@@ -1,0 +1,23 @@
+[package]
+name = "serial_writer"
+version = "0.2.0"
+edition = "2021"
+readme = "README.md"
+description = "Serial communication implementations."
+license.workspace = true
+repository.workspace = true
+
+[package.metadata.docs.rs]
+features = ["std"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+uefi_core = { workspace = true }
+
+[target.'cfg(target_arch="x86_64")'.dependencies]
+x86_64 = { workspace = true }
+uart_16550 = { workspace = true }
+
+[features]
+std = []
