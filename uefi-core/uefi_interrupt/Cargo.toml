@@ -1,18 +1,14 @@
 [package]
-name = "uefi_cpu_init"
-version = "0.2.0"
+name = "uefi_interrupt"
+version = "0.1.0"
 edition = "2021"
-readme = "README.md"
-description = "CPU Initializer trait implementations for the pure rust DXE core."
-license.workspace = true
-repository.workspace = true
 
 [package.metadata.docs.rs]
 features = ["doc", "std"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
-name = "uefi_cpu_init"
+name = "uefi_interrupt"
 path = "src/lib.rs"
 
 [dependencies]

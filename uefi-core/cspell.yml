@@ -15,6 +15,7 @@ dictionaries:
 ignorePaths:
   - "**/target/**"
   - "**/book/**"
+  - "**/*.asm"
   - "docs/mermaid.min.js"
 minWordLength: 5
 caseSensitive: false
@@ -24,9 +25,12 @@ words:
   - brotli
   - decompressor
   - edkii
+  - efiapi
   - rebox
   - repr
+  - rflags
   - rustc
+  - rwlock
   - tiano
   - uart
   - uefi
