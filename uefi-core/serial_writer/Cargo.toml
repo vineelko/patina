@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [package.metadata.docs.rs]
-features = ["std"]
+features = ["std", "doc"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -21,3 +21,4 @@ uart_16550 = { workspace = true }
 
 [features]
 std = []
+doc = []

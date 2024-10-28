@@ -8,6 +8,7 @@
 //!
 use uefi_core::interface::SerialIO;
 
+/// A null (stub) device that does nothing.
 #[derive(Debug)]
 pub struct Uart {}
 

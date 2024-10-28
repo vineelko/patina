@@ -56,12 +56,12 @@ macro_rules! generate_uefi_arch_macro {
   ($name:ident, $arch:literal) => {
       #[doc = "Includes the given block of code if the target uefi architecture is "]
       #[doc = $arch]
-      #[doc = "."]
+      #[doc = " or the feature flag \"doc\" is set."]
       #[macro_export]
       macro_rules! $name {
           ($$($i:item)*) => {
               $$(
-                  #[cfg(any(doc, all(target_os="uefi", target_arch = $arch)))]
+                  #[cfg(any(feature = "doc", all(target_os="uefi", target_arch = $arch)))]
                   $$i
               )*
           };
