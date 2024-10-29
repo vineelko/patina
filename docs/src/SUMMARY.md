@@ -12,7 +12,7 @@
   - [Unit Testing](dev/testing/unit.md)
   - [Integration Testing](dev/testing/integration.md)
   - [On-Platform Testing](dev/testing/platform.md)
-  - [Mocking]()
+  - [Mocking](dev/testing/mock.md)
 - [Formatting](dev/formatting.md)
 - [Documenting](dev/documenting.md)
   - [Quick Reference](dev/documenting/reference.md)
@@ -42,7 +42,7 @@
   - [Dispatcher](dxe_core/dispatcher.md)
   - [Performance Analysis]()
   - [Synchronization](dxe_core/synchronization.md)
-  - [Testing]()
+  - [Testing](dxe_core/testing.md)
 
 # Creating a Rust DXE Driver
 - [Component Interface](driver/interface.md)
