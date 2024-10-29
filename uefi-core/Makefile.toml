@@ -3,7 +3,7 @@ default_to_workspace = false
 
 [env]
 RUSTC_BOOTSTRAP = 1
-BUILD_FLAGS = "--profile ${RUSTC_PROFILE} -Zbuild-std=core,compiler_builtins,alloc -Zbuild-std-features=compiler-builtins-mem -Zunstable-options --timings=html"
+NO_STD_FLAGS = "--profile ${RUSTC_PROFILE} -Zbuild-std=core,compiler_builtins,alloc -Zbuild-std-features=compiler-builtins-mem -Zunstable-options --timings=html"
 UEFI_CRATES = "-p uefi_cpu_init -p uefi_logger -p section_extractor -p serial_writer -p uefi_interrupt"
 BUILD_CRATES = "-p uefi_core"
 
@@ -49,7 +49,7 @@ Example:
 """
 clear = true
 command = "cargo"
-args = ["build", "--target", "x86_64-unknown-uefi", "@@split(BUILD_FLAGS, )", "@@split(UEFI_CRATES, )"]
+args = ["build", "--target", "x86_64-unknown-uefi", "@@split(NO_STD_FLAGS, )", "@@split(UEFI_CRATES, )"]
 
 [tasks.build-aarch64]
 description = """Runs the standard library DXE core.
@@ -60,19 +60,19 @@ Example:
 """
 clear = true
 command = "cargo"
-args = ["build", "--target", "aarch64-unknown-uefi", "@@split(BUILD_FLAGS, )", "@@split(UEFI_CRATES, )"]
+args = ["build", "--target", "aarch64-unknown-uefi", "@@split(NO_STD_FLAGS, )", "@@split(UEFI_CRATES, )"]
 
 [tasks.check_no_std]
 description = "Checks rust code for no_std build errors with results."
 private = true
 command = "cargo"
-args = ["check", "@@split(NO_STD_FLAGS, )", "@@split(CARGO_MAKE_TASK_ARGS, )"]
+args = ["check", "@@split(NO_STD_FLAGS, )", "@@split(CARGO_MAKE_TASK_ARGS, )", "--target", "x86_64-unknown-uefi", "--target", "aarch64-unknown-uefi"]
 
 [tasks.check_std]
 description = "Checks rust code for std build errors with results."
 private = true
 command = "cargo"
-args = ["check", "@@split(STD_FLAGS, )", "@@split(CARGO_MAKE_TASK_ARGS, )"]
+args = ["check", "@@split(CARGO_MAKE_TASK_ARGS, )"]
 
 [tasks.check]
 description = "Checks rust code for errors. Example `cargo make check`"
