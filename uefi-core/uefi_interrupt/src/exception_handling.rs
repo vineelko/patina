@@ -24,6 +24,8 @@ const NUM_EXCEPTION_TYPES: usize = if cfg!(target_arch = "x86_64") {
 // The static exception handlers are needed to track the global state. RwLock is
 // used to allow potential nested exceptions.
 static EXCEPTION_HANDLERS: [RwLock<Option<UefiExceptionHandler>>; NUM_EXCEPTION_TYPES] = {
+    // This clippy warning can be ignored. We are purposefully generating a different `INIT` const for each element.
+    #[allow(clippy::declare_interior_mutable_const)]
     const INIT: RwLock<Option<UefiExceptionHandler>> = RwLock::new(None);
     [INIT; NUM_EXCEPTION_TYPES]
 };

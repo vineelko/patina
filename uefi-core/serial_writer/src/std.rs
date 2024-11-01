@@ -6,7 +6,6 @@
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
-#![cfg(feature = "std")]
 use std::io::{Read, Write};
 use uefi_core::interface::SerialIO;
 

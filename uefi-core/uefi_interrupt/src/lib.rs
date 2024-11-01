@@ -8,19 +8,21 @@
 //! ## Examples and Usage
 //!
 //! ```
-//! let interrupt_manager = InterruptManagerX64::new();
-//! let handler: UefiExceptionHandler = |exception_type: u64, context: EfiSystemContext| {
-//!     // Do something.
+//! # use uefi_interrupt::InterruptManagerNull as InterruptManagerX64;
+//! # use uefi_interrupt::{InterruptManager, UefiExceptionHandler, efi_system_context::EfiSystemContext};
+//! extern "efiapi" fn handler(exception_type: u64, context: EfiSystemContext) {
+//!    // Do something.
 //! }
+//! let mut interrupt_manager = InterruptManagerX64::default();
 //!
 //! // Initialize interrupts and exceptions.
 //! interrupt_manager.initialize();
 //!
 //! // Set an exception handler.
-//! interrupt_manager.RegisterExceptionHandler(0, handler).expect("Failed to setup exception handler!");
+//! interrupt_manager.register_exception_handler(0, handler).expect("Failed to setup exception handler!");
 //!
 //! // Remove interrupt handler.
-//! interrupt_manager.UnregisterExceptionHandler(0).expect("Failed to remove exception handler!");
+//! interrupt_manager.unregister_exception_handler(0).expect("Failed to remove exception handler!");
 //! ```
 //!
 //! ## License
