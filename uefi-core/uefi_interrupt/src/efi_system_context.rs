@@ -182,18 +182,44 @@ pub struct EfiSystemContextAArch64 {
 
 #[repr(C)]
 pub union EfiSystemContext {
-    pub system_context_x64: *mut EfiSystemContextX64,
-    pub system_context_aarch64: *mut EfiSystemContextAArch64,
+    system_context_x64: *mut EfiSystemContextX64,
+    system_context_aarch64: *mut EfiSystemContextAArch64,
 }
 
 impl EfiSystemContext {
     #[cfg(target_arch = "x86_64")]
-    pub fn get_arch_context(&self) -> &mut EfiSystemContextX64 {
+    /// Create a new x64 system context.
+    pub const fn new(system_context_x64: *mut EfiSystemContextX64) -> Self {
+        Self { system_context_x64 }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    /// Create a new AArch64 system context.
+    pub const fn new(system_context_aarch64: *mut EfiSystemContextAArch64) -> Self {
+        Self { system_context_aarch64 }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    /// Get reference to the x64 system context.
+    pub fn get_arch_context(&self) -> &EfiSystemContextX64 {
+        unsafe { &*(self.system_context_x64) }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    /// Get mutable reference to the x64 system context.
+    pub fn get_arch_context_mut(&mut self) -> &mut EfiSystemContextX64 {
         unsafe { &mut *(self.system_context_x64) }
     }
 
     #[cfg(target_arch = "aarch64")]
-    pub fn get_arch_context(&self) -> &mut EfiSystemContextAArch64 {
+    /// Get reference to the AArch64 system context.
+    pub fn get_arch_context(&self) -> &EfiSystemContextAArch64 {
+        unsafe { &*(self.system_context_aarch64) }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    /// Get mutable reference to the AArch64 system context.
+    pub fn get_arch_context_mut(&mut self) -> &mut EfiSystemContextAArch64 {
         unsafe { &mut *(self.system_context_aarch64) }
     }
 }

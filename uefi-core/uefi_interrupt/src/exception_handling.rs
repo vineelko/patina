@@ -115,7 +115,7 @@ mod tests {
         let mut zeroed_memory: Box<[u8; std::mem::size_of::<EfiSystemContextX64>()]> =
             Box::new([0; std::mem::size_of::<EfiSystemContextX64>()]);
 
-        EfiSystemContext { system_context_x64: zeroed_memory.as_mut_ptr() as *mut EfiSystemContextX64 }
+        EfiSystemContext::new(zeroed_memory.as_mut_ptr() as *mut EfiSystemContextX64)
     }
 
     #[test]
