@@ -114,8 +114,9 @@ mod tests {
     }
 
     fn get_empty_system_context() -> EfiSystemContext {
-        let mut zeroed_memory: Box<[u8; std::mem::size_of::<EfiSystemContextX64>()]> =
+        let zeroed_memory: Box<[u8; std::mem::size_of::<EfiSystemContextX64>()]> =
             Box::new([0; std::mem::size_of::<EfiSystemContextX64>()]);
+        let zeroed_memory = Box::leak(zeroed_memory);
 
         EfiSystemContext::new(zeroed_memory.as_mut_ptr() as *mut EfiSystemContextX64)
     }

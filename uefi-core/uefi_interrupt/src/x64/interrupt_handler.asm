@@ -212,11 +212,6 @@ stack_normalized:
     call    exception_handler
     add     rsp, 4 * 8 + 8
 
-    xor     rax, rax
-_dbg:
-    cmp     rax, 0
-    je      _dbg
-
     #
     # Return from the exception. Begin by unwinding the context.
     #
