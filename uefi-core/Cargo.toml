@@ -30,7 +30,7 @@ spin = "^0.9"
 uart_16550 = "^0.3"
 x86_64 = "^0.14"
 mu_pi = {git = "https://github.com/microsoft/mu_rust_pi.git", tag = "v5.0.1"}
-mu_rust_helpers = { git = "https://github.com/microsoft/mu_rust_helpers", tag = "v1.2.0", default-features = false}
+mu_rust_helpers = { git = "https://github.com/microsoft/mu_rust_helpers", tag = "v1.2.1", default-features = false}
 
 [profile.dev]
 opt-level = 3
