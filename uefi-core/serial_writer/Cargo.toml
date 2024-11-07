@@ -1,6 +1,6 @@
 [package]
 name = "serial_writer"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2021"
 readme = "README.md"
 description = "Serial communication implementations."

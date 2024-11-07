@@ -20,7 +20,7 @@ include = [
 ]
 
 [workspace.dependencies]
-uefi_core = { path = "uefi_core", version = "0.2.0" }
+uefi_core = { path = "uefi_core", version = "1.0.0" }
 
 # External Libraries
 lazy_static = { version = "^1", features = ["spin_no_std"] }
