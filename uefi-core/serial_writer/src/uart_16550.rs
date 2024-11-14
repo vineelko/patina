@@ -19,7 +19,7 @@ pub enum Interface {
     /// The I/O interface for the Uart16550 serial port.
     Io(u16),
     /// The Memory Mapped I/O interface for the Uart16550 serial port.
-    Mmio(usize),
+    Mmio { base: usize, reg_stride: usize },
 }
 
 /// An interface for writing to a Uart 16550 device.
@@ -41,8 +41,8 @@ impl SerialIO for Uart {
                 let mut serial_port = unsafe { IoSerialPort::new(base) };
                 serial_port.init();
             }
-            Interface::Mmio(base) => {
-                let mut serial_port = unsafe { MmioSerialPort::new(base) };
+            Interface::Mmio { base, reg_stride } => {
+                let mut serial_port = unsafe { MmioSerialPort::new_with_stride(base, reg_stride) };
                 serial_port.init();
             }
         }
@@ -58,8 +58,8 @@ impl SerialIO for Uart {
                     }
                 });
             }
-            Interface::Mmio(base) => {
-                let mut serial_port = unsafe { MmioSerialPort::new(base) };
+            Interface::Mmio { base, reg_stride } => {
+                let mut serial_port = unsafe { MmioSerialPort::new_with_stride(base, reg_stride) };
                 interrupts::without_interrupts(|| {
                     for b in buffer {
                         serial_port.send(*b);
@@ -75,8 +75,8 @@ impl SerialIO for Uart {
                 let mut serial_port = unsafe { IoSerialPort::new(base) };
                 serial_port.receive()
             }
-            Interface::Mmio(base) => {
-                let mut serial_port = unsafe { MmioSerialPort::new(base) };
+            Interface::Mmio { base, reg_stride } => {
+                let mut serial_port = unsafe { MmioSerialPort::new_with_stride(base, reg_stride) };
                 serial_port.receive()
             }
         }
@@ -92,8 +92,8 @@ impl SerialIO for Uart {
                     None
                 }
             }
-            Interface::Mmio(base) => {
-                let mut serial_port = unsafe { MmioSerialPort::new(base) };
+            Interface::Mmio { base, reg_stride } => {
+                let mut serial_port = unsafe { MmioSerialPort::new_with_stride(base, reg_stride) };
                 if let Ok(value) = serial_port.try_receive() {
                     Some(value)
                 } else {
