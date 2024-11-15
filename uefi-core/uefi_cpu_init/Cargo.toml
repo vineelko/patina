@@ -1,6 +1,6 @@
 [package]
 name = "uefi_cpu_init"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2021"
 readme = "README.md"
 description = "CPU Initializer trait implementations for the pure rust DXE core."
