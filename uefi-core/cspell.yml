@@ -17,15 +17,19 @@ ignorePaths:
   - "**/book/**"
   - "**/*.asm"
   - "docs/mermaid.min.js"
+  - "uefi_debugger/src/arch/xml/**"
 minWordLength: 5
 caseSensitive: false
 allowCompoundWords: true
 words:
   - aarch
+  - addrs
   - brotli
   - decompressor
   - edkii
   - efiapi
+  - eflags
+  - gdbstub
   - rebox
   - repr
   - rflags
@@ -35,5 +39,6 @@ words:
   - uart
   - uefi
   - virt
+  - windbg
   - zbuild
   - zunstable

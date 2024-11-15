@@ -4,9 +4,11 @@ resolver = "2"
 members = [
   "uefi_core",
   "uefi_cpu_init",
+  "uefi_debugger",
+  "uefi_interrupt",
   "uefi_logger",
   "section_extractor",
-  "serial_writer", "uefi_interrupt",
+  "serial_writer",
 ]
 
 [workspace.package]
@@ -21,6 +23,8 @@ include = [
 
 [workspace.dependencies]
 uefi_core = { path = "uefi_core", version = "2.0.0" }
+uefi_interrupt = { path = "uefi_interrupt", version = "2.0.0" }
+serial_writer = { path = "serial_writer", version = "2.0.0" }
 
 # External Libraries
 lazy_static = { version = "^1", features = ["spin_no_std"] }
@@ -31,6 +35,7 @@ uart_16550 = "^0.3.2"
 x86_64 = "^0.14"
 mu_pi = {git = "https://github.com/microsoft/mu_rust_pi.git", tag = "v5.1.0"}
 mu_rust_helpers = { git = "https://github.com/microsoft/mu_rust_helpers", tag = "v1.2.1", default-features = false}
+paging = { git = "https://github.com/pop-project/paging.git", rev = "feef56f0123f9464d971a509d7935add0f043cdc" }
 
 [profile.dev]
 opt-level = 3

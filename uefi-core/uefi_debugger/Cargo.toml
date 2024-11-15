@@ -1,0 +1,24 @@
+[package]
+name = "uefi_debugger"
+version = "0.1.0"
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "uefi_debugger"
+path = "src/lib.rs"
+
+[dependencies]
+gdbstub = { version = "0.7.3", default-features = false }
+uefi_core = { workspace = true }
+uefi_interrupt = { workspace = true }
+log = { workspace = true }
+spin = { workspace = true }
+paging = { workspace = true  }
+
+[dev-dependencies]
+serial_writer = { workspace = true }
+
+[features]
+default = ["windbg_workarounds"]
+windbg_workarounds = []
