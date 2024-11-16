@@ -9,6 +9,12 @@
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
+#![cfg_attr(not(feature = "std"), no_std)]
+#![feature(macro_metavar_expr)]
 
-pub mod logger;
+#[macro_use]
+pub mod macros;
+
+pub mod error;
+pub mod log;
 pub mod serial;

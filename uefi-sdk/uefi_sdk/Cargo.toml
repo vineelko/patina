@@ -7,6 +7,13 @@ edition.workspace = true
 include.workspace = true
 
 [dependencies]
+log = { workspace = true }
+r-efi = { workspace = true }
+
+[target.'cfg(target_arch="x86_64")'.dependencies]
+x86_64 = { workspace = true }
+uart_16550 = { workspace = true }
 
 [features]
 std = []
+doc = []
