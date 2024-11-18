@@ -1,13 +1,19 @@
 //! x86_86 GDT initialization
-//! 
+//!
 //! ## License
 //!
 //! Copyright (C) Microsoft Corporation. All rights reserved.
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
+#![cfg_attr(test, allow(dead_code))]
+#![cfg_attr(test, allow(unused_imports))]
 use core::ptr::addr_of;
 use lazy_static::lazy_static;
+use x86_64::instructions::{
+    segmentation::{Segment, CS, SS},
+    tables::load_tss,
+};
 use x86_64::{
     structures::{
         gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector},
@@ -25,7 +31,7 @@ lazy_static! {
             const STACK_SIZE: usize = 4096 * 5;
             static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
 
-            VirtAddr::from_ptr(unsafe { addr_of!(STACK) }) + STACK_SIZE
+            VirtAddr::from_ptr(unsafe { addr_of!(STACK) }) + STACK_SIZE as u64
         };
         tss
     };
@@ -48,11 +54,6 @@ struct Selectors {
 }
 
 pub fn init() {
-    use x86_64::instructions::{
-        segmentation::{Segment, CS, SS},
-        tables::load_tss,
-    };
-
     GDT.0.load();
     unsafe {
         CS::set_reg(GDT.1.code_selector);

@@ -18,15 +18,20 @@ path = "src/lib.rs"
 [dependencies]
 lazy_static = { workspace = true }
 log = { workspace = true }
+r-efi = { workspace = true }
 uefi_sdk = { workspace = true }
 spin = { workspace = true, features = ["rwlock"] }
 x86_64 = { workspace = true, optional = true }
+paging = { workspace = true }
+mtrr = { workspace = true, optional = true }
 
-[target.'cfg(all(target_os="uefi", target_arch="x86_64"))'.dependencies]
+[target.'cfg(all(target_arch="x86_64"))'.dependencies]
 x86_64 = { workspace = true }
+mtrr = { workspace = true }
 
 [dev-dependencies]
 x86_64 = { workspace = true }
+mockall = { workspace = true }
 
 [features]
 default = []

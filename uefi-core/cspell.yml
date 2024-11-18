@@ -30,6 +30,7 @@ words:
   - efiapi
   - eflags
   - gdbstub
+  - mtrrs
   - rebox
   - repr
   - rflags
@@ -38,7 +39,9 @@ words:
   - tiano
   - uart
   - uefi
+  - Uncacheable
   - virt
   - windbg
+  - wbinvd
   - zbuild
   - zunstable

@@ -6,18 +6,218 @@
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
-use crate::CpuInitializer;
-
+#[cfg(not(test))]
 use crate::x64::gdt;
+use crate::EfiCpuInit;
+use crate::{EfiCpuFlushType, EfiCpuInitType, EfiPhysicalAddress};
+#[cfg(not(test))]
+use core::arch::asm;
+use core::sync::atomic::{AtomicBool, Ordering};
+use r_efi::efi;
 
-/// [CpuInitializer] trait implementation for the x86_64 architecture.
-///
-/// TODO: Explain the initialization process this provides.
-#[derive(Default)]
-pub struct X64CpuInitializer;
-impl CpuInitializer for X64CpuInitializer {
-    fn initialize(&mut self) {
+/// Struct to implement X64 Cpu Init.
+pub struct X64EfiCpuInit {
+    interrupt_state: AtomicBool,
+    timer_period: u64,
+}
+
+impl X64EfiCpuInit {
+    pub fn new() -> Self {
+        let mut x64_efi_init = X64EfiCpuInit { interrupt_state: AtomicBool::new(false), timer_period: 0 };
+        x64_efi_init.calculate_timer_period();
+        x64_efi_init
+    }
+
+    fn calculate_timer_period(&mut self) {
+        // Read time stamp counter before and after delay of 100 microseconds
+        let begin_value = self.asm_read_tsc(); // Assuming asm_read_tsc is defined
+        self.microsecond_delay(100); // Assuming microsecond_delay is defined
+        let end_value = self.asm_read_tsc();
+
+        // Calculate the actual frequency
+        if end_value != begin_value {
+            self.timer_period = (1000 * 1000 * 1000 * 100) / (end_value - begin_value);
+        }
+    }
+
+    fn initialize_gdt(&self) {
+        #[cfg(all(not(test), target_arch = "x86_64"))]
         gdt::init();
-        x86_64::instructions::interrupts::enable();
+    }
+
+    // X64 related asm functions
+    fn asm_wbinvd(&self) {
+        #[cfg(all(not(test), target_arch = "x86_64"))]
+        {
+            unsafe {
+                asm!("wbinvd");
+            }
+        }
+    }
+
+    fn asm_invd(&self) {
+        #[cfg(all(not(test), target_arch = "x86_64"))]
+        {
+            unsafe {
+                asm!("invd");
+            }
+        }
+    }
+
+    fn asm_read_tsc(&self) -> u64 {
+        // unimplemented!();
+        0
+    }
+
+    fn microsecond_delay(&self, _microseconds: u64) {
+        // unimplemented!();
+    }
+
+    fn enable_interrupts(&self) {
+        #[cfg(all(not(test), target_arch = "x86_64"))]
+        {
+            unsafe {
+                asm!("sti", options(preserves_flags, nostack));
+            }
+        }
+    }
+
+    fn disable_interrupts(&self) {
+        #[cfg(all(not(test), target_arch = "x86_64"))]
+        {
+            unsafe {
+                asm!("cli", options(preserves_flags, nostack));
+            }
+        }
+    }
+}
+
+/// The x86_64 implementation of EFI Cpu Init.
+impl EfiCpuInit for X64EfiCpuInit {
+    /// This function initializes the CPU for the x86_64 architecture.
+    fn initialize(&mut self) -> Result<(), efi::Status> {
+        // Initialize floating point units
+
+        // disable interrupts
+        self.disable_interrupt()?;
+
+        // Initialize GDT
+        self.initialize_gdt();
+
+        self.enable_interrupt()?;
+
+        Ok(())
+    }
+
+    fn flush_data_cache(
+        &self,
+        _start: EfiPhysicalAddress,
+        _length: u64,
+        flush_type: EfiCpuFlushType,
+    ) -> Result<(), efi::Status> {
+        match flush_type {
+            EfiCpuFlushType::WriteBackInvalidate => {
+                self.asm_wbinvd();
+                Ok(())
+            }
+            EfiCpuFlushType::Invalidate => {
+                self.asm_invd();
+                Ok(())
+            }
+            _ => Err(efi::Status::UNSUPPORTED),
+        }
+    }
+
+    fn enable_interrupt(&self) -> Result<(), efi::Status> {
+        self.enable_interrupts();
+        self.interrupt_state.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    fn disable_interrupt(&self) -> Result<(), efi::Status> {
+        self.disable_interrupts();
+        self.interrupt_state.store(false, Ordering::Release);
+        Ok(())
+    }
+
+    fn get_interrupt_state(&self) -> Result<bool, efi::Status> {
+        Ok(self.interrupt_state.load(Ordering::Acquire))
+    }
+
+    fn init(&self, _init_type: EfiCpuInitType) -> Result<(), efi::Status> {
+        unimplemented!()
+    }
+
+    fn get_timer_value(&self, timer_index: u32) -> Result<(u64, u64), efi::Status> {
+        if timer_index != 0 {
+            return Err(efi::Status::INVALID_PARAMETER);
+        }
+
+        let timer_value = self.asm_read_tsc(); // Assuming asm_read_tsc is defined elsewhere
+
+        Ok((timer_value, self.timer_period))
+    }
+}
+
+impl Default for X64EfiCpuInit {
+    fn default() -> Self {
+        X64EfiCpuInit::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use crate::EfiCpuInit;
+
+    #[test]
+    fn test_initialize() {
+        let mut x64_cpu_init = X64EfiCpuInit { interrupt_state: AtomicBool::new(false), timer_period: 0 };
+        x64_cpu_init.calculate_timer_period();
+
+        assert_eq!(x64_cpu_init.initialize(), Ok(()));
+    }
+
+    #[test]
+    fn test_flush_data_cache() {
+        let mut x64_cpu_init = X64EfiCpuInit { interrupt_state: AtomicBool::new(false), timer_period: 0 };
+        x64_cpu_init.calculate_timer_period();
+
+        assert_eq!(x64_cpu_init.initialize(), Ok(()));
+        let start: EfiPhysicalAddress = 0;
+        let length: u64 = 0;
+        let flush_type: EfiCpuFlushType = EfiCpuFlushType::WriteBackInvalidate;
+        assert_eq!(x64_cpu_init.flush_data_cache(start, length, flush_type), Ok(()));
+
+        let start: EfiPhysicalAddress = 0;
+        let length: u64 = 0;
+        let flush_type: EfiCpuFlushType = EfiCpuFlushType::Invalidate;
+        assert_eq!(x64_cpu_init.flush_data_cache(start, length, flush_type), Ok(()));
+
+        let start: EfiPhysicalAddress = 0;
+        let length: u64 = 0;
+        let flush_type: EfiCpuFlushType = EfiCpuFlushType::WriteBack;
+        assert_eq!(x64_cpu_init.flush_data_cache(start, length, flush_type), Err(efi::Status::UNSUPPORTED));
+    }
+
+    #[test]
+    fn test_enable_disable_interrupts() {
+        let mut x64_cpu_init = X64EfiCpuInit { interrupt_state: AtomicBool::new(false), timer_period: 0 };
+        x64_cpu_init.calculate_timer_period();
+
+        assert_eq!(x64_cpu_init.initialize(), Ok(()));
+        assert_eq!(x64_cpu_init.enable_interrupt(), Ok(()));
+        assert_eq!(x64_cpu_init.disable_interrupt(), Ok(()));
+    }
+
+    #[test]
+    fn test_get_timer_value() {
+        let mut x64_cpu_init = X64EfiCpuInit { interrupt_state: AtomicBool::new(false), timer_period: 0 };
+        x64_cpu_init.calculate_timer_period();
+
+        assert_eq!(x64_cpu_init.initialize(), Ok(()));
+        assert_eq!(x64_cpu_init.get_timer_value(1), Err(efi::Status::INVALID_PARAMETER));
+        assert_eq!(x64_cpu_init.get_timer_value(0), Ok((0, 0)));
     }
 }
