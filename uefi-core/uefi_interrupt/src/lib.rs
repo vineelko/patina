@@ -35,7 +35,7 @@
 #![feature(abi_x86_interrupt)]
 
 use efi_system_context::EfiSystemContext;
-use uefi_core::error::EfiError;
+use uefi_sdk::error::EfiError;
 
 pub mod efi_system_context;
 mod exception_handling;
@@ -78,12 +78,12 @@ pub trait InterruptManager {
     }
 }
 
-uefi_core::if_x64! {
+uefi_sdk::if_x64! {
     mod x64;
     pub use x64::InterruptManagerX64 as InterruptManagerX64;
 }
 
-uefi_core::if_aarch64! {
+uefi_sdk::if_aarch64! {
     mod aarch64;
     pub use aarch64::InterruptManagerAarch64 as InterruptManagerAarch64;
 }

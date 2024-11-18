@@ -24,14 +24,13 @@
 //! debugger is either not set or not enabled, the static routines will be no-ops.
 //!
 //! ```rust
-//! extern crate uefi_core;
+//! extern crate uefi_sdk;
 //! extern crate uefi_interrupt;
-//! extern crate serial_writer;
 //!
 //! use uefi_interrupt::InterruptManager;
 //!
-//! static DEBUGGER: uefi_debugger::UefiDebugger<serial_writer::UartNull> =
-//!     uefi_debugger::UefiDebugger::new(serial_writer::UartNull{});
+//! static DEBUGGER: uefi_debugger::UefiDebugger<uefi_sdk::serial::UartNull> =
+//!     uefi_debugger::UefiDebugger::new(uefi_sdk::serial::UartNull{});
 //!
 //! fn entry() {
 //!
@@ -90,14 +89,14 @@ mod transport;
 
 extern crate gdbstub;
 extern crate paging;
-extern crate uefi_core;
 extern crate uefi_interrupt;
+extern crate uefi_sdk;
 
 pub use debugger::UefiDebugger;
 
 use arch::{DebuggerArch, SystemArch};
-use uefi_core::interface::SerialIO;
 use uefi_interrupt::{efi_system_context::EfiSystemContext, InterruptManager};
+use uefi_sdk::serial::SerialIO;
 
 /// Global instance of the debugger.
 ///
@@ -137,7 +136,7 @@ enum DebugError {
     /// Failure from the GDB stub initialization.
     GdbStubInit,
     /// Failure from the GDB stub.
-    GdbStubError(gdbstub::stub::GdbStubError<(), uefi_core::error::EfiError>),
+    GdbStubError(gdbstub::stub::GdbStubError<(), uefi_sdk::error::EfiError>),
 }
 
 /// Sets the global instance of the debugger.
@@ -185,6 +184,7 @@ pub fn enabled() -> bool {
 }
 
 /// Exception information for the debugger.
+#[allow(dead_code)]
 struct ExceptionInfo {
     /// The type of exception that occurred.
     pub exception_type: ExceptionType,
@@ -194,6 +194,7 @@ struct ExceptionInfo {
 
 /// Exception type information.
 #[derive(Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 enum ExceptionType {
     /// A break due to a completed instruction step.
     Step,

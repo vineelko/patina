@@ -18,7 +18,7 @@ path = "src/lib.rs"
 [dependencies]
 lazy_static = { workspace = true }
 log = { workspace = true }
-uefi_core = { workspace = true }
+uefi_sdk = { workspace = true }
 spin = { workspace = true, features = ["rwlock"] }
 x86_64 = { workspace = true, optional = true }
 

@@ -10,7 +10,7 @@
 
 use crate::{efi_system_context::EfiSystemContext, UefiExceptionHandler};
 use spin::rwlock::RwLock;
-use uefi_core::error::EfiError;
+use uefi_sdk::error::EfiError;
 
 // Different architecture have a different number of exception types.
 const NUM_EXCEPTION_TYPES: usize = if cfg!(target_arch = "x86_64") {

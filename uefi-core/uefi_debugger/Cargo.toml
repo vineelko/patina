@@ -10,14 +10,11 @@ path = "src/lib.rs"
 
 [dependencies]
 gdbstub = { version = "0.7.3", default-features = false }
-uefi_core = { workspace = true }
+uefi_sdk = { workspace = true }
 uefi_interrupt = { workspace = true }
 log = { workspace = true }
 spin = { workspace = true }
 paging = { workspace = true  }
-
-[dev-dependencies]
-serial_writer = { workspace = true }
 
 [features]
 default = ["windbg_workarounds"]

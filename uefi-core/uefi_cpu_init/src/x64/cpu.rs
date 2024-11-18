@@ -6,7 +6,7 @@
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
-use uefi_core::interface::CpuInitializer;
+use crate::CpuInitializer;
 
 use crate::x64::gdt;
 

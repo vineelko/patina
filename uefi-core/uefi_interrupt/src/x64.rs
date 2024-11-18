@@ -11,7 +11,7 @@ use crate::efi_system_context::EfiSystemContext;
 use crate::InterruptManager;
 use core::arch::global_asm;
 use lazy_static::lazy_static;
-use uefi_core::error::EfiError;
+use uefi_sdk::error::EfiError;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 use x86_64::VirtAddr;
 

@@ -12,7 +12,7 @@
 
 use core::result::Result;
 use gdbstub::conn::{Connection, ConnectionExt};
-use uefi_core::interface::SerialIO;
+use uefi_sdk::serial::SerialIO;
 
 /// Serial Connection for use with GdbStub
 ///
@@ -33,7 +33,7 @@ impl<'a, T: SerialIO> SerialConnection<'a, T> {
 }
 
 impl<'a, T: SerialIO> Connection for SerialConnection<'a, T> {
-    type Error = uefi_core::error::EfiError;
+    type Error = uefi_sdk::error::EfiError;
 
     /// Write a byte to the serial transport.
     fn write(&mut self, byte: u8) -> Result<(), Self::Error> {

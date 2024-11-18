@@ -8,7 +8,7 @@
 //!
 
 use crate::InterruptManager;
-use uefi_core::error::EfiError;
+use uefi_sdk::error::EfiError;
 
 /// AARCH64 Implementation of the InterruptManager.
 #[derive(Default, Copy, Clone)]

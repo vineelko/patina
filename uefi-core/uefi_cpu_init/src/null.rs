@@ -8,7 +8,7 @@
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
-use uefi_core::interface::CpuInitializer;
+use crate::CpuInitializer;
 
 /// [CpuInitializer] trait implementation that does nothing.
 ///
