@@ -19,7 +19,7 @@ include = [
 ]
 
 [workspace.dependencies]
-uefi_interrupt = { path = "uefi_interrupt", version = "2.0.0" }
+uefi_interrupt = { path = "uefi_interrupt", version = "3.0.0" }
 
 # External Libraries
 uefi_sdk = {git = "https://github.com/pop-project/uefi-sdk.git", rev = "ee76ceb89f003b1c5d62573d8fe862ce31baf503" }
