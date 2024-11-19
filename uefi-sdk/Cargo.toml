@@ -1,7 +1,10 @@
 [workspace]
 resolver = "2"
 
-members = ["uefi_sdk"]
+members = [
+  "uefi_sdk",
+  "runtime_services",
+]
 
 [workspace.package]
 repository = "https://github.com/pop-project/uefi-sdk"
@@ -18,6 +21,8 @@ log = { version = "^0.4", default-features = false }
 r-efi = { version = "^5", default-features = false }
 uart_16550 = "^0.3.2"
 x86_64 = "^0.14"
+
+runtime_services = { path="./runtime_services" }
 
 [profile.dev]
 opt-level = 3
