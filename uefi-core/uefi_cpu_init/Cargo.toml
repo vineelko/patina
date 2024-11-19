@@ -24,6 +24,7 @@ spin = { workspace = true, features = ["rwlock"] }
 x86_64 = { workspace = true, optional = true }
 paging = { workspace = true }
 mtrr = { workspace = true, optional = true }
+mu_pi = { workspace = true }
 
 [target.'cfg(all(target_arch="x86_64"))'.dependencies]
 x86_64 = { workspace = true }

@@ -9,10 +9,10 @@
 #[cfg(not(test))]
 use crate::x64::gdt;
 use crate::EfiCpuInit;
-use crate::{EfiCpuFlushType, EfiCpuInitType, EfiPhysicalAddress};
 #[cfg(not(test))]
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, Ordering};
+use mu_pi::protocols::cpu_arch::{CpuFlushType, CpuInitType};
 use r_efi::efi;
 
 /// Struct to implement X64 Cpu Init.
@@ -111,16 +111,16 @@ impl EfiCpuInit for X64EfiCpuInit {
 
     fn flush_data_cache(
         &self,
-        _start: EfiPhysicalAddress,
+        _start: efi::PhysicalAddress,
         _length: u64,
-        flush_type: EfiCpuFlushType,
+        flush_type: CpuFlushType,
     ) -> Result<(), efi::Status> {
         match flush_type {
-            EfiCpuFlushType::WriteBackInvalidate => {
+            CpuFlushType::EfiCpuFlushTypeWriteBackInvalidate => {
                 self.asm_wbinvd();
                 Ok(())
             }
-            EfiCpuFlushType::Invalidate => {
+            CpuFlushType::EFiCpuFlushTypeInvalidate => {
                 self.asm_invd();
                 Ok(())
             }
@@ -144,7 +144,7 @@ impl EfiCpuInit for X64EfiCpuInit {
         Ok(self.interrupt_state.load(Ordering::Acquire))
     }
 
-    fn init(&self, _init_type: EfiCpuInitType) -> Result<(), efi::Status> {
+    fn init(&self, _init_type: CpuInitType) -> Result<(), efi::Status> {
         unimplemented!()
     }
 
@@ -185,19 +185,19 @@ mod tests {
         x64_cpu_init.calculate_timer_period();
 
         assert_eq!(x64_cpu_init.initialize(), Ok(()));
-        let start: EfiPhysicalAddress = 0;
+        let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
-        let flush_type: EfiCpuFlushType = EfiCpuFlushType::WriteBackInvalidate;
+        let flush_type: CpuFlushType = CpuFlushType::EfiCpuFlushTypeWriteBackInvalidate;
         assert_eq!(x64_cpu_init.flush_data_cache(start, length, flush_type), Ok(()));
 
-        let start: EfiPhysicalAddress = 0;
+        let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
-        let flush_type: EfiCpuFlushType = EfiCpuFlushType::Invalidate;
+        let flush_type: CpuFlushType = CpuFlushType::EFiCpuFlushTypeInvalidate;
         assert_eq!(x64_cpu_init.flush_data_cache(start, length, flush_type), Ok(()));
 
-        let start: EfiPhysicalAddress = 0;
+        let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
-        let flush_type: EfiCpuFlushType = EfiCpuFlushType::WriteBack;
+        let flush_type: CpuFlushType = CpuFlushType::EfiCpuFlushTypeWriteBack;
         assert_eq!(x64_cpu_init.flush_data_cache(start, length, flush_type), Err(efi::Status::UNSUPPORTED));
     }
 

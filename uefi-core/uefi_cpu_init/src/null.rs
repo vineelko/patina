@@ -9,7 +9,11 @@
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 
-use crate::{EfiCpuFlushType, EfiCpuInit, EfiCpuInitType, EfiCpuPaging, EfiPhysicalAddress};
+use crate::{EfiCpuInit, EfiCpuPaging};
+use mu_pi::{
+    hob::EfiPhysicalAddress,
+    protocols::cpu_arch::{CpuFlushType, CpuInitType},
+};
 use r_efi::efi;
 
 #[derive(Default)]
@@ -55,7 +59,7 @@ impl EfiCpuInit for NullEfiCpuInit {
         &self,
         _start: EfiPhysicalAddress,
         _length: u64,
-        _flush_type: EfiCpuFlushType,
+        _flush_type: CpuFlushType,
     ) -> Result<(), efi::Status> {
         Ok(())
     }
@@ -72,7 +76,7 @@ impl EfiCpuInit for NullEfiCpuInit {
         Ok(false)
     }
 
-    fn init(&self, _init_type: EfiCpuInitType) -> Result<(), efi::Status> {
+    fn init(&self, _init_type: CpuInitType) -> Result<(), efi::Status> {
         Ok(())
     }
 

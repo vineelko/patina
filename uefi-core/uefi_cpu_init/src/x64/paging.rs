@@ -1,5 +1,4 @@
 use crate::EfiCpuPaging;
-use crate::EfiPhysicalAddress;
 use alloc::boxed::Box;
 use mtrr::create_mtrr_lib;
 use mtrr::error::MtrrError;
@@ -38,7 +37,7 @@ where
 {
     fn set_memory_attributes(
         &mut self,
-        base_address: EfiPhysicalAddress,
+        base_address: efi::PhysicalAddress,
         length: u64,
         attributes: u64,
     ) -> Result<(), efi::Status> {
@@ -193,46 +192,46 @@ mod tests {
         let mut x64_cpu_paging =
             X64EfiCpuPaging::<MockMockPageTable, MockMockMtrr> { paging: mock_page_table, mtrr: mock_mtrr };
 
-        let start: EfiPhysicalAddress = 0;
+        let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
         let attributes: u64 = 0x00000000_00000020u64; // Invalid cache attribute
         assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(efi::Status::UNSUPPORTED));
 
-        let start: EfiPhysicalAddress = 0;
+        let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
         let attributes: u64 = EFI_MEMORY_UC;
         assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(efi::Status::UNSUPPORTED));
 
-        let start: EfiPhysicalAddress = 0;
+        let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
         let attributes: u64 = EFI_MEMORY_UCE;
         assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(efi::Status::UNSUPPORTED));
 
-        let start: EfiPhysicalAddress = 0;
+        let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
         let attributes: u64 = EFI_MEMORY_UC;
         assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Ok(()));
 
         // Simulate positive case for cache attributes
-        let start: EfiPhysicalAddress = 0;
+        let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
         let attributes: u64 = EFI_MEMORY_WC;
         assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Ok(()));
 
         // Simulate MtrrError::OutOfResources for cache attributes
-        let start: EfiPhysicalAddress = 0;
+        let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
         let attributes: u64 = EFI_MEMORY_WC;
         assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(efi::Status::OUT_OF_RESOURCES));
 
         // Simulate positive case for memory attributes
-        let start: EfiPhysicalAddress = 0;
+        let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
         let attributes: u64 = EFI_MEMORY_XP;
         assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Ok(()));
 
         // Simulate negative case for memory attributes
-        let start: EfiPhysicalAddress = 0;
+        let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
         let attributes: u64 = EFI_MEMORY_XP;
         assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(efi::Status::NO_MAPPING));

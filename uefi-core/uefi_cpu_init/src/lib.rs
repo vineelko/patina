@@ -13,27 +13,10 @@
 extern crate alloc;
 
 mod null;
+use mu_pi::protocols::cpu_arch::CpuFlushType;
+use mu_pi::protocols::cpu_arch::CpuInitType;
 pub use null::NullEfiCpuInit;
 use r_efi::efi;
-
-/// 64-bit physical memory address.
-pub type EfiPhysicalAddress = u64;
-
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EfiCpuFlushType {
-    WriteBackInvalidate,
-    WriteBack,
-    Invalidate,
-    MaxFlushType,
-}
-
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EfiCpuInitType {
-    Init,
-    MaxInitType,
-}
 
 /// A trait to facilitate architecture-specific implementations.
 /// TODO: This trait will be further broken down in future.
@@ -56,9 +39,9 @@ pub trait EfiCpuInit {
     /// DeviceError   If requested range could not be flushed.
     fn flush_data_cache(
         &self,
-        start: EfiPhysicalAddress,
+        start: efi::PhysicalAddress,
         length: u64,
-        flush_type: EfiCpuFlushType,
+        flush_type: CpuFlushType,
     ) -> Result<(), efi::Status>;
 
     /// Enables CPU interrupts.
@@ -94,7 +77,7 @@ pub trait EfiCpuInit {
     /// Success       If CPU INIT occurred. This value should never be seen.
     /// DeviceError   If CPU INIT failed.
     /// Unsupported   Requested type of CPU INIT not supported.
-    fn init(&self, init_type: EfiCpuInitType) -> Result<(), efi::Status>;
+    fn init(&self, init_type: CpuInitType) -> Result<(), efi::Status>;
 
     /// Returns a timer value from one of the CPU's internal timers. There is no
     /// inherent time interval between ticks but is a function of the CPU frequency.
@@ -134,7 +117,7 @@ pub trait EfiCpuPaging {
     ///                  range specified by base_address and Length.
     fn set_memory_attributes(
         &mut self,
-        base_address: EfiPhysicalAddress,
+        base_address: efi::PhysicalAddress,
         length: u64,
         attributes: u64,
     ) -> Result<(), efi::Status>;
