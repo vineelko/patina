@@ -264,6 +264,7 @@ mod tests {
         systemtables::init_system_table,
         test_support,
     };
+    use uefi_sdk::base::UEFI_PAGE_SIZE;
 
     fn with_locked_state<F: Fn()>(f: F) {
         test_support::with_global_lock(|| {
@@ -286,7 +287,6 @@ mod tests {
     #[test]
     fn test_memory_attributes_table_generation() {
         with_locked_state(|| {
-            const UEFI_PAGE_SIZE: u64 = 0x1000;
             // Create a vector to store the allocated pages
             let mut allocated_pages = Vec::new();
             let mut entry_count = 0;
@@ -309,7 +309,7 @@ mod tests {
                 match core_allocate_pages(
                     efi::ALLOCATE_ANY_PAGES,
                     page_type.0,
-                    entry_count as usize + 0x1,
+                    entry_count + 0x1,
                     core::ptr::addr_of_mut!(buffer_ptr) as *mut efi::PhysicalAddress,
                 ) {
                     // because we allocate top down, we need to insert at the front of the vector
@@ -323,8 +323,8 @@ mod tests {
                 let len = (entry_count + 1) * UEFI_PAGE_SIZE;
                 // ignore failures here, we can't set attributes in the actual page table here, but the GCD will
                 // get updated
-                let _ = core_set_memory_space_capabilities(buffer_ptr as u64, len, u64::MAX);
-                let _ = core_set_memory_space_attributes(buffer_ptr as u64, len, page_type.1);
+                let _ = core_set_memory_space_capabilities(buffer_ptr as u64, len as u64, u64::MAX);
+                let _ = core_set_memory_space_attributes(buffer_ptr as u64, len as u64, page_type.1);
             }
 
             // before we create the MAT, we expect MEMORY_ATTRIBUTES_TABLE to be None
@@ -360,7 +360,7 @@ mod tests {
                 // ignore the first entry for the system table, we don't need to randomize this test
                 // by checking it. Annoyingly, the system table is not guaranteed to be the first entry
                 // if other tests run first, so we need to check for it.
-                if entry_slice.len() == entry_count as usize + 1 {
+                if entry_slice.len() == entry_count + 1 {
                     entry_slice = &entry_slice[1..];
                 }
 
@@ -368,7 +368,7 @@ mod tests {
                     let expected_type = allocated_pages[i].1 .0;
 
                     let expected_physical_start = allocated_pages[i].0 as u64;
-                    let expected_number_of_pages = allocated_pages[i].2;
+                    let expected_number_of_pages = allocated_pages[i].2 as u64;
                     let expected_attribute = allocated_pages[i].1 .1;
 
                     assert_eq!(entry.r#type, expected_type);
