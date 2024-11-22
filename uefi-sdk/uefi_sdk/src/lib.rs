@@ -15,6 +15,8 @@
 #[macro_use]
 pub mod macros;
 
+pub mod base;
 pub mod error;
+pub mod guid;
 pub mod log;
 pub mod serial;
