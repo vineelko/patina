@@ -22,7 +22,7 @@ include = [
 uefi_interrupt = { path = "uefi_interrupt", version = "3.0.0" }
 
 # External Libraries
-uefi_sdk = {git = "https://github.com/pop-project/uefi-sdk.git", rev = "ee76ceb89f003b1c5d62573d8fe862ce31baf503" }
+uefi_sdk = {git = "https://github.com/pop-project/uefi-sdk.git", rev = "v0.1.0" }
 lazy_static = { version = "^1", features = ["spin_no_std"] }
 log = { version = "^0.4", default-features = false }
 r-efi = { version = "^5", default-features = false }
