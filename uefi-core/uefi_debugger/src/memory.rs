@@ -33,7 +33,7 @@ pub fn read_memory(address: u64, buffer: &mut [u8], unsafe_read: bool) -> Result
 
     let ptr = address as *const u8;
     unsafe {
-        ptr::copy_nonoverlapping(ptr, buffer.as_mut_ptr(), buffer.len());
+        ptr::copy(ptr, buffer.as_mut_ptr(), buffer.len());
     }
 
     Ok(buffer.len())

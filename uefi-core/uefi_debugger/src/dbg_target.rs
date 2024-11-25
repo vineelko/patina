@@ -150,7 +150,10 @@ impl SingleThreadBase for UefiTarget {
     ) -> TargetResult<(), Self> {
         match memory::write_memory(start_addr, data) {
             Ok(_) => Ok(()),
-            Err(_) => Err(gdbstub::target::TargetError::NonFatal),
+            Err(_) => {
+                log::info!("Failed to write memory at 0x{:x} : 0x{:x}", start_addr, data.len());
+                Err(gdbstub::target::TargetError::NonFatal)
+            }
         }
     }
 

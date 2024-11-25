@@ -32,9 +32,6 @@ use crate::{
 /// Length of the static buffer used for GDB communication.
 const GDB_BUFF_LEN: usize = 0x1000;
 
-/// Static buffer used for GDB communication.
-static mut GDB_BUFFER: [u8; GDB_BUFF_LEN] = [0; GDB_BUFF_LEN];
-
 // SAFETY: The exception info is not actually stored globally, but this is needed to satisfy
 // the compiler as it will be a contained within the target struct which the GdbStub
 // is generalized on using phantom data. This data will not actually be stored outside
@@ -47,7 +44,6 @@ unsafe impl Sync for ExceptionInfo {}
 /// This struct implements the Debugger trait for the UEFI debugger. It wraps
 /// a SerialIO transport and manages the debugger in an internal struct.
 ///
-#[derive(Default)]
 pub struct UefiDebugger<T>
 where
     T: SerialIO + 'static,
@@ -60,6 +56,8 @@ where
     debugger_log: bool,
     /// Internal mutable debugger state.
     internal: spin::Mutex<DebuggerInternal<'static, T>>,
+    /// Buffer for GDB communication.
+    buffer: [u8; GDB_BUFF_LEN],
 }
 
 /// Internal Debugger State
@@ -67,7 +65,6 @@ where
 /// contains the internal configuration and state for the debugger. This will
 /// be locked to allow mutable access while using the debugger.
 ///
-#[derive(Default)]
 struct DebuggerInternal<'a, T>
 where
     T: SerialIO,
@@ -94,6 +91,7 @@ impl<T: SerialIO> UefiDebugger<T> {
                 initial_break_timeout: 0,
                 gdb: None,
             }),
+            buffer: [0_u8; GDB_BUFF_LEN],
         }
     }
 
@@ -177,7 +175,7 @@ impl<T: SerialIO> Debugger for UefiDebugger<T> {
                 self.transport.write("$T05thread:01;#07".as_bytes());
 
                 // SAFETY: Use of this buffer will be guarded by the internal lock of the debugger.
-                let buf: &mut [u8; GDB_BUFF_LEN] = unsafe { core::ptr::addr_of_mut!(GDB_BUFFER).as_mut().unwrap() };
+                let buf: &mut [u8; GDB_BUFF_LEN] = unsafe { &mut *(self.buffer.as_ptr() as *mut [u8; GDB_BUFF_LEN]) };
                 let conn = SerialConnection::new(&self.transport);
 
                 let builder =

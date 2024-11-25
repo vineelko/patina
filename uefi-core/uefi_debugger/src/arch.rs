@@ -47,20 +47,44 @@ pub trait DebuggerArch {
 
     type PageTable: PageTable;
 
+    /// Executes a breakpoint instruction.
     fn breakpoint();
+
+    /// Processes the entry into the debugger, doing any fixup needed to the
+    /// CPU state of the system context.
     fn process_entry(exception_type: u64, context: EfiSystemContext) -> crate::ExceptionInfo;
+
+    /// Processes the exit from the debugger, doing any fixup needed to the
+    /// CPU state of the system context.
     fn process_exit(exception_info: &mut ExceptionInfo);
+
+    /// Enables the architecture specific single step.
     fn set_single_step(exception_info: &mut ExceptionInfo);
+
+    /// Initializes the architecture specific state for the debugger.
     fn initialize();
+
+    /// Adds a watchpoint to the provided address.
     fn add_watchpoint(address: u64, length: u64, access_type: breakpoints::WatchKind) -> bool;
+
+    /// Removes a watchpoint from the provided address.
     fn remove_watchpoint(address: u64, length: u64, access_type: breakpoints::WatchKind) -> bool;
+
+    /// Reboots the system.
     fn reboot() -> !;
+
+    /// Gets the current page table.
     fn get_page_table() -> Result<Self::PageTable, ()>;
 }
 
 pub trait UefiArchRegs: Sized {
+    /// Initializes the register from a UEFI context structure.
     fn from_context(context: &EfiSystemContext) -> Self;
+
+    /// Writes the register to a UEFI context structure.
     fn write_to_context(&self, context: &mut EfiSystemContext);
+
+    /// Reads the register from a UEFI context structure.
     fn read_from_context(&mut self, context: &EfiSystemContext) {
         *self = Self::from_context(context);
     }

@@ -176,10 +176,9 @@ pub fn poll_debugger() {
 
 /// Checks if the debugger is enabled.
 pub fn enabled() -> bool {
-    if let Some(debugger) = DEBUGGER.get() {
-        debugger.enabled()
-    } else {
-        false
+    match DEBUGGER.get() {
+        Some(debugger) => debugger.enabled(),
+        None => false,
     }
 }
 

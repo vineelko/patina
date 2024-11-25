@@ -22,11 +22,6 @@ impl gdbstub::arch::Arch for X64Arch {
     type BreakpointKind = usize;
     type Registers = X64CoreRegs;
     type RegId = X64CoreRegId;
-
-    fn target_description_xml() -> Option<&'static str> {
-        // this about this some more..
-        None
-    }
 }
 
 impl DebuggerArch for X64Arch {
@@ -55,7 +50,6 @@ impl DebuggerArch for X64Arch {
                     context.get_arch_context_mut().rip -= 1;
                     ExceptionType::Breakpoint
                 }
-
                 14 => ExceptionType::AccessViolation(context.get_arch_context().cr2 as usize),
                 _ => ExceptionType::Other(exception_type),
             },
@@ -142,6 +136,8 @@ pub struct X64CoreRegs {
     pub eflags: u64,
     /// Segment registers: CS, SS, DS, ES, FS, GS
     pub segments: [u32; 6],
+    /// Control registers: CR0, CR2, CR3, CR4
+    pub control: [u64; 4],
     /// FPU internal registers
     pub fpu: [u32; 7],
     /// FPU registers: FOP +  ST0 through ST7
@@ -173,6 +169,10 @@ impl Registers for X64CoreRegs {
 
         for &segment in &self.segments {
             write_bytes!(&segment.to_le_bytes());
+        }
+
+        for &cr in &self.control {
+            write_bytes!(&cr.to_le_bytes());
         }
 
         for &fpu_reg in &self.fpu {
@@ -210,6 +210,10 @@ impl Registers for X64CoreRegs {
             *segment = read!(u32);
         }
 
+        for cr in &mut self.control {
+            *cr = read!(u64);
+        }
+
         // Just skip the FPU registers, will not be written back anyways.
 
         Ok(())
@@ -228,6 +232,7 @@ impl UefiArchRegs for X64CoreRegs {
             rip: x64.rip,
             eflags: x64.rflags,
             segments: [x64.cs as u32, x64.ss as u32, x64.ds as u32, x64.es as u32, x64.fs as u32, x64.gs as u32],
+            control: [x64.cr0, x64.cr2, x64.cr3, x64.cr4],
             fpu: [0; 7],
             st: [[0; 10]; 9],
         }
@@ -262,6 +267,11 @@ impl UefiArchRegs for X64CoreRegs {
         x64.es = self.segments[3] as u64;
         x64.fs = self.segments[4] as u64;
         x64.gs = self.segments[5] as u64;
+
+        x64.cr0 = self.control[0];
+        x64.cr2 = self.control[1];
+        x64.cr3 = self.control[2];
+        x64.cr4 = self.control[3];
     }
 }
 
@@ -272,6 +282,7 @@ pub enum X64CoreRegId {
     Rip,
     Eflags,
     Segment(u8),
+    Control(u8),
     Fpu(u8),
     St(u8),
 }
@@ -283,8 +294,9 @@ impl RegId for X64CoreRegId {
             16 => (Self::Rip, 8),
             17 => (Self::Eflags, 8),
             18..=23 => (Self::Segment((id - 18) as u8), 4),
-            24..=30 => (Self::Fpu((id - 24) as u8), 4),
-            31..=39 => (Self::St((id - 31) as u8), 10),
+            24..=28 => (Self::Control((id - 24) as u8), 8),
+            29..=35 => (Self::Fpu((id - 24) as u8), 4),
+            36..=44 => (Self::St((id - 31) as u8), 10),
             _ => return None,
         };
 

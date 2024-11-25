@@ -10,8 +10,8 @@
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 
-use core::fmt::Write;
-use gdbstub::target::ext;
+use core::{fmt::Write, str::Split};
+use gdbstub::target::ext::{self, monitor_cmd::ConsoleOutput};
 
 use super::UefiTarget;
 
@@ -20,41 +20,101 @@ UEFI Rust Debugger monitor commands:
     help - Display this help.
     ? - Display information about the state of the machine.
     reboot - Prepares to reboot the machine on the next continue.
-    modbreak <image name> - Set a breakpoint on the module load.
+    mod all - Will break on all module loads.
+    mod break <image name> - Set a breakpoint on the module load.
+    mod clear - Clears the current module breakpoints.
 ";
 
+const BUFFER_SIZE: usize = 512;
+
+/// Buffer for monitor command output. This is needed since the out provided
+/// by gdbstub will write immediately and this might confuse the debugger.
+struct Buffer {
+    buf: [u8; BUFFER_SIZE],
+    pos: usize,
+}
+
+impl Buffer {
+    const fn new() -> Self {
+        Buffer { buf: [0_u8; BUFFER_SIZE], pos: 0 }
+    }
+
+    fn flush(&mut self, out: &mut ConsoleOutput<'_>) {
+        if self.pos > 0 {
+            out.write_raw(&self.buf[..self.pos]);
+            self.pos = 0;
+        }
+    }
+}
+
+impl Write for Buffer {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let bytes = s.as_bytes();
+        let len = bytes.len().min(self.buf.len() - self.pos);
+        if len < bytes.len() {
+            log::error!("Truncating monitor output by {} bytes", bytes.len() - len);
+        }
+
+        self.buf[self.pos..self.pos + len].copy_from_slice(bytes);
+        self.pos += len;
+        Ok(())
+    }
+}
+
 impl ext::monitor_cmd::MonitorCmd for UefiTarget {
-    fn handle_monitor_cmd(
-        &mut self,
-        cmd: &[u8],
-        mut out: ext::monitor_cmd::ConsoleOutput<'_>,
-    ) -> Result<(), Self::Error> {
+    fn handle_monitor_cmd(&mut self, cmd: &[u8], mut out: ConsoleOutput<'_>) -> Result<(), Self::Error> {
         let cmd_str = core::str::from_utf8(cmd).map_err(|_| ())?;
         let mut tokens = cmd_str.split(' ');
 
+        // The out object provided by gdbstub will treat each write as a transmission.
+        // This can case the debugger to not read all of the response, so buffer it
+        // and flush it at the end.
+        let mut buffer = Buffer::new();
+
         match tokens.next() {
             Some("help") => {
-                let _ = out.write_str(MONITOR_HELP);
+                let _ = buffer.write_str(MONITOR_HELP);
             }
-            Some("modbreak") => {
-                let _ = out.write_str("TODO");
+            Some("mod") => {
+                self.module_cmd(&mut tokens, &mut buffer);
             }
             Some("reboot") => {
                 self.reboot = true;
-                let _ = out.write_str("System will reboot on continue.");
+                let _ = buffer.write_str("System will reboot on continue.");
             }
             Some("?") => {
-                let _ = out.write_str("UEFI Rust Debugger.");
+                let _ =
+                    write!(buffer, "UEFI Rust Debugger.\nException Type: {:x?}", self.exception_info.exception_type);
             }
             Some("disablechecks") => {
                 self.disable_checks = true;
-                let _ = out.write_str("Disabling safety checks. Good luck!");
+                let _ = buffer.write_str("Disabling safety checks. Good luck!");
             }
             _ => {
-                let _ = out.write_str("Unknown command.");
+                let _ = buffer.write_str("Unknown command. Use 'help' for a list of commands.");
             }
         }
 
+        buffer.flush(&mut out);
         Ok(())
+    }
+}
+
+impl UefiTarget {
+    fn module_cmd(&mut self, tokens: &mut Split<'_, char>, out: &mut Buffer) {
+        match tokens.next() {
+            Some("all") => {
+                let _ = out.write_str("TODO");
+            }
+            Some("break") => {
+                let _ = out.write_str("TODO");
+            }
+            Some("clear") => {
+                let _ = out.write_str("Cleared module breaks!");
+            }
+            _ => {
+                let _ = out.write_str("Unknown module command!");
+            }
+        }
     }
 }
