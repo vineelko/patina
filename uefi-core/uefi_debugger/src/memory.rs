@@ -9,7 +9,7 @@
 
 use core::ptr;
 
-use paging::{page_allocator::PageAllocator, PageTable};
+use paging::{page_allocator::PageAllocator, MemoryAttributes, PageTable};
 
 use crate::arch::{DebuggerArch, SystemArch};
 
@@ -67,8 +67,10 @@ pub fn write_memory(address: u64, buffer: &[u8]) -> Result<(), ()> {
             .query_memory_region(page, PAGE_SIZE)
             .expect("Unexpected failure on address that was already checked.");
 
-        if attributes & paging::EFI_MEMORY_RO != 0 {
-            page_table.remap_memory_region(page, PAGE_SIZE, attributes & !paging::EFI_MEMORY_RP).map_err(|_| ())?;
+        if attributes.contains(MemoryAttributes::ReadOnly) {
+            page_table
+                .remap_memory_region(page, PAGE_SIZE, attributes & !MemoryAttributes::ReadProtect)
+                .map_err(|_| ())?;
         }
 
         let ptr = address as *mut u8;
@@ -76,7 +78,7 @@ pub fn write_memory(address: u64, buffer: &[u8]) -> Result<(), ()> {
             ptr::copy_nonoverlapping(buffer.as_ptr().offset(offset), ptr, len);
         }
 
-        if attributes & paging::EFI_MEMORY_RO != 0 {
+        if attributes.contains(MemoryAttributes::ReadOnly) {
             // Restore the original page attributes. Panic if this fails as the
             // debugger should not allow the system to continue if it's state cannot be restored.
             page_table
@@ -99,7 +101,7 @@ fn check_range_accessibility<P: PageTable>(page_table: &P, start_address: u64, l
     let mut page = start_address & PAGE_MASK;
     while page < start_address + length {
         let attributes = page_table.query_memory_region(page, PAGE_SIZE).map_err(|_| ())?;
-        if attributes & paging::EFI_MEMORY_RP != 0 {
+        if attributes.contains(MemoryAttributes::ReadProtect) {
             return Err(());
         }
 
@@ -114,7 +116,7 @@ fn check_range_accessibility<P: PageTable>(page_table: &P, start_address: u64, l
 pub struct DebugPageAllocator {}
 
 impl PageAllocator for DebugPageAllocator {
-    fn allocate_page(&mut self, _align: u64, _size: u64) -> paging::page_table_error::PtResult<u64> {
+    fn allocate_page(&mut self, _align: u64, _size: u64) -> paging::PtResult<u64> {
         panic!("Should not allocate page tables from the debugger!");
     }
 }

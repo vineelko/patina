@@ -132,7 +132,7 @@ pub trait EfiCpuPaging {
 
 use alloc::boxed::Box;
 pub use paging::page_allocator::PageAllocator;
-pub use paging::page_table_error::PtResult;
+pub use paging::PtResult;
 #[cfg(target_arch = "x86_64")]
 pub mod x64;
 #[cfg(target_arch = "x86_64")]

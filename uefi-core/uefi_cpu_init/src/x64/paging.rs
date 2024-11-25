@@ -5,17 +5,11 @@ use mtrr::error::MtrrError;
 use mtrr::structs::MtrrMemoryCacheType;
 use mtrr::Mtrr;
 use paging::page_allocator::PageAllocator;
-use paging::page_table_error::PtError;
 use paging::x64::X64PageTable;
+use paging::MemoryAttributes;
 use paging::PageTable;
 use paging::PagingType;
-use paging::EFI_CACHE_ATTRIBUTE_MASK;
-use paging::EFI_MEMORY_ACCESS_MASK;
-use paging::EFI_MEMORY_UC;
-use paging::EFI_MEMORY_WB;
-use paging::EFI_MEMORY_WC;
-use paging::EFI_MEMORY_WP;
-use paging::EFI_MEMORY_WT;
+use paging::PtError;
 use r_efi::efi;
 
 /// The x86_64 paging implementation. It acts as a bridge between the EFI CPU
@@ -41,24 +35,25 @@ where
         length: u64,
         attributes: u64,
     ) -> Result<(), efi::Status> {
-        let cache_attributes = attributes & EFI_CACHE_ATTRIBUTE_MASK;
-        let memory_attributes = attributes & EFI_MEMORY_ACCESS_MASK;
+        let attributes = MemoryAttributes::from_bits(attributes).ok_or(efi::Status::INVALID_PARAMETER)?;
+        let cache_attributes = attributes & MemoryAttributes::CacheAttributesMask;
+        let memory_attributes = attributes & MemoryAttributes::AccessAttributesMask;
 
         if attributes != (cache_attributes | memory_attributes) {
             return Err(efi::Status::UNSUPPORTED);
         }
 
-        if cache_attributes != 0 {
+        if cache_attributes != MemoryAttributes::empty() {
             if !self.mtrr.is_supported() {
                 return Err(efi::Status::UNSUPPORTED);
             }
 
             let cache_type = match cache_attributes {
-                EFI_MEMORY_UC => MtrrMemoryCacheType::Uncacheable,
-                EFI_MEMORY_WC => MtrrMemoryCacheType::WriteCombining,
-                EFI_MEMORY_WT => MtrrMemoryCacheType::WriteThrough,
-                EFI_MEMORY_WP => MtrrMemoryCacheType::WriteProtected,
-                EFI_MEMORY_WB => MtrrMemoryCacheType::WriteBack,
+                MemoryAttributes::Uncacheable => MtrrMemoryCacheType::Uncacheable,
+                MemoryAttributes::WriteCombining => MtrrMemoryCacheType::WriteCombining,
+                MemoryAttributes::WriteThrough => MtrrMemoryCacheType::WriteThrough,
+                MemoryAttributes::WriteProtect => MtrrMemoryCacheType::WriteProtected,
+                MemoryAttributes::Writeback => MtrrMemoryCacheType::WriteBack,
                 _ => return Err(efi::Status::UNSUPPORTED),
             };
 
@@ -78,6 +73,7 @@ where
 
     // Paging related APIs
     fn map_memory_region(&mut self, address: u64, size: u64, attributes: u64) -> Result<(), efi::Status> {
+        let attributes = MemoryAttributes::from_bits(attributes).ok_or(efi::Status::INVALID_PARAMETER)?;
         self.paging.map_memory_region(address, size, attributes).map_err(paging_err_to_efi_status)
     }
 
@@ -86,6 +82,7 @@ where
     }
 
     fn remap_memory_region(&mut self, address: u64, size: u64, attributes: u64) -> Result<(), efi::Status> {
+        let attributes = MemoryAttributes::from_bits(attributes).ok_or(efi::Status::INVALID_PARAMETER)?;
         self.paging.remap_memory_region(address, size, attributes).map_err(paging_err_to_efi_status)
     }
 
@@ -94,7 +91,10 @@ where
     }
 
     fn query_memory_region(&self, address: u64, size: u64) -> Result<u64, efi::Status> {
-        self.paging.query_memory_region(address, size).map_err(paging_err_to_efi_status)
+        self.paging
+            .query_memory_region(address, size)
+            .map(|attributes| attributes.bits())
+            .map_err(paging_err_to_efi_status)
     }
 }
 
@@ -129,6 +129,7 @@ fn paging_err_to_efi_status(err: PtError) -> efi::Status {
         PtError::UnalignedPageBase => efi::Status::INVALID_PARAMETER,
         PtError::UnalignedAddress => efi::Status::INVALID_PARAMETER,
         PtError::UnalignedMemoryRange => efi::Status::INVALID_PARAMETER,
+        PtError::InvalidMemoryRange => efi::Status::INVALID_PARAMETER,
     }
 }
 
@@ -138,19 +139,18 @@ mod tests {
     use mockall::predicate::*;
     use mockall::*;
     use mtrr::structs::{MtrrMemoryRange, MtrrSettings};
-    use paging::page_table_error::PtResult;
-    use paging::{EFI_MEMORY_UCE, EFI_MEMORY_XP};
+    use paging::PtResult;
 
     // Page Table Trait Mock
     mock! {
         pub(crate) MockPageTable {}
 
         impl PageTable for MockPageTable {
-            fn map_memory_region(&mut self, address: u64, size: u64, attributes: u64) -> PtResult<()>;
+            fn map_memory_region(&mut self, address: u64, size: u64, attributes: MemoryAttributes) -> PtResult<()>;
             fn unmap_memory_region(&mut self, address: u64, size: u64) -> PtResult<()>;
-            fn remap_memory_region(&mut self, address: u64, size: u64, attributes: u64) -> PtResult<()>;
+            fn remap_memory_region(&mut self, address: u64, size: u64, attributes: MemoryAttributes) -> PtResult<()>;
             fn install_page_table(&self) -> PtResult<()>;
-            fn query_memory_region(&self, address: u64, size: u64) -> PtResult<u64>;
+            fn query_memory_region(&self, address: u64, size: u64) -> PtResult<MemoryAttributes>;
         }
     }
 
@@ -195,45 +195,48 @@ mod tests {
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
         let attributes: u64 = 0x00000000_00000020u64; // Invalid cache attribute
+        assert_eq!(
+            x64_cpu_paging.set_memory_attributes(start, length, attributes),
+            Err(efi::Status::INVALID_PARAMETER)
+        );
+
+        let start: efi::PhysicalAddress = 0;
+        let length: u64 = 0;
+        let attributes: u64 = MemoryAttributes::Uncacheable.bits();
         assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(efi::Status::UNSUPPORTED));
 
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
-        let attributes: u64 = EFI_MEMORY_UC;
+        let attributes: u64 = MemoryAttributes::UncacheableExport.bits();
         assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(efi::Status::UNSUPPORTED));
 
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
-        let attributes: u64 = EFI_MEMORY_UCE;
-        assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(efi::Status::UNSUPPORTED));
-
-        let start: efi::PhysicalAddress = 0;
-        let length: u64 = 0;
-        let attributes: u64 = EFI_MEMORY_UC;
+        let attributes: u64 = MemoryAttributes::Uncacheable.bits();
         assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Ok(()));
 
         // Simulate positive case for cache attributes
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
-        let attributes: u64 = EFI_MEMORY_WC;
+        let attributes: u64 = MemoryAttributes::WriteCombining.bits();
         assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Ok(()));
 
         // Simulate MtrrError::OutOfResources for cache attributes
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
-        let attributes: u64 = EFI_MEMORY_WC;
+        let attributes: u64 = MemoryAttributes::WriteCombining.bits();
         assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(efi::Status::OUT_OF_RESOURCES));
 
         // Simulate positive case for memory attributes
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
-        let attributes: u64 = EFI_MEMORY_XP;
+        let attributes: u64 = MemoryAttributes::ExecuteProtect.bits();
         assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Ok(()));
 
         // Simulate negative case for memory attributes
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
-        let attributes: u64 = EFI_MEMORY_XP;
+        let attributes: u64 = MemoryAttributes::ExecuteProtect.bits();
         assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(efi::Status::NO_MAPPING));
     }
 
@@ -244,7 +247,7 @@ mod tests {
         mock_page_table.expect_unmap_memory_region().times(1).returning(|_, _| Ok(()));
         mock_page_table.expect_remap_memory_region().times(1).returning(|_, _, _| Ok(()));
         mock_page_table.expect_install_page_table().times(1).returning(|| Ok(()));
-        mock_page_table.expect_query_memory_region().times(1).returning(|_, _| Ok(0));
+        mock_page_table.expect_query_memory_region().times(1).returning(|_, _| Ok(MemoryAttributes::empty()));
 
         let mock_mtrr = MockMockMtrr::new();
 
