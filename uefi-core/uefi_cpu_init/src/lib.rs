@@ -23,7 +23,7 @@ use r_efi::efi;
 pub trait EfiCpuInit {
     /// The first function called by DxeCore to initialize the cpu lib before
     /// setting up heap. Cannot use heap related structures like Box, Rc etc.
-    fn initialize(&mut self) -> Result<(), efi::Status>;
+    fn initialize(&mut self) -> Result<(), EfiError>;
 
     /// Flush CPU data cache. If the instruction cache is fully coherent
     /// with all DMA operations then function can just return Success.
@@ -42,7 +42,7 @@ pub trait EfiCpuInit {
         start: efi::PhysicalAddress,
         length: u64,
         flush_type: CpuFlushType,
-    ) -> Result<(), efi::Status>;
+    ) -> Result<(), EfiError>;
 
     /// Enables CPU interrupts.
     ///
@@ -50,7 +50,7 @@ pub trait EfiCpuInit {
     ///
     /// Success       If interrupts were enabled in the CPU
     /// DeviceError   If interrupts could not be enabled on the CPU.
-    fn enable_interrupt(&self) -> Result<(), efi::Status>;
+    fn enable_interrupt(&self) -> Result<(), EfiError>;
 
     /// Disables CPU interrupts.
     ///
@@ -58,7 +58,7 @@ pub trait EfiCpuInit {
     ///
     /// Success       If interrupts were disabled in the CPU.
     /// DeviceError   If interrupts could not be disabled on the CPU.
-    fn disable_interrupt(&self) -> Result<(), efi::Status>;
+    fn disable_interrupt(&self) -> Result<(), EfiError>;
 
     /// Return the state of interrupts.
     ///
@@ -66,7 +66,7 @@ pub trait EfiCpuInit {
     ///
     /// Success            If interrupts were disabled in the CPU.
     /// InvalidParameter   State is NULL.
-    fn get_interrupt_state(&self) -> Result<bool, efi::Status>;
+    fn get_interrupt_state(&self) -> Result<bool, EfiError>;
 
     /// Generates an INIT to the CPU.
     ///
@@ -77,7 +77,7 @@ pub trait EfiCpuInit {
     /// Success       If CPU INIT occurred. This value should never be seen.
     /// DeviceError   If CPU INIT failed.
     /// Unsupported   Requested type of CPU INIT not supported.
-    fn init(&self, init_type: CpuInitType) -> Result<(), efi::Status>;
+    fn init(&self, init_type: CpuInitType) -> Result<(), EfiError>;
 
     /// Returns a timer value from one of the CPU's internal timers. There is no
     /// inherent time interval between ticks but is a function of the CPU frequency.
@@ -90,7 +90,7 @@ pub trait EfiCpuInit {
     /// Unsupported      - If the CPU does not have any readable timers.
     /// DeviceError      - If an error occurred while reading the timer.
     /// InvalidParameter - timer_index is not valid or TimerValue is NULL.
-    fn get_timer_value(&self, timer_index: u32) -> Result<(u64, u64), efi::Status>;
+    fn get_timer_value(&self, timer_index: u32) -> Result<(u64, u64), EfiError>;
 }
 
 pub trait EfiCpuPaging {
@@ -120,14 +120,14 @@ pub trait EfiCpuPaging {
         base_address: efi::PhysicalAddress,
         length: u64,
         attributes: u64,
-    ) -> Result<(), efi::Status>;
+    ) -> Result<(), EfiError>;
 
     /// Paging related functions
-    fn map_memory_region(&mut self, address: u64, size: u64, attributes: u64) -> Result<(), efi::Status>;
-    fn unmap_memory_region(&mut self, address: u64, size: u64) -> Result<(), efi::Status>;
-    fn remap_memory_region(&mut self, address: u64, size: u64, attributes: u64) -> Result<(), efi::Status>;
-    fn install_page_table(&self) -> Result<(), efi::Status>;
-    fn query_memory_region(&self, address: u64, size: u64) -> Result<u64, efi::Status>;
+    fn map_memory_region(&mut self, address: u64, size: u64, attributes: u64) -> Result<(), EfiError>;
+    fn unmap_memory_region(&mut self, address: u64, size: u64) -> Result<(), EfiError>;
+    fn remap_memory_region(&mut self, address: u64, size: u64, attributes: u64) -> Result<(), EfiError>;
+    fn install_page_table(&self) -> Result<(), EfiError>;
+    fn query_memory_region(&self, address: u64, size: u64) -> Result<u64, EfiError>;
 }
 
 use alloc::boxed::Box;
@@ -135,11 +135,12 @@ pub use paging::page_allocator::PageAllocator;
 pub use paging::PtResult;
 #[cfg(target_arch = "x86_64")]
 pub mod x64;
+use uefi_sdk::error::EfiError;
 #[cfg(target_arch = "x86_64")]
 pub use x64::X64EfiCpuInit;
 #[cfg(target_arch = "x86_64")]
 pub use x64::X64EfiCpuPaging;
-pub fn create_cpu_paging<A: PageAllocator + 'static>(_page_allocator: A) -> Result<Box<dyn EfiCpuPaging>, efi::Status> {
+pub fn create_cpu_paging<A: PageAllocator + 'static>(_page_allocator: A) -> Result<Box<dyn EfiCpuPaging>, EfiError> {
     #[cfg(target_arch = "x86_64")]
     {
         use x64::create_cpu_x64_paging;
@@ -147,6 +148,6 @@ pub fn create_cpu_paging<A: PageAllocator + 'static>(_page_allocator: A) -> Resu
     }
     #[cfg(target_arch = "aarch64")]
     {
-        Err(efi::Status::UNSUPPORTED)
+        Err(EfiError::Unsupported)
     }
 }

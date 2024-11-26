@@ -11,6 +11,7 @@ use paging::PageTable;
 use paging::PagingType;
 use paging::PtError;
 use r_efi::efi;
+use uefi_sdk::error::EfiError;
 
 /// The x86_64 paging implementation. It acts as a bridge between the EFI CPU
 /// Architecture Protocol and the x86_64 paging implementation.
@@ -34,18 +35,18 @@ where
         base_address: efi::PhysicalAddress,
         length: u64,
         attributes: u64,
-    ) -> Result<(), efi::Status> {
-        let attributes = MemoryAttributes::from_bits(attributes).ok_or(efi::Status::INVALID_PARAMETER)?;
+    ) -> Result<(), EfiError> {
+        let attributes = MemoryAttributes::from_bits(attributes).ok_or(EfiError::InvalidParameter)?;
         let cache_attributes = attributes & MemoryAttributes::CacheAttributesMask;
         let memory_attributes = attributes & MemoryAttributes::AccessAttributesMask;
 
         if attributes != (cache_attributes | memory_attributes) {
-            return Err(efi::Status::UNSUPPORTED);
+            return Err(EfiError::Unsupported);
         }
 
         if cache_attributes != MemoryAttributes::empty() {
             if !self.mtrr.is_supported() {
-                return Err(efi::Status::UNSUPPORTED);
+                return Err(EfiError::Unsupported);
             }
 
             let cache_type = match cache_attributes {
@@ -54,7 +55,7 @@ where
                 MemoryAttributes::WriteThrough => MtrrMemoryCacheType::WriteThrough,
                 MemoryAttributes::WriteProtect => MtrrMemoryCacheType::WriteProtected,
                 MemoryAttributes::Writeback => MtrrMemoryCacheType::WriteBack,
-                _ => return Err(efi::Status::UNSUPPORTED),
+                _ => return Err(EfiError::Unsupported),
             };
 
             let curr_attribute = self.mtrr.get_memory_attribute(base_address);
@@ -72,25 +73,25 @@ where
     }
 
     // Paging related APIs
-    fn map_memory_region(&mut self, address: u64, size: u64, attributes: u64) -> Result<(), efi::Status> {
-        let attributes = MemoryAttributes::from_bits(attributes).ok_or(efi::Status::INVALID_PARAMETER)?;
+    fn map_memory_region(&mut self, address: u64, size: u64, attributes: u64) -> Result<(), EfiError> {
+        let attributes = MemoryAttributes::from_bits(attributes).ok_or(EfiError::InvalidParameter)?;
         self.paging.map_memory_region(address, size, attributes).map_err(paging_err_to_efi_status)
     }
 
-    fn unmap_memory_region(&mut self, address: u64, size: u64) -> Result<(), efi::Status> {
+    fn unmap_memory_region(&mut self, address: u64, size: u64) -> Result<(), EfiError> {
         self.paging.unmap_memory_region(address, size).map_err(paging_err_to_efi_status)
     }
 
-    fn remap_memory_region(&mut self, address: u64, size: u64, attributes: u64) -> Result<(), efi::Status> {
-        let attributes = MemoryAttributes::from_bits(attributes).ok_or(efi::Status::INVALID_PARAMETER)?;
+    fn remap_memory_region(&mut self, address: u64, size: u64, attributes: u64) -> Result<(), EfiError> {
+        let attributes = MemoryAttributes::from_bits(attributes).ok_or(EfiError::InvalidParameter)?;
         self.paging.remap_memory_region(address, size, attributes).map_err(paging_err_to_efi_status)
     }
 
-    fn install_page_table(&self) -> Result<(), efi::Status> {
+    fn install_page_table(&self) -> Result<(), EfiError> {
         self.paging.install_page_table().map_err(paging_err_to_efi_status)
     }
 
-    fn query_memory_region(&self, address: u64, size: u64) -> Result<u64, efi::Status> {
+    fn query_memory_region(&self, address: u64, size: u64) -> Result<u64, EfiError> {
         self.paging
             .query_memory_region(address, size)
             .map(|attributes| attributes.bits())
@@ -98,38 +99,36 @@ where
     }
 }
 
-pub fn create_cpu_x64_paging<A: PageAllocator + 'static>(
-    page_allocator: A,
-) -> Result<Box<dyn EfiCpuPaging>, efi::Status> {
+pub fn create_cpu_x64_paging<A: PageAllocator + 'static>(page_allocator: A) -> Result<Box<dyn EfiCpuPaging>, EfiError> {
     Ok(Box::new(X64EfiCpuPaging {
         paging: X64PageTable::new(page_allocator, PagingType::Paging4KB4Level).unwrap(),
         mtrr: create_mtrr_lib(0),
     }))
 }
 
-fn mtrr_err_to_efi_status(err: MtrrError) -> efi::Status {
+fn mtrr_err_to_efi_status(err: MtrrError) -> EfiError {
     match err {
-        MtrrError::MtrrNotSupported => efi::Status::UNSUPPORTED,
-        MtrrError::VariableRangeMtrrExhausted => efi::Status::OUT_OF_RESOURCES,
-        MtrrError::FixedRangeMtrrBaseAddressNotAligned => efi::Status::INVALID_PARAMETER,
-        MtrrError::FixedRangeMtrrLengthNotAligned => efi::Status::INVALID_PARAMETER,
-        MtrrError::InvalidParameter => efi::Status::INVALID_PARAMETER,
-        MtrrError::BufferTooSmall => efi::Status::BUFFER_TOO_SMALL,
-        MtrrError::OutOfResources => efi::Status::OUT_OF_RESOURCES,
-        MtrrError::AlreadyStarted => efi::Status::ALREADY_STARTED,
+        MtrrError::MtrrNotSupported => EfiError::Unsupported,
+        MtrrError::VariableRangeMtrrExhausted => EfiError::OutOfResources,
+        MtrrError::FixedRangeMtrrBaseAddressNotAligned => EfiError::InvalidParameter,
+        MtrrError::FixedRangeMtrrLengthNotAligned => EfiError::InvalidParameter,
+        MtrrError::InvalidParameter => EfiError::InvalidParameter,
+        MtrrError::BufferTooSmall => EfiError::BufferTooSmall,
+        MtrrError::OutOfResources => EfiError::OutOfResources,
+        MtrrError::AlreadyStarted => EfiError::AlreadyStarted,
     }
 }
 
-fn paging_err_to_efi_status(err: PtError) -> efi::Status {
+fn paging_err_to_efi_status(err: PtError) -> EfiError {
     match err {
-        PtError::InvalidParameter => efi::Status::INVALID_PARAMETER,
-        PtError::OutOfResources => efi::Status::OUT_OF_RESOURCES,
-        PtError::NoMapping => efi::Status::NO_MAPPING,
-        PtError::IncompatibleMemoryAttributes => efi::Status::INVALID_PARAMETER,
-        PtError::UnalignedPageBase => efi::Status::INVALID_PARAMETER,
-        PtError::UnalignedAddress => efi::Status::INVALID_PARAMETER,
-        PtError::UnalignedMemoryRange => efi::Status::INVALID_PARAMETER,
-        PtError::InvalidMemoryRange => efi::Status::INVALID_PARAMETER,
+        PtError::InvalidParameter => EfiError::InvalidParameter,
+        PtError::OutOfResources => EfiError::OutOfResources,
+        PtError::NoMapping => EfiError::NoMapping,
+        PtError::IncompatibleMemoryAttributes => EfiError::InvalidParameter,
+        PtError::UnalignedPageBase => EfiError::InvalidParameter,
+        PtError::UnalignedAddress => EfiError::InvalidParameter,
+        PtError::UnalignedMemoryRange => EfiError::InvalidParameter,
+        PtError::InvalidMemoryRange => EfiError::InvalidParameter,
     }
 }
 
@@ -195,20 +194,17 @@ mod tests {
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
         let attributes: u64 = 0x00000000_00000020u64; // Invalid cache attribute
-        assert_eq!(
-            x64_cpu_paging.set_memory_attributes(start, length, attributes),
-            Err(efi::Status::INVALID_PARAMETER)
-        );
+        assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(EfiError::InvalidParameter));
 
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
         let attributes: u64 = MemoryAttributes::Uncacheable.bits();
-        assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(efi::Status::UNSUPPORTED));
+        assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(EfiError::Unsupported));
 
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
         let attributes: u64 = MemoryAttributes::UncacheableExport.bits();
-        assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(efi::Status::UNSUPPORTED));
+        assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(EfiError::Unsupported));
 
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
@@ -225,7 +221,7 @@ mod tests {
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
         let attributes: u64 = MemoryAttributes::WriteCombining.bits();
-        assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(efi::Status::OUT_OF_RESOURCES));
+        assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(EfiError::OutOfResources));
 
         // Simulate positive case for memory attributes
         let start: efi::PhysicalAddress = 0;
@@ -237,7 +233,7 @@ mod tests {
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
         let attributes: u64 = MemoryAttributes::ExecuteProtect.bits();
-        assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(efi::Status::NO_MAPPING));
+        assert_eq!(x64_cpu_paging.set_memory_attributes(start, length, attributes), Err(EfiError::NoMapping));
     }
 
     #[test]

@@ -14,6 +14,7 @@ use core::arch::asm;
 use core::sync::atomic::{AtomicBool, Ordering};
 use mu_pi::protocols::cpu_arch::{CpuFlushType, CpuInitType};
 use r_efi::efi;
+use uefi_sdk::error::EfiError;
 
 /// Struct to implement X64 Cpu Init.
 pub struct X64EfiCpuInit {
@@ -95,7 +96,7 @@ impl X64EfiCpuInit {
 /// The x86_64 implementation of EFI Cpu Init.
 impl EfiCpuInit for X64EfiCpuInit {
     /// This function initializes the CPU for the x86_64 architecture.
-    fn initialize(&mut self) -> Result<(), efi::Status> {
+    fn initialize(&mut self) -> Result<(), EfiError> {
         // Initialize floating point units
 
         // disable interrupts
@@ -114,7 +115,7 @@ impl EfiCpuInit for X64EfiCpuInit {
         _start: efi::PhysicalAddress,
         _length: u64,
         flush_type: CpuFlushType,
-    ) -> Result<(), efi::Status> {
+    ) -> Result<(), EfiError> {
         match flush_type {
             CpuFlushType::EfiCpuFlushTypeWriteBackInvalidate => {
                 self.asm_wbinvd();
@@ -124,33 +125,33 @@ impl EfiCpuInit for X64EfiCpuInit {
                 self.asm_invd();
                 Ok(())
             }
-            _ => Err(efi::Status::UNSUPPORTED),
+            _ => Err(EfiError::Unsupported),
         }
     }
 
-    fn enable_interrupt(&self) -> Result<(), efi::Status> {
+    fn enable_interrupt(&self) -> Result<(), EfiError> {
         self.enable_interrupts();
         self.interrupt_state.store(true, Ordering::Release);
         Ok(())
     }
 
-    fn disable_interrupt(&self) -> Result<(), efi::Status> {
+    fn disable_interrupt(&self) -> Result<(), EfiError> {
         self.disable_interrupts();
         self.interrupt_state.store(false, Ordering::Release);
         Ok(())
     }
 
-    fn get_interrupt_state(&self) -> Result<bool, efi::Status> {
+    fn get_interrupt_state(&self) -> Result<bool, EfiError> {
         Ok(self.interrupt_state.load(Ordering::Acquire))
     }
 
-    fn init(&self, _init_type: CpuInitType) -> Result<(), efi::Status> {
+    fn init(&self, _init_type: CpuInitType) -> Result<(), EfiError> {
         unimplemented!()
     }
 
-    fn get_timer_value(&self, timer_index: u32) -> Result<(u64, u64), efi::Status> {
+    fn get_timer_value(&self, timer_index: u32) -> Result<(u64, u64), EfiError> {
         if timer_index != 0 {
-            return Err(efi::Status::INVALID_PARAMETER);
+            return Err(EfiError::InvalidParameter);
         }
 
         let timer_value = self.asm_read_tsc(); // Assuming asm_read_tsc is defined elsewhere
@@ -198,7 +199,7 @@ mod tests {
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
         let flush_type: CpuFlushType = CpuFlushType::EfiCpuFlushTypeWriteBack;
-        assert_eq!(x64_cpu_init.flush_data_cache(start, length, flush_type), Err(efi::Status::UNSUPPORTED));
+        assert_eq!(x64_cpu_init.flush_data_cache(start, length, flush_type), Err(EfiError::Unsupported));
     }
 
     #[test]
@@ -217,7 +218,7 @@ mod tests {
         x64_cpu_init.calculate_timer_period();
 
         assert_eq!(x64_cpu_init.initialize(), Ok(()));
-        assert_eq!(x64_cpu_init.get_timer_value(1), Err(efi::Status::INVALID_PARAMETER));
+        assert_eq!(x64_cpu_init.get_timer_value(1), Err(EfiError::InvalidParameter));
         assert_eq!(x64_cpu_init.get_timer_value(0), Ok((0, 0)));
     }
 }
