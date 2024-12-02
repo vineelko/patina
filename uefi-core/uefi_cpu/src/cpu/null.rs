@@ -1,4 +1,4 @@
-//! AArch64 CPU initialization implementation
+//! Null CPU initialization implementation - For doc tests
 //!
 //! ## License
 //!
@@ -11,10 +11,11 @@ use mu_pi::protocols::cpu_arch::{CpuFlushType, CpuInitType};
 use r_efi::efi;
 use uefi_sdk::error::EfiError;
 
-/// Struct to implement AArch64 Cpu Init.
-pub struct EfiCpuInitAArch64 {}
+/// Struct to implement Null Cpu Init.
+#[derive(Default, Copy, Clone)]
+pub struct EfiCpuInitNull {}
 
-impl EfiCpuInit for EfiCpuInitAArch64 {
+impl EfiCpuInit for EfiCpuInitNull {
     fn initialize(&mut self) -> Result<(), EfiError> {
         Ok(())
     }

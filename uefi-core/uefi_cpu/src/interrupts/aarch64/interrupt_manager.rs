@@ -15,15 +15,15 @@ use super::exception_handling;
 
 /// AARCH64 Implementation of the InterruptManager.
 #[derive(Default, Copy, Clone)]
-pub struct InterruptManagerAarch64 {}
+pub struct InterruptManagerAArch64 {}
 
-impl InterruptManagerAarch64 {
+impl InterruptManagerAArch64 {
     pub const fn new() -> Self {
         Self {}
     }
 }
 
-impl InterruptManager for InterruptManagerAarch64 {
+impl InterruptManager for InterruptManagerAArch64 {
     fn initialize(&mut self) -> Result<(), EfiError> {
         // TODO
         Ok(())

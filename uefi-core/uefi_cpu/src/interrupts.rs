@@ -12,9 +12,24 @@ use aarch64::EfiSystemContextAArch64;
 use uefi_sdk::error::EfiError;
 use x64::EfiSystemContextX64;
 
-mod aarch64;
+pub mod aarch64;
 pub mod null;
-mod x64;
+pub mod x64;
+
+cfg_if::cfg_if! {
+    if #[cfg(all(target_os = "uefi", target_arch = "x86_64"))] {
+        pub use x64::InterruptManagerX64 as InterruptManagerX64;
+        pub use null::InterruptManagerNull as InterruptManagerNull;
+    } else if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
+        pub use aarch64::InterruptManagerAArch64 as InterruptManagerAArch64;
+        pub use null::InterruptManagerNull as InterruptManagerNull;
+    } else if #[cfg(feature = "doc")] {
+        pub use x64::InterruptManagerX64 as InterruptManagerX64;
+        pub use aarch64::InterruptManagerAArch64 as InterruptManagerAArch64;
+        pub use null::InterruptManagerNull as InterruptManagerNull;
+    } else if #[cfg(test)] {
+    }
+}
 
 #[repr(C)]
 pub union EfiSystemContext {

@@ -11,3 +11,4 @@ mod exception_handling;
 mod interrupt_manager;
 
 pub use efi_system_context::EfiSystemContextAArch64;
+pub use interrupt_manager::InterruptManagerAArch64;

@@ -8,3 +8,5 @@
 //!
 mod cpu;
 mod gdt;
+
+pub use cpu::EfiCpuInitX64;

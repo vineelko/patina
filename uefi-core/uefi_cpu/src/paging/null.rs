@@ -1,4 +1,4 @@
-//! AArch64 Paging
+//! Null Paging - For doc tests
 //!
 //! This module provides an in direction to the external paging crate.
 //!
@@ -14,9 +14,9 @@ use uefi_sdk::error::EfiError;
 use super::EfiCpuPaging;
 
 #[derive(Default)]
-pub struct EfiCpuPagingAArch64;
+pub struct EfiCpuPagingNull;
 
-impl EfiCpuPaging for EfiCpuPagingAArch64 {
+impl EfiCpuPaging for EfiCpuPagingNull {
     fn set_memory_attributes(
         &mut self,
         _base_address: efi::PhysicalAddress,

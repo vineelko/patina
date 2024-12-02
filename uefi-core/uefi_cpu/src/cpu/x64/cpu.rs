@@ -17,14 +17,14 @@ use r_efi::efi;
 use uefi_sdk::error::EfiError;
 
 /// Struct to implement X64 Cpu Init.
-pub struct X64EfiCpuInit {
+pub struct EfiCpuInitX64 {
     interrupt_state: AtomicBool,
     timer_period: u64,
 }
 
-impl X64EfiCpuInit {
+impl EfiCpuInitX64 {
     pub fn new() -> Self {
-        let mut x64_efi_init = X64EfiCpuInit { interrupt_state: AtomicBool::new(false), timer_period: 0 };
+        let mut x64_efi_init = EfiCpuInitX64 { interrupt_state: AtomicBool::new(false), timer_period: 0 };
         x64_efi_init.calculate_timer_period();
         x64_efi_init
     }
@@ -94,7 +94,7 @@ impl X64EfiCpuInit {
 }
 
 /// The x86_64 implementation of EFI Cpu Init.
-impl EfiCpuInit for X64EfiCpuInit {
+impl EfiCpuInit for EfiCpuInitX64 {
     /// This function initializes the CPU for the x86_64 architecture.
     fn initialize(&mut self) -> Result<(), EfiError> {
         // Initialize floating point units
@@ -160,9 +160,9 @@ impl EfiCpuInit for X64EfiCpuInit {
     }
 }
 
-impl Default for X64EfiCpuInit {
+impl Default for EfiCpuInitX64 {
     fn default() -> Self {
-        X64EfiCpuInit::new()
+        EfiCpuInitX64::new()
     }
 }
 
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_initialize() {
-        let mut x64_cpu_init = X64EfiCpuInit { interrupt_state: AtomicBool::new(false), timer_period: 0 };
+        let mut x64_cpu_init = EfiCpuInitX64 { interrupt_state: AtomicBool::new(false), timer_period: 0 };
         x64_cpu_init.calculate_timer_period();
 
         assert_eq!(x64_cpu_init.initialize(), Ok(()));
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn test_flush_data_cache() {
-        let mut x64_cpu_init = X64EfiCpuInit { interrupt_state: AtomicBool::new(false), timer_period: 0 };
+        let mut x64_cpu_init = EfiCpuInitX64 { interrupt_state: AtomicBool::new(false), timer_period: 0 };
         x64_cpu_init.calculate_timer_period();
 
         assert_eq!(x64_cpu_init.initialize(), Ok(()));
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_enable_disable_interrupts() {
-        let mut x64_cpu_init = X64EfiCpuInit { interrupt_state: AtomicBool::new(false), timer_period: 0 };
+        let mut x64_cpu_init = EfiCpuInitX64 { interrupt_state: AtomicBool::new(false), timer_period: 0 };
         x64_cpu_init.calculate_timer_period();
 
         assert_eq!(x64_cpu_init.initialize(), Ok(()));
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn test_get_timer_value() {
-        let mut x64_cpu_init = X64EfiCpuInit { interrupt_state: AtomicBool::new(false), timer_period: 0 };
+        let mut x64_cpu_init = EfiCpuInitX64 { interrupt_state: AtomicBool::new(false), timer_period: 0 };
         x64_cpu_init.calculate_timer_period();
 
         assert_eq!(x64_cpu_init.initialize(), Ok(()));

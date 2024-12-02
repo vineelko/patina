@@ -26,7 +26,7 @@ use super::EfiCpuPaging;
 
 /// The x86_64 paging implementation. It acts as a bridge between the EFI CPU
 /// Architecture Protocol and the x86_64 paging implementation.
-struct X64EfiCpuPaging<P, M>
+struct EfiCpuPagingX64<P, M>
 where
     P: PageTable,
     M: Mtrr,
@@ -36,7 +36,7 @@ where
 }
 
 /// The x86_64 paging implementation.
-impl<P, M> EfiCpuPaging for X64EfiCpuPaging<P, M>
+impl<P, M> EfiCpuPaging for EfiCpuPagingX64<P, M>
 where
     P: PageTable,
     M: Mtrr,
@@ -111,7 +111,7 @@ where
 }
 
 pub fn create_cpu_x64_paging<A: PageAllocator + 'static>(page_allocator: A) -> Result<Box<dyn EfiCpuPaging>, EfiError> {
-    Ok(Box::new(X64EfiCpuPaging {
+    Ok(Box::new(EfiCpuPagingX64 {
         paging: X64PageTable::new(page_allocator, PagingType::Paging4KB4Level).unwrap(),
         mtrr: create_mtrr_lib(0),
     }))
@@ -200,7 +200,7 @@ mod tests {
 
         // not using new() constructor to inject mock objects(paging, mtrr)
         let mut x64_cpu_paging =
-            X64EfiCpuPaging::<MockMockPageTable, MockMockMtrr> { paging: mock_page_table, mtrr: mock_mtrr };
+            EfiCpuPagingX64::<MockMockPageTable, MockMockMtrr> { paging: mock_page_table, mtrr: mock_mtrr };
 
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
@@ -260,7 +260,7 @@ mod tests {
 
         // not using new() constructor to inject mock objects(paging, mtrr)
         let mut x64_cpu_paging =
-            X64EfiCpuPaging::<MockMockPageTable, MockMockMtrr> { paging: mock_page_table, mtrr: mock_mtrr };
+            EfiCpuPagingX64::<MockMockPageTable, MockMockMtrr> { paging: mock_page_table, mtrr: mock_mtrr };
 
         let start: u64 = 0;
         let length: u64 = 0;

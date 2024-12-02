@@ -12,14 +12,28 @@
 cfg_if::cfg_if! {
     if #[cfg(all(target_os = "uefi", target_arch = "x86_64"))] {
         mod x64;
+        mod null;
+        pub use x64::EfiCpuInitX64 as EfiCpuInitX64;
+        pub use null::EfiCpuInitNull as EfiCpuInitNull;
     } else if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
-        mod aarch64;
+        pub mod aarch64;
+        pub mod null;
+        pub use aarch64::EfiCpuInitAArch64 as EfiCpuInitAArch64;
+        pub use null::EfiCpuInitNull as EfiCpuInitNull;
     } else if #[cfg(feature = "doc")] {
-        mod x64;
-        mod aarch64;
+        pub mod x64;
+        pub mod aarch64;
+        pub mod null;
+        pub use x64::EfiCpuInitX64 as EfiCpuInitX64;
+        pub use aarch64::EfiCpuInitAArch64 as EfiCpuInitAArch64;
+        pub use null::EfiCpuInitNull as EfiCpuInitNull;
     } else if #[cfg(test)] {
-        mod x64;
-        mod aarch64;
+        pub mod x64;
+        pub mod aarch64;
+        pub mod null;
+        pub use x64::EfiCpuInitX64 as EfiCpuInitX64;
+        pub use aarch64::EfiCpuInitAArch64 as EfiCpuInitAArch64;
+        pub use null::EfiCpuInitNull as EfiCpuInitNull;
     }
 }
 
