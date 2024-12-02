@@ -18,7 +18,7 @@ include = [
 ]
 
 [workspace.dependencies]
-uefi_cpu = { path = "uefi_cpu", version = "5.0.0" }
+uefi_cpu = { path = "uefi_cpu", version = "6.0.0" }
 
 # External Libraries
 uefi_sdk = {git = "https://github.com/pop-project/uefi-sdk.git", rev = "v0.1.1" }
