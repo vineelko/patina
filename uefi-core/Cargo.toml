@@ -22,13 +22,13 @@ include = [
 uefi_interrupt = { path = "uefi_interrupt", version = "3.0.0" }
 
 # External Libraries
-uefi_sdk = {git = "https://github.com/pop-project/uefi-sdk.git", rev = "v0.1.0" }
+uefi_sdk = {git = "https://github.com/pop-project/uefi-sdk.git", rev = "v0.1.1" }
 lazy_static = { version = "^1", features = ["spin_no_std"] }
 log = { version = "^0.4", default-features = false }
 r-efi = { version = "^5", default-features = false }
 spin = "^0.9"
 uart_16550 = "^0.3.2"
-x86_64 = "^0.14"
+x86_64 = { version= "^0.14", default-features = false, features = ["instructions", "abi_x86_interrupt"] }
 mu_pi = {git = "https://github.com/microsoft/mu_rust_pi.git", tag = "v5.1.0"}
 mu_rust_helpers = { git = "https://github.com/microsoft/mu_rust_helpers", tag = "v1.2.1", default-features = false}
 mockall = "0.13.0"
