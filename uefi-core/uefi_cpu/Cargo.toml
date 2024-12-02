@@ -1,6 +1,6 @@
 [package]
 name = "uefi_cpu"
-version = "3.0.1"
+version = "5.0.0"
 edition = "2021"
 readme = "README.md"
 description = "CPU crate implementation."
