@@ -5,7 +5,7 @@ use gdbstub::{
     target::ext::breakpoints::WatchKind,
 };
 use paging::PagingType;
-use uefi_interrupt::efi_system_context::EfiSystemContext;
+use uefi_cpu::interrupts::EfiSystemContext;
 
 use super::{DebuggerArch, UefiArchRegs};
 use crate::paging;

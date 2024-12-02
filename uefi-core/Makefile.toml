@@ -4,7 +4,7 @@ default_to_workspace = false
 [env]
 RUSTC_BOOTSTRAP = 1
 NO_STD_FLAGS = "--profile ${RUSTC_PROFILE} -Zbuild-std=core,compiler_builtins,alloc -Zbuild-std-features=compiler-builtins-mem -Zunstable-options --timings=html"
-UEFI_CRATES = "-p uefi_cpu_init -p section_extractor -p uefi_interrupt -p uefi_debugger"
+UEFI_CRATES = "-p uefi_cpu -p section_extractor -p uefi_debugger"
 BUILD_CRATES = ""
 
 [env.development]

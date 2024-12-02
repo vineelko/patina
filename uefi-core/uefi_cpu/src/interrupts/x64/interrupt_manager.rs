@@ -1,4 +1,4 @@
-//! x86_86 Interrupt initialization
+//! X64 Interrupt manager
 //!
 //! ## License
 //!
@@ -7,15 +7,20 @@
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 
-use crate::efi_system_context::EfiSystemContext;
-use crate::InterruptManager;
 use core::arch::global_asm;
 use lazy_static::lazy_static;
 use uefi_sdk::error::EfiError;
-use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
+use x86_64::structures::idt::InterruptDescriptorTable;
+use x86_64::structures::idt::InterruptStackFrame;
 use x86_64::VirtAddr;
 
-global_asm!(include_str!("x64/interrupt_handler.asm"));
+use crate::interrupts::EfiSystemContext;
+use crate::interrupts::InterruptManager;
+use crate::interrupts::UefiExceptionHandler;
+
+use super::exception_handling;
+
+global_asm!(include_str!("interrupt_handler.asm"));
 
 // Use efiapi for the consistent calling convention.
 extern "efiapi" {
@@ -36,6 +41,8 @@ lazy_static! {
         // Intentionally use direct function for double fault. This allows for
         // more robust diagnostics of the exception stack. Currently this also
         // means external caller cannot register for double fault call backs.
+        // Fix it: Below line is excluded from std builds because rustc fails to
+        //        compile with following error "offset is not a multiple of 16"
         unsafe { idt.double_fault.set_handler_fn(double_fault_handler).set_stack_index(0) };
 
         // Initialize the error code vectors. the x86_64 crate does not allow these
@@ -85,6 +92,20 @@ impl InterruptManager for InterruptManagerX64 {
         self.register_exception_handler(14, page_fault_handler).expect("Failed to install default exception handler!");
 
         Ok(())
+    }
+
+    /// Registers a callback for the given exception type.
+    fn register_exception_handler(
+        &mut self,
+        exception_type: usize,
+        handler: UefiExceptionHandler,
+    ) -> Result<(), EfiError> {
+        exception_handling::register_exception_handler(exception_type, handler)
+    }
+
+    /// Removes the registered exception handlers for the given exception type.
+    fn unregister_exception_handler(&mut self, exception_type: usize) -> Result<(), EfiError> {
+        exception_handling::unregister_exception_handler(exception_type)
     }
 }
 

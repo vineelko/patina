@@ -25,9 +25,10 @@
 //!
 //! ```rust
 //! extern crate uefi_sdk;
-//! extern crate uefi_interrupt;
+//! extern crate uefi_cpu;
 //!
-//! use uefi_interrupt::InterruptManager;
+//! use uefi_cpu::interrupts::InterruptManager;
+//! use uefi_cpu::interrupts::null::InterruptManagerNull;
 //!
 //! static DEBUGGER: uefi_debugger::UefiDebugger<uefi_sdk::serial::UartNull> =
 //!     uefi_debugger::UefiDebugger::new(uefi_sdk::serial::UartNull{});
@@ -48,7 +49,7 @@
 //! }
 //!
 //! fn start() {
-//!     let mut interrupt_manager = uefi_interrupt::InterruptManagerNull::default();
+//!     let mut interrupt_manager = InterruptManagerNull::default();
 //!
 //!     // Initialize the debugger. This will cause a debug break because of the
 //!     // initial break configuration set above.
@@ -89,13 +90,13 @@ mod transport;
 
 extern crate gdbstub;
 extern crate paging;
-extern crate uefi_interrupt;
+extern crate uefi_cpu;
 extern crate uefi_sdk;
 
 pub use debugger::UefiDebugger;
 
 use arch::{DebuggerArch, SystemArch};
-use uefi_interrupt::{efi_system_context::EfiSystemContext, InterruptManager};
+use uefi_cpu::interrupts::{EfiSystemContext, InterruptManager};
 use uefi_sdk::serial::SerialIO;
 
 /// Global instance of the debugger.

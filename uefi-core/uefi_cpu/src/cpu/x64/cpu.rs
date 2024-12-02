@@ -1,4 +1,4 @@
-//! x86_86 CPU initialization implementation
+//! X64 CPU initialization implementation
 //!
 //! ## License
 //!
@@ -7,8 +7,8 @@
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 #[cfg(not(test))]
-use crate::x64::gdt;
-use crate::EfiCpuInit;
+use super::gdt;
+use crate::cpu::EfiCpuInit;
 #[cfg(not(test))]
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -170,7 +170,6 @@ impl Default for X64EfiCpuInit {
 mod tests {
 
     use super::*;
-    use crate::EfiCpuInit;
 
     #[test]
     fn test_initialize() {

@@ -1,16 +1,17 @@
-//! Module for architecture agnostic handling of exceptions. These have to be
+//! Module for architecture specific handling of exceptions. These have to be
 //! statically defined
 //!
 //! ## License
 //!
-//! Copyright (C) Microsoft Corporation.
+//! Copyright (C) Microsoft Corporation. All rights reserved.
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 
-use crate::{efi_system_context::EfiSystemContext, UefiExceptionHandler};
 use spin::rwlock::RwLock;
 use uefi_sdk::error::EfiError;
+
+use crate::interrupts::{EfiSystemContext, UefiExceptionHandler};
 
 // Different architecture have a different number of exception types.
 const NUM_EXCEPTION_TYPES: usize = if cfg!(target_arch = "x86_64") {
@@ -37,7 +38,7 @@ static EXCEPTION_HANDLERS: [RwLock<Option<UefiExceptionHandler>>; NUM_EXCEPTION_
 /// Returns [`InvalidParameter`](EfiError::InvalidParameter) if the exception type is above the expected range.
 /// Returns [`AlreadyStarted`](EfiError::AlreadyStarted) if a callback has already been registered.
 ///
-pub fn register_exception_handler(exception_type: usize, handler: UefiExceptionHandler) -> Result<(), EfiError> {
+pub(crate) fn register_exception_handler(exception_type: usize, handler: UefiExceptionHandler) -> Result<(), EfiError> {
     if exception_type >= NUM_EXCEPTION_TYPES {
         return Err(EfiError::InvalidParameter);
     }
@@ -58,7 +59,7 @@ pub fn register_exception_handler(exception_type: usize, handler: UefiExceptionH
 /// Returns [`InvalidParameter`](EfiError::InvalidParameter) if the exception type is above the expected range.
 /// Returns [`InvalidParameter`](EfiError::InvalidParameter) if no callback currently exists.
 ///
-pub fn unregister_exception_handler(exception_type: usize) -> Result<(), EfiError> {
+pub(crate) fn unregister_exception_handler(exception_type: usize) -> Result<(), EfiError> {
     if exception_type >= NUM_EXCEPTION_TYPES {
         return Err(EfiError::InvalidParameter);
     }
@@ -72,7 +73,7 @@ pub fn unregister_exception_handler(exception_type: usize) -> Result<(), EfiErro
     Ok(())
 }
 
-/// The architecture agnostic entry of the exception handler stack.
+/// The architecture specific entry of the exception handler stack.
 ///
 /// This will be invoked by the architectures assembly entry and so requires
 /// EFIAPI for a consistent calling convention.
@@ -83,7 +84,7 @@ pub fn unregister_exception_handler(exception_type: usize) -> Result<(), EfiErro
 /// read lock cannot be acquired.
 ///
 #[no_mangle]
-extern "efiapi" fn exception_handler(exception_type: usize, context: EfiSystemContext) {
+extern "efiapi" fn x64_exception_handler(exception_type: usize, context: EfiSystemContext) {
     let handler_lock =
         EXCEPTION_HANDLERS[exception_type].try_read().expect("Failed to read lock in exception handler!");
     match *handler_lock {
@@ -101,8 +102,9 @@ extern "efiapi" fn exception_handler(exception_type: usize, context: EfiSystemCo
 #[cfg(test)]
 mod tests {
     extern crate std;
+    use crate::interrupts::x64::EfiSystemContextX64;
+
     use super::*;
-    use crate::efi_system_context::{EfiSystemContext, EfiSystemContextX64};
     use std::boxed::Box;
 
     const CALLBACK_EXCEPTION: usize = 0;
@@ -128,7 +130,7 @@ mod tests {
 
         register_exception_handler(CALLBACK_EXCEPTION, test_callback).expect("Failed to register exception handler!");
         register_exception_handler(CALLBACK_EXCEPTION, test_callback).expect_err("Allowed double register!");
-        exception_handler(CALLBACK_EXCEPTION, context);
+        x64_exception_handler(CALLBACK_EXCEPTION, context);
         assert!(unsafe { CALLBACK_INVOKED });
         unregister_exception_handler(CALLBACK_EXCEPTION).expect("Failed to unregister handler!");
         unregister_exception_handler(CALLBACK_EXCEPTION).expect_err("Allowed double unregister!");

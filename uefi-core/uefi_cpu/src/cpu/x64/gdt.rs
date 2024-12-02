@@ -1,4 +1,4 @@
-//! x86_86 GDT initialization
+//! X64 GDT initialization
 //!
 //! ## License
 //!

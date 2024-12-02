@@ -184,9 +184,9 @@ Below are the list of crates and their purpose / contents.
 This crate provides the trait definition for a Component, and a error enum for converting between
 the typical rust error handling (with "?"s) and UEFI error handling (returning EFI_X)
 
-### uefi_cpu_init
+### uefi_cpu
 
-This crate provides cpu architecture-specific functionality like managing the GDT and IDT on x86 platforms.
+This crate provides cpu architecture-specific functionality like managing the GDT, IDT and paging on x64/aarch64 platforms.
 
 ### uefi_logger
 

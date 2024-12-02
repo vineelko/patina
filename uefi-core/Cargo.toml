@@ -2,9 +2,8 @@
 resolver = "2"
 
 members = [
-  "uefi_cpu_init",
+  "uefi_cpu",
   "uefi_debugger",
-  "uefi_interrupt",
   "section_extractor",
 ]
 
@@ -19,7 +18,7 @@ include = [
 ]
 
 [workspace.dependencies]
-uefi_interrupt = { path = "uefi_interrupt", version = "3.0.0" }
+uefi_cpu = { path = "uefi_cpu", version = "3.0.0" }
 
 # External Libraries
 uefi_sdk = {git = "https://github.com/pop-project/uefi-sdk.git", rev = "v0.1.1" }
@@ -34,6 +33,7 @@ mu_rust_helpers = { git = "https://github.com/microsoft/mu_rust_helpers", tag = 
 mockall = "0.13.0"
 paging = { git = "https://github.com/pop-project/paging.git", rev = "4ca4452d6fdd2216abf8b0ba509b6ebe433e3646" }
 mtrr = { git = "https://github.com/pop-project/mtrr.git", rev = "25a88e3e3062933b59b211bd01bc1f8a64b11f09" }
+cfg-if = "1.0.0"
 
 [profile.dev]
 opt-level = 3

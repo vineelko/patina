@@ -1,9 +1,9 @@
 [package]
-name = "uefi_cpu_init"
+name = "uefi_cpu"
 version = "3.0.1"
 edition = "2021"
 readme = "README.md"
-description = "CPU Initializer trait implementations for the pure rust DXE core."
+description = "CPU crate implementation."
 license.workspace = true
 repository.workspace = true
 
@@ -12,7 +12,7 @@ features = ["doc", "std"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
-name = "uefi_cpu_init"
+name = "uefi_cpu"
 path = "src/lib.rs"
 
 [dependencies]
@@ -21,14 +21,14 @@ log = { workspace = true }
 r-efi = { workspace = true }
 uefi_sdk = { workspace = true }
 spin = { workspace = true, features = ["rwlock"] }
-x86_64 = { workspace = true, optional = true }
 paging = { workspace = true }
-mtrr = { workspace = true, optional = true }
 mu_pi = { workspace = true }
+cfg-if = { workspace = true }
 
 [target.'cfg(all(target_arch="x86_64"))'.dependencies]
 x86_64 = { workspace = true }
 mtrr = { workspace = true }
+
 
 [dev-dependencies]
 x86_64 = { workspace = true }
@@ -37,4 +37,4 @@ mockall = { workspace = true }
 [features]
 default = []
 std = []
-doc = ["x86_64"]
+doc = []

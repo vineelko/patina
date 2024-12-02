@@ -20,7 +20,7 @@ mod x64;
 
 use gdbstub::target::ext::breakpoints;
 use paging::PageTable;
-use uefi_interrupt::efi_system_context::EfiSystemContext;
+use uefi_cpu::interrupts::EfiSystemContext;
 
 use crate::ExceptionInfo;
 

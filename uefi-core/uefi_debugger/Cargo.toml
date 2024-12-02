@@ -11,7 +11,7 @@ path = "src/lib.rs"
 [dependencies]
 gdbstub = { version = "0.7.3", default-features = false }
 uefi_sdk = { workspace = true }
-uefi_interrupt = { workspace = true }
+uefi_cpu = { workspace = true }
 log = { workspace = true }
 spin = { workspace = true }
 paging = { workspace = true  }

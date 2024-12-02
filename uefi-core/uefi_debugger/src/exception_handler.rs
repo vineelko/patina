@@ -10,7 +10,7 @@
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 
-use uefi_interrupt::efi_system_context::EfiSystemContext;
+use uefi_cpu::interrupts::EfiSystemContext;
 
 use crate::{
     arch::{DebuggerArch, SystemArch},

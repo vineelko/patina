@@ -1,7 +1,7 @@
 #
 # Exception entry point logic for X64.
 #
-# Copyright (C) Microsoft Corporation.
+# Copyright (C) Microsoft Corporation. All rights reserved.
 #
 # SPDX-License-Identifier: BSD-2-Clause-Patent
 #
@@ -9,7 +9,7 @@
 .section .data
 
 .section .text
-.global exception_handler
+.global x64_exception_handler
 .global common_interrupt_entry
 .global AsmIdtVectorBegin
 
@@ -209,7 +209,7 @@ stack_normalized:
     mov     rdx, rsp
 
     sub     rsp, 4 * 8 + 8 # max parameter space + 8 for 16 bytes alignment.
-    call    exception_handler
+    call    x64_exception_handler
     add     rsp, 4 * 8 + 8
 
     #

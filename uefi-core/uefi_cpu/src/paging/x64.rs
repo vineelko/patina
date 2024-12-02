@@ -1,4 +1,13 @@
-use crate::EfiCpuPaging;
+//! X64 Paging
+//!
+//! This module provides an in direction to the external paging/mtrr crates.
+//!
+//! ## License
+//!
+//! Copyright (C) Microsoft Corporation. All rights reserved.
+//!
+//! SPDX-License-Identifier: BSD-2-Clause-Patent
+//!
 use alloc::boxed::Box;
 use mtrr::create_mtrr_lib;
 use mtrr::error::MtrrError;
@@ -13,9 +22,11 @@ use paging::PtError;
 use r_efi::efi;
 use uefi_sdk::error::EfiError;
 
+use super::EfiCpuPaging;
+
 /// The x86_64 paging implementation. It acts as a bridge between the EFI CPU
 /// Architecture Protocol and the x86_64 paging implementation.
-pub struct X64EfiCpuPaging<P, M>
+struct X64EfiCpuPaging<P, M>
 where
     P: PageTable,
     M: Mtrr,

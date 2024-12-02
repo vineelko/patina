@@ -1,6 +1,6 @@
-//! CPU Init
+//! UEFI CPU Module
 //!
-//! This crate provides implementation for the Cpu Init.
+//! This module provides implementation for Cpu.
 //!
 //! ## License
 //!
@@ -8,15 +8,24 @@
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
-#![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
-#![feature(abi_x86_interrupt)]
-extern crate alloc;
 
-mod null;
-use mu_pi::protocols::cpu_arch::CpuFlushType;
-use mu_pi::protocols::cpu_arch::CpuInitType;
-pub use null::NullEfiCpuInit;
+cfg_if::cfg_if! {
+    if #[cfg(all(target_os = "uefi", target_arch = "x86_64"))] {
+        mod x64;
+    } else if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
+        mod aarch64;
+    } else if #[cfg(feature = "doc")] {
+        mod x64;
+        mod aarch64;
+    } else if #[cfg(test)] {
+        mod x64;
+        mod aarch64;
+    }
+}
+
+use mu_pi::protocols::cpu_arch::{CpuFlushType, CpuInitType};
 use r_efi::efi;
+use uefi_sdk::error::EfiError;
 
 /// A trait to facilitate architecture-specific implementations.
 /// TODO: This trait will be further broken down in future.
@@ -91,63 +100,4 @@ pub trait EfiCpuInit {
     /// DeviceError      - If an error occurred while reading the timer.
     /// InvalidParameter - timer_index is not valid or TimerValue is NULL.
     fn get_timer_value(&self, timer_index: u32) -> Result<(u64, u64), EfiError>;
-}
-
-pub trait EfiCpuPaging {
-    /// Implementation of SetMemoryAttributes() service of CPU Architecture Protocol.
-    /// Length from their current attributes to the attributes specified by Attributes.
-    ///
-    /// base_address     The physical address that is the start address of a memory region.
-    /// length           The size in bytes of the memory region.
-    /// attributes       The bit mask of attributes to set for the memory region.
-    ///
-    /// ## Errors
-    ///
-    /// Success          The attributes were set for the memory region.
-    /// AccessDenied     The attributes for the memory resource range specified by
-    ///                  base_address and Length cannot be modified.
-    /// InvalidParameter Length is zero.
-    ///                  Attributes specified an illegal combination of attributes that
-    ///                  cannot be set together.
-    /// OutOfResources   There are not enough system resources to modify the attributes of
-    ///                  the memory resource range.
-    /// Unsupported      The processor does not support one or more bytes of the memory
-    ///                  resource range specified by base_address and Length.
-    ///                  The bit mask of attributes is not support for the memory resource
-    ///                  range specified by base_address and Length.
-    fn set_memory_attributes(
-        &mut self,
-        base_address: efi::PhysicalAddress,
-        length: u64,
-        attributes: u64,
-    ) -> Result<(), EfiError>;
-
-    /// Paging related functions
-    fn map_memory_region(&mut self, address: u64, size: u64, attributes: u64) -> Result<(), EfiError>;
-    fn unmap_memory_region(&mut self, address: u64, size: u64) -> Result<(), EfiError>;
-    fn remap_memory_region(&mut self, address: u64, size: u64, attributes: u64) -> Result<(), EfiError>;
-    fn install_page_table(&self) -> Result<(), EfiError>;
-    fn query_memory_region(&self, address: u64, size: u64) -> Result<u64, EfiError>;
-}
-
-use alloc::boxed::Box;
-pub use paging::page_allocator::PageAllocator;
-pub use paging::PtResult;
-#[cfg(target_arch = "x86_64")]
-pub mod x64;
-use uefi_sdk::error::EfiError;
-#[cfg(target_arch = "x86_64")]
-pub use x64::X64EfiCpuInit;
-#[cfg(target_arch = "x86_64")]
-pub use x64::X64EfiCpuPaging;
-pub fn create_cpu_paging<A: PageAllocator + 'static>(_page_allocator: A) -> Result<Box<dyn EfiCpuPaging>, EfiError> {
-    #[cfg(target_arch = "x86_64")]
-    {
-        use x64::create_cpu_x64_paging;
-        create_cpu_x64_paging(_page_allocator)
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        Err(EfiError::Unsupported)
-    }
 }

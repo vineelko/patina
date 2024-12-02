@@ -17,7 +17,7 @@ use gdbstub::{
     conn::ConnectionExt,
     stub::{state_machine::GdbStubStateMachine, GdbStubBuilder, SingleThreadStopReason},
 };
-use uefi_interrupt::InterruptManager;
+use uefi_cpu::interrupts::InterruptManager;
 use uefi_sdk::serial::SerialIO;
 
 use crate::{

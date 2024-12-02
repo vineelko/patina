@@ -32,10 +32,7 @@ impl DebuggerArch for NoArch {
 
     fn breakpoint() {}
 
-    fn process_entry(
-        exception_type: u64,
-        context: uefi_interrupt::efi_system_context::EfiSystemContext,
-    ) -> crate::ExceptionInfo {
+    fn process_entry(exception_type: u64, context: uefi_cpu::interrupts::EfiSystemContext) -> crate::ExceptionInfo {
         ExceptionInfo { context, exception_type: ExceptionType::Other(exception_type) }
     }
 
@@ -84,11 +81,11 @@ impl Registers for NoArchRegs {
 }
 
 impl UefiArchRegs for NoArchRegs {
-    fn from_context(_context: &uefi_interrupt::efi_system_context::EfiSystemContext) -> Self {
+    fn from_context(_context: &uefi_cpu::interrupts::EfiSystemContext) -> Self {
         NoArchRegs
     }
 
-    fn write_to_context(&self, _context: &mut uefi_interrupt::efi_system_context::EfiSystemContext) {}
+    fn write_to_context(&self, _context: &mut uefi_cpu::interrupts::EfiSystemContext) {}
 }
 
 #[derive(Debug)]
