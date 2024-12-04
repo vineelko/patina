@@ -5,7 +5,7 @@ use gdbstub::{
     target::ext::breakpoints::WatchKind,
 };
 use paging::PagingType;
-use uefi_cpu::interrupts::EfiSystemContext;
+use uefi_cpu::interrupts::ExceptionContext;
 
 use super::{DebuggerArch, UefiArchRegs};
 use crate::paging;
@@ -37,23 +37,23 @@ impl DebuggerArch for X64Arch {
         unsafe { asm!("int 3") };
     }
 
-    fn process_entry(exception_type: u64, mut context: EfiSystemContext) -> ExceptionInfo {
+    fn process_entry(exception_type: u64, context: &mut ExceptionContext) -> ExceptionInfo {
         ExceptionInfo {
             exception_type: match exception_type {
                 1 => {
-                    context.get_arch_context_mut().rflags &= !0x100; // Clear the trap flag.
+                    context.rflags &= !0x100; // Clear the trap flag.
                     ExceptionType::Step
                 }
                 3 => {
                     // The "int 3" will still move the RIP forward. Step it back
                     // so the debugger shows the correct instruction.
-                    context.get_arch_context_mut().rip -= 1;
+                    context.rip -= 1;
                     ExceptionType::Breakpoint
                 }
-                14 => ExceptionType::AccessViolation(context.get_arch_context().cr2 as usize),
+                14 => ExceptionType::AccessViolation(context.cr2 as usize),
                 _ => ExceptionType::Other(exception_type),
             },
-            context,
+            context: *context,
         }
     }
 
@@ -61,14 +61,14 @@ impl DebuggerArch for X64Arch {
         if exception_info.exception_type == ExceptionType::Breakpoint {
             // If the instruction is a hard-coded "int 3", then step past it on return.
             // SAFETY: Given the exception type, the RIP should be valid.
-            if unsafe { *((exception_info.context.get_arch_context().rip) as *const u8) == INT_3 } {
-                exception_info.context.get_arch_context_mut().rip += 1;
+            if unsafe { *((exception_info.context.rip) as *const u8) == INT_3 } {
+                exception_info.context.rip += 1;
             }
         }
     }
 
     fn set_single_step(exception_info: &mut ExceptionInfo) {
-        exception_info.context.get_arch_context_mut().rflags |= 0x100; // Set the trap flag.
+        exception_info.context.rflags |= 0x100; // Set the trap flag.
     }
 
     fn initialize() {
@@ -221,57 +221,74 @@ impl Registers for X64CoreRegs {
 }
 
 impl UefiArchRegs for X64CoreRegs {
-    fn from_context(context: &EfiSystemContext) -> Self {
-        let x64 = context.get_arch_context();
-
+    fn from_context(context: &ExceptionContext) -> Self {
         X64CoreRegs {
             regs: [
-                x64.rax, x64.rbx, x64.rcx, x64.rdx, x64.rsi, x64.rdi, x64.rbp, x64.rsp, x64.r8, x64.r9, x64.r10,
-                x64.r11, x64.r12, x64.r13, x64.r14, x64.r15,
+                context.rax,
+                context.rbx,
+                context.rcx,
+                context.rdx,
+                context.rsi,
+                context.rdi,
+                context.rbp,
+                context.rsp,
+                context.r8,
+                context.r9,
+                context.r10,
+                context.r11,
+                context.r12,
+                context.r13,
+                context.r14,
+                context.r15,
             ],
-            rip: x64.rip,
-            eflags: x64.rflags,
-            segments: [x64.cs as u32, x64.ss as u32, x64.ds as u32, x64.es as u32, x64.fs as u32, x64.gs as u32],
-            control: [x64.cr0, x64.cr2, x64.cr3, x64.cr4],
+            rip: context.rip,
+            eflags: context.rflags,
+            segments: [
+                context.cs as u32,
+                context.ss as u32,
+                context.ds as u32,
+                context.es as u32,
+                context.fs as u32,
+                context.gs as u32,
+            ],
+            control: [context.cr0, context.cr2, context.cr3, context.cr4],
             fpu: [0; 7],
             st: [[0; 10]; 9],
         }
     }
 
-    fn write_to_context(&self, context: &mut EfiSystemContext) {
-        let x64 = context.get_arch_context_mut();
+    fn write_to_context(&self, context: &mut ExceptionContext) {
+        context.rax = self.regs[0];
+        context.rbx = self.regs[1];
+        context.rcx = self.regs[2];
+        context.rdx = self.regs[3];
+        context.rsi = self.regs[4];
+        context.rdi = self.regs[5];
+        context.rbp = self.regs[6];
+        context.rsp = self.regs[7];
+        context.r8 = self.regs[8];
+        context.r9 = self.regs[9];
+        context.r10 = self.regs[10];
+        context.r11 = self.regs[11];
+        context.r12 = self.regs[12];
+        context.r13 = self.regs[13];
+        context.r14 = self.regs[14];
+        context.r15 = self.regs[15];
 
-        x64.rax = self.regs[0];
-        x64.rbx = self.regs[1];
-        x64.rcx = self.regs[2];
-        x64.rdx = self.regs[3];
-        x64.rsi = self.regs[4];
-        x64.rdi = self.regs[5];
-        x64.rbp = self.regs[6];
-        x64.rsp = self.regs[7];
-        x64.r8 = self.regs[8];
-        x64.r9 = self.regs[9];
-        x64.r10 = self.regs[10];
-        x64.r11 = self.regs[11];
-        x64.r12 = self.regs[12];
-        x64.r13 = self.regs[13];
-        x64.r14 = self.regs[14];
-        x64.r15 = self.regs[15];
+        context.rip = self.rip;
+        context.rflags = self.eflags;
 
-        x64.rip = self.rip;
-        x64.rflags = self.eflags;
+        context.cs = self.segments[0] as u64;
+        context.ss = self.segments[1] as u64;
+        context.ds = self.segments[2] as u64;
+        context.es = self.segments[3] as u64;
+        context.fs = self.segments[4] as u64;
+        context.gs = self.segments[5] as u64;
 
-        x64.cs = self.segments[0] as u64;
-        x64.ss = self.segments[1] as u64;
-        x64.ds = self.segments[2] as u64;
-        x64.es = self.segments[3] as u64;
-        x64.fs = self.segments[4] as u64;
-        x64.gs = self.segments[5] as u64;
-
-        x64.cr0 = self.control[0];
-        x64.cr2 = self.control[1];
-        x64.cr3 = self.control[2];
-        x64.cr4 = self.control[3];
+        context.cr0 = self.control[0];
+        context.cr2 = self.control[1];
+        context.cr3 = self.control[2];
+        context.cr4 = self.control[3];
     }
 }
 

@@ -9,16 +9,14 @@
 
 use core::arch::global_asm;
 use lazy_static::lazy_static;
+use mu_pi::protocols::cpu_arch::EfiSystemContext;
 use uefi_sdk::error::EfiError;
 use x86_64::structures::idt::InterruptDescriptorTable;
 use x86_64::structures::idt::InterruptStackFrame;
 use x86_64::VirtAddr;
 
-use crate::interrupts::EfiSystemContext;
+use crate::interrupts::HandlerType;
 use crate::interrupts::InterruptManager;
-use crate::interrupts::UefiExceptionHandler;
-
-use super::exception_handling;
 
 global_asm!(include_str!("interrupt_handler.asm"));
 
@@ -87,25 +85,12 @@ impl InterruptManager for InterruptManagerX64 {
         log::info!("Loaded IDT");
 
         // Register some default handlers.
-        self.register_exception_handler(13, general_protection_fault_handler)
+        self.register_exception_handler(13, HandlerType::UefiRoutine(general_protection_fault_handler))
             .expect("Failed to install default exception handler!");
-        self.register_exception_handler(14, page_fault_handler).expect("Failed to install default exception handler!");
+        self.register_exception_handler(14, HandlerType::UefiRoutine(page_fault_handler))
+            .expect("Failed to install default exception handler!");
 
         Ok(())
-    }
-
-    /// Registers a callback for the given exception type.
-    fn register_exception_handler(
-        &mut self,
-        exception_type: usize,
-        handler: UefiExceptionHandler,
-    ) -> Result<(), EfiError> {
-        exception_handling::register_exception_handler(exception_type, handler)
-    }
-
-    /// Removes the registered exception handlers for the given exception type.
-    fn unregister_exception_handler(&mut self, exception_type: usize) -> Result<(), EfiError> {
-        exception_handling::unregister_exception_handler(exception_type)
     }
 }
 
@@ -120,13 +105,14 @@ extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame,
 }
 
 /// Default handler for GP faults.
-extern "efiapi" fn general_protection_fault_handler(_exception_type: u64, context: EfiSystemContext) {
-    panic!("EXCEPTION: GP FAULT\n{:#x?}", context.get_arch_context());
+extern "efiapi" fn general_protection_fault_handler(_exception_type: isize, context: EfiSystemContext) {
+    let x64_context = unsafe { context.system_context_x64.as_ref().unwrap() };
+    panic!("EXCEPTION: GP FAULT\n{:#x?}", x64_context);
 }
 
 /// Default handler for page faults.
-extern "efiapi" fn page_fault_handler(_exception_type: u64, context: EfiSystemContext) {
-    let x64_context = context.get_arch_context();
+extern "efiapi" fn page_fault_handler(_exception_type: isize, context: EfiSystemContext) {
+    let x64_context = unsafe { context.system_context_x64.as_ref().unwrap() };
 
     log::error!("EXCEPTION: PAGE FAULT");
     log::error!("Accessed Address: 0x{:x?}", x64_context.cr2);

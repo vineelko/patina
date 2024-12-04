@@ -20,7 +20,7 @@ mod x64;
 
 use gdbstub::target::ext::breakpoints;
 use paging::PageTable;
-use uefi_cpu::interrupts::EfiSystemContext;
+use uefi_cpu::interrupts::ExceptionContext;
 
 use crate::ExceptionInfo;
 
@@ -52,7 +52,7 @@ pub trait DebuggerArch {
 
     /// Processes the entry into the debugger, doing any fixup needed to the
     /// CPU state of the system context.
-    fn process_entry(exception_type: u64, context: EfiSystemContext) -> crate::ExceptionInfo;
+    fn process_entry(exception_type: u64, context: &mut ExceptionContext) -> crate::ExceptionInfo;
 
     /// Processes the exit from the debugger, doing any fixup needed to the
     /// CPU state of the system context.
@@ -79,13 +79,13 @@ pub trait DebuggerArch {
 
 pub trait UefiArchRegs: Sized {
     /// Initializes the register from a UEFI context structure.
-    fn from_context(context: &EfiSystemContext) -> Self;
+    fn from_context(context: &ExceptionContext) -> Self;
 
     /// Writes the register to a UEFI context structure.
-    fn write_to_context(&self, context: &mut EfiSystemContext);
+    fn write_to_context(&self, context: &mut ExceptionContext);
 
     /// Reads the register from a UEFI context structure.
-    fn read_from_context(&mut self, context: &EfiSystemContext) {
+    fn read_from_context(&mut self, context: &ExceptionContext) {
         *self = Self::from_context(context);
     }
 }

@@ -6,9 +6,16 @@
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
-mod efi_system_context;
-mod exception_handling;
 mod interrupt_manager;
 
-pub use efi_system_context::EfiSystemContextAArch64;
+use mu_pi::protocols::cpu_arch::EfiSystemContext;
+
 pub use interrupt_manager::InterruptManagerAArch64;
+
+pub type ExceptionContextAArch64 = r_efi::protocols::debug_support::SystemContextAArch64;
+
+impl super::EfiSystemContextFactory for ExceptionContextAArch64 {
+    fn create_efi_system_context(&mut self) -> EfiSystemContext {
+        EfiSystemContext { system_context_aarch64: self as *mut _ }
+    }
+}

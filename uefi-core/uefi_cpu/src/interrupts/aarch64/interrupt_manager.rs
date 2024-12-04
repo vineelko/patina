@@ -9,9 +9,7 @@
 
 use uefi_sdk::error::EfiError;
 
-use crate::interrupts::{InterruptManager, UefiExceptionHandler};
-
-use super::exception_handling;
+use crate::interrupts::InterruptManager;
 
 /// AARCH64 Implementation of the InterruptManager.
 #[derive(Default, Copy, Clone)]
@@ -27,19 +25,5 @@ impl InterruptManager for InterruptManagerAArch64 {
     fn initialize(&mut self) -> Result<(), EfiError> {
         // TODO
         Ok(())
-    }
-
-    /// Registers a callback for the given exception type.
-    fn register_exception_handler(
-        &mut self,
-        exception_type: usize,
-        handler: UefiExceptionHandler,
-    ) -> Result<(), EfiError> {
-        exception_handling::register_exception_handler(exception_type, handler)
-    }
-
-    /// Removes the registered exception handlers for the given exception type.
-    fn unregister_exception_handler(&mut self, exception_type: usize) -> Result<(), EfiError> {
-        exception_handling::unregister_exception_handler(exception_type)
     }
 }

@@ -12,6 +12,7 @@
 use arch::DebuggerArch;
 use gdbstub::arch::RegId;
 use gdbstub::target::ext::breakpoints::WatchKind;
+use uefi_cpu::interrupts::ExceptionContext;
 
 use crate::memory;
 use crate::{ExceptionInfo, ExceptionType};
@@ -32,8 +33,8 @@ impl DebuggerArch for NoArch {
 
     fn breakpoint() {}
 
-    fn process_entry(exception_type: u64, context: uefi_cpu::interrupts::EfiSystemContext) -> crate::ExceptionInfo {
-        ExceptionInfo { context, exception_type: ExceptionType::Other(exception_type) }
+    fn process_entry(exception_type: u64, context: &mut ExceptionContext) -> crate::ExceptionInfo {
+        ExceptionInfo { context: *context, exception_type: ExceptionType::Other(exception_type) }
     }
 
     fn process_exit(_exception_info: &mut ExceptionInfo) {}
@@ -81,11 +82,11 @@ impl Registers for NoArchRegs {
 }
 
 impl UefiArchRegs for NoArchRegs {
-    fn from_context(_context: &uefi_cpu::interrupts::EfiSystemContext) -> Self {
+    fn from_context(_context: &ExceptionContext) -> Self {
         NoArchRegs
     }
 
-    fn write_to_context(&self, _context: &mut uefi_cpu::interrupts::EfiSystemContext) {}
+    fn write_to_context(&self, _context: &mut ExceptionContext) {}
 }
 
 #[derive(Debug)]

@@ -84,7 +84,6 @@
 mod arch;
 mod dbg_target;
 mod debugger;
-mod exception_handler;
 mod memory;
 mod transport;
 
@@ -96,7 +95,7 @@ extern crate uefi_sdk;
 pub use debugger::UefiDebugger;
 
 use arch::{DebuggerArch, SystemArch};
-use uefi_cpu::interrupts::{EfiSystemContext, InterruptManager};
+use uefi_cpu::interrupts::{ExceptionContext, InterruptManager};
 use uefi_sdk::serial::SerialIO;
 
 /// Global instance of the debugger.
@@ -115,9 +114,6 @@ static DEBUGGER: spin::Once<&dyn Debugger> = spin::Once::new();
 trait Debugger: Sync {
     /// Initializes the debugger.
     fn initialize(&'static self, interrupt_manager: &mut dyn InterruptManager);
-
-    /// Enters the debugger from an exception.
-    fn enter_debugger(&'static self, exception_info: ExceptionInfo) -> Result<ExceptionInfo, DebugError>;
 
     /// Checks if the debugger is enabled.
     fn enabled(&'static self) -> bool;
@@ -189,7 +185,7 @@ struct ExceptionInfo {
     /// The type of exception that occurred.
     pub exception_type: ExceptionType,
     /// The system context at the time of the exception.
-    pub context: EfiSystemContext,
+    pub context: ExceptionContext,
 }
 
 /// Exception type information.

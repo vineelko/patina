@@ -17,13 +17,12 @@ use gdbstub::{
     conn::ConnectionExt,
     stub::{state_machine::GdbStubStateMachine, GdbStubBuilder, SingleThreadStopReason},
 };
-use uefi_cpu::interrupts::InterruptManager;
+use uefi_cpu::interrupts::{HandlerType, InterruptHandler, InterruptManager};
 use uefi_sdk::serial::SerialIO;
 
 use crate::{
     arch::{DebuggerArch, SystemArch},
     dbg_target::UefiTarget,
-    exception_handler::debug_exception_handler,
     transport::LoggingSuspender,
     transport::SerialConnection,
     DebugError, Debugger, ExceptionInfo,
@@ -143,9 +142,8 @@ impl<T: SerialIO> UefiDebugger<T> {
         // Intentionally ignoring initial_break config until configuration is thought out.
         inner.initial_break = true;
     }
-}
 
-impl<T: SerialIO> Debugger for UefiDebugger<T> {
+    /// Enters the debugger from an exception.
     fn enter_debugger(&'static self, exception_info: ExceptionInfo) -> Result<ExceptionInfo, DebugError> {
         let mut debug = match self.internal.try_lock() {
             Some(inner) => inner,
@@ -226,7 +224,9 @@ impl<T: SerialIO> Debugger for UefiDebugger<T> {
         debug.gdb = Some(gdb);
         Ok(target.into_exception_info())
     }
+}
 
+impl<T: SerialIO> Debugger for UefiDebugger<T> {
     fn initialize(&'static self, interrupt_manager: &mut dyn InterruptManager) {
         let inner = self.internal.lock();
         if !inner.enabled {
@@ -253,7 +253,7 @@ impl<T: SerialIO> Debugger for UefiDebugger<T> {
             // there may not be a handler anyways.
             let _ = interrupt_manager.unregister_exception_handler(*exception_type);
 
-            let res = interrupt_manager.register_exception_handler(*exception_type, debug_exception_handler);
+            let res = interrupt_manager.register_exception_handler(*exception_type, HandlerType::Handler(self));
             if res.is_err() {
                 log::error!("Failed to register debugger exception handler for type {}: {:?}", exception_type, res);
             }
@@ -290,5 +290,25 @@ impl<T: SerialIO> Debugger for UefiDebugger<T> {
 
         log::info!("Debugger polling not yet implemented!");
         // TODO
+    }
+}
+
+impl<T: SerialIO> InterruptHandler for UefiDebugger<T> {
+    fn handle_interrupt(&'static self, exception_type: usize, context: &mut uefi_cpu::interrupts::ExceptionContext) {
+        let mut exception_info = SystemArch::process_entry(exception_type as u64, context);
+        let result = self.enter_debugger(exception_info);
+
+        exception_info = result.unwrap_or_else(|error| {
+            // In the future, this could be make more robust by trying
+            // to re-enter the debugger, re-initializing the stub. This
+            // may require a new communication buffer though.
+
+            // It is not safe to return in this case. Log the error and reboot.
+            log::error!("The debugger crashed, rebooting the system. Error: {:?}", error);
+            SystemArch::reboot();
+        });
+
+        SystemArch::process_exit(&mut exception_info);
+        *context = exception_info.context;
     }
 }

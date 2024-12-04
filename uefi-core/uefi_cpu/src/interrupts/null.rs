@@ -7,7 +7,17 @@
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 
-mod exception_handling;
 mod interrupt_manager;
 
 pub use interrupt_manager::InterruptManagerNull;
+use mu_pi::protocols::cpu_arch::EfiSystemContext;
+
+#[derive(Debug)]
+pub struct ExceptionContextNull;
+
+impl super::EfiSystemContextFactory for ExceptionContextNull {
+    fn create_efi_system_context(&mut self) -> EfiSystemContext {
+        // Pointer being set is arbitrary, but EBC is architecture agnostic.
+        EfiSystemContext { system_context_ebc: core::ptr::null_mut() }
+    }
+}

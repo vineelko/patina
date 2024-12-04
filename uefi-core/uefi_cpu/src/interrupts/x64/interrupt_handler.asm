@@ -9,7 +9,7 @@
 .section .data
 
 .section .text
-.global x64_exception_handler
+.global exception_handler
 .global common_interrupt_entry
 .global AsmIdtVectorBegin
 
@@ -209,7 +209,7 @@ stack_normalized:
     mov     rdx, rsp
 
     sub     rsp, 4 * 8 + 8 # max parameter space + 8 for 16 bytes alignment.
-    call    x64_exception_handler
+    call    exception_handler
     add     rsp, 4 * 8 + 8
 
     #
