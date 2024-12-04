@@ -1,6 +1,6 @@
 [package]
 name = "section_extractor"
-version = "6.0.0"
+version = "7.0.0"
 edition = "2021"
 readme = "README.md"
 description = "UEFI section extractor implementations."
