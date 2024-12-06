@@ -90,7 +90,6 @@ unsafe impl Send for StandardRuntimeServices<'static> {}
 
 #[cfg_attr(any(test, feature = "mockall"), automock)]
 #[allow(clippy::needless_lifetimes)] //https://github.com/rust-lang/rust-clippy/issues/6622
-
 /// Interface for Rust-friendly wrappers of the UEFI Runtime Services
 pub trait RuntimeServices {
     /// Sets a UEFI variable.

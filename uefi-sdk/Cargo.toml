@@ -3,6 +3,7 @@ resolver = "2"
 
 members = [
   "uefi_sdk",
+  "boot_services",
   "runtime_services",
 ]
 
