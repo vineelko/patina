@@ -15,6 +15,30 @@ pub const UEFI_PAGE_SIZE: usize = 0x1000;
 pub const UEFI_PAGE_MASK: usize = UEFI_PAGE_SIZE - 1;
 pub const UEFI_PAGE_SHIFT: usize = 12;
 
+/// Define common sizes
+pub const SIZE_1KB: usize = 0x400;
+pub const SIZE_4KB: usize = 0x1000;
+pub const SIZE_8KB: usize = 0x2000;
+pub const SIZE_16KB: usize = 0x4000;
+pub const SIZE_32KB: usize = 0x8000;
+pub const SIZE_64KB: usize = 0x10000;
+pub const SIZE_128KB: usize = 0x20000;
+pub const SIZE_256KB: usize = 0x40000;
+pub const SIZE_512KB: usize = 0x80000;
+pub const SIZE_1MB: usize = 0x100000;
+pub const SIZE_2MB: usize = 0x200000;
+pub const SIZE_4MB: usize = 0x400000;
+pub const SIZE_8MB: usize = 0x800000;
+pub const SIZE_16MB: usize = 0x1000000;
+pub const SIZE_32MB: usize = 0x2000000;
+pub const SIZE_64MB: usize = 0x4000000;
+pub const SIZE_128MB: usize = 0x8000000;
+pub const SIZE_256MB: usize = 0x10000000;
+pub const SIZE_512MB: usize = 0x20000000;
+pub const SIZE_1GB: usize = 0x40000000;
+pub const SIZE_2GB: usize = 0x80000000;
+pub const SIZE_4GB: usize = 0x100000000;
+
 /// Aligns the given address down to the nearest boundary specified by align.
 ///
 /// # Parameters
