@@ -8,41 +8,50 @@
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
-use r_efi::efi;
-use uefi_sdk::error::EfiError;
+use paging::{MemoryAttributes, PageTable, PtError};
 
-use super::EfiCpuPaging;
+use paging::page_allocator::PageAllocator;
 
 #[derive(Default)]
-pub struct EfiCpuPagingNull;
+pub struct EfiCpuPagingNull<A>
+where
+    A: PageAllocator,
+{
+    _allocator: core::marker::PhantomData<A>,
+}
 
-impl EfiCpuPaging for EfiCpuPagingNull {
-    fn set_memory_attributes(
-        &mut self,
-        _base_address: efi::PhysicalAddress,
-        _length: u64,
-        _attributes: u64,
-    ) -> Result<(), EfiError> {
+impl<A> PageTable for EfiCpuPagingNull<A>
+where
+    A: PageAllocator,
+{
+    type ALLOCATOR = A;
+    fn borrow_allocator(&mut self) -> &mut A {
+        panic!("NullEfiCpuInit does not have a page allocator");
+    }
+
+    fn map_memory_region(&mut self, _address: u64, _size: u64, _attributes: MemoryAttributes) -> Result<(), PtError> {
         Ok(())
     }
 
-    fn map_memory_region(&mut self, _address: u64, _size: u64, _attributes: u64) -> Result<(), EfiError> {
+    fn unmap_memory_region(&mut self, _address: u64, _size: u64) -> Result<(), PtError> {
         Ok(())
     }
 
-    fn unmap_memory_region(&mut self, _address: u64, _size: u64) -> Result<(), EfiError> {
+    fn remap_memory_region(&mut self, _address: u64, _size: u64, _attributes: MemoryAttributes) -> Result<(), PtError> {
         Ok(())
     }
 
-    fn remap_memory_region(&mut self, _address: u64, _size: u64, _attributes: u64) -> Result<(), EfiError> {
+    fn install_page_table(&self) -> Result<(), PtError> {
         Ok(())
     }
 
-    fn install_page_table(&self) -> Result<(), EfiError> {
-        Ok(())
+    fn query_memory_region(&self, _address: u64, _size: u64) -> Result<MemoryAttributes, PtError> {
+        Ok(MemoryAttributes::empty())
     }
 
-    fn query_memory_region(&self, _address: u64, _size: u64) -> Result<u64, EfiError> {
+    fn get_page_table_pages_for_size(&self, _address: u64, _size: u64) -> Result<u64, PtError> {
         Ok(0)
     }
+
+    fn dump_page_tables(&self, _address: u64, _size: u64) {}
 }

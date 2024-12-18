@@ -116,7 +116,7 @@ fn check_range_accessibility<P: PageTable>(page_table: &P, start_address: u64, l
 pub struct DebugPageAllocator {}
 
 impl PageAllocator for DebugPageAllocator {
-    fn allocate_page(&mut self, _align: u64, _size: u64) -> paging::PtResult<u64> {
+    fn allocate_page(&mut self, _align: u64, _size: u64, _is_root: bool) -> paging::PtResult<u64> {
         panic!("Should not allocate page tables from the debugger!");
     }
 }
