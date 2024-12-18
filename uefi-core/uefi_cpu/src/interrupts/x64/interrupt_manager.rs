@@ -10,7 +10,7 @@
 use core::arch::global_asm;
 use lazy_static::lazy_static;
 use mu_pi::protocols::cpu_arch::EfiSystemContext;
-use uefi_sdk::error::EfiError;
+use uefi_sdk::{base::SIZE_4GB, error::EfiError};
 use x86_64::structures::idt::InterruptDescriptorTable;
 use x86_64::structures::idt::InterruptStackFrame;
 use x86_64::VirtAddr;
@@ -81,6 +81,10 @@ impl InterruptManagerX64 {
 
 impl InterruptManager for InterruptManagerX64 {
     fn initialize(&mut self) -> Result<(), EfiError> {
+        if &IDT as *const _ as usize >= SIZE_4GB {
+            // TODO: Come back and ensure the GDT is below 4GB
+            panic!("GDT above 4GB, MP services will fail");
+        }
         IDT.load();
         log::info!("Loaded IDT");
 
