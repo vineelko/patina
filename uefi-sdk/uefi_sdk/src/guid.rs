@@ -12,19 +12,14 @@
 
 use r_efi::efi;
 
-/// Exit Boot Services Failed GUID
+/// Cache Attribute Change Event Group GUID
 ///
-/// The GUID for an event group signaled when ExitBootServices() fails. For example, the ExitBootServices()
-/// implementation may find that the memory map key provided does not match the current memory map key and return
-/// an error code. This event group will be signaled in that case just before returning to the caller.
+/// The GUID for an event group signaled when the cache attributes for a memory region are changed. The event group
+/// is intended for architectures, such as x86, that require cache attribute changes to be propagated to all APs.
 ///
-/// (`4F6C5507-232F-4787-B95E-72F862490CB1`)
-/// ```
-/// # use uefi_sdk::guid::*;
-/// # assert_eq!("4F6C5507-232F-4787-B95E-72F862490CB1", format!("{:?}", FmtGuid(&EBS_FAILED)));
-/// ```
-pub const EBS_FAILED: efi::Guid =
-    efi::Guid::from_fields(0x4f6c5507, 0x232f, 0x4787, 0xb9, 0x5e, &[0x72, 0xf8, 0x62, 0x49, 0x0c, 0xb1]);
+/// (`b8e477c7-26a9-4b9a-a7c9-5f8f1f3d9c7b`)
+pub const CACHE_ATTRIBUTE_CHANGE_EVENT_GROUP: efi::Guid =
+    efi::Guid::from_fields(0xb8e477c7, 0x26a9, 0x4b9a, 0xa7, 0xc9, &[0x5f, 0x8f, 0x1f, 0x3d, 0x9c, 0x7b]);
 
 /// DXE Core Module GUID
 ///
@@ -42,33 +37,19 @@ pub const EBS_FAILED: efi::Guid =
 pub const DXE_CORE: efi::Guid =
     efi::Guid::from_fields(0x23C9322F, 0x2AF2, 0x476A, 0xBC, 0x4C, &[0x26, 0xBC, 0x88, 0x26, 0x6C, 0x71]);
 
-/// Zero GUID
+/// Exit Boot Services Failed GUID
 ///
-/// All-zero GUID, used as a marker or placeholder.
+/// The GUID for an event group signaled when ExitBootServices() fails. For example, the ExitBootServices()
+/// implementation may find that the memory map key provided does not match the current memory map key and return
+/// an error code. This event group will be signaled in that case just before returning to the caller.
 ///
-/// (`00000000-0000-0000-0000-000000000000`)
+/// (`4f6c5507-232f-4787-b95e-72f862490cb1`)
 /// ```
 /// # use uefi_sdk::guid::*;
-/// # assert_eq!("00000000-0000-0000-0000-000000000000", format!("{:?}", FmtGuid(&ZERO)));
+/// # assert_eq!("4F6C5507-232F-4787-B95E-72F862490CB1", format!("{:?}", FmtGuid(&EBS_FAILED)));
 /// ```
-pub const ZERO: efi::Guid = efi::Guid::from_fields(0, 0, 0, 0, 0, &[0, 0, 0, 0, 0, 0]);
-
-/// Memory Type Info GUID
-///
-/// The memory type information HOB and variable can be used to store information
-/// for each memory type in Variable or HOB.
-///
-/// The Memory Type Information GUID can also be optionally used as the Owner
-/// field of a Resource Descriptor HOB to provide the preferred memory range
-/// for the memory types described in the Memory Type Information GUID HOB.
-///
-/// (`4C19049F-4137-4DD3-9C10-8B97A83FFDFA`)
-/// ```
-/// # use uefi_sdk::guid::*;
-/// # assert_eq!("4C19049F-4137-4DD3-9C10-8B97A83FFDFA", format!("{:?}", FmtGuid(&MEMORY_TYPE_INFORMATION)));
-/// ```
-pub const MEMORY_TYPE_INFORMATION: efi::Guid =
-    efi::Guid::from_fields(0x4C19049F, 0x4137, 0x4DD3, 0x9C, 0x10, &[0x8B, 0x97, 0xA8, 0x3F, 0xFD, 0xFA]);
+pub const EBS_FAILED: efi::Guid =
+    efi::Guid::from_fields(0x4f6c5507, 0x232f, 0x4787, 0xb9, 0x5e, &[0x72, 0xf8, 0x62, 0x49, 0x0c, 0xb1]);
 
 /// EDKII FPDT (Firmware Performance Data Table) extender firmware performance.
 ///
@@ -94,7 +75,24 @@ pub const EDKII_FPDT_EXTENDED_FIRMWARE_PERFORMANCE: efi::Guid =
 pub const EVENT_GROUP_END_OF_DXE: efi::Guid =
     efi::Guid::from_fields(0x2ce967a, 0xdd7e, 0x4ffc, 0x9e, 0xe7, &[0x81, 0xc, 0xf0, 0x47, 0x8, 0x80]);
 
-/// Performace Protocol GUID.
+/// Memory Type Info GUID
+///
+/// The memory type information HOB and variable can be used to store information
+/// for each memory type in Variable or HOB.
+///
+/// The Memory Type Information GUID can also be optionally used as the Owner
+/// field of a Resource Descriptor HOB to provide the preferred memory range
+/// for the memory types described in the Memory Type Information GUID HOB.
+///
+/// (`4C19049F-4137-4DD3-9C10-8B97A83FFDFA`)
+/// ```
+/// # use uefi_sdk::guid::*;
+/// # assert_eq!("4C19049F-4137-4DD3-9C10-8B97A83FFDFA", format!("{:?}", FmtGuid(&MEMORY_TYPE_INFORMATION)));
+/// ```
+pub const MEMORY_TYPE_INFORMATION: efi::Guid =
+    efi::Guid::from_fields(0x4C19049F, 0x4137, 0x4DD3, 0x9C, 0x10, &[0x8B, 0x97, 0xA8, 0x3F, 0xFD, 0xFA]);
+
+/// Performance Protocol GUID.
 ///
 /// This protocol provides a means of adding performace record to the Firmware Basic Boot Performance Table (FBPT).
 ///
@@ -118,6 +116,17 @@ pub const PERFORMANCE_PROTOCOL: efi::Guid =
 /// ```
 pub const SMM_COMMUNICATION_PROTOCOL: efi::Guid =
     efi::Guid::from_fields(0xc68ed8e2, 0x9dc6, 0x4cbd, 0x9d, 0x94, &[0xdb, 0x65, 0xac, 0xc5, 0xc3, 0x32]);
+
+/// Zero GUID
+///
+/// All-zero GUID, used as a marker or placeholder.
+///
+/// (`00000000-0000-0000-0000-000000000000`)
+/// ```
+/// # use uefi_sdk::guid::*;
+/// # assert_eq!("00000000-0000-0000-0000-000000000000", format!("{:?}", FmtGuid(&ZERO)));
+/// ```
+pub const ZERO: efi::Guid = efi::Guid::from_fields(0, 0, 0, 0, 0, &[0, 0, 0, 0, 0, 0]);
 
 pub struct FmtGuid<'a>(pub &'a efi::Guid);
 
