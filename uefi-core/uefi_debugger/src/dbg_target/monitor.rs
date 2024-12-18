@@ -61,6 +61,27 @@ impl Write for Buffer {
     }
 }
 
+cfg_if::cfg_if! {
+    if #[cfg(all(target_os = "uefi", target_arch = "x86_64"))] {
+        use core::arch::asm;
+        fn get_gdt(buffer: &mut Buffer) {
+            let mut gdtr: u64 = 0;
+            unsafe {
+                asm!(
+                    "sgdt [{}]",
+                    in(reg) &mut gdtr,
+                    options(nostack, preserves_flags)
+                );
+            }
+            let _ = write!(buffer, "GDT: {:#x?}", gdtr);
+        }
+    } else {
+        fn get_gdt(buffer: &mut Buffer) {
+            let _ = buffer.write_str("'gdt' command not implemented for this architecture. Use 'help' for a list of commands.");
+        }
+    }
+}
+
 impl ext::monitor_cmd::MonitorCmd for UefiTarget {
     fn handle_monitor_cmd(&mut self, cmd: &[u8], mut out: ConsoleOutput<'_>) -> Result<(), Self::Error> {
         let cmd_str = core::str::from_utf8(cmd).map_err(|_| ())?;
@@ -89,6 +110,9 @@ impl ext::monitor_cmd::MonitorCmd for UefiTarget {
             Some("disablechecks") => {
                 self.disable_checks = true;
                 let _ = buffer.write_str("Disabling safety checks. Good luck!");
+            }
+            Some("gdt") => {
+                get_gdt(&mut buffer);
             }
             _ => {
                 let _ = buffer.write_str("Unknown command. Use 'help' for a list of commands.");
