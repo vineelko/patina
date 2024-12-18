@@ -11,6 +11,7 @@ mod interrupt_manager;
 
 pub use interrupt_manager::InterruptManagerNull;
 use mu_pi::protocols::cpu_arch::EfiSystemContext;
+use uefi_sdk::error::EfiError;
 
 #[derive(Debug)]
 pub struct ExceptionContextNull;
@@ -20,4 +21,12 @@ impl super::EfiSystemContextFactory for ExceptionContextNull {
         // Pointer being set is arbitrary, but EBC is architecture agnostic.
         EfiSystemContext { system_context_ebc: core::ptr::null_mut() }
     }
+}
+
+pub fn enable_interrupts() {}
+
+pub fn disable_interrupts() {}
+
+pub fn get_interrupt_state() -> Result<bool, EfiError> {
+    Ok(false)
 }

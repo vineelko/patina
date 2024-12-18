@@ -67,30 +67,6 @@ pub trait EfiCpuInit {
         flush_type: CpuFlushType,
     ) -> Result<(), EfiError>;
 
-    /// Enables CPU interrupts.
-    ///
-    /// ## Errors
-    ///
-    /// Success       If interrupts were enabled in the CPU
-    /// DeviceError   If interrupts could not be enabled on the CPU.
-    fn enable_interrupt(&self) -> Result<(), EfiError>;
-
-    /// Disables CPU interrupts.
-    ///
-    /// ## Errors
-    ///
-    /// Success       If interrupts were disabled in the CPU.
-    /// DeviceError   If interrupts could not be disabled on the CPU.
-    fn disable_interrupt(&self) -> Result<(), EfiError>;
-
-    /// Return the state of interrupts.
-    ///
-    /// ## Errors
-    ///
-    /// Success            If interrupts were disabled in the CPU.
-    /// InvalidParameter   State is NULL.
-    fn get_interrupt_state(&self) -> Result<bool, EfiError>;
-
     /// Generates an INIT to the CPU.
     ///
     /// init_type          Type of CPU INIT to perform

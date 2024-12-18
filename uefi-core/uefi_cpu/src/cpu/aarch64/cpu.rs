@@ -28,18 +28,6 @@ impl EfiCpuInit for EfiCpuInitAArch64 {
         Ok(())
     }
 
-    fn enable_interrupt(&self) -> Result<(), EfiError> {
-        Ok(())
-    }
-
-    fn disable_interrupt(&self) -> Result<(), EfiError> {
-        Ok(())
-    }
-
-    fn get_interrupt_state(&self) -> Result<bool, EfiError> {
-        Ok(false)
-    }
-
     fn init(&self, _init_type: CpuInitType) -> Result<(), EfiError> {
         Ok(())
     }

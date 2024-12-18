@@ -9,6 +9,7 @@
 mod interrupt_manager;
 
 use mu_pi::protocols::cpu_arch::EfiSystemContext;
+use uefi_sdk::error::EfiError;
 
 pub use interrupt_manager::InterruptManagerAArch64;
 
@@ -18,4 +19,16 @@ impl super::EfiSystemContextFactory for ExceptionContextAArch64 {
     fn create_efi_system_context(&mut self) -> EfiSystemContext {
         EfiSystemContext { system_context_aarch64: self as *mut _ }
     }
+}
+
+pub fn enable_interrupts() {
+    todo!()
+}
+
+pub fn disable_interrupts() {
+    todo!()
+}
+
+pub fn get_interrupt_state() -> Result<bool, EfiError> {
+    todo!()
 }

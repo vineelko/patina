@@ -8,23 +8,21 @@
 //!
 #[cfg(not(test))]
 use super::gdt;
-use crate::cpu::EfiCpuInit;
+use crate::{cpu::EfiCpuInit, interrupts};
 #[cfg(not(test))]
 use core::arch::asm;
-use core::sync::atomic::{AtomicBool, Ordering};
 use mu_pi::protocols::cpu_arch::{CpuFlushType, CpuInitType};
 use r_efi::efi;
 use uefi_sdk::error::EfiError;
 
 /// Struct to implement X64 Cpu Init.
 pub struct EfiCpuInitX64 {
-    interrupt_state: AtomicBool,
     timer_period: u64,
 }
 
 impl EfiCpuInitX64 {
     pub fn new() -> Self {
-        let mut x64_efi_init = EfiCpuInitX64 { interrupt_state: AtomicBool::new(false), timer_period: 0 };
+        let mut x64_efi_init = EfiCpuInitX64 { timer_period: 0 };
         x64_efi_init.calculate_timer_period();
         x64_efi_init
     }
@@ -73,24 +71,6 @@ impl EfiCpuInitX64 {
     fn microsecond_delay(&self, _microseconds: u64) {
         // unimplemented!();
     }
-
-    fn enable_interrupts(&self) {
-        #[cfg(all(not(test), target_arch = "x86_64"))]
-        {
-            unsafe {
-                asm!("sti", options(preserves_flags, nostack));
-            }
-        }
-    }
-
-    fn disable_interrupts(&self) {
-        #[cfg(all(not(test), target_arch = "x86_64"))]
-        {
-            unsafe {
-                asm!("cli", options(preserves_flags, nostack));
-            }
-        }
-    }
 }
 
 /// The x86_64 implementation of EFI Cpu Init.
@@ -100,12 +80,12 @@ impl EfiCpuInit for EfiCpuInitX64 {
         // Initialize floating point units
 
         // disable interrupts
-        self.disable_interrupt()?;
+        interrupts::disable_interrupts();
 
         // Initialize GDT
         self.initialize_gdt();
 
-        self.enable_interrupt()?;
+        interrupts::enable_interrupts();
 
         Ok(())
     }
@@ -127,22 +107,6 @@ impl EfiCpuInit for EfiCpuInitX64 {
             }
             _ => Err(EfiError::Unsupported),
         }
-    }
-
-    fn enable_interrupt(&self) -> Result<(), EfiError> {
-        self.enable_interrupts();
-        self.interrupt_state.store(true, Ordering::Release);
-        Ok(())
-    }
-
-    fn disable_interrupt(&self) -> Result<(), EfiError> {
-        self.disable_interrupts();
-        self.interrupt_state.store(false, Ordering::Release);
-        Ok(())
-    }
-
-    fn get_interrupt_state(&self) -> Result<bool, EfiError> {
-        Ok(self.interrupt_state.load(Ordering::Acquire))
     }
 
     fn init(&self, _init_type: CpuInitType) -> Result<(), EfiError> {
@@ -173,7 +137,7 @@ mod tests {
 
     #[test]
     fn test_initialize() {
-        let mut x64_cpu_init = EfiCpuInitX64 { interrupt_state: AtomicBool::new(false), timer_period: 0 };
+        let mut x64_cpu_init = EfiCpuInitX64 { timer_period: 0 };
         x64_cpu_init.calculate_timer_period();
 
         assert_eq!(x64_cpu_init.initialize(), Ok(()));
@@ -181,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_flush_data_cache() {
-        let mut x64_cpu_init = EfiCpuInitX64 { interrupt_state: AtomicBool::new(false), timer_period: 0 };
+        let mut x64_cpu_init = EfiCpuInitX64 { timer_period: 0 };
         x64_cpu_init.calculate_timer_period();
 
         assert_eq!(x64_cpu_init.initialize(), Ok(()));
@@ -202,18 +166,8 @@ mod tests {
     }
 
     #[test]
-    fn test_enable_disable_interrupts() {
-        let mut x64_cpu_init = EfiCpuInitX64 { interrupt_state: AtomicBool::new(false), timer_period: 0 };
-        x64_cpu_init.calculate_timer_period();
-
-        assert_eq!(x64_cpu_init.initialize(), Ok(()));
-        assert_eq!(x64_cpu_init.enable_interrupt(), Ok(()));
-        assert_eq!(x64_cpu_init.disable_interrupt(), Ok(()));
-    }
-
-    #[test]
     fn test_get_timer_value() {
-        let mut x64_cpu_init = EfiCpuInitX64 { interrupt_state: AtomicBool::new(false), timer_period: 0 };
+        let mut x64_cpu_init = EfiCpuInitX64 { timer_period: 0 };
         x64_cpu_init.calculate_timer_period();
 
         assert_eq!(x64_cpu_init.initialize(), Ok(()));

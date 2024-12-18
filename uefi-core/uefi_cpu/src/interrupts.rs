@@ -12,21 +12,21 @@
 use mu_pi::protocols::cpu_arch::EfiSystemContext;
 use uefi_sdk::error::EfiError;
 
-pub mod aarch64;
 mod exception_handling;
 pub mod null;
-pub mod x64;
 
 cfg_if::cfg_if! {
     if #[cfg(all(target_os = "uefi", target_arch = "x86_64"))] {
+        pub mod x64;
         pub use x64::InterruptManagerX64 as InterruptManagerX64;
         pub use null::InterruptManagerNull as InterruptManagerNull;
     } else if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
+        pub mod aarch64;
         pub use aarch64::InterruptManagerAArch64 as InterruptManagerAArch64;
         pub use null::InterruptManagerNull as InterruptManagerNull;
-    } else if #[cfg(feature = "doc")] {
-        pub use x64::InterruptManagerX64 as InterruptManagerX64;
-        pub use aarch64::InterruptManagerAArch64 as InterruptManagerAArch64;
+    } else {
+        pub mod x64;
+        pub mod aarch64;
         pub use null::InterruptManagerNull as InterruptManagerNull;
     }
 }
@@ -113,4 +113,44 @@ pub trait InterruptHandler: Sync {
     /// then the handler should panic or otherwise halt the system.
     ///
     fn handle_interrupt(&'static self, exception_type: ExceptionType, context: &mut ExceptionContext);
+}
+
+cfg_if::cfg_if! {
+    if #[cfg(all(target_os = "uefi", target_arch = "x86_64"))] {
+        pub fn enable_interrupts() {
+            x64::enable_interrupts();
+        }
+
+        pub fn disable_interrupts() {
+            x64::disable_interrupts();
+        }
+
+        pub fn get_interrupt_state() -> Result<bool, EfiError> {
+            x64::get_interrupt_state()
+        }
+    } else if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
+        pub fn enable_interrupts() {
+            aarch64::enable_interrupts();
+        }
+
+        pub fn disable_interrupts() {
+            aarch64::disable_interrupts();
+        }
+
+        pub fn get_interrupt_state() -> Result<bool, EfiError> {
+            aarch64::get_interrupt_state()
+        }
+    } else  {
+        pub fn enable_interrupts() {
+            null::enable_interrupts();
+        }
+
+        pub fn disable_interrupts() {
+            null::disable_interrupts();
+        }
+
+        pub fn get_interrupt_state() -> Result<bool, EfiError> {
+            null::get_interrupt_state()
+        }
+    }
 }
