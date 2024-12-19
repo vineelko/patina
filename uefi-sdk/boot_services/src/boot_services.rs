@@ -32,7 +32,8 @@ use r_efi::efi;
 use allocation::{AllocType, MemoryMap, MemoryType};
 use boxed::BootServicesBox;
 use event::{EventNotifyCallback, EventTimerType, EventType};
-use protocol_handler::{HandleSearchType, Protocol, Registration};
+use protocol::Protocol;
+use protocol_handler::{HandleSearchType, Registration};
 use tpl::{Tpl, TplGuard};
 
 /// This is the boot services used in the UEFI.

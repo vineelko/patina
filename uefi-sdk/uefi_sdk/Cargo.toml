@@ -7,6 +7,11 @@ edition.workspace = true
 include.workspace = true
 
 [dependencies]
+boot_services = { workspace = true }
+protocol = { workspace = true }
+runtime_services = { workspace = true }
+tpl_mutex = { workspace = true }
+
 log = { workspace = true }
 r-efi = { workspace = true }
 

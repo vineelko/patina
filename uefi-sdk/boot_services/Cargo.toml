@@ -1,6 +1,6 @@
 [package]
 name = "boot_services"
-version = "1.0.0"
+version = "0.1.3"
 edition = "2021"
 
 [lib]
@@ -12,6 +12,8 @@ global_allocator = []
 mockall = ["dep:mockall"]
 
 [dependencies]
+protocol = { workspace = true }
+
 r-efi = { workspace = true }
 mockall = { version = "*", optional = true }
 

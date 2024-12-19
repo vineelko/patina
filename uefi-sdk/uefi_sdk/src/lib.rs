@@ -9,7 +9,7 @@
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 #![feature(macro_metavar_expr)]
 
 #[macro_use]
@@ -20,3 +20,8 @@ pub mod error;
 pub mod guid;
 pub mod log;
 pub mod serial;
+
+pub use boot_services;
+pub use protocol;
+pub use runtime_services;
+pub use tpl_mutex;

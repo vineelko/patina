@@ -1,0 +1,16 @@
+[package]
+name = "tpl_mutex"
+version = "0.1.3"
+edition = "2021"
+resolver = "2"
+
+[lib]
+path = "src/tpl_mutex.rs"
+
+[dependencies]
+r-efi = { workspace=true }
+boot_services = { workspace=true }
+
+[dev-dependencies]
+mockall = { version = "0.13.0" }
+boot_services = { workspace=true, features = ["mockall"]}

@@ -20,6 +20,7 @@ caseSensitive: false
 allowCompoundWords: true
 words:
   - aarch
+  - edkii
   - efiapi
   - rustc
   - uart
