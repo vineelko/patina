@@ -28,9 +28,12 @@ words:
   - decompressor
   - edkii
   - efiapi
+  - efierror
   - eflags
   - gdbstub
   - mtrrs
+  - pterror
+  - pushfq
   - rebox
   - repr
   - rflags
