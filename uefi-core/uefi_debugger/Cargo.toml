@@ -1,6 +1,6 @@
 [package]
 name = "uefi_debugger"
-version = "7.0.1"
+version = "7.0.2"
 license.workspace = true
 repository.workspace = true
 
