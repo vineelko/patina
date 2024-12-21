@@ -1,6 +1,6 @@
 [package]
 name = "dxe_core"
-version = "5.0.0"
+version = "6.1.0"
 edition = "2021"
 readme = "../README.md"
 description = "A pure rust implementation of the UEFI DXE Core."
@@ -42,6 +42,7 @@ uefi_cpu = { workspace = true }
 uefi_debugger = { workspace = true }
 uefi_device_path = { workspace = true }
 uefi_depex = { workspace = true}
+uefi_performance = { workspace = true }
 
 [dev-dependencies]
 sample_components = { workspace = true }
