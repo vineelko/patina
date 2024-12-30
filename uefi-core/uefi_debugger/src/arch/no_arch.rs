@@ -9,7 +9,7 @@
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 
-use arch::DebuggerArch;
+use super::DebuggerArch;
 use gdbstub::arch::RegId;
 use gdbstub::target::ext::breakpoints::WatchKind;
 use uefi_cpu::interrupts::ExceptionContext;
@@ -48,7 +48,7 @@ impl DebuggerArch for NoArch {
         false
     }
 
-    fn reboot() -> ! {
+    fn reboot() {
         panic!("no_arch reboot.");
     }
 

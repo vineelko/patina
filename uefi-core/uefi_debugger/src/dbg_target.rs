@@ -134,7 +134,7 @@ impl SingleThreadBase for UefiTarget {
             return Ok(data.len());
         }
 
-        match memory::read_memory(start_addr, data, self.disable_checks) {
+        match memory::read_memory::<SystemArch>(start_addr, data, self.disable_checks) {
             Ok(bytes_read) => Ok(bytes_read),
             Err(_) => {
                 log::info!("Failed to read memory at 0x{:x} : 0x{:x}", start_addr, data.len());
@@ -148,7 +148,7 @@ impl SingleThreadBase for UefiTarget {
         start_addr: <Self::Arch as gdbstub::arch::Arch>::Usize,
         data: &[u8],
     ) -> TargetResult<(), Self> {
-        match memory::write_memory(start_addr, data) {
+        match memory::write_memory::<SystemArch>(start_addr, data) {
             Ok(_) => Ok(()),
             Err(_) => {
                 log::info!("Failed to write memory at 0x{:x} : 0x{:x}", start_addr, data.len());

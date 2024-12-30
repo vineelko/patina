@@ -17,14 +17,13 @@ use gdbstub::{
     conn::ConnectionExt,
     stub::{state_machine::GdbStubStateMachine, GdbStubBuilder, SingleThreadStopReason},
 };
-use uefi_cpu::interrupts::{HandlerType, InterruptHandler, InterruptManager};
+use uefi_cpu::interrupts::{ExceptionType, HandlerType, InterruptHandler, InterruptManager};
 use uefi_sdk::serial::SerialIO;
 
 use crate::{
     arch::{DebuggerArch, SystemArch},
     dbg_target::UefiTarget,
-    transport::LoggingSuspender,
-    transport::SerialConnection,
+    transport::{LoggingSuspender, SerialConnection},
     DebugError, Debugger, ExceptionInfo,
 };
 
@@ -217,6 +216,7 @@ impl<T: SerialIO> UefiDebugger<T> {
         if target.reboot_on_resume() {
             // Reboot the system.
             SystemArch::reboot();
+            panic!("Reboot failed!");
         }
 
         // Target is resumed, store the state machine for the next break and
@@ -294,7 +294,11 @@ impl<T: SerialIO> Debugger for UefiDebugger<T> {
 }
 
 impl<T: SerialIO> InterruptHandler for UefiDebugger<T> {
-    fn handle_interrupt(&'static self, exception_type: usize, context: &mut uefi_cpu::interrupts::ExceptionContext) {
+    fn handle_interrupt(
+        &'static self,
+        exception_type: ExceptionType,
+        context: &mut uefi_cpu::interrupts::ExceptionContext,
+    ) {
         let mut exception_info = SystemArch::process_entry(exception_type as u64, context);
         let result = self.enter_debugger(exception_info);
 
@@ -302,13 +306,21 @@ impl<T: SerialIO> InterruptHandler for UefiDebugger<T> {
             // In the future, this could be make more robust by trying
             // to re-enter the debugger, re-initializing the stub. This
             // may require a new communication buffer though.
-
-            // It is not safe to return in this case. Log the error and reboot.
-            log::error!("The debugger crashed, rebooting the system. Error: {:?}", error);
-            SystemArch::reboot();
+            debugger_crash(error, exception_type);
         });
 
         SystemArch::process_exit(&mut exception_info);
         *context = exception_info.context;
     }
+}
+
+fn debugger_crash(error: DebugError, exception_type: ExceptionType) -> ! {
+    // Always log crashes, the debugger will stop working anyways.
+    log::set_max_level(log::LevelFilter::Error);
+    log::error!("DEBUGGER CRASH! Error: {:?} Exception Type: {:?}", error, exception_type);
+
+    // Could use SystemArch::reboot() in the future, but looping makes diagnosing
+    // debugger bugs easier for now.
+    #[allow(clippy::empty_loop)]
+    loop {}
 }

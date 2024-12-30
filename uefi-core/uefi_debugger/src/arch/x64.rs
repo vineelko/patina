@@ -8,7 +8,6 @@ use paging::PagingType;
 use uefi_cpu::interrupts::ExceptionContext;
 
 use super::{DebuggerArch, UefiArchRegs};
-use crate::paging;
 use crate::{memory, ExceptionInfo, ExceptionType};
 
 /// The "int 3" instruction.
@@ -91,7 +90,7 @@ impl DebuggerArch for X64Arch {
         false
     }
 
-    fn reboot() -> ! {
+    fn reboot() {
         // Reset the system through the keyboard controller IO port.
         unsafe {
             asm!("cli");

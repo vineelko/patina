@@ -51,8 +51,8 @@ impl breakpoints::SwBreakpoint for UefiTarget {
         for bp in breakpoints.iter_mut() {
             if !bp.set {
                 // Save the original memory and write the breakpoint instruction.
-                memory::read_memory(addr, &mut bp.original, self.disable_checks)?;
-                memory::write_memory(addr, SystemArch::BREAKPOINT_INSTRUCTION)?;
+                memory::read_memory::<SystemArch>(addr, &mut bp.original, self.disable_checks)?;
+                memory::write_memory::<SystemArch>(addr, SystemArch::BREAKPOINT_INSTRUCTION)?;
 
                 bp.addr = addr;
                 bp.set = true;
@@ -67,7 +67,7 @@ impl breakpoints::SwBreakpoint for UefiTarget {
         for bp in breakpoints.iter_mut() {
             if bp.set && bp.addr == addr {
                 // Restore the original memory.
-                memory::write_memory(addr, &bp.original)?;
+                memory::write_memory::<SystemArch>(addr, &bp.original)?;
 
                 bp.set = false;
                 return Ok(true);

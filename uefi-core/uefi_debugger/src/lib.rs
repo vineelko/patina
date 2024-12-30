@@ -79,18 +79,13 @@
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 mod arch;
 mod dbg_target;
 mod debugger;
 mod memory;
 mod transport;
-
-extern crate gdbstub;
-extern crate paging;
-extern crate uefi_cpu;
-extern crate uefi_sdk;
 
 pub use debugger::UefiDebugger;
 
@@ -180,6 +175,7 @@ pub fn enabled() -> bool {
 }
 
 /// Exception information for the debugger.
+#[derive(Debug)]
 #[allow(dead_code)]
 struct ExceptionInfo {
     /// The type of exception that occurred.

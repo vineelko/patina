@@ -71,7 +71,7 @@ pub trait DebuggerArch {
     fn remove_watchpoint(address: u64, length: u64, access_type: breakpoints::WatchKind) -> bool;
 
     /// Reboots the system.
-    fn reboot() -> !;
+    fn reboot();
 
     /// Gets the current page table.
     fn get_page_table() -> Result<Self::PageTable, ()>;
