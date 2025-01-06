@@ -9,7 +9,7 @@
 
 use uefi_sdk::error::EfiError;
 
-use crate::interrupts::InterruptManager;
+use crate::interrupts::{InterruptBases, InterruptManager};
 
 /// Null Implementation of the InterruptManager.
 #[derive(Default, Copy, Clone)]
@@ -24,5 +24,19 @@ impl InterruptManagerNull {
 impl InterruptManager for InterruptManagerNull {
     fn initialize(&mut self) -> Result<(), EfiError> {
         Ok(())
+    }
+}
+
+/// Null Implementation of the InterruptBases.
+#[derive(Default, Copy, Clone)]
+pub struct InterruptBasesNull {}
+
+impl InterruptBases for InterruptBasesNull {
+    fn get_interrupt_base_d(&self) -> u64 {
+        unimplemented!()
+    }
+
+    fn get_interrupt_base_r(&self) -> u64 {
+        unimplemented!()
     }
 }

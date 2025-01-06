@@ -29,6 +29,8 @@ cfg-if = { workspace = true }
 x86_64 = { workspace = true }
 mtrr = { workspace = true }
 
+[target.'cfg(all(target_arch="aarch64"))'.dependencies]
+arm-gic = { workspace = true }
 
 [dev-dependencies]
 x86_64 = { workspace = true }

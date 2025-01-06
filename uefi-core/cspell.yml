@@ -25,13 +25,22 @@ words:
   - aarch
   - addrs
   - brotli
+  - civac
+  - daifclr
+  - daifset
   - decompressor
   - edkii
   - efiapi
   - efierror
   - eflags
   - gdbstub
+  - icfgr
+  - intid
+  - irouter
+  - isenabler
+  - mpidr
   - mtrrs
+  - nomem
   - pterror
   - pushfq
   - rebox
@@ -39,7 +48,9 @@ words:
   - rflags
   - rustc
   - rwlock
+  - sysreg
   - tiano
+  - typer
   - uart
   - uefi
   - Uncacheable

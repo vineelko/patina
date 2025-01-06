@@ -20,14 +20,17 @@ cfg_if::cfg_if! {
         pub mod x64;
         pub use x64::InterruptManagerX64 as InterruptManagerX64;
         pub use null::InterruptManagerNull as InterruptManagerNull;
+        pub use null::InterruptBasesNull as InterruptBasesNull;
     } else if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
         pub mod aarch64;
         pub use aarch64::InterruptManagerAArch64 as InterruptManagerAArch64;
         pub use null::InterruptManagerNull as InterruptManagerNull;
+        pub use aarch64::InterruptBasesAArch64 as InterruptBasesAArch64;
     } else {
         pub mod x64;
         pub mod aarch64;
         pub use null::InterruptManagerNull as InterruptManagerNull;
+        pub use null::InterruptBasesNull as InterruptBasesNull;
     }
 }
 
@@ -80,6 +83,14 @@ pub trait InterruptManager {
     fn unregister_exception_handler(&self, exception_type: ExceptionType) -> Result<(), EfiError> {
         exception_handling::unregister_exception_handler(exception_type)
     }
+}
+
+pub trait InterruptBases {
+    /// Returns the base address of the interrupt controller.
+    fn get_interrupt_base_d(&self) -> u64;
+
+    /// Returns the base address of the interrupt controller.
+    fn get_interrupt_base_r(&self) -> u64;
 }
 
 /// Type for storing the handler for a given exception.

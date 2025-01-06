@@ -9,6 +9,7 @@
 
 mod interrupt_manager;
 
+pub use interrupt_manager::InterruptBasesNull;
 pub use interrupt_manager::InterruptManagerNull;
 use mu_pi::protocols::cpu_arch::EfiSystemContext;
 use uefi_sdk::error::EfiError;

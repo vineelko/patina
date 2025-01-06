@@ -6,12 +6,25 @@
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
-mod interrupt_manager;
-
 use mu_pi::protocols::cpu_arch::EfiSystemContext;
 use uefi_sdk::error::EfiError;
 
-pub use interrupt_manager::InterruptManagerAArch64;
+cfg_if::cfg_if! {
+    if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
+        mod interrupt_manager;
+        mod sysreg;
+        pub mod gic_manager;
+        pub use interrupt_manager::InterruptManagerAArch64;
+        pub use interrupt_manager::InterruptBasesAArch64;
+
+        use core::arch::asm;
+        use crate::interrupts::aarch64::sysreg::read_sysreg;
+    } else if #[cfg(feature = "doc")] {
+        pub use interrupt_manager::InterruptManagerAArch64;
+        pub use interrupt_manager::InterruptBasesAArch64;
+        mod interrupt_manager;
+    }
+}
 
 pub type ExceptionContextAArch64 = r_efi::protocols::debug_support::SystemContextAArch64;
 
@@ -22,13 +35,41 @@ impl super::EfiSystemContextFactory for ExceptionContextAArch64 {
 }
 
 pub fn enable_interrupts() {
-    todo!()
+    #[cfg(all(not(test), target_arch = "aarch64"))]
+    {
+        unsafe {
+            asm!("msr   daifclr, 0x02");
+            asm!("isb", options(nostack));
+        }
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        unimplemented!()
+    }
 }
 
 pub fn disable_interrupts() {
-    todo!()
+    #[cfg(all(not(test), target_arch = "aarch64"))]
+    {
+        unsafe {
+            asm!("msr   daifset, 0x02");
+            asm!("isb", options(nostack));
+        }
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        unimplemented!()
+    }
 }
 
 pub fn get_interrupt_state() -> Result<bool, EfiError> {
-    todo!()
+    #[cfg(all(not(test), target_arch = "aarch64"))]
+    {
+        let daif = unsafe { read_sysreg!(daif) };
+        Ok(daif & 0x80 == 0)
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        Err(EfiError::Unsupported)
+    }
 }

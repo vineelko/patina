@@ -34,6 +34,7 @@ mockall = "0.13.0"
 paging = { git = "https://github.com/pop-project/paging.git", rev = "00d9ab1dbb46b201069e6e58de16679f26d3c54f" }
 mtrr = { git = "https://github.com/pop-project/mtrr.git", rev = "25a88e3e3062933b59b211bd01bc1f8a64b11f09" }
 cfg-if = "1.0.0"
+arm-gic = "^0.1.2"
 
 [profile.dev]
 opt-level = 3
