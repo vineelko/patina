@@ -34,7 +34,7 @@ AsmIdtVectorEnd:
 common_interrupt_entry:
 
     # The stack is inconsistent at this point. Some exceptions will have an error
-    # code and some wont. Check if this vector has an error code, and if not, inject
+    # code and some won't. Check if this vector has an error code, and if not, inject
     # a zero to keep a consistent stack. The Vector is at the top of the stack as
     # pushed in the vector above.
 

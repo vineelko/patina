@@ -10,7 +10,11 @@
 use core::arch::global_asm;
 use lazy_static::lazy_static;
 use mu_pi::protocols::cpu_arch::EfiSystemContext;
-use uefi_sdk::{base::SIZE_4GB, error::EfiError};
+use paging::page_allocator::PageAllocator;
+use paging::{MemoryAttributes, PageTable, PagingType};
+use uefi_sdk::base::SIZE_4GB;
+use uefi_sdk::base::{UEFI_PAGE_MASK, UEFI_PAGE_SIZE};
+use uefi_sdk::error::EfiError;
 use x86_64::structures::idt::InterruptDescriptorTable;
 use x86_64::structures::idt::InterruptStackFrame;
 use x86_64::VirtAddr;
@@ -111,7 +115,56 @@ extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame,
 /// Default handler for GP faults.
 extern "efiapi" fn general_protection_fault_handler(_exception_type: isize, context: EfiSystemContext) {
     let x64_context = unsafe { context.system_context_x64.as_ref().unwrap() };
-    panic!("EXCEPTION: GP FAULT\n{:#x?}", x64_context);
+    log::error!("EXCEPTION: GP FAULT");
+    log::error!("Instruction Pointer: {:#x?}", x64_context.rip);
+    log::error!("Code Segment: 0x{:x?}", x64_context.cs);
+    log::error!("RFLAGS: 0x{:x?}", x64_context.rflags);
+    log::error!("Stack Segment: 0x{:x?}", x64_context.ss);
+    log::error!("Stack Pointer: 0x{:x?}", x64_context.rsp);
+    log::error!("Data Segment: 0x{:x?}", x64_context.ds);
+    log::error!("Paging Enable: {}", x64_context.cr0 & 0x80000000 != 0);
+    log::error!("Protection Enable: {}", x64_context.cr0 & 0x00000001 != 0);
+    log::error!("Page Directory Base: 0x{:x?}", x64_context.cr3);
+    log::error!("Control Flags (cr4): 0x{:x?}", x64_context.cr4);
+    interpret_gp_fault_exception_data(x64_context.exception_data);
+
+    log::error!(
+        "General-Purpose Registers\n \
+                RAX: {:x?}\n \
+                RBX: {:x?}\n \
+                RCX: {:x?}\n \
+                RDX: {:x?}\n \
+                RSI: {:x?}\n \
+                RDI: {:x?}\n \
+                RBP: {:x?}\n \
+                R8: {:x?}\n \
+                R9: {:x?}\n \
+                R10: {:x?}\n \
+                R11: {:x?}\n \
+                R12: {:x?}\n \
+                R13: {:x?}\n \
+                R14: {:x?}\n \
+                R15: {:x?}",
+        x64_context.rax,
+        x64_context.rbx,
+        x64_context.rcx,
+        x64_context.rdx,
+        x64_context.rsi,
+        x64_context.rdi,
+        x64_context.rbp,
+        x64_context.r8,
+        x64_context.r9,
+        x64_context.r10,
+        x64_context.r11,
+        x64_context.r12,
+        x64_context.r13,
+        x64_context.r14,
+        x64_context.r15
+    );
+
+    log::debug!("Full Context: {:#x?}", x64_context);
+
+    panic!("EXCEPTION: GP FAULT\n");
 }
 
 /// Default handler for page faults.
@@ -120,8 +173,65 @@ extern "efiapi" fn page_fault_handler(_exception_type: isize, context: EfiSystem
 
     log::error!("EXCEPTION: PAGE FAULT");
     log::error!("Accessed Address: 0x{:x?}", x64_context.cr2);
-    log::error!("Error Code: 0x{:x?}", x64_context.exception_data);
-    log::error!("{:#x?}", x64_context);
+    log::error!("Paging Enabled: {}", x64_context.cr0 & 0x80000000 != 0);
+    log::error!("Instruction Pointer: 0x{:x?}", x64_context.rip);
+    log::error!("Code Segment: 0x{:x?}", x64_context.cs);
+    log::error!("RFLAGS: 0x{:x?}", x64_context.rflags);
+    log::error!("Stack Segment: 0x{:x?}", x64_context.ss);
+    log::error!("Data Segment: 0x{:x?}", x64_context.ds);
+    log::error!("Stack Pointer: 0x{:x?}", x64_context.rsp);
+    log::error!("Page Directory Base: 0x{:x?}", x64_context.cr3);
+    log::error!("Paging Features (cr4): 0x{:x?}", x64_context.cr4);
+    interpret_page_fault_exception_data(x64_context.exception_data);
+
+    let paging_type = {
+        if x64_context.cr4 & (1 << 12) != 0 {
+            PagingType::Paging4KB5Level
+        } else {
+            PagingType::Paging4KB4Level
+        }
+    };
+
+    if let Some(attrs) = get_fault_attributes(x64_context.cr2, x64_context.cr3, paging_type) {
+        log::error!("Page Attributes: {:?}", attrs);
+    }
+
+    log::error!(
+        "General-Purpose Registers\n \
+                RAX: {:x?}\n \
+                RBX: {:x?}\n \
+                RCX: {:x?}\n \
+                RDX: {:x?}\n \
+                RSI: {:x?}\n \
+                RDI: {:x?}\n \
+                RBP: {:x?}\n \
+                R8: {:x?}\n \
+                R9: {:x?}\n \
+                R10: {:x?}\n \
+                R11: {:x?}\n \
+                R12: {:x?}\n \
+                R13: {:x?}\n \
+                R14: {:x?}\n \
+                R15: {:x?}",
+        x64_context.rax,
+        x64_context.rbx,
+        x64_context.rcx,
+        x64_context.rdx,
+        x64_context.rsi,
+        x64_context.rdi,
+        x64_context.rbp,
+        x64_context.r8,
+        x64_context.r9,
+        x64_context.r10,
+        x64_context.r11,
+        x64_context.r12,
+        x64_context.r13,
+        x64_context.r14,
+        x64_context.r15
+    );
+
+    log::debug!("Full Context: {:#x?}", x64_context);
+
     panic!("EXCEPTION: PAGE FAULT");
 }
 
@@ -133,4 +243,63 @@ fn get_vector_address(index: usize) -> VirtAddr {
     }
 
     unsafe { VirtAddr::from_ptr(AsmGetVectorAddress(index) as *const ()) }
+}
+
+fn interpret_page_fault_exception_data(exception_data: u64) {
+    log::error!("Error Code: 0x{:x}\n", exception_data);
+    if (exception_data & 0x1) == 0 {
+        log::error!("Page not present\n");
+    } else {
+        log::error!("Page-level protection violation\n");
+    }
+
+    if (exception_data & 0x2) == 0 {
+        log::error!("R/W: Read\n");
+    } else {
+        log::error!("R/W: Write\n");
+    }
+
+    if (exception_data & 0x4) == 0 {
+        log::error!("Mode: Supervisor\n");
+    } else {
+        log::error!("Mode: User\n");
+    }
+
+    if (exception_data & 0x8) == 0 {
+        log::error!("Reserved bit violation\n");
+    }
+
+    if (exception_data & 0x10) == 0 {
+        log::error!("Instruction fetch access\n");
+    }
+}
+
+fn interpret_gp_fault_exception_data(exception_data: u64) {
+    log::error!("Error Code: 0x{:x}\n", exception_data);
+    if (exception_data & 0x1) != 0 {
+        log::error!("Invalid segment\n");
+    }
+
+    if (exception_data & 0x2) != 0 {
+        log::error!("Invalid write access\n");
+    }
+
+    if (exception_data & 0x4) == 0 {
+        log::error!("Mode: Supervisor\n");
+    } else {
+        log::error!("Mode: User\n");
+    }
+}
+
+fn get_fault_attributes(cr2: u64, cr3: u64, paging_type: PagingType) -> Option<MemoryAttributes> {
+    let pt = unsafe { paging::x64::X64PageTable::from_existing(cr3, FaultAllocator {}, paging_type).ok()? };
+    pt.query_memory_region(cr2 & !(UEFI_PAGE_MASK as u64), UEFI_PAGE_SIZE as u64).ok()
+}
+
+pub struct FaultAllocator {}
+
+impl PageAllocator for FaultAllocator {
+    fn allocate_page(&mut self, _align: u64, _size: u64, _contiguous: bool) -> paging::PtResult<u64> {
+        unimplemented!()
+    }
 }
