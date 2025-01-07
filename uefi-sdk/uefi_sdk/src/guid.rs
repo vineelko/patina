@@ -75,6 +75,29 @@ pub const EDKII_FPDT_EXTENDED_FIRMWARE_PERFORMANCE: efi::Guid =
 pub const EVENT_GROUP_END_OF_DXE: efi::Guid =
     efi::Guid::from_fields(0x2ce967a, 0xdd7e, 0x4ffc, 0x9e, 0xe7, &[0x81, 0xc, 0xf0, 0x47, 0x8, 0x80]);
 
+/// Hardware Interrupt protocol GUID.
+/// This protocol provides a means of registering and unregistering interrupt handlers for AARCH64 systems.
+///
+/// (`2890B3EA-053D-1643-AD0C-D64808DA3FF1`)
+/// ```
+/// # use uefi_sdk::guid::*;
+/// # assert_eq!("2890B3EA-053D-1643-AD0C-D64808DA3FF1", format!("{:?}", FmtGuid(&HARDWARE_INTERRUPT_PROTOCOL)));
+/// ```
+pub const HARDWARE_INTERRUPT_PROTOCOL: efi::Guid =
+    efi::Guid::from_fields(0x2890B3EA, 0x053D, 0x1643, 0xAD, 0x0C, &[0xD6, 0x48, 0x08, 0xDA, 0x3F, 0xF1]);
+
+/// Hardware Interrupt v2 protocol GUID.
+/// This protocol provides a means of registering and unregistering interrupt handlers for AARCH64 systems.
+/// This protocol extends the Hardware Interrupt Protocol to support interrupt type query.
+///
+/// (`32898322-2D1A-474A-BAAA-F3F7CF569470`)
+/// ```
+/// # use uefi_sdk::guid::*;
+/// # assert_eq!("32898322-2D1A-474A-BAAA-F3F7CF569470", format!("{:?}", FmtGuid(&HARDWARE_INTERRUPT_PROTOCOL_V2)));
+/// ```
+pub const HARDWARE_INTERRUPT_PROTOCOL_V2: efi::Guid =
+    efi::Guid::from_fields(0x32898322, 0x2d1a, 0x474a, 0xba, 0xaa, &[0xf3, 0xf7, 0xcf, 0x56, 0x94, 0x70]);
+
 /// Memory Type Info GUID
 ///
 /// The memory type information HOB and variable can be used to store information
