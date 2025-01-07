@@ -18,5 +18,8 @@ cfg_if::cfg_if! {
         mod null;
         mod aarch64;
         pub use aarch64::create_cpu_aarch64_paging as create_cpu_paging;
+    } else {
+        mod null;
+        pub use null::create_cpu_null_paging as create_cpu_paging;
     }
 }

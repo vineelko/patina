@@ -8,9 +8,11 @@
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
+use alloc::boxed::Box;
 use paging::{MemoryAttributes, PageTable, PtError};
 
 use paging::page_allocator::PageAllocator;
+use r_efi::efi;
 
 #[derive(Default)]
 pub struct EfiCpuPagingNull<A>
@@ -54,4 +56,10 @@ where
     }
 
     fn dump_page_tables(&self, _address: u64, _size: u64) {}
+}
+
+pub fn create_cpu_null_paging<A: PageAllocator + 'static>(
+    _page_allocator: A,
+) -> Result<Box<dyn PageTable<ALLOCATOR = A>>, efi::Status> {
+    Err(efi::Status::UNSUPPORTED)
 }
