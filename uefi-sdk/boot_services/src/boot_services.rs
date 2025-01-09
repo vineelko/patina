@@ -32,9 +32,9 @@ use r_efi::efi;
 use allocation::{AllocType, MemoryMap, MemoryType};
 use boxed::BootServicesBox;
 use event::{EventNotifyCallback, EventTimerType, EventType};
-use protocol::Protocol;
 use protocol_handler::{HandleSearchType, Registration};
 use tpl::{Tpl, TplGuard};
+use uefi_protocol::Protocol;
 
 /// This is the boot services used in the UEFI.
 /// it wraps an atomic ptr to [`efi::BootServices`]

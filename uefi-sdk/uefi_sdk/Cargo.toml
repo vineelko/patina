@@ -8,7 +8,7 @@ include.workspace = true
 
 [dependencies]
 boot_services = { workspace = true }
-protocol = { workspace = true }
+uefi_protocol = { workspace = true }
 runtime_services = { workspace = true }
 tpl_mutex = { workspace = true }
 

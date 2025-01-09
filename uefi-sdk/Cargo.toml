@@ -4,7 +4,7 @@ resolver = "2"
 members = [
   "uefi_sdk",
   "boot_services",
-  "protocol",
+  "uefi_protocol",
   "runtime_services",
   "tpl_mutex"
 ]
@@ -21,7 +21,7 @@ include = [
 
 [workspace.dependencies]
 boot_services = { path = "./boot_services" }
-protocol = { path = "./protocol"} 
+uefi_protocol = { path = "./uefi_protocol"}
 runtime_services = { path = "./runtime_services" }
 tpl_mutex = { path = "./tpl_mutex" }
 
