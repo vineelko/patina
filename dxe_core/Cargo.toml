@@ -22,8 +22,6 @@ required-features = ["std"]
 
 [dependencies]
 ahash = { workspace=  true }
-# temporary until aarch64 paging comes in
-cfg-if = { workspace = true }
 corosensei = { workspace = true }
 crc32fast = { workspace = true }
 goblin = {workspace = true}
@@ -52,6 +50,9 @@ sample_components = { workspace = true }
 section_extractor = { workspace = true }
 uefi_collections = { workspace = true, default-features = true }
 mockall = { workspace = true }
+
+[target.'cfg(all(target_arch="aarch64"))'.dependencies]
+arm-gic = { workspace = true }
 
 [features]
 default = []

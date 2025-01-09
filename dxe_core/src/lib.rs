@@ -8,6 +8,7 @@
 //! ``` rust,no_run
 //! use uefi_cpu::cpu::EfiCpuInit;
 //! use uefi_cpu::interrupts::InterruptManager;
+//! use uefi_cpu::interrupts::InterruptBases;
 //! use uefi_cpu::interrupts::ExceptionType;
 //! use uefi_cpu::interrupts::HandlerType;
 //! use uefi_sdk::error::EfiError;
@@ -48,11 +49,18 @@
 //! #        exception_type: ExceptionType,
 //! #    ) -> Result<(), EfiError> { Ok(()) }
 //! # }
+//! # #[derive(Default, Clone, Copy)]
+//! # struct InterruptBasesExample;
+//! # impl uefi_cpu::interrupts::InterruptBases for InterruptBasesExample {
+//! #     fn get_interrupt_base_d(&self) -> u64 { 0 }
+//! #     fn get_interrupt_base_r(&self) -> u64 { 0 }
+//! # }
 //! # let physical_hob_list = core::ptr::null();
 //! dxe_core::Core::default()
 //!   .with_cpu_init(CpuInitExample::default())
 //!   .with_interrupt_manager(InterruptManagerExample::default())
 //!   .with_section_extractor(SectionExtractExample::default())
+//!   .with_interrupt_bases(InterruptBasesExample::default())
 //!   .initialize(physical_hob_list)
 //!   .with_driver(Box::new(Driver::default()))
 //!   .start()
@@ -88,6 +96,8 @@ mod events;
 mod filesystems;
 mod fv;
 mod gcd;
+#[cfg(all(target_os = "uefi", target_arch = "aarch64"))]
+mod hw_interrupt_protocol;
 mod image;
 mod memory_attributes_protocol;
 mod memory_attributes_table;
@@ -190,33 +200,44 @@ pub(crate) static GCD: SpinLockedGcd = SpinLockedGcd::new(Some(events::gcd_map_c
 /// #        exception_type: ExceptionType,
 /// #    ) -> Result<(), EfiError> { Ok(()) }
 /// # }
+/// # #[derive(Default, Clone, Copy)]
+/// # struct InterruptBasesExample;
+/// # impl uefi_cpu::interrupts::InterruptBases for InterruptBasesExample {
+/// #     fn get_interrupt_base_d(&self) -> u64 { 0 }
+/// #     fn get_interrupt_base_r(&self) -> u64 { 0 }
+/// # }
 /// # let physical_hob_list = core::ptr::null();
 /// dxe_core::Core::default()
 ///   .with_cpu_init(CpuInitExample::default())
 ///   .with_interrupt_manager(InterruptManagerExample::default())
 ///   .with_section_extractor(SectionExtractExample::default())
+///   .with_interrupt_bases(InterruptBasesExample::default())
 ///   .initialize(physical_hob_list)
 ///   .with_driver(Box::new(Driver::default()))
 ///   .start()
 ///   .unwrap();
 /// ```
 #[derive(Default)]
-pub struct Core<CpuInit, SectionExtractor, InterruptManager>
+pub struct Core<CpuInit, SectionExtractor, InterruptManager, InterruptBases>
 where
     CpuInit: uefi_cpu::cpu::EfiCpuInit + Default + 'static,
     SectionExtractor: fw_fs::SectionExtractor + Default + Copy + 'static,
     InterruptManager: uefi_cpu::interrupts::InterruptManager + Default + Copy + 'static,
+    InterruptBases: uefi_cpu::interrupts::InterruptBases + Default + Copy + 'static,
 {
     cpu_init: CpuInit,
     section_extractor: SectionExtractor,
     interrupt_manager: InterruptManager,
+    interrupt_bases: InterruptBases,
 }
 
-impl<CpuInit, SectionExtractor, InterruptManager> Core<CpuInit, SectionExtractor, InterruptManager>
+impl<CpuInit, SectionExtractor, InterruptManager, InterruptBases>
+    Core<CpuInit, SectionExtractor, InterruptManager, InterruptBases>
 where
     CpuInit: uefi_cpu::cpu::EfiCpuInit + Default + 'static,
     SectionExtractor: fw_fs::SectionExtractor + Default + Copy + 'static,
     InterruptManager: uefi_cpu::interrupts::InterruptManager + Default + Copy + 'static,
+    InterruptBases: uefi_cpu::interrupts::InterruptBases + Default + Copy + 'static,
 {
     /// Registers the CPU Init with it's own configuration.
     pub fn with_cpu_init(mut self, cpu_init: CpuInit) -> Self {
@@ -241,6 +262,12 @@ where
     /// get_c_hob_list_size is not marked unsafe, but it is
     fn get_hob_list_len(hob_list: *const c_void) -> usize {
         unsafe { get_c_hob_list_size(hob_list) }
+    }
+
+    /// Registers the interrupt bases with it's own configuration.
+    pub fn with_interrupt_bases(mut self, interrupt_bases: InterruptBases) -> Self {
+        self.interrupt_bases = interrupt_bases;
+        self
     }
 
     /// Initializes the core with the given configuration, including GCD initialization, enabling allocations.
@@ -305,6 +332,8 @@ where
 
             cpu_arch_protocol::install_cpu_arch_protocol(&mut self.cpu_init, &mut self.interrupt_manager);
             memory_attributes_protocol::install_memory_attributes_protocol();
+            #[cfg(all(target_os = "uefi", target_arch = "aarch64"))]
+            hw_interrupt_protocol::install_hw_interrupt_protocol(&mut self.interrupt_manager, &self.interrupt_bases);
 
             // re-checksum the system tables after above initialization.
             st.checksum_all();
