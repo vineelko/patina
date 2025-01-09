@@ -1,7 +1,12 @@
 [package]
 name = "runtime_services"
-version = "0.1.4"
-edition = "2021"
+resolver = "2"
+version.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Rust-friendly UEFI Runtime Service wrappers."
 
 [lib]
 path = "src/runtime_services.rs"

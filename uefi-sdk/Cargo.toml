@@ -10,6 +10,7 @@ members = [
 ]
 
 [workspace.package]
+version = "0.1.5"
 repository = "https://github.com/pop-project/uefi-sdk"
 license = "BSD-2-Clause-Patent"
 edition = "2021"
