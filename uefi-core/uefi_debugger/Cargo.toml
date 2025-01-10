@@ -1,10 +1,12 @@
 [package]
 name = "uefi_debugger"
-version = "9.0.0"
-edition = "2021"
-description = "Debugger implementation for a UEFI Core."
-license.workspace = true
+resolver = "2"
+version.workspace = true
 repository.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Debugger implementation for a UEFI Core."
 
 [lib]
 name = "uefi_debugger"

@@ -8,17 +8,14 @@ members = [
 ]
 
 [workspace.package]
+version = "9.0.0"
+publish = ["UefiRust"]
 repository = "https://github.com/pop-project/uefi-core"
 license = "BSD-2-Clause-Patent"
 edition = "2021"
-include = [
-  "Cargo.toml",
-  "LICENSE*",
-  "README.md"
-]
 
 [workspace.dependencies]
-uefi_cpu = { path = "uefi_cpu", version = "9.0.0" }
+uefi_cpu = { path = "uefi_cpu", version = "9" }
 
 # External Libraries
 uefi_sdk = {git = "https://github.com/pop-project/uefi-sdk.git", rev = "v0.1.5" }
