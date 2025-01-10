@@ -10,17 +10,17 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.6"
+version = "1.0.0"
 publish = ["UefiRust"]
 repository = "https://github.com/pop-project/uefi-sdk"
 license = "BSD-2-Clause-Patent"
 edition = "2021"
 
 [workspace.dependencies]
-boot_services = { path = "./boot_services", version = "0.1" }
-uefi_protocol = { path = "./uefi_protocol", version = "0.1"}
-runtime_services = { path = "./runtime_services", version = "0.1" }
-tpl_mutex = { path = "./tpl_mutex", version = "0.1" }
+boot_services = { path = "./boot_services", version = "1" }
+uefi_protocol = { path = "./uefi_protocol", version = "1"}
+runtime_services = { path = "./runtime_services", version = "1" }
+tpl_mutex = { path = "./tpl_mutex", version = "1" }
 
 log = { version = "^0.4", default-features = false }
 r-efi = { version = "^5", default-features = false }
