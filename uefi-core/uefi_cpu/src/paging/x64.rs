@@ -155,7 +155,7 @@ pub fn create_cpu_x64_paging<A: PageAllocator + 'static>(
     page_allocator: A,
 ) -> Result<Box<dyn PageTable<ALLOCATOR = A>>, efi::Status> {
     Ok(Box::new(EfiCpuPagingX64 {
-        paging: X64PageTable::new(page_allocator, PagingType::Paging4KB4Level).unwrap(),
+        paging: X64PageTable::new(page_allocator, PagingType::Paging4Level).unwrap(),
         mtrr: create_mtrr_lib(0),
     }))
 }

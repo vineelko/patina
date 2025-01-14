@@ -31,7 +31,7 @@ x86_64 = { version= "=0.14.12", default-features = false, features = ["instructi
 mu_pi = {git = "https://github.com/microsoft/mu_rust_pi.git", tag = "v5.1.2"}
 mu_rust_helpers = { git = "https://github.com/microsoft/mu_rust_helpers", tag = "v1.2.1", default-features = false}
 mockall = "0.13.0"
-paging = { git = "https://github.com/pop-project/paging.git", rev = "fdfd4db1f453005299aa55a55c56692d97704e2f" }
+paging = { git = "https://github.com/pop-project/paging.git", rev = "9a55b63198bde79fb4dff6c7fdf1d83a3466ae16" }
 mtrr = { git = "https://github.com/pop-project/mtrr.git", rev = "25a88e3e3062933b59b211bd01bc1f8a64b11f09" }
 cfg-if = "1.0.0"
 arm-gic = "^0.1.2"

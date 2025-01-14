@@ -186,9 +186,9 @@ extern "efiapi" fn page_fault_handler(_exception_type: isize, context: EfiSystem
 
     let paging_type = {
         if x64_context.cr4 & (1 << 12) != 0 {
-            PagingType::Paging4KB5Level
+            PagingType::Paging5Level
         } else {
-            PagingType::Paging4KB4Level
+            PagingType::Paging4Level
         }
     };
 

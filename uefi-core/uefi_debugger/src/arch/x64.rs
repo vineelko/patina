@@ -110,9 +110,9 @@ impl DebuggerArch for X64Arch {
         // Check CR4 to determine if we are using 4-level or 5-level paging.
         let paging_type = {
             if cr4 & (1 << 12) != 0 {
-                PagingType::Paging4KB5Level
+                PagingType::Paging5Level
             } else {
-                PagingType::Paging4KB4Level
+                PagingType::Paging4Level
             }
         };
 
