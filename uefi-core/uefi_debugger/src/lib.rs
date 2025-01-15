@@ -73,6 +73,9 @@
 //!
 //! `windbg_workarounds` - (Default) Enables workarounds for Windbg compatibility.
 //!
+//! `no_alloc` - Uses static buffers for all memory. This will limit functionality
+//! but allows debugging prior to allocation being initialized.
+//!
 //! ## License
 //!
 //! Copyright (C) Microsoft Corporation.
@@ -85,7 +88,10 @@ mod arch;
 mod dbg_target;
 mod debugger;
 mod memory;
+mod modules;
 mod transport;
+
+extern crate alloc;
 
 pub use debugger::UefiDebugger;
 
@@ -125,10 +131,16 @@ trait Debugger: Sync {
 enum DebugError {
     /// The debugger lock could not be acquired. Usually indicating the debugger faulted.
     Reentry,
+    /// The debugger configuration is locked. This indicates a failure during debugger configuration.
+    ConfigLocked,
+    /// The debugger was invoked without being fuly initialized.
+    NotInitialized,
     /// Failure from the GDB stub initialization.
     GdbStubInit,
     /// Failure from the GDB stub.
     GdbStubError(gdbstub::stub::GdbStubError<(), uefi_sdk::error::EfiError>),
+    /// Failure to reboot the system.
+    RebootFailure,
 }
 
 /// Sets the global instance of the debugger.
@@ -194,6 +206,8 @@ enum ExceptionType {
     Breakpoint,
     /// A break due to an invalid memory access. The accessed address is provided.
     AccessViolation(usize),
+    /// A general protection fault. Exception data is provided.
+    GeneralProtectionFault(u64),
     /// A break due to an exception type not handled by the debugger. The exception type is provided.
     Other(u64),
 }

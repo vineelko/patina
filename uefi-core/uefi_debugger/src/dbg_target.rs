@@ -21,10 +21,14 @@ use gdbstub::target::{
     },
     Target, TargetError, TargetResult,
 };
+use spin::Mutex;
 
 use crate::{
     arch::{DebuggerArch, SystemArch, UefiArchRegs},
-    memory, ExceptionInfo,
+    memory,
+    modules::Modules,
+    transport::BufferWriter,
+    ExceptionInfo,
 };
 
 /// Addresses that windbg will attempt to read in a loop, reads from these addresses
@@ -42,12 +46,27 @@ pub struct UefiTarget {
     reboot: bool,
     /// Disables safety checks for the target.
     disable_checks: bool,
+    /// Tracks modules state.
+    modules: &'static Mutex<Modules>,
+    /// Buffer used for monitor calls.
+    monitor_buffer: BufferWriter<'static>,
 }
 
 impl UefiTarget {
     /// Create a new UEFI target.
-    pub const fn new(exception_info: ExceptionInfo) -> Self {
-        UefiTarget { exception_info, resume: false, reboot: false, disable_checks: false }
+    pub fn new(
+        exception_info: ExceptionInfo,
+        modules: &'static Mutex<Modules>,
+        monitor_buffer: &'static mut [u8],
+    ) -> Self {
+        UefiTarget {
+            exception_info,
+            resume: false,
+            reboot: false,
+            disable_checks: false,
+            modules,
+            monitor_buffer: BufferWriter::new(monitor_buffer),
+        }
     }
 
     /// Checks if the target has been resumed.

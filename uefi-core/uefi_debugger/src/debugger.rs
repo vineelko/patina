@@ -11,24 +11,32 @@
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 
-use core::panic;
-
+#[cfg(not(feature = "no_alloc"))]
+use alloc::boxed::Box;
 use gdbstub::{
     conn::ConnectionExt,
     stub::{state_machine::GdbStubStateMachine, GdbStubBuilder, SingleThreadStopReason},
 };
+use spin::Mutex;
 use uefi_cpu::interrupts::{ExceptionType, HandlerType, InterruptHandler, InterruptManager};
 use uefi_sdk::serial::SerialIO;
 
 use crate::{
     arch::{DebuggerArch, SystemArch},
     dbg_target::UefiTarget,
+    modules::Modules,
     transport::{LoggingSuspender, SerialConnection},
     DebugError, Debugger, ExceptionInfo,
 };
 
 /// Length of the static buffer used for GDB communication.
-const GDB_BUFF_LEN: usize = 0x1000;
+const GDB_BUFF_LEN: usize = 0x2000;
+const MONITOR_BUFF_LEN: usize = GDB_BUFF_LEN / 2;
+
+#[cfg(feature = "no_alloc")]
+static GDB_BUFFER: [u8; GDB_BUFF_LEN] = [0; GDB_BUFF_LEN];
+#[cfg(feature = "no_alloc")]
+static MONITOR_BUFFER: [u8; MONITOR_BUFF_LEN] = [0; MONITOR_BUFF_LEN];
 
 // SAFETY: The exception info is not actually stored globally, but this is needed to satisfy
 // the compiler as it will be a contained within the target struct which the GdbStub
@@ -52,10 +60,23 @@ where
     exception_types: &'static [usize],
     /// Whether the debugger can log to the transport while broken in.
     debugger_log: bool,
+    /// Internal mutable debugger config.
+    config: spin::RwLock<DebuggerConfig>,
     /// Internal mutable debugger state.
-    internal: spin::Mutex<DebuggerInternal<'static, T>>,
-    /// Buffer for GDB communication.
-    buffer: [u8; GDB_BUFF_LEN],
+    internal: Mutex<DebuggerInternal<'static, T>>,
+    /// Tracks modules state.
+    modules: Mutex<Modules>,
+}
+
+/// Debugger Configuration
+///
+/// contains the internal configuration and state for the debugger. This will
+/// be locked to allow mutable access while using the debugger.
+///
+struct DebuggerConfig {
+    enabled: bool,
+    initial_break: bool,
+    initial_break_timeout: u32,
 }
 
 /// Internal Debugger State
@@ -67,10 +88,9 @@ struct DebuggerInternal<'a, T>
 where
     T: SerialIO,
 {
-    enabled: bool,
-    initial_break: bool,
-    initial_break_timeout: u32,
     gdb: Option<GdbStubStateMachine<'a, UefiTarget, SerialConnection<'a, T>>>,
+    gdb_buffer: Option<&'a [u8; GDB_BUFF_LEN]>,
+    monitor_buffer: Option<&'a [u8; MONITOR_BUFF_LEN]>,
 }
 
 impl<T: SerialIO> UefiDebugger<T> {
@@ -83,13 +103,13 @@ impl<T: SerialIO> UefiDebugger<T> {
             transport,
             debugger_log: false,
             exception_types: SystemArch::DEFAULT_EXCEPTION_TYPES,
-            internal: spin::Mutex::new(DebuggerInternal {
+            config: spin::RwLock::new(DebuggerConfig {
                 enabled: false,
                 initial_break: false,
                 initial_break_timeout: 0,
-                gdb: None,
             }),
-            buffer: [0_u8; GDB_BUFF_LEN],
+            internal: Mutex::new(DebuggerInternal { gdb_buffer: None, gdb: None, monitor_buffer: None }),
+            modules: Mutex::new(Modules::new()),
         }
     }
 
@@ -107,7 +127,7 @@ impl<T: SerialIO> UefiDebugger<T> {
     ///
     pub const fn with_default_config(mut self, enabled: bool, initial_break: bool, initial_break_timeout: u32) -> Self {
         // Intentionally ignoring initial_break config until configuration is thought out.
-        self.internal = spin::Mutex::new(DebuggerInternal { enabled, initial_break, initial_break_timeout, gdb: None });
+        self.config = spin::RwLock::new(DebuggerConfig { enabled, initial_break, initial_break_timeout });
         self
     }
 
@@ -136,10 +156,10 @@ impl<T: SerialIO> UefiDebugger<T> {
     /// 0 indicates no timeout and will wait indefinitely
     ///
     pub fn configure(&self, enabled: bool, _initial_break: bool, _initial_break_timeout: u32) {
-        let mut inner = self.internal.lock();
-        inner.enabled = enabled;
+        let mut config = self.config.write();
+        config.enabled = enabled;
         // Intentionally ignoring initial_break config until configuration is thought out.
-        inner.initial_break = true;
+        config.initial_break = true;
     }
 
     /// Enters the debugger from an exception.
@@ -149,34 +169,54 @@ impl<T: SerialIO> UefiDebugger<T> {
             None => return Err(DebugError::Reentry),
         };
 
-        if !debug.enabled {
-            panic!("Debugger entered but is not enabled!");
-        }
-
         // Suspend logging. This will resume logging when the struct is dropped.
         let _log_suspend;
         if !self.debugger_log {
             _log_suspend = LoggingSuspender::suspend();
         }
 
-        // Create the target for the debugger, giving it the context.
-        let mut target = UefiTarget::new(exception_info);
+        // Get the stored allocated buffer for the monitor. This needs to be
+        // pre-allocated as allocations should not occur during the debugger.
+        let monitor_buffer = {
+            let const_buffer = match debug.monitor_buffer {
+                Some(buffer) => buffer,
+                None => return Err(DebugError::NotInitialized),
+            };
+
+            // SAFETY: The buffer will only ever be used by the target monitor
+            // within the internal state lock.
+            unsafe { core::slice::from_raw_parts_mut(const_buffer.as_ptr() as *mut u8, const_buffer.len()) }
+        };
+
+        let mut target = UefiTarget::new(exception_info, &self.modules, monitor_buffer);
 
         // Either take the existing state machine, or start one if this is the first break.
         let mut gdb = match debug.gdb {
             Some(_) => debug.gdb.take().unwrap(),
             None => {
+                let const_buffer = match debug.gdb_buffer {
+                    Some(buffer) => buffer,
+                    None => return Err(DebugError::NotInitialized),
+                };
+
                 // Always start with a stop code. This is not to spec, but is a
                 // useful hint to the client that a break has occurred. This allows
                 // the debugger to reconnect on scenarios like reboots.
                 self.transport.write("$T05thread:01;#07".as_bytes());
 
-                // SAFETY: Use of this buffer will be guarded by the internal lock of the debugger.
-                let buf: &mut [u8; GDB_BUFF_LEN] = unsafe { &mut *(self.buffer.as_ptr() as *mut [u8; GDB_BUFF_LEN]) };
+                // SAFETY: The buffer will only ever be used by the paired GDB stub
+                // within the internal state lock. Because there is no GDB stub at
+                // this point, there is no other references to the buffer. This
+                // ensures a single locked mutable reference to the buffer.
+                let mut_buffer =
+                    unsafe { core::slice::from_raw_parts_mut(const_buffer.as_ptr() as *mut u8, const_buffer.len()) };
+
                 let conn = SerialConnection::new(&self.transport);
 
-                let builder =
-                    GdbStubBuilder::new(conn).with_packet_buffer(buf).build().map_err(|_| DebugError::GdbStubInit)?;
+                let builder = GdbStubBuilder::new(conn)
+                    .with_packet_buffer(mut_buffer)
+                    .build()
+                    .map_err(|_| DebugError::GdbStubInit)?;
 
                 builder.run_state_machine(&mut target).map_err(|_| DebugError::GdbStubInit)?
             }
@@ -216,7 +256,7 @@ impl<T: SerialIO> UefiDebugger<T> {
         if target.reboot_on_resume() {
             // Reboot the system.
             SystemArch::reboot();
-            panic!("Reboot failed!");
+            return Err(DebugError::RebootFailure);
         }
 
         // Target is resumed, store the state machine for the next break and
@@ -228,24 +268,42 @@ impl<T: SerialIO> UefiDebugger<T> {
 
 impl<T: SerialIO> Debugger for UefiDebugger<T> {
     fn initialize(&'static self, interrupt_manager: &mut dyn InterruptManager) {
-        let inner = self.internal.lock();
-        if !inner.enabled {
+        let config = self.config.read();
+        if !config.enabled {
             log::info!("Debugger is disabled.");
             return;
         }
 
         log::info!("Initializing debugger.");
-        let initial_breakpoint = inner.initial_break;
-        let _initial_break_timeout = inner.initial_break_timeout; // TODO
+        let initial_breakpoint = config.initial_break;
+        let _initial_break_timeout = config.initial_break_timeout; // TODO
 
         // Drop the lock to prevent deadlock in the initial breakpoint.
-        drop(inner);
+        drop(config);
 
         // Initialize the underlying transport.
         self.transport.init();
 
         // Initialize any architecture specifics.
         SystemArch::initialize();
+
+        // Initialize the communication buffer.
+        {
+            let mut internal = self.internal.lock();
+            cfg_if::cfg_if! {
+                if #[cfg(feature = "no_alloc")] {
+                    internal.gdb_buffer = unsafe { Some(&*(GDB_BUFFER.as_ptr() as *mut [u8; GDB_BUFF_LEN])) };
+                    internal.monitor_buffer = unsafe { Some(&*(MONITOR_BUFFER.as_ptr() as *mut [u8; MONITOR_BUFF_LEN])) };
+                } else {
+                    if internal.gdb_buffer.is_none() {
+                        internal.gdb_buffer = Some(Box::leak(Box::new([0u8; GDB_BUFF_LEN])));
+                    }
+                    if internal.monitor_buffer.is_none() {
+                        internal.monitor_buffer = Some(Box::leak(Box::new([0u8; MONITOR_BUFF_LEN])));
+                    }
+                }
+            }
+        }
 
         // Setup Exception Handlers.
         for exception_type in self.exception_types {
@@ -269,22 +327,28 @@ impl<T: SerialIO> Debugger for UefiDebugger<T> {
     }
 
     fn enabled(&'static self) -> bool {
-        self.internal.lock().enabled
+        self.config.read().enabled
     }
 
     fn notify_module_load(&'static self, module_name: &str, address: usize, length: usize) {
-        let inner = self.internal.lock();
-        if !inner.enabled {
+        if !self.enabled() {
             return;
         }
 
-        log::info!("Debugger: Module loaded: {} - 0x{:x} - 0x{:x}", module_name, address, length);
-        // TODO
+        let breakpoint = {
+            let mut modules = self.modules.lock();
+            modules.add_module(module_name, address, length);
+            modules.check_module_breakpoints(module_name)
+        };
+
+        if breakpoint {
+            log::error!("MODULE BREAKPOINT! {} - 0x{:x} - 0x{:x}", module_name, address, length);
+            SystemArch::breakpoint();
+        }
     }
 
     fn poll_debugger(&'static self) {
-        let inner = self.internal.lock();
-        if !inner.enabled {
+        if !self.enabled() {
             return;
         }
 

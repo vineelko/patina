@@ -49,6 +49,7 @@ impl DebuggerArch for X64Arch {
                     context.rip -= 1;
                     ExceptionType::Breakpoint
                 }
+                13 => ExceptionType::GeneralProtectionFault(context.exception_data),
                 14 => ExceptionType::AccessViolation(context.cr2 as usize),
                 _ => ExceptionType::Other(exception_type),
             },
@@ -72,21 +73,43 @@ impl DebuggerArch for X64Arch {
 
     fn initialize() {
         // Clear the hardware breakpoints.
-        unsafe {
-            let mut dr7: u64;
-            asm!("mov {}, dr7", out(reg) dr7);
-            dr7 &= !0xFF;
-            asm!("mov dr7, {}", in(reg) dr7);
-        }
+        let mut hw_breakpoints = X64HardwareBreakpoints::read();
+        hw_breakpoints.clear_all();
+        hw_breakpoints.flush();
     }
 
-    fn add_watchpoint(_address: u64, _length: u64, _access_type: WatchKind) -> bool {
-        // TODO
+    fn add_watchpoint(address: u64, length: u64, access_type: WatchKind) -> bool {
+        let mut hw_breakpoints = X64HardwareBreakpoints::read();
+
+        // First check for duplicate watchpoints.
+        for i in 0..=X64HardwareBreakpoints::MAX_INDEX {
+            if hw_breakpoints.get_enabled(i) && hw_breakpoints.get_address(i) == address {
+                return true;
+            }
+        }
+
+        for i in 0..=X64HardwareBreakpoints::MAX_INDEX {
+            if !hw_breakpoints.get_enabled(i) {
+                hw_breakpoints.set_address(i, address);
+                hw_breakpoints.set_len(i, length);
+                hw_breakpoints.set_rw(i, access_type);
+                hw_breakpoints.set_enabled(i, true);
+                hw_breakpoints.flush();
+                return true;
+            }
+        }
         false
     }
 
-    fn remove_watchpoint(_address: u64, _length: u64, _access_type: WatchKind) -> bool {
-        // TODO
+    fn remove_watchpoint(address: u64, _length: u64, _access_type: WatchKind) -> bool {
+        let mut hw_breakpoints = X64HardwareBreakpoints::read();
+        for i in 0..=X64HardwareBreakpoints::MAX_INDEX {
+            if hw_breakpoints.get_enabled(i) && hw_breakpoints.get_address(i) == address {
+                hw_breakpoints.set_enabled(i, false);
+                hw_breakpoints.flush();
+                return true;
+            }
+        }
         false
     }
 
@@ -317,5 +340,116 @@ impl RegId for X64CoreRegId {
         };
 
         Some((reg_id, Some(NonZeroUsize::new(size)?)))
+    }
+}
+
+/// Structure for abstracting the x64 debug registers for hardware breakpoints.
+struct X64HardwareBreakpoints {
+    dr7: u64,
+}
+
+impl X64HardwareBreakpoints {
+    pub const MAX_INDEX: usize = 3;
+
+    // The DR7 register is as follows for relevent bits.
+    //
+    // 64   32     30    28     26    24     22    20     18    16     8    7    6    5    4    3    2    1    0
+    // |-----|------|-----|------|-----|------|-----|------|-----|-----|----|----|----|----|----|----|----|----|
+    // | ... | LEN3 | RW3 | LEN2 | RW2 | LEN1 | RW1 | LEN0 | RW0 | ... | G3 | L3 | G2 | L2 | G1 | L1 | G0 | L0 |
+    // |-----|------|-----|------|-----|------|-----|------|-----|-----|----|----|----|----|----|----|----|----|
+    //
+
+    /// The first 8 bits of DR7 consist of the global and local enable bits for
+    /// the 4 hardware breakpoints.
+    const DR7_ENABLE_MASK: u64 = 0xFF;
+    /// The Local Enable bit is every other bit starting from bit 0 for each breakpoint.
+    const DR7_LOCAL_ENABLE_STRIDE: usize = 2;
+    /// RW is 2 bits long
+    const DR7_RW_MASK: u64 = 0x3;
+    /// RW starts at bit 16
+    const DR7_RW_OFFSET: usize = 16;
+    /// Each RW value is 4 bits appart.
+    const DR7_RW_STRIDE: usize = 4;
+    /// LEN is 2 bits long
+    const DR7_LEN_MASK: u64 = 0x3;
+    /// LEN starts at bit 18
+    const DR7_LEN_OFFSET: usize = 18;
+    /// Each LEN value is 4 bits appart.
+    const DR7_LEN_STRIDE: usize = 4;
+
+    pub fn read() -> Self {
+        let dr7: u64;
+        unsafe { asm!("mov {}, dr7", out(reg) dr7) };
+        X64HardwareBreakpoints { dr7 }
+    }
+
+    pub fn flush(&mut self) {
+        unsafe { asm!("mov dr7, {}", in(reg) self.dr7) };
+    }
+
+    pub fn clear_all(&mut self) {
+        self.dr7 &= !Self::DR7_ENABLE_MASK;
+    }
+
+    pub fn get_enabled(&self, index: usize) -> bool {
+        (self.dr7 >> (index * Self::DR7_LOCAL_ENABLE_STRIDE)) & 0x1 != 0
+    }
+
+    pub fn set_enabled(&mut self, index: usize, enabled: bool) {
+        if enabled {
+            self.dr7 |= 1 << (index * Self::DR7_LOCAL_ENABLE_STRIDE);
+        } else {
+            self.dr7 &= !(1 << (index * Self::DR7_LOCAL_ENABLE_STRIDE));
+        }
+    }
+
+    pub fn set_rw(&mut self, index: usize, kind: WatchKind) {
+        self.dr7 &= !(Self::DR7_RW_MASK << (index * Self::DR7_RW_STRIDE + Self::DR7_RW_OFFSET));
+        match kind {
+            WatchKind::Read | WatchKind::ReadWrite => {
+                self.dr7 |= 3 << (index * Self::DR7_RW_STRIDE + Self::DR7_RW_OFFSET);
+            }
+            WatchKind::Write => {
+                self.dr7 |= 1 << (index * Self::DR7_RW_STRIDE + Self::DR7_RW_OFFSET);
+            }
+        }
+    }
+
+    pub fn set_len(&mut self, index: usize, len: u64) {
+        let len = match len {
+            1 => 0,
+            2 => 1,
+            4 => 2,
+            _ => 3,
+        };
+
+        self.dr7 &= !(Self::DR7_LEN_MASK << (index * Self::DR7_LEN_STRIDE + Self::DR7_LEN_OFFSET));
+        self.dr7 |= (len as u64) << (index * Self::DR7_LEN_STRIDE + Self::DR7_LEN_OFFSET);
+    }
+
+    pub fn get_address(&self, index: usize) -> u64 {
+        let mut addr = 0;
+        unsafe {
+            match index {
+                0 => asm!("mov {}, dr0", out(reg) addr),
+                1 => asm!("mov {}, dr1", out(reg) addr),
+                2 => asm!("mov {}, dr2", out(reg) addr),
+                3 => asm!("mov {}, dr3", out(reg) addr),
+                _ => debug_assert!(false, "Invalid x64 hardware breakpoint index."),
+            }
+        }
+        addr
+    }
+
+    pub fn set_address(&mut self, index: usize, addr: u64) {
+        unsafe {
+            match index {
+                0 => asm!("mov dr0, {}", in(reg) addr),
+                1 => asm!("mov dr1, {}", in(reg) addr),
+                2 => asm!("mov dr2, {}", in(reg) addr),
+                3 => asm!("mov dr3, {}", in(reg) addr),
+                _ => debug_assert!(false, "Invalid x64 hardware breakpoint index."),
+            }
+        }
     }
 }

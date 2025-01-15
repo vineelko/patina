@@ -25,3 +25,4 @@ mockall = { workspace = true }
 [features]
 default = ["windbg_workarounds"]
 windbg_workarounds = []
+no_alloc = []

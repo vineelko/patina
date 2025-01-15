@@ -82,6 +82,8 @@ pub struct LoggingSuspender {
 }
 
 impl LoggingSuspender {
+    /// Suspend logging within the current scope. When the returned LoggingSuspender
+    /// goes out of scope, logging will be restored to the previous level.
     pub fn suspend() -> Self {
         let level = log::max_level();
         log::set_max_level(log::LevelFilter::Off);
@@ -92,5 +94,49 @@ impl LoggingSuspender {
 impl Drop for LoggingSuspender {
     fn drop(&mut self) {
         log::set_max_level(self.level);
+    }
+}
+
+/// Buffer for monitor command output. This is needed since the out provided
+/// by gdbstub will write immediately and this might confuse the debugger.
+pub struct BufferWriter<'a> {
+    buffer: &'a mut [u8],
+    pos: usize,
+    truncated: usize,
+}
+
+impl<'a> BufferWriter<'a> {
+    pub fn new(buffer: &'a mut [u8]) -> Self {
+        BufferWriter { buffer, pos: 0, truncated: 0 }
+    }
+
+    pub fn flush_to_console(&mut self, out: &mut gdbstub::target::ext::monitor_cmd::ConsoleOutput<'_>) {
+        if self.pos > 0 {
+            if self.truncated > 0 {
+                log::error!("Truncated monitor output by {} bytes", self.truncated);
+            }
+
+            out.write_raw(&self.buffer[..self.pos]);
+            self.reset();
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.pos = 0;
+        self.truncated = 0;
+    }
+}
+
+impl<'a> core::fmt::Write for BufferWriter<'a> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let bytes = s.as_bytes();
+        let len = bytes.len().min(self.buffer.len() - self.pos);
+        if len < bytes.len() {
+            self.truncated += bytes.len() - len;
+        }
+
+        self.buffer[self.pos..self.pos + len].copy_from_slice(&bytes[0..len]);
+        self.pos += len;
+        Ok(())
     }
 }
