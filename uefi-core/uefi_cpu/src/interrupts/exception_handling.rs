@@ -121,7 +121,7 @@ mod tests {
     use core::sync::atomic::AtomicBool;
 
     const CALLBACK_EXCEPTION: usize = 0;
-    const HANDLER_EXCEPTION: usize = 0;
+    const HANDLER_EXCEPTION: usize = 1;
     static mut CALLBACK_INVOKED: bool = false;
 
     struct TestHandler {
