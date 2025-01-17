@@ -220,14 +220,13 @@ extern "efiapi" fn create_performance_measurement(
     let string = unsafe { _utils::string_from_c_char_ptr(string) };
 
     let mut perf_id = identifier as u16;
-    if attribute == PerfAttribute::PerfEntry {
+    if attribute != PerfAttribute::PerfEntry {
         if perf_id != 0 && is_known_id(perf_id) && !is_known_token(string.as_ref()) {
             return efi::Status::INVALID_PARAMETER;
         } else if perf_id != 0 && !is_known_id(perf_id) && !is_known_token(string.as_ref()) {
             if attribute == PerfAttribute::PerfStartEntry && ((perf_id & 0x000F) != 0) {
                 perf_id &= 0xFFF0;
-            }
-            if attribute == PerfAttribute::PerfStartEntry && ((perf_id & 0x000F) == 0) {
+            } else if attribute == PerfAttribute::PerfEndEntry && ((perf_id & 0x000F) == 0) {
                 perf_id += 1;
             }
         } else if perf_id == 0 {
@@ -338,7 +337,7 @@ extern "efiapi" fn create_performance_measurement(
                 DynamicStringEventRecord::new(perf_id, 0, timestamp, guid, string.as_deref().unwrap_or("unknown name"));
             _ = &FBPT.lock().add_record(record);
         }
-        _ if attribute == PerfAttribute::PerfEntry => {
+        _ if attribute != PerfAttribute::PerfEntry => {
             // TODO: https://github.com/pop-project/uefi-dxe-core/issues/195
             log::warn!(
                 "[Module: {}, Line: {}, Function: {}] TODO: This path need to be verified. It has not been tested yet.",
