@@ -138,9 +138,8 @@ pub unsafe fn gic_initialize(gicd_base: *mut u64, gicr_base: *mut u64) -> Result
     // skipped those first 32 lines.
     let cpu_target = get_mpidr() & (0xFF0000FFFF);
     for i in 0..(max_int - 32) {
-        let index = (i * 2) as usize;
         unsafe {
-            let irouter_ptr = addr_of_mut!((*gic_v3.gicd_ptr()).irouter[index]);
+            let irouter_ptr = addr_of_mut!((*gic_v3.gicd_ptr()).irouter[i as usize]);
             write_volatile(irouter_ptr, cpu_target);
         }
     }
