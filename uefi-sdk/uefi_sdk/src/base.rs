@@ -38,6 +38,22 @@ pub const SIZE_512MB: usize = 0x20000000;
 pub const SIZE_1GB: usize = 0x40000000;
 pub const SIZE_2GB: usize = 0x80000000;
 pub const SIZE_4GB: usize = 0x100000000;
+pub const SIZE_8GB: usize = 0x200000000;
+pub const SIZE_16GB: usize = 0x400000000;
+pub const SIZE_32GB: usize = 0x800000000;
+pub const SIZE_64GB: usize = 0x1000000000;
+pub const SIZE_128GB: usize = 0x2000000000;
+pub const SIZE_256GB: usize = 0x4000000000;
+pub const SIZE_512GB: usize = 0x8000000000;
+pub const SIZE_1TB: usize = 0x10000000000;
+pub const SIZE_2TB: usize = 0x20000000000;
+pub const SIZE_4TB: usize = 0x40000000000;
+pub const SIZE_8TB: usize = 0x80000000000;
+pub const SIZE_16TB: usize = 0x100000000000;
+pub const SIZE_32TB: usize = 0x200000000000;
+pub const SIZE_64TB: usize = 0x400000000000;
+pub const SIZE_128TB: usize = 0x800000000000;
+pub const SIZE_256TB: usize = 0x1000000000000;
 
 /// Aligns the given address down to the nearest boundary specified by align.
 ///
