@@ -3,6 +3,11 @@
 //! This crate implements common functionality for building and executing UEFI
 //! binaries in Rust.
 //!
+//! ## Features
+//!
+//! - `core`: Exposes additional items in the [component] module necessary to manage and execute components and their
+//!   dependencies.
+//!
 //! ## License
 //!
 //! Copyright (C) Microsoft Corporation.
@@ -10,12 +15,14 @@
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
+#![feature(const_type_name)]
 #![feature(macro_metavar_expr)]
 
 #[macro_use]
 pub mod macros;
 
 pub mod base;
+pub mod component;
 pub mod error;
 pub mod guid;
 pub mod log;

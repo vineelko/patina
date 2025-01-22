@@ -22,7 +22,10 @@ uefi_protocol = { path = "./uefi_protocol", version = "1"}
 runtime_services = { path = "./runtime_services", version = "1" }
 tpl_mutex = { path = "./tpl_mutex", version = "1" }
 
+criterion = "^0.5"
+fixedbitset = { version = "^0.5", default-features = false }
 log = { version = "^0.4", default-features = false }
+mu_pi = "^5"
 r-efi = { version = "^5", default-features = false }
 uart_16550 = "^0.3.2"
 x86_64 = { version= "=0.14.12", default-features = false, features = ["instructions"] }

@@ -8,8 +8,14 @@ edition.workspace = true
 publish.workspace = true
 description = "UEFI Software Development Kit (SDK) that provides common types and functionality used in UEFI development."
 
+[[bench]]
+name = "bench_component"
+harness = false
+
 [dependencies]
 boot_services = { workspace = true }
+fixedbitset = { workspace = true }
+mu_pi = { workspace = true }
 uefi_protocol = { workspace = true }
 runtime_services = { workspace = true }
 tpl_mutex = { workspace = true }
@@ -21,6 +27,10 @@ r-efi = { workspace = true }
 x86_64 = { workspace = true }
 uart_16550 = { workspace = true }
 
+[dev-dependencies]
+criterion = { workspace = true }
+
 [features]
+core = []
 std = []
 doc = []
