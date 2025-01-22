@@ -55,6 +55,24 @@ impl<V> SparseVec<V> {
     }
 }
 
+impl<'a, V> IntoIterator for &'a SparseVec<V> {
+    type Item = &'a Option<V>;
+    type IntoIter = core::slice::Iter<'a, Option<V>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.iter()
+    }
+}
+
+impl<'a, V> IntoIterator for &'a mut SparseVec<V> {
+    type Item = &'a mut Option<V>;
+    type IntoIter = core::slice::IterMut<'a, Option<V>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.iter_mut()
+    }
+}
+
 /// Storage container for all datums that can be consumed by a Component.
 ///
 /// The [Component](crate::component::Component) trait provides the interface that a component must implement to be
@@ -168,6 +186,15 @@ impl Storage {
             .get(id)
             .unwrap_or_else(|| panic!("Could not find Config value when with id [{}] it should always exist.", id))
             .borrow_mut()
+    }
+
+    /// Marks all configs present in the storage as locked (immutable).
+    pub fn lock_configs(&mut self) {
+        for config in &mut self.configs {
+            if let Some(cell) = config.as_mut() {
+                cell.borrow_mut().0 = true
+            }
+        }
     }
 }
 
@@ -311,5 +338,39 @@ unsafe impl Param for &Storage {
         );
 
         meta.access_mut().reads_all_configs();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_iter_works() {
+        let mut v: SparseVec<u32> = SparseVec::new();
+
+        v.insert(4, 100);
+        v.insert(9, 200);
+        v.insert(75, 300);
+
+        assert_eq!(v.into_iter().filter(|o| o.is_some()).count(), 3);
+
+        // Check that interior mutability sticks
+        for v in &mut v {
+            if let Some(v) = v.as_mut() {
+                *v += 1;
+            }
+        }
+
+        assert_eq!(v.get(4), Some(&101));
+        assert_eq!(v.get(9), Some(&201));
+        assert_eq!(v.get(75), Some(&301));
+
+        // Check that exterior mutability sticks
+        for v in &mut v {
+            *v = None;
+        }
+
+        assert_eq!(v.into_iter().filter(|o| o.is_some()).count(), 0);
     }
 }
