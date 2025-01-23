@@ -102,7 +102,6 @@
 extern crate alloc;
 
 use core::{
-    any::Any,
     cell::{Ref, RefCell, RefMut},
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -118,6 +117,8 @@ use crate::{
         storage::{Storage, UnsafeStorageCell},
     },
 };
+
+use super::storage::ConfigRaw;
 
 type ParamItem<'w, 'state, P> = <P as Param>::Item<'w, 'state>;
 
@@ -242,7 +243,7 @@ unsafe impl<P: Param> Param for Option<P> {
 /// [Component](super::Component) execution.
 #[derive(Debug)]
 pub struct Config<'c, T: Default + 'static> {
-    value: Ref<'c, (bool, Box<dyn Any>)>,
+    value: Ref<'c, ConfigRaw>,
     _marker: PhantomData<T>,
 }
 
@@ -268,7 +269,7 @@ impl<'c, T: Default + 'static> Config<'c, T> {
     /// ```
     #[allow(clippy::test_attr_in_doctest)]
     pub fn mock(value: T) -> Self {
-        let refcell: RefCell<(bool, Box<dyn Any>)> = RefCell::new((true, Box::new(value)));
+        let refcell: RefCell<ConfigRaw> = RefCell::new(ConfigRaw::new(true, Box::new(value)));
         let leaked = Box::leak(Box::new(refcell));
         Config { value: leaked.borrow(), _marker: PhantomData }
     }
@@ -278,15 +279,12 @@ impl<'c, T: Default + 'static> Deref for Config<'c, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.value
-            .1
-            .downcast_ref()
-            .unwrap_or_else(|| panic!("Config should be of type {}", core::any::type_name::<T>()))
+        self.value.downcast_ref().unwrap_or_else(|| panic!("Config should be of type {}", core::any::type_name::<T>()))
     }
 }
 
-impl<'c, T: Default + 'static> From<Ref<'c, (bool, Box<dyn Any>)>> for Config<'c, T> {
-    fn from(value: Ref<'c, (bool, Box<dyn Any>)>) -> Self {
+impl<'c, T: Default + 'static> From<Ref<'c, ConfigRaw>> for Config<'c, T> {
+    fn from(value: Ref<'c, ConfigRaw>) -> Self {
         Self { value, _marker: PhantomData }
     }
 }
@@ -300,18 +298,18 @@ unsafe impl<'c, T: Default + 'static> Param for Config<'c, T> {
         lookup_id: &'state Self::State,
         storage: UnsafeStorageCell<'storage>,
     ) -> Self::Item<'storage, 'state> {
-        Config::from(storage.storage().get_config_untyped(*lookup_id))
+        Config::from(storage.storage().get_raw_config(*lookup_id))
     }
 
     // `Config` is only available if the underlying datum is locked.
     fn validate(state: &Self::State, storage: UnsafeStorageCell) -> bool {
         // SAFETY: accesses are correctly registered with storage, no conflicts
-        unsafe { storage.storage() }.get_config_untyped(*state).0
+        unsafe { storage.storage() }.get_raw_config(*state).is_locked()
     }
 
     fn init_state(storage: &mut Storage, meta: &mut MetaData) -> Self::State {
         let id = storage.register_config::<T>();
-        storage.try_add_config(id, true, T::default());
+        storage.try_add_config_with_id(id, T::default());
 
         assert!(
             !meta.access_mut().has_config_write(id),
@@ -329,7 +327,7 @@ unsafe impl<'c, T: Default + 'static> Param for Config<'c, T> {
 /// [Component](super::Component) execution.
 #[derive(Debug)]
 pub struct ConfigMut<'c, T: Default + 'static> {
-    value: RefMut<'c, (bool, Box<dyn Any>)>,
+    value: RefMut<'c, ConfigRaw>,
     _marker: PhantomData<T>,
 }
 
@@ -355,14 +353,14 @@ impl<'c, T: Default + 'static> ConfigMut<'c, T> {
     /// ```
     #[allow(clippy::test_attr_in_doctest)]
     pub fn mock(value: T) -> Self {
-        let refcell: RefCell<(bool, Box<dyn Any>)> = RefCell::new((false, Box::new(value)));
+        let refcell: RefCell<ConfigRaw> = RefCell::new(ConfigRaw::new(false, Box::new(value)));
         let leaked = Box::leak(Box::new(refcell));
         ConfigMut { value: leaked.borrow_mut(), _marker: PhantomData }
     }
 
     /// Locks the underlying datum, prevent any further changes and allowing [Config] to be used.
     pub fn lock(&mut self) {
-        self.value.0 = true;
+        self.value.lock();
     }
 }
 
@@ -370,24 +368,18 @@ impl<'c, T: Default + 'static> Deref for ConfigMut<'c, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.value
-            .1
-            .downcast_ref()
-            .unwrap_or_else(|| panic!("Config should be of type {}", core::any::type_name::<T>()))
+        self.value.downcast_ref().unwrap_or_else(|| panic!("Config should be of type {}", core::any::type_name::<T>()))
     }
 }
 
 impl<'c, T: Default + 'static> DerefMut for ConfigMut<'c, T> {
     fn deref_mut(&mut self) -> &mut T {
-        self.value
-            .1
-            .downcast_mut()
-            .unwrap_or_else(|| panic!("Config should be of type {}", core::any::type_name::<T>()))
+        self.value.downcast_mut().unwrap_or_else(|| panic!("Config should be of type {}", core::any::type_name::<T>()))
     }
 }
 
-impl<'c, T: Default + 'static> From<RefMut<'c, (bool, Box<dyn Any>)>> for ConfigMut<'c, T> {
-    fn from(value: RefMut<'c, (bool, Box<dyn Any>)>) -> Self {
+impl<'c, T: Default + 'static> From<RefMut<'c, ConfigRaw>> for ConfigMut<'c, T> {
+    fn from(value: RefMut<'c, ConfigRaw>) -> Self {
         Self { value, _marker: PhantomData }
     }
 }
@@ -401,20 +393,21 @@ unsafe impl<'c, T: Default + 'static> Param for ConfigMut<'c, T> {
         lookup_id: &'state Self::State,
         storage: UnsafeStorageCell<'storage>,
     ) -> Self::Item<'storage, 'state> {
-        ConfigMut::from(storage.storage().get_config_mut_untyped(*lookup_id))
+        ConfigMut::from(storage.storage().get_raw_config_mut(*lookup_id))
     }
 
     // `ConfigMut` is only available if the underlying datum is not locked.
     fn validate(state: &Self::State, storage: UnsafeStorageCell) -> bool {
         // SAFETY: accesses are correctly registered with storage, no conflicts
-        !unsafe { storage.storage() }.get_config_untyped(*state).0
+        !unsafe { storage.storage() }.get_raw_config(*state).is_locked()
     }
 
     fn init_state(storage: &mut Storage, meta: &mut MetaData) -> Self::State {
         let id = storage.register_config::<T>();
         // All config is locked by default. We only unlock it (like below) when a component is detected that needs
         // it to be mutable.
-        storage.try_add_config(id, false, T::default());
+        storage.try_add_config_with_id(id, T::default());
+        storage.unlock_config(id);
 
         assert!(
             !meta.access().has_config_write(id),
@@ -573,7 +566,7 @@ mod tests {
             *cfg += 1;
         }
 
-        let inner_data: RefCell<(bool, Box<dyn Any>)> = RefCell::new((false, Box::new(42)));
+        let inner_data: RefCell<ConfigRaw> = RefCell::new(ConfigRaw::new(false, Box::new(42)));
         let config = ConfigMut::from(inner_data.borrow_mut());
         my_fn(config);
 

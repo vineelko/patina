@@ -14,7 +14,9 @@ use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use core::{
     any::{Any, TypeId},
     cell::{Ref, RefCell, RefMut, UnsafeCell},
+    fmt::Debug,
     marker::PhantomData,
+    ops::{Deref, DerefMut},
     ptr,
     sync::atomic::AtomicPtr,
 };
@@ -73,6 +75,51 @@ impl<'a, V> IntoIterator for &'a mut SparseVec<V> {
     }
 }
 
+/// A container for an untyped config datum.
+pub struct ConfigRaw(bool, Box<dyn Any>);
+
+impl Debug for ConfigRaw {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ConfigRaw").field("is_locked", &self.0).field("raw_config", &self.1).finish()
+    }
+}
+
+impl ConfigRaw {
+    /// Creates a new [ConfigRaw] object.
+    pub fn new(locked: bool, config: Box<dyn Any>) -> Self {
+        Self(locked, config)
+    }
+
+    /// Locks the config, making it immutable.
+    pub fn lock(&mut self) {
+        self.0 = true;
+    }
+
+    /// Unlocks the config, making it mutable.
+    pub(crate) fn unlock(&mut self) {
+        self.0 = false;
+    }
+
+    /// Returns true if the config is locked.
+    pub fn is_locked(&self) -> bool {
+        self.0
+    }
+}
+
+impl Deref for ConfigRaw {
+    type Target = dyn Any;
+
+    fn deref(&self) -> &Self::Target {
+        self.1.as_ref()
+    }
+}
+
+impl DerefMut for ConfigRaw {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.1.as_mut()
+    }
+}
+
 /// Storage container for all datums that can be consumed by a Component.
 ///
 /// The [Component](crate::component::Component) trait provides the interface that a component must implement to be
@@ -98,7 +145,7 @@ pub struct Storage {
     /// A container for all [Config](super::params::Config) and [ConfigMut](super::params::ConfigMut) datums. This
     /// resource can be accessed both immutably and mutably, so it must be tracked by
     /// [Access](super::metadata::Access).
-    configs: SparseVec<RefCell<(bool, Box<dyn Any>)>>,
+    configs: SparseVec<RefCell<ConfigRaw>>,
     /// A map to convert from a TypeId to a config index.
     config_indices: BTreeMap<TypeId, usize>,
     /// The platform's [HobList].
@@ -144,36 +191,50 @@ impl Storage {
     }
 
     /// Registers a config type with the storage and returns its global id.
-    pub fn register_config<C: Default + 'static>(&mut self) -> usize {
+    pub(crate) fn register_config<C: Default + 'static>(&mut self) -> usize {
         self.get_or_register_config(TypeId::of::<C>())
     }
 
     /// Gets the global id of a config, registering it if it does not exist.
-    pub fn get_or_register_config(&mut self, id: TypeId) -> usize {
+    pub(crate) fn get_or_register_config(&mut self, id: TypeId) -> usize {
         let idx = self.config_indices.len();
         *self.config_indices.entry(id).or_insert(idx)
     }
 
-    /// Adds a config datum to the storage if one does not already exist.
-    pub fn try_add_config<C: Default + 'static>(&mut self, id: usize, locked: bool, config: C) {
-        // Add new config if it does not exist.
-        if !self.configs.contains(id) {
-            self.configs.insert(id, RefCell::new((locked, Box::new(config))));
-        } else if !locked {
-            // Unlock existing config if requested
-            self.configs.get(id).expect("Config was verified to exist but cold not be retrieved.").borrow_mut().0 =
-                false;
-        }
+    /// Adds a config datum to the storage, overwriting an existing value if it exists.
+    pub fn add_config<C: Default + 'static>(&mut self, config: C) {
+        let id = self.register_config::<C>();
+        self.configs.insert(id, RefCell::new(ConfigRaw::new(false, Box::new(config))));
     }
 
-    /// Adds a config to the storage, overwriting any existing config.
-    pub fn add_config<C: Default + 'static>(&mut self, locked: bool, config: C) {
-        let id = self.register_config::<C>();
-        self.try_add_config(id, locked, config);
+    /// Gets an immutable reference to a config datum in the storage.
+    pub fn try_get_config<C: Default + 'static>(&self) -> Option<crate::component::params::Config<C>> {
+        let id = self.config_indices.get(&TypeId::of::<C>())?;
+        let untyped = self.get_raw_config(*id);
+        Some(crate::component::params::Config::from(untyped))
+    }
+
+    /// Gets a mutable reference to a config datum in the storage.
+    pub fn try_get_config_mut<C: Default + 'static>(&mut self) -> Option<crate::component::params::ConfigMut<C>> {
+        let id = self.config_indices.get(&TypeId::of::<C>())?;
+        let untyped = self.get_raw_config_mut(*id);
+        Some(crate::component::params::ConfigMut::from(untyped))
+    }
+
+    /// Adds a config datum to the storage if one does not already exist.
+    ///
+    /// Returns true if the config was added, false if it already exists.
+    pub(crate) fn try_add_config_with_id<C: Default + 'static>(&mut self, id: usize, config: C) -> bool {
+        // Add new config if it does not exist.
+        if self.configs.contains(id) {
+            return false;
+        }
+        self.configs.insert(id, RefCell::new(ConfigRaw::new(true, Box::new(config))));
+        true
     }
 
     /// Retrieves a config from the storage.
-    pub fn get_config_untyped(&self, id: usize) -> Ref<(bool, Box<dyn Any>)> {
+    pub(crate) fn get_raw_config(&self, id: usize) -> Ref<ConfigRaw> {
         self.configs
             .get(id)
             .unwrap_or_else(|| panic!("Could not find Config value when with id [{}] it should always exist.", id))
@@ -181,20 +242,23 @@ impl Storage {
     }
 
     /// Retrieves a mutable config from the storage.
-    pub fn get_config_mut_untyped(&self, id: usize) -> RefMut<(bool, Box<dyn Any>)> {
+    pub(crate) fn get_raw_config_mut(&self, id: usize) -> RefMut<ConfigRaw> {
         self.configs
             .get(id)
             .unwrap_or_else(|| panic!("Could not find Config value when with id [{}] it should always exist.", id))
             .borrow_mut()
     }
 
-    /// Marks all configs present in the storage as locked (immutable).
-    pub fn lock_configs(&mut self) {
-        for config in &mut self.configs {
-            if let Some(cell) = config.as_mut() {
-                cell.borrow_mut().0 = true
-            }
+    /// Unlocks a config in the storage.
+    pub(crate) fn unlock_config(&self, id: usize) {
+        if let Some(config) = self.configs.get(id) {
+            config.borrow_mut().unlock();
         }
+    }
+
+    /// Marks all configs present in the storage as locked (immutable).
+    pub fn lock_configs(&self) {
+        (&self.configs).into_iter().flatten().for_each(|config| config.borrow_mut().lock());
     }
 }
 
