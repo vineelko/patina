@@ -11,9 +11,6 @@ name: Publish
 on:
   workflow_call:
     secrets:
-      GH_PAT:
-        description: 'The GitHub Personal Access Token to use for authenticating with GitHub'
-        required: true
       CRATES_IO_TOKEN:
         description: 'The token to use for authenticating with crates.io'
         required: true
@@ -36,11 +33,6 @@ jobs:
       - name: 🛠️ Download Rust Tools 🛠️
         uses: pop-project/uefi-dxe-core/.github/actions/rust-tool-cache@main
 
-      - name: Add Credentials # Remove once repositories are public
-        run: |
-          git config --global url."https://${{ secrets.GH_PAT }}@github.com".insteadOf https://github.com
-        shell: bash
-
       - name: Get Release Tag
         id: release_tag
         run: |
@@ -61,28 +53,28 @@ jobs:
           global-credential-providers = ["cargo:token"]
           EOF
 
-      - name: Login to Registry
-        run: cargo login "${{ secrets.CRATES_IO_TOKEN }}" --registry UefiRust
-
-      - name: Cargo Release Dry Run
-        run: cargo release ${{ steps.release_tag.outputs.tag }} --workspace
-        env:
-          RUSTC_BOOTSTRAP: 1
-
       - name: Update git credentials
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Cargo Release
-        run: cargo release ${{ steps.release_tag.outputs.tag }} -x --no-tag --no-confirm --workspace --no-push
-        env:
-          RUSTC_BOOTSTRAP: 1
-
+    
       - name: Checkout New Branch
         run: |
           git checkout -b "github-actions/release-${{ steps.release_tag.outputs.tag }}"
           git push origin "github-actions/release-${{ steps.release_tag.outputs.tag }}"
+
+      - name: Login to Registry
+        run: cargo login "${{ secrets.CRATES_IO_TOKEN }}" --registry UefiRust
+
+      - name: Cargo Release Dry Run
+        run: cargo release ${{ steps.release_tag.outputs.tag }} --workspace --registry UefiRust
+        env:
+          RUSTC_BOOTSTRAP: 1
+
+      - name: Cargo Release
+        run: cargo release ${{ steps.release_tag.outputs.tag }} -x --no-tag --no-confirm --workspace --registry UefiRust
+        env:
+          RUSTC_BOOTSTRAP: 1
     
       - name: Publish PR
         uses: actions/github-script@v7
