@@ -24,6 +24,7 @@ global_asm!(include_str!("exception_handler.asm"));
 // extern "efiapi" fn AsmGetVectorAddress(index: u64);
 extern "C" {
     static exception_handlers_start: u64;
+    static sp_el0_end: u64;
 }
 
 /// AARCH64 Implementation of the InterruptManager.
@@ -108,7 +109,17 @@ fn enable_async_abort() {
 }
 
 fn initialize_exception() -> Result<(), EfiError> {
-    // TODO: Did not do ArchVectorConfig here.
+    // Set the stack pointer for EL0 to be used for synchronous exceptions
+    #[cfg(all(not(test), target_arch = "aarch64"))]
+    unsafe {
+        let mut sp_el0_reg = &sp_el0_end as *const _ as u64;
+        sp_el0_reg &= !0x0F;
+        asm!("msr sp_el0, {}", in(reg) sp_el0_reg, options(nostack));
+
+        let mut hcr = unsafe { read_sysreg!(hcr_el2) as u64 };
+        hcr = hcr as u64 | 1 << 27; // Enable TGE
+        unsafe { write_sysreg!(hcr_el2, hcr) };
+    }
 
     // Program VBar
     #[cfg(all(not(test), target_arch = "aarch64"))]

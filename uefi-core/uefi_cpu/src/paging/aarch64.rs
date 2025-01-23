@@ -40,7 +40,7 @@ where
     }
 
     fn map_memory_region(&mut self, address: u64, size: u64, attributes: MemoryAttributes) -> Result<(), PtError> {
-        self.paging.map_memory_region(address, size, attributes & MemoryAttributes::AccessAttributesMask)
+        self.paging.map_memory_region(address, size, attributes)
     }
 
     fn unmap_memory_region(&mut self, address: u64, size: u64) -> Result<(), PtError> {
@@ -48,7 +48,7 @@ where
     }
 
     fn remap_memory_region(&mut self, address: u64, size: u64, attributes: MemoryAttributes) -> Result<(), PtError> {
-        self.paging.remap_memory_region(address, size, attributes & MemoryAttributes::AccessAttributesMask)
+        self.paging.remap_memory_region(address, size, attributes)
     }
 
     fn install_page_table(&self) -> Result<(), PtError> {
