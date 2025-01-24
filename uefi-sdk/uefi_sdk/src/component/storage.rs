@@ -204,7 +204,7 @@ impl Storage {
     /// Adds a config datum to the storage, overwriting an existing value if it exists.
     pub fn add_config<C: Default + 'static>(&mut self, config: C) {
         let id = self.register_config::<C>();
-        self.configs.insert(id, RefCell::new(ConfigRaw::new(false, Box::new(config))));
+        self.configs.insert(id, RefCell::new(ConfigRaw::new(true, Box::new(config))));
     }
 
     /// Gets an immutable reference to a config datum in the storage.
