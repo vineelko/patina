@@ -10,6 +10,7 @@
 
 const FLAG_REGISTER_OFFSET: usize = 0x18;
 const FR_BUSY: u8 = 1 << 3;
+const FR_RXFE: u8 = 1 << 4;
 const FR_TXFF: u8 = 1 << 5;
 
 /// An interface for writing to a Uart PL011 device.
@@ -48,6 +49,21 @@ impl Uart {
         while self.read_flag_register() & FR_BUSY != 0 {}
     }
 
+    /// Reads a single byte from the UART.
+    pub fn read_byte(&self) -> Option<u8> {
+        // Wait until the RX buffer is not empty.
+        if self.read_flag_register() & FR_RXFE != 0 {
+            return None;
+        }
+
+        // SAFETY: We know that the base address points to the control
+        // registers of a PL011 device which is appropriately mapped.
+        unsafe {
+            // Read from the RX buffer.
+            Some(self.get_base().read_volatile())
+        }
+    }
+
     fn read_flag_register(&self) -> u8 {
         // SAFETY: We know that the base address points to the control
         // registers of a PL011 device which is appropriately mapped.
@@ -61,19 +77,22 @@ impl Uart {
 
 impl super::SerialIO for Uart {
     fn init(&self) {}
+
     fn write(&self, buffer: &[u8]) {
         for byte in buffer {
             self.write_byte(*byte);
         }
     }
+
     fn read(&self) -> u8 {
-        // PANIC: this is not strictly needed until the debugger is implemented.
-        // Deferring this implementation until then.
-        todo!();
+        loop {
+            if let Some(byte) = self.read_byte() {
+                return byte;
+            }
+        }
     }
+
     fn try_read(&self) -> Option<u8> {
-        // TODO: this is not strictly needed until the debugger is implemented.
-        // Deferring this implementation until then.
-        None
+        self.read_byte()
     }
 }
