@@ -25,7 +25,9 @@ words:
   - aarch
   - addrs
   - brotli
+  - Cforce
   - civac
+  - ctypes
   - daifclr
   - daifset
   - decompressor
@@ -33,7 +35,9 @@ words:
   - efiapi
   - efierror
   - eflags
+  - fnent
   - gdbstub
+  - getrsp
   - icfgr
   - intid
   - irouter
@@ -41,11 +45,16 @@ words:
   - mpidr
   - mtrrs
   - nomem
+  - ntdll
+  - opinfo
+  - pdata
+  - psapi
   - pterror
   - pushfq
   - rebox
   - repr
   - rflags
+  - rsplit
   - rustc
   - rwlock
   - sysreg
@@ -55,7 +64,8 @@ words:
   - uefi
   - Uncacheable
   - virt
-  - windbg
   - wbinvd
+  - windbg
+  - windbgx
   - zbuild
   - zunstable

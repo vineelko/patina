@@ -5,6 +5,7 @@ members = [
   "uefi_cpu",
   "uefi_debugger",
   "section_extractor",
+  "stacktrace",
 ]
 
 [workspace.package]
