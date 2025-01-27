@@ -74,6 +74,7 @@
 extern crate alloc;
 
 mod function_component;
+mod struct_component;
 mod metadata;
 pub mod params;
 mod storage;

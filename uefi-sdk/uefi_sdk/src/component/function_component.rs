@@ -40,7 +40,7 @@ where
 impl<Marker, Func> Component for FunctionComponent<Marker, Func>
 where
     Marker: 'static,
-    Func: ParamFunction<Marker, Out = Result<()>>,
+    Func: ParamFunction<Marker, In = (), Out = Result<()>>,
 {
     /// Runs the Component if all parameters are retrievable from storage.
     ///
@@ -58,7 +58,7 @@ where
 
         let param_value = Func::Param::get_param(param_state, storage);
 
-        self.func.run(param_value).map(|_| true)
+        self.func.run((), param_value).map(|_| true)
     }
 
     /// Returns the metadata of the Component.
@@ -75,7 +75,7 @@ where
 impl<Marker, F> IntoComponent<Marker> for F
 where
     Marker: 'static,
-    F: ParamFunction<Marker, Out = Result<()>>,
+    F: ParamFunction<Marker, In = (), Out = Result<()>>,
 {
     fn into_component(self) -> alloc::boxed::Box<dyn Component> {
         alloc::boxed::Box::new(FunctionComponent {

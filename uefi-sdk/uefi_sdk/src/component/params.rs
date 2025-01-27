@@ -171,13 +171,25 @@ pub unsafe trait Param {
     fn init_state(storage: &mut Storage, meta: &mut MetaData) -> Self::State;
 }
 
+/// A hidden marker to differentiate between functions that have input and those that do not.
+#[doc(hidden)]
+pub struct HasInput;
+
+/// A trait that must be implemented by all components that have input.
+#[doc(hidden)]
+pub trait ComponentInput: Sized {}
+
+#[doc(hidden)]
+impl ComponentInput for () {}
+
 /// A trait that allows the implementor to define a function whose parameters can be automatically retrieved from the
 /// underlying [Storage] before being immediately executed.
 pub trait ParamFunction<Marker>: Send + Sync + 'static {
     type Param: Param;
+    type In: ComponentInput;
     type Out;
 
-    fn run(&mut self, param_value: ParamItem<Self::Param>) -> Self::Out;
+    fn run(&mut self, input: Self::In, param_value: ParamItem<Self::Param>) -> Self::Out;
 }
 
 macro_rules! impl_param_function {
@@ -193,8 +205,9 @@ macro_rules! impl_param_function {
             Out: 'static,
         {
             type Param = ($($param,)*);
+            type In = ();
             type Out = Out;
-            fn run(&mut self, param_value: ParamItem<($($param,)*)>) -> Out {
+            fn run(&mut self, _input: (), param_value: ParamItem<($($param,)*)>) -> Out {
                 fn call_inner<Out, $($param),*>(
                     mut f: impl FnMut($($param),*) -> Out,
                     $($param: $param,)*
@@ -203,6 +216,33 @@ macro_rules! impl_param_function {
                 }
                 let ($($param,)*) = param_value;
                 call_inner(self, $($param),*)
+            }
+        }
+
+        #[allow(unused_variables)]
+        #[allow(non_snake_case)]
+        impl<In, Out, Func, $($param: Param),*> ParamFunction<(HasInput, fn(In, $($param,)*)->Out)> for Func
+        where
+            Func: Send + Sync + 'static,
+            for <'a> &'a mut Func:
+                FnMut(In, $($param),*) -> Out +
+                FnMut(In, $(ParamItem<$param>),*) -> Out,
+            In: ComponentInput + 'static,
+            Out: 'static,
+        {
+            type Param = ($($param,)*);
+            type In = In;
+            type Out = Out;
+            fn run(&mut self, input: In, param_value: ParamItem<($($param,)*)>) -> Out {
+                fn call_inner<In, Out, $($param,)*>(
+                    mut f: impl FnMut(In, $($param),*) -> Out,
+                    input: In,
+                    $($param: $param,)*
+                ) -> Out {
+                    f(input, $($param),*)
+                }
+                let ($($param,)*) = param_value;
+                call_inner(self, input, $($param),*)
             }
         }
     }
