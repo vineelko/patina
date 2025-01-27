@@ -1,4 +1,4 @@
-use core::{arch::asm, num::NonZeroUsize};
+use core::{arch::asm, fmt::Write, num::NonZeroUsize};
 
 use gdbstub::{
     arch::{RegId, Registers},
@@ -8,7 +8,7 @@ use paging::PagingType;
 use uefi_cpu::interrupts::ExceptionContext;
 
 use super::{DebuggerArch, UefiArchRegs};
-use crate::{memory, ExceptionInfo, ExceptionType};
+use crate::{memory, transport::BufferWriter, ExceptionInfo, ExceptionType};
 
 /// The "int 3" instruction.
 const INT_3: u8 = 0xCC;
@@ -143,6 +143,25 @@ impl DebuggerArch for X64Arch {
         // should point to a valid page table.
         unsafe {
             paging::x64::X64PageTable::from_existing(cr3, memory::DebugPageAllocator {}, paging_type).map_err(|_| ())
+        }
+    }
+
+    fn monitor_cmd(tokens: &mut core::str::SplitWhitespace, out: &mut BufferWriter) {
+        match tokens.next() {
+            Some("regs") => {
+                let mut gdtr: u64 = 0;
+                unsafe {
+                    asm!(
+                        "sgdt [{}]",
+                        in(reg) &mut gdtr,
+                        options(nostack, preserves_flags)
+                    );
+                }
+                let _ = write!(out, "GDT: {:#x?}", gdtr);
+            }
+            _ => {
+                let _ = out.write_str("Unknown X64 monitor command. Supported commands: regs");
+            }
         }
     }
 }

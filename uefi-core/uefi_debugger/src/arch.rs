@@ -13,25 +13,25 @@
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 
-mod no_arch;
-
-#[cfg(target_arch = "x86_64")]
-mod x64;
-
 use gdbstub::target::ext::breakpoints;
 use paging::PageTable;
 use uefi_cpu::interrupts::ExceptionContext;
 
 use crate::ExceptionInfo;
 
-#[cfg(target_arch = "x86_64")]
-pub type SystemArch = x64::X64Arch;
+mod no_arch;
 
-#[cfg(target_arch = "aarch64")]
-pub type SystemArch = no_arch::NoArch; // TODO
-
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-pub type SystemArch = no_arch::NoArch;
+cfg_if::cfg_if! {
+    if #[cfg(target_arch = "x86_64")] {
+        mod x64;
+        pub type SystemArch = x64::X64Arch;
+    } else if #[cfg(target_arch = "aarch64")] {
+        mod aarch64;
+        pub type SystemArch = aarch64::Aarch64Arch;
+    } else {
+        pub type SystemArch = no_arch::NoArch;
+    }
+}
 
 /// Trait for architecture specific debugger implementations.
 ///
@@ -75,6 +75,9 @@ pub trait DebuggerArch {
 
     /// Gets the current page table.
     fn get_page_table() -> Result<Self::PageTable, ()>;
+
+    /// Process architecture specific monitor commands.
+    fn monitor_cmd(_tokens: &mut core::str::SplitWhitespace, _out: &mut crate::transport::BufferWriter) {}
 }
 
 pub trait UefiArchRegs: Sized {

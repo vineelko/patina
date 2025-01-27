@@ -30,6 +30,8 @@ words:
   - ctypes
   - daifclr
   - daifset
+  - dbgwcr
+  - dbgwvr
   - decompressor
   - edkii
   - efiapi
@@ -42,11 +44,14 @@ words:
   - intid
   - irouter
   - isenabler
+  - mdscr
   - mpidr
   - mtrrs
   - nomem
   - ntdll
   - opinfo
+  - oslar
+  - oslsr
   - pdata
   - psapi
   - pterror
@@ -57,6 +62,7 @@ words:
   - rsplit
   - rustc
   - rwlock
+  - sctlr
   - sysreg
   - tiano
   - typer

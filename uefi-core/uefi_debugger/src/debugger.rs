@@ -178,10 +178,7 @@ impl<T: SerialIO> UefiDebugger<T> {
         // Get the stored allocated buffer for the monitor. This needs to be
         // pre-allocated as allocations should not occur during the debugger.
         let monitor_buffer = {
-            let const_buffer = match debug.monitor_buffer {
-                Some(buffer) => buffer,
-                None => return Err(DebugError::NotInitialized),
-            };
+            let const_buffer = debug.monitor_buffer.ok_or(DebugError::NotInitialized)?;
 
             // SAFETY: The buffer will only ever be used by the target monitor
             // within the internal state lock.
@@ -194,10 +191,7 @@ impl<T: SerialIO> UefiDebugger<T> {
         let mut gdb = match debug.gdb {
             Some(_) => debug.gdb.take().unwrap(),
             None => {
-                let const_buffer = match debug.gdb_buffer {
-                    Some(buffer) => buffer,
-                    None => return Err(DebugError::NotInitialized),
-                };
+                let const_buffer = debug.gdb_buffer.ok_or(DebugError::NotInitialized)?;
 
                 // Always start with a stop code. This is not to spec, but is a
                 // useful hint to the client that a break has occurred. This allows

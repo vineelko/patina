@@ -20,6 +20,7 @@ uefi_cpu = { workspace = true }
 log = { workspace = true }
 spin = { workspace = true }
 paging = { workspace = true  }
+bitfield-struct = { workspace = true  }
 
 [dev-dependencies]
 mockall = { workspace = true }

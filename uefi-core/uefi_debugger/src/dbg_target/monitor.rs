@@ -13,7 +13,7 @@
 use core::{fmt::Write, str::SplitWhitespace};
 use gdbstub::target::ext::{self, monitor_cmd::ConsoleOutput};
 
-use crate::transport::BufferWriter;
+use crate::{arch::DebuggerArch, arch::SystemArch};
 
 use super::UefiTarget;
 
@@ -22,31 +22,17 @@ UEFI Rust Debugger monitor commands:
     help - Display this help.
     ? - Display information about the state of the machine.
     reboot - Prepares to reboot the machine on the next continue.
-    mod breakall - Will break on all module loads.
-    mod break [image name] - Set a breakpoint on the module load.
-    mod clear - Clears the current module breakpoints.
+    mod ... - Commands for breaking on or quering modules.
+    arch ... - Architecture specific commands.
 ";
 
-cfg_if::cfg_if! {
-    if #[cfg(all(target_os = "uefi", target_arch = "x86_64"))] {
-        use core::arch::asm;
-        fn get_gdt(buffer: &mut BufferWriter) {
-            let mut gdtr: u64 = 0;
-            unsafe {
-                asm!(
-                    "sgdt [{}]",
-                    in(reg) &mut gdtr,
-                    options(nostack, preserves_flags)
-                );
-            }
-            let _ = write!(buffer, "GDT: {:#x?}", gdtr);
-        }
-    } else {
-        fn get_gdt(buffer: &mut BufferWriter) {
-            let _ = buffer.write_str("'gdt' command not implemented for this architecture. Use 'help' for a list of commands.");
-        }
-    }
-}
+const MOD_HELP: &str = "
+Mod commands:
+    list [count] [index] - List loaded modules.
+    break [module] - Set load breakpoint for a module.
+    breakall - Break on all module loads.
+    clear - clear all module breakpoints.
+";
 
 impl ext::monitor_cmd::MonitorCmd for UefiTarget {
     fn handle_monitor_cmd(&mut self, cmd: &[u8], mut out: ConsoleOutput<'_>) -> Result<(), Self::Error> {
@@ -76,8 +62,8 @@ impl ext::monitor_cmd::MonitorCmd for UefiTarget {
                 self.disable_checks = true;
                 let _ = self.monitor_buffer.write_str("Disabling safety checks. Good luck!");
             }
-            Some("gdt") => {
-                get_gdt(&mut self.monitor_buffer);
+            Some("arch") => {
+                SystemArch::monitor_cmd(&mut tokens, &mut self.monitor_buffer);
             }
             _ => {
                 let _ = self.monitor_buffer.write_str("Unknown command. Use 'help' for a list of commands.");
@@ -123,13 +109,23 @@ impl UefiTarget {
                 let _ = self.monitor_buffer.write_str("Cleared module breaks!");
             }
             Some("list") => {
-                let _ = self.monitor_buffer.write_str("Modules:\n");
-                for module in modules.get_modules().iter() {
+                let count: usize = tokens.next().and_then(|token| token.parse().ok()).unwrap_or(usize::MAX);
+                let start: usize = tokens.next().and_then(|token| token.parse().ok()).unwrap_or(0);
+                let mut printed = 0;
+                for module in modules.get_modules().iter().skip(start) {
                     let _ = writeln!(self.monitor_buffer, "\t{}: {:#x} : {:#x}", module.name, module.base, module.size);
+                    printed += 1;
+                    if printed >= count {
+                        break;
+                    }
+                }
+
+                if printed == 0 {
+                    let _ = self.monitor_buffer.write_str("No modules.");
                 }
             }
             _ => {
-                let _ = self.monitor_buffer.write_str("Unknown module command!");
+                let _ = self.monitor_buffer.write_str(MOD_HELP);
             }
         }
     }
