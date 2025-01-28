@@ -6,7 +6,8 @@ members = [
   "boot_services",
   "uefi_protocol",
   "runtime_services",
-  "tpl_mutex"
+  "tpl_mutex",
+  "uefi_sdk_macro",
 ]
 
 [workspace.package]
@@ -19,6 +20,7 @@ edition = "2021"
 [workspace.dependencies]
 boot_services = { path = "./boot_services", version = "1" }
 uefi_protocol = { path = "./uefi_protocol", version = "1"}
+uefi_sdk_macro = { path = "./uefi_sdk_macro", version = "1" }
 runtime_services = { path = "./runtime_services", version = "1" }
 tpl_mutex = { path = "./tpl_mutex", version = "1" }
 
@@ -29,6 +31,11 @@ mu_pi = "^5"
 r-efi = { version = "^5", default-features = false }
 uart_16550 = "^0.3.2"
 x86_64 = { version= "=0.14.12", default-features = false, features = ["instructions"] }
+
+# Proc macro dependencies
+syn = { version = "^2", features = ["full"] }
+quote = "^1"
+proc-macro2 = "^1"
 
 [profile.dev]
 opt-level = 3

@@ -27,11 +27,29 @@
 //! by any user-defined type. So long as it implements [IntoComponent], it can be registered with and executed by the
 //! DxeCore.
 //!
-//! This module defines a `FunctionComponent` implementation of a the [Component] trait, whose [IntoComponent]
+//! ### `FunctionComponent`
+//!
+//! This module defines two implementations of the [Component] trait. `FunctionComponent`, whose [IntoComponent]
 //! implementation is a blanket implementation for any functions whose parameters implement [Param](params::Param).
 //! You can review the [Param](params::Param) implementations for all types that can be used as parameters to these
 //! functions. The `FunctionComponent` implementation has an arbitrary parameter count limit of 5, but this can be
 //! changed in the future if needed. See the [params] module for more information.
+//!
+//! ### `StructComponent`
+//!
+//! The second implementation is `StructComponent`, which is a component that allows for private internal configuration
+//! unlike the `FunctionComponent` which requires all configuration to be public via `Config<T>` and `ConfigMut<T>`
+//! parameters. To allow a struct or enum to be used as a `StructComponent`, a derive macro, [IntoComponent] is
+//! provided which implements necessary traits and specifies the entry point function for the component. The default
+//! entry point of `Self::entry_point` can be overridden with the `#[entry_point = path::to::function]` attribute.
+//!
+//! It is important to note that the function's first parameter must be `self` or `mut self`, **NOT** `&self` or
+//! `&mut self`. This design choice was made as components are only expected to be executed once, and by consuming
+//! `self`, you are able to pass ownership of the entire struct (or items within the struct) to other "things" (for
+//! lack of a better term) without the need for cloning or borrowing.
+//!
+//! Similar to `FunctionComponent`, there is an arbitrary parameter count limit of 5, but this can be changed in the
+//! future if needed. See the [params] module for more information.
 //!
 //! ### `Param` types
 //!
@@ -47,7 +65,9 @@
 //! | &HobList                     | An immutable reference to a list of Handoff Blocks (HOBs) passed to the DXE Core.                                                                          |
 //! | StandardBootServices         | Rust implementation of Boot Services                                                                                                                       |
 //!
-//! ### Example
+//! ### Examples
+//!
+//! ### Function Component Example
 //!
 //! ```rust
 //! # use uefi_sdk::{error::Result, component::params::ConfigMut};
@@ -65,6 +85,48 @@
 //! }
 //! ```
 //!
+//! ### Struct Component Example
+//!
+//! ```rust
+//! use uefi_sdk::{
+//!     error::Result,
+//!     component::{
+//!         IntoComponent,
+//!         params::Config,
+//!     },
+//! };
+//!
+//! #[derive(IntoComponent)]
+//! struct MyStruct(u32);
+//!
+//! impl MyStruct {
+//!     fn entry_point(self, _cfg: Config<String>) -> Result<()> {
+//!         Ok(())
+//!     }
+//! }
+//!
+//! #[derive(IntoComponent)]
+//! #[entry_point(path = driver)]
+//! struct MyStruct2(u32);
+//!
+//! fn driver(s: MyStruct2, _cfg: Config<String>) -> Result<()> {
+//!    Ok(())
+//! }
+//!
+//! #[derive(IntoComponent)]
+//! #[entry_point(path = MyEnum::run_me)]
+//! enum MyEnum {
+//!    A,
+//!    B,
+//! }
+//!
+//! impl MyEnum {
+//!    fn run_me(self, _cfg: Config<String>) -> Result<()> {
+//!       Ok(())
+//!   }
+//! }
+//! ```
+//!
 //! ## License
 //!
 //! Copyright (C) Microsoft Corporation. All rights reserved.
@@ -74,10 +136,10 @@
 extern crate alloc;
 
 mod function_component;
-mod struct_component;
 mod metadata;
 pub mod params;
 mod storage;
+mod struct_component;
 
 #[cfg(any(feature = "doc", feature = "core"))]
 pub use metadata::MetaData;
@@ -85,6 +147,13 @@ pub use metadata::MetaData;
 pub use storage::{Storage, UnsafeStorageCell};
 
 use crate::error::Result;
+
+/// A part of the private API that must be public for the component macro to work. Users should not use this directly
+/// and it is subject to change at any time.
+#[doc(hidden)]
+pub use struct_component::StructComponent;
+
+pub use uefi_sdk_macro::IntoComponent;
 
 /// An executable object whose parameters implement [Param](params::Param).
 pub trait Component {
