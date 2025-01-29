@@ -266,12 +266,36 @@ pub trait BootServices {
     /// If the handle does not exist, it is created and added to the list of handles in the system.
     ///
     /// [UEFI Spec Documentation: 7.3.2. EFI_BOOT_SERVICES.InstallProtocolInterface()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-installprotocolinterface)
+    ///
+    /// ## Example
+    /// ```rust ignore
+    /// let handle = self.uefi_binding.driver_binding_handle;
+    /// let uefi_driver_binding: &'static mut UefiDriverBinding = Box::leak(Box::new(self));
+    ///
+    /// let key = match static_boot_services().install_protocol_interface(
+    ///     Some(handle),
+    ///     &uefi_protocol::DriverBinding,
+    ///     &mut uefi_driver_binding.uefi_binding,
+    /// ) {
+    ///     Ok((_handle, key)) => key,
+    ///     Err((uefi_driver_binding, status)) => {
+    ///         drop(unsafe {
+    ///             Box::from_raw(
+    ///                 uefi_driver_binding as *mut protocols::driver_binding::Protocol as *mut UefiDriverBinding,
+    ///             )
+    ///         });
+    ///         return Err(status);
+    ///     }
+    /// };
+    /// Ok(key)
+    /// ```
+    ///
     fn install_protocol_interface<P, R, I>(
         &self,
         handle: Option<efi::Handle>,
         protocol: &P,
         interface: R,
-    ) -> Result<(efi::Handle, PtrMetadata<'static, R>), efi::Status>
+    ) -> Result<(efi::Handle, PtrMetadata<'static, R>), (R, efi::Status)>
     where
         P: Protocol<Interface = I> + 'static,
         R: CMutRef<'static, Type = I> + 'static,
@@ -284,14 +308,16 @@ pub trait BootServices {
         );
 
         let key = interface.metadata();
-        let handle = unsafe {
-            self.install_protocol_interface_unchecked(
+        unsafe {
+            match self.install_protocol_interface_unchecked(
                 handle,
                 protocol.protocol_guid(),
                 interface.into_mut_ptr() as *mut c_void,
-            )?
-        };
-        Ok((handle, key))
+            ) {
+                Ok(handle) => Ok((handle, key)),
+                Err(status) => Err((key.into_original_ptr(), status)),
+            }
+        }
     }
 
     /// Installs a protocol marker (null) interface on a device handle.
@@ -2048,6 +2074,36 @@ mod test {
         let (handle, _) = boot_services.install_protocol_interface(None, &TestProtocol, Box::new(42)).unwrap();
 
         assert_eq!(17, handle as usize);
+    }
+
+    #[test]
+    fn test_install_protocol_interface_err() {
+        let boot_services = boot_services!(install_protocol_interface = efi_install_protocol_interface);
+
+        extern "efiapi" fn efi_install_protocol_interface(
+            handle: *mut efi::Handle,
+            guid: *mut efi::Guid,
+            interface_type: u32,
+            interface: *mut c_void,
+        ) -> efi::Status {
+            assert_ne!(ptr::null_mut(), handle);
+            assert_eq!(ptr::null_mut(), unsafe { ptr::read(handle) });
+            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(guid) });
+            assert_eq!(efi::NATIVE_INTERFACE, interface_type);
+            assert_eq!(42, unsafe { ptr::read(interface as *mut u32) });
+
+            unsafe {
+                ptr::write(handle, 17_usize as _);
+            }
+
+            efi::Status::ALREADY_STARTED
+        }
+
+        let (interface, status) =
+            boot_services.install_protocol_interface(None, &TestProtocol, Box::new(42)).err().unwrap();
+
+        assert_eq!(42, *interface);
+        assert_eq!(efi::Status::ALREADY_STARTED, status);
     }
 
     #[test]
