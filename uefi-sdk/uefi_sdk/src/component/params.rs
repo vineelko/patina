@@ -61,16 +61,11 @@
 //!
 //! ``` rust
 //! # use uefi_sdk::{error::Result, component::params::{ConfigMut, Config}};
-//! # use mu_pi::hob::HobList;
 //! // This component will execute even if the config is already locked. If the interface was just
 //! // `config: ConfigMut<u32>`, and the config was locked, this component would never execute.
-//! fn my_driver(hob_list: &HobList, mut config: Option<ConfigMut<u32>>) -> Result<()> {
-//!     for hob in hob_list {
-//!         // Find the hob(s) that I care about, set the config value
-//!         if let Some(ref mut config) = config {
-//!             **config = 42;
-//!             config.lock();
-//!         }
+//! fn my_driver(mut config: Option<ConfigMut<u32>>) -> Result<()> {
+//!     if let Some(mut config) = config {
+//!        *config += 1;
 //!     }
 //!     // Continue on ...
 //!     Ok(())
@@ -108,7 +103,6 @@ use core::{
 };
 
 use alloc::boxed::Box;
-use mu_pi::hob::HobList;
 
 use crate::{
     boot_services::StandardBootServices,
@@ -468,25 +462,6 @@ unsafe impl<'c, T: Default + 'static> Param for ConfigMut<'c, T> {
     }
 }
 
-unsafe impl Param for &HobList<'_> {
-    type State = ();
-    type Item<'storage, 'state> = &'storage HobList<'static>;
-
-    unsafe fn get_param<'storage, 'state>(
-        _state: &'state Self::State,
-        storage: UnsafeStorageCell<'storage>,
-    ) -> Self::Item<'storage, 'state> {
-        storage.storage().hob_list()
-    }
-
-    fn validate(_state: &Self::State, storage: UnsafeStorageCell) -> bool {
-        // SAFETY: The HobList is only accessed immutably
-        !unsafe { storage.storage() }.hob_list().is_empty()
-    }
-
-    fn init_state(_storage: &mut Storage, _meta: &mut MetaData) -> Self::State {}
-}
-
 unsafe impl Param for StandardBootServices<'_> {
     type State = ();
     type Item<'storage, 'state> = StandardBootServices<'storage>;
@@ -716,29 +691,6 @@ mod tests {
     }
 
     #[test]
-    fn test_hoblist_fails_to_validate_when_empty() {
-        let mut storage = Storage::new(); // Empty hoblist exists in storage
-        let mut mock_metadata = MetaData::new::<i32>();
-
-        <&HobList as Param>::init_state(&mut storage, &mut mock_metadata);
-        assert!(<&HobList as Param>::try_validate(&(), (&storage).into()).is_err_and(|e| e == "&mu_pi::hob::HobList"));
-    }
-
-    #[test]
-    fn test_hoblist_can_be_retrieved() {
-        let mut storage = Storage::new();
-        let mut mock_metadata = MetaData::new::<i32>();
-        storage.hob_list.push(mu_pi::hob::Hob::Misc(0xff));
-
-        <&HobList as Param>::init_state(&mut storage, &mut mock_metadata);
-        assert!(<&HobList as Param>::try_validate(&(), (&storage).into()).is_ok());
-
-        let cell_storage = UnsafeStorageCell::new_mutable(&mut storage);
-        // does not panic
-        let _ = unsafe { <&HobList as Param>::get_param(&(), cell_storage) };
-    }
-
-    #[test]
     fn test_boot_services_fails_to_validate_when_null() {
         let mut storage = Storage::default(); // boot_services is an empty pointer
         let mut mock_metadata = MetaData::new::<i32>();
@@ -782,8 +734,8 @@ mod tests {
     fn test_try_validate_on_tuple_returns_underlying_param_type_not_full_tuple_name() {
         let mut storage = Storage::default();
         let mut mock_meadata = MetaData::new::<i32>();
-        <(StandardBootServices, &HobList) as Param>::init_state(&mut storage, &mut mock_meadata);
-        assert!(<(StandardBootServices, &HobList) as Param>::try_validate(&((), ()), (&storage).into())
+        <(StandardBootServices, Config<i32>) as Param>::init_state(&mut storage, &mut mock_meadata);
+        assert!(<(StandardBootServices, Config<i32>) as Param>::try_validate(&((), 1), (&storage).into())
             .is_err_and(|e| e == "boot_services::StandardBootServices"));
     }
 }

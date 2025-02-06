@@ -20,7 +20,6 @@ use core::{
     ptr,
     sync::atomic::AtomicPtr,
 };
-use mu_pi::hob::HobList;
 use r_efi::efi::BootServices;
 
 /// A vector whose elements are sparsely populated.
@@ -148,8 +147,6 @@ pub struct Storage {
     configs: SparseVec<RefCell<ConfigRaw>>,
     /// A map to convert from a TypeId to a config index.
     config_indices: BTreeMap<TypeId, usize>,
-    /// The platform's [HobList].
-    pub hob_list: HobList<'static>,
     /// A pointer to the UEFI Boot Services Table.
     bs: AtomicPtr<BootServices>,
 }
@@ -162,22 +159,12 @@ impl Default for Storage {
 
 impl Storage {
     pub const fn new() -> Self {
-        Self {
-            configs: SparseVec::new(),
-            config_indices: BTreeMap::new(),
-            hob_list: HobList::new(),
-            bs: AtomicPtr::new(ptr::null_mut()),
-        }
+        Self { configs: SparseVec::new(), config_indices: BTreeMap::new(), bs: AtomicPtr::new(ptr::null_mut()) }
     }
 
     /// Applies all deferred actions to the storage. Used in a multi-threaded context
     pub fn apply_deferred(&self) {
         // TODO
-    }
-
-    /// Returns a reference to the platform's [HobList].
-    pub fn hob_list(&self) -> &HobList<'static> {
-        &self.hob_list
     }
 
     /// Stores a pointer to the UEFI Boot Services Table.

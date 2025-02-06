@@ -196,8 +196,10 @@ pub trait IntoComponent<Input> {
 mod tests {
     extern crate std;
 
-    use crate::error::{EfiError, Result};
-    use mu_pi::hob::HobList;
+    use crate::{
+        component::params::ConfigMut,
+        error::{EfiError, Result},
+    };
 
     use super::*;
 
@@ -208,7 +210,7 @@ mod tests {
 
     // HobList should be empty, so `validate_param` should fail and the component
     // should not run.
-    fn example_component_not_dispatched(_hob_list: &HobList) -> Result<()> {
+    fn example_component_not_dispatched(_cfg: ConfigMut<u32>) -> Result<()> {
         Ok(())
     }
 
@@ -217,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn test_component_run_return_handling_in_core_pre_memory_init_add_component() {
+    fn test_component_run_return_handling() {
         let mut storage = storage::Storage::new();
 
         // Test component dispatched and succeeds does not panic does not panic and returns Ok(true)
@@ -228,6 +230,7 @@ mod tests {
         // Test component not dispatched does not panic and returns Ok(false)
         let mut component2 = example_component_not_dispatched.into_component();
         component2.initialize(&mut storage);
+        storage.lock_configs(); // Lock the config so the component cannot run
         assert!(component2.run(&mut storage).is_ok_and(|res| !res));
 
         // Test component failed does not panic and returns Err(EfiError::<Something>)

@@ -42,11 +42,11 @@ pub struct StructComponent<Marker, Func>
 where
     Func: ParamFunction<Marker>,
 {
-    pub func: Func,
-    pub input: Option<Func::In>,
-    pub param_state: Option<<Func::Param as Param>::State>,
-    pub metadata: MetaData,
-    pub _marker: PhantomData<fn() -> Marker>,
+    func: Func,
+    input: Option<Func::In>,
+    param_state: Option<<Func::Param as Param>::State>,
+    metadata: MetaData,
+    _marker: PhantomData<fn() -> Marker>,
 }
 
 impl<Marker, Func> StructComponent<Marker, Func>
@@ -104,7 +104,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate as uefi_sdk;
-    use crate::component::params::Config;
+    use crate::component::params::{Config, ConfigMut};
     use crate::component::IntoComponent;
 
     #[derive(IntoComponent)]
@@ -139,7 +139,7 @@ mod tests {
     }
 
     impl TestStructNotDispatched {
-        fn entry_point(self, _cfg: &mu_pi::hob::HobList) -> uefi_sdk::error::Result<()> {
+        fn entry_point(self, _cfg: ConfigMut<u32>) -> uefi_sdk::error::Result<()> {
             Ok(())
         }
     }
@@ -182,8 +182,9 @@ mod tests {
 
         let mut test_struct = TestStructNotDispatched { x: 5 }.into_component();
         test_struct.initialize(&mut storage);
+        storage.lock_configs(); // Lock it so the ConfigMut can't be accessed
         assert!(test_struct.run(&mut storage).is_ok_and(|res| !res));
-        assert_eq!(test_struct.metadata().failed_param(), Some("&mu_pi::hob::HobList"));
+        assert_eq!(test_struct.metadata().failed_param(), Some("uefi_sdk::component::params::ConfigMut<u32>"));
 
         let mut test_struct = TestStructFail { x: 5 }.into_component();
         test_struct.initialize(&mut storage);
