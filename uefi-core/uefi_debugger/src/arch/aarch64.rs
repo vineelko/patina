@@ -81,7 +81,7 @@ impl DebuggerArch for Aarch64Arch {
                 EC_SW_STEP_CURRENT_EL | EC_SW_STEP_LOWER_EL => {
                     // Clear the step bit in the MDSCR
                     let mut mdscr_el1 = read_sysreg!("mdscr_el1");
-                    mdscr_el1 &= !0x1;
+                    mdscr_el1 &= !MDSCR_SOFTWARE_STEP;
                     write_sysreg!("mdscr_el1", mdscr_el1);
 
                     ExceptionType::Step

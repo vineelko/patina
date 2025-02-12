@@ -34,7 +34,7 @@ use crate::{
 /// Addresses that windbg will attempt to read in a loop, reads from these addresses
 /// will just return 0 to avoid long retry delays.
 #[cfg(feature = "windbg_workarounds")]
-const WINDBG_MOCK_ADDRESSES: [u64; 2] = [0xfffff78000000268, 0];
+const WINDBG_MOCK_ADDRESSES: [u64; 3] = [0xfffff78000000268, 0, 0x34c00];
 
 /// UEFI target for GDB.
 pub struct UefiTarget {

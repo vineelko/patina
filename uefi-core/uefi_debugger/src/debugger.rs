@@ -193,6 +193,9 @@ impl<T: SerialIO> UefiDebugger<T> {
             None => {
                 let const_buffer = debug.gdb_buffer.ok_or(DebugError::NotInitialized)?;
 
+                // Flush any stale data from the transport.
+                while self.transport.try_read().is_some() {}
+
                 // Always start with a stop code. This is not to spec, but is a
                 // useful hint to the client that a break has occurred. This allows
                 // the debugger to reconnect on scenarios like reboots.
@@ -342,12 +345,18 @@ impl<T: SerialIO> Debugger for UefiDebugger<T> {
     }
 
     fn poll_debugger(&'static self) {
+        const CRTL_C: u8 = 3;
+
         if !self.enabled() {
             return;
         }
 
-        log::info!("Debugger polling not yet implemented!");
-        // TODO
+        while let Some(byte) = self.transport.try_read() {
+            if byte == CRTL_C {
+                // Ctrl-C
+                SystemArch::breakpoint();
+            }
+        }
     }
 }
 
