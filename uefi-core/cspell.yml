@@ -24,6 +24,7 @@ allowCompoundWords: true
 words:
   - aarch
   - addrs
+  - armasm
   - brotli
   - Cforce
   - civac
@@ -40,6 +41,7 @@ words:
   - fnent
   - gdbstub
   - getrsp
+  - getsp
   - icfgr
   - intid
   - irouter
@@ -52,6 +54,7 @@ words:
   - opinfo
   - oslar
   - oslsr
+  - pacibsp
   - pdata
   - psapi
   - pterror
@@ -69,9 +72,18 @@ words:
   - uart
   - uefi
   - Uncacheable
+  - vcvarsamd
+  - vcvarsarm
   - virt
   - wbinvd
   - windbg
   - windbgx
+  - x'xxxzzzzz
+  - x'xxzzzzzz
+  - xdata
+  - xx'xxzzzzzz
+  - xxx'xxxxxxxx
+  - xxxxxxxx'xxxxxxxx'xxxxxxxx
+  - xxxzzzzz
   - zbuild
   - zunstable

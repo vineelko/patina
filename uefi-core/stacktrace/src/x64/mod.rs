@@ -1,9 +1,8 @@
-mod pe;
-pub mod stacktrace;
+pub(crate) mod runtime_function;
 mod unwind;
 
 cfg_if::cfg_if! {
-    if #[cfg(all(target_os = "windows", test))] {
+    if #[cfg(all(target_os = "windows", target_arch = "x86_64", test))] {
         pub mod tests;
     }
 }

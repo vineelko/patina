@@ -1,6 +1,9 @@
-use crate::x64::{
+use crate::{
     pe::PE,
-    tests::{module::Module, set_logger},
+    x64::{
+        runtime_function::RuntimeFunction,
+        tests::{module::Module, set_logger},
+    },
 };
 
 #[test]
@@ -20,7 +23,7 @@ fn test_module_pe_runtime_functions() {
 
         let image = image.unwrap();
 
-        let runtime_functions = image.find_all_functions();
+        let runtime_functions = RuntimeFunction::find_all_functions(&image);
         assert!(runtime_functions.is_ok());
 
         let runtime_functions = runtime_functions.unwrap();
@@ -30,7 +33,7 @@ fn test_module_pe_runtime_functions() {
         }
 
         let rip_rva_in_func1 = 0x1080; // rip rva inside x64.dll!func1. Can be found using .fnent x64!func1
-        let runtime_function = image.find_function(rip_rva_in_func1);
+        let runtime_function = RuntimeFunction::find_function(&image, rip_rva_in_func1);
         assert!(runtime_function.is_ok());
         let runtime_function = runtime_function.unwrap();
         println!("{}", runtime_function);

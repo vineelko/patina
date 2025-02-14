@@ -1,6 +1,9 @@
-use crate::x64::{
+use crate::{
     pe::PE,
-    tests::{module::Module, set_logger},
+    x64::{
+        runtime_function::RuntimeFunction,
+        tests::{module::Module, set_logger},
+    },
 };
 #[test]
 fn test_unwind_info() {
@@ -18,7 +21,7 @@ fn test_unwind_info() {
 
         let image = image.unwrap();
 
-        let runtime_functions = image.find_all_functions();
+        let runtime_functions = RuntimeFunction::find_all_functions(&image);
         assert!(runtime_functions.is_ok());
 
         let runtime_functions = runtime_functions.unwrap();

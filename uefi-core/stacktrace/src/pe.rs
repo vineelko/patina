@@ -1,15 +1,12 @@
 use crate::alloc::string::ToString;
-
 use crate::byte_reader::ByteReader;
 use crate::error::{Error, StResult};
 
-use super::unwind::RuntimeFunction;
-
 // PE Header related constants
-const PAGE_SIZE: u64 = 0x1000; // 4KB pages.
 const MZ_SIGNATURE: u16 = 0x5A4D; // 'MZ' in little-endian.
-const PE_POINTER_OFFSET: usize = 0x3C;
+const PAGE_SIZE: u64 = 0x1000; // 4KB pages.
 const PE_MAGIC_OFFSET: usize = 0x18;
+const PE_POINTER_OFFSET: usize = 0x3C;
 const PE_SIGNATURE: u32 = 0x0000_4550; // 'PE\0\0' in little-endian.
 const PE64_EXECUTABLE: u16 = 0x20B; // PE32+
 const SIZE_OF_IMAGE_OFFSET: usize = 0x50;
@@ -39,7 +36,7 @@ pub struct PE<'a> {
     pub image_name: Option<&'a str>,
 
     /// loaded image memory as a byte slice
-    bytes: &'a [u8],
+    pub(crate) bytes: &'a [u8],
 }
 
 impl<'a> PE<'a> {
@@ -94,59 +91,6 @@ impl<'a> PE<'a> {
 
         // Something is really bad with given rip
         Err(Error::ImageNotFound(original_rip))
-    }
-
-    /// Function to return the Runtime Function corresponding to the given
-    /// relative rip.
-    pub(crate) unsafe fn find_function(&self, rip_rva: u32) -> StResult<RuntimeFunction<'a>> {
-        // Get PE Header offset
-        let pe_header_offset = self.bytes.read32(PE_POINTER_OFFSET)? as usize;
-
-        // Determine PE Type(PE32 or PE32+)
-        let pe_type = self.bytes.read16(pe_header_offset + PE_MAGIC_OFFSET)?;
-
-        // Jump to exception table data directory and read the exception table
-        // rva
-        let offset = if pe_type == PE64_EXECUTABLE {
-            pe_header_offset + EXCEPTION_TABLE_POINTER_PE64_OFFSET
-        } else {
-            pe_header_offset + EXCEPTION_TABLE_POINTER_PE32_OFFSET
-        };
-        let exception_table_rva = self.bytes.read32(offset)?;
-
-        // Jump to exception table section size
-        let offset = if pe_type == PE64_EXECUTABLE {
-            pe_header_offset + EXCEPTION_TABLE_POINTER_PE64_OFFSET + 4
-        } else {
-            pe_header_offset + EXCEPTION_TABLE_POINTER_PE32_OFFSET + 4
-        };
-        let exception_table_size = self.bytes.read32(offset)?;
-
-        // Bail out if exception table section(aka .pdata section) is not
-        // available
-        if exception_table_rva == 0 || exception_table_size == 0 {
-            return Err(Error::ExceptionDirectoryNotFound(self.image_name.map(|s| s.to_string())));
-        }
-
-        // Jump to .pdata section and parse the Runtime Function records.
-        // - Break the section in to 12 byte chunks
-        // - Map the 12 bytes in to 3 u32
-        // - Filter the chunk which fall with in the given rva range
-        // - Map the chunk in to RuntimeFunction
-        let runtime_function = self.bytes
-            [exception_table_rva as usize..(exception_table_rva + exception_table_size) as usize]
-            .chunks(core::mem::size_of::<u32>() * 3) // 3 u32
-            .map(|ele| {
-                (
-                    ele.read32(0).unwrap(), // start_rva
-                    ele.read32(4).unwrap(), // end_rva
-                    ele.read32(8).unwrap(), // unwindinfo_rva
-                )
-            })
-            .find(|ele| ele.0 <= rip_rva && rip_rva <= ele.1)
-            .map(|ele| RuntimeFunction::new(self.bytes, self.image_name, ele.0, ele.1, ele.2));
-
-        runtime_function.ok_or(Error::RuntimeFunctionNotFound(self.image_name.map(|s| s.to_string()), rip_rva))
     }
 
     /// Private function to locate the image name in the memory.
@@ -216,9 +160,7 @@ impl<'a> PE<'a> {
         Some(file_name)
     }
 
-    /// Test function to return all Runtime Functions
-    #[cfg(test)]
-    pub unsafe fn find_all_functions(&self) -> StResult<Vec<RuntimeFunction<'a>>> {
+    pub(crate) unsafe fn get_exception_table(&self) -> StResult<(u32, u32)> {
         // Get PE Header offset
         let pe_header_offset = self.bytes.read32(PE_POINTER_OFFSET)? as usize;
 
@@ -248,19 +190,6 @@ impl<'a> PE<'a> {
             return Err(Error::ExceptionDirectoryNotFound(self.image_name.map(|s| s.to_string())));
         }
 
-        // Jump to .pdata section and parse the Runtime Function records.
-        // - Break the section in to 12 byte chunks
-        // - Map the 12 bytes in to 3 u32
-        // - Map each chunk in to RuntimeFunction
-        let runtime_functions = self.bytes
-            [exception_table_rva as usize..(exception_table_rva + exception_table_size) as usize]
-            .chunks(4)
-            .map(|ele| ele.read32(0).unwrap())
-            .collect::<Vec<u32>>()
-            .chunks(3)
-            .map(|ele| RuntimeFunction::new(self.bytes, self.image_name, ele[0], ele[1], ele[2]))
-            .collect::<Vec<RuntimeFunction>>();
-
-        Ok(runtime_functions)
+        Ok((exception_table_rva, exception_table_size))
     }
 }

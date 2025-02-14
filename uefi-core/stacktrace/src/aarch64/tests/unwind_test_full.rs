@@ -1,8 +1,8 @@
 /// This is a comprehensive test to validate the stack-walking logic implemented
 /// in `stacktrace.rs`. The test creates a separate thread in the process, loads
-/// the `x64.dll`, and calls the `StartCallStack()` exported function, which, in
+/// the `aarch64.dll`, and calls the `StartCallStack()` exported function, which, in
 /// turn, creates the following call stack and waits. The test then retrieves
-/// the `rsp` and `rip` of `func1()` to validate the stack-walking logic and
+/// the `sp` and `pc` of `func1()` to validate the stack-walking logic and
 /// repeats this process for the other stack frames.
 ///
 ///  func1()
@@ -26,18 +26,18 @@ use super::set_logger;
 type StartCallStack = unsafe extern "system" fn();
 type ContinueToNextFrame = unsafe extern "system" fn();
 type GetCurrentFrameNumber = unsafe extern "system" fn() -> i32;
-type GetCurrentRip = unsafe extern "system" fn() -> u64;
-type GetReturnRip = unsafe extern "system" fn() -> u64;
-type GetCurrentRsp = unsafe extern "system" fn() -> u64;
+type GetCurrentPc = unsafe extern "system" fn() -> u64;
+type GetReturnPc = unsafe extern "system" fn() -> u64;
+type GetCurrentSp = unsafe extern "system" fn() -> u64;
 
 #[derive(Clone, Copy)]
 struct FfiFunctionPointers {
     start_call_stack: StartCallStack,
     continue_to_next_frame: ContinueToNextFrame,
     get_current_frame_number: GetCurrentFrameNumber,
-    get_current_rip: GetCurrentRip,
-    get_return_rip: GetReturnRip,
-    get_current_rsp: GetCurrentRsp,
+    get_current_pc: GetCurrentPc,
+    get_return_pc: GetReturnPc,
+    get_current_sp: GetCurrentSp,
 }
 
 #[test]
@@ -46,7 +46,7 @@ fn test_unwind_info_full() {
     set_logger();
 
     unsafe {
-        let path = r"src\x64\tests\collateral\x64.dll";
+        let path = r"src\aarch64\tests\collateral\aarch64.dll";
         let dll_path = CString::new(path).unwrap();
         let dll: HMODULE = LoadLibraryA(dll_path.as_ptr());
         if dll.is_null() {
@@ -101,27 +101,27 @@ unsafe extern "system" fn call_stack_thread(raw_ffi_function_pointers: *mut c_vo
 }
 
 unsafe fn execute_frame_transitions(ffi_function_pointers: &FfiFunctionPointers) {
-    let mut return_rip;
-    let mut current_rsp;
+    let mut return_pc;
+    let mut current_sp;
 
     // Frame 1 - func1():
     while (ffi_function_pointers.get_current_frame_number)() < 1 {
         // Wait until thread gets in to frame 1 aka func1()
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    let current_rip = (ffi_function_pointers.get_current_rip)();
-    current_rsp = (ffi_function_pointers.get_current_rsp)();
-    return_rip = (ffi_function_pointers.get_return_rip)();
+    let current_pc = (ffi_function_pointers.get_current_pc)();
+    current_sp = (ffi_function_pointers.get_current_sp)();
+    return_pc = (ffi_function_pointers.get_return_pc)();
 
     log::info!("[+] Required call stack has been setup. Dumping it using Stack unwind implementation...");
 
     // Dump the call stack using StackTrace lib
-    let res = StackTrace::dump_with(current_rip, current_rsp);
+    let res = StackTrace::dump_with(current_pc, current_sp);
     assert!(res.is_ok());
 
-    log::info!("\n[+] Unwinding the stack one frame at a time. Querying the actual Rsp/Return Rip...");
-    log::info!("[+] # Current RSP  Return RIP");
-    log::info!("    0 {:X}   {:X}", current_rsp, return_rip);
+    log::info!("\n[+] Unwinding the stack one frame at a time. Querying the actual SP/Return PC...");
+    log::info!("[+] # Current  SP  Return  PC");
+    log::info!("    0 {:X}   {:X}", current_sp, return_pc);
 
     // At Frame 2 - func2() - Unwind frame 1:
     // This should trigger completion of func1() and func2() will loop
@@ -130,10 +130,10 @@ unsafe fn execute_frame_transitions(ffi_function_pointers: &FfiFunctionPointers)
         // Wait until thread gets in to frame 2 aka func2()
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    // current_rip = (ffi_function_pointers.get_current_rip)();
-    current_rsp = (ffi_function_pointers.get_current_rsp)();
-    return_rip = (ffi_function_pointers.get_return_rip)();
-    log::info!("    1 {:X}   {:X}", current_rsp, return_rip);
+    // current_pc = (ffi_function_pointers.get_current_pc)();
+    current_sp = (ffi_function_pointers.get_current_sp)();
+    return_pc = (ffi_function_pointers.get_return_pc)();
+    log::info!("    1 {:X}   {:X}", current_sp, return_pc);
 
     // At Frame 3 - func3() - Unwind frame 2:
     // This should trigger completion of func2() and func3() will loop
@@ -142,10 +142,10 @@ unsafe fn execute_frame_transitions(ffi_function_pointers: &FfiFunctionPointers)
         // Wait until thread gets in to frame 3 aka func3()
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    // current_rip = (ffi_function_pointers.get_current_rip)();
-    current_rsp = (ffi_function_pointers.get_current_rsp)();
-    return_rip = (ffi_function_pointers.get_return_rip)();
-    log::info!("    2 {:X}   {:X}", current_rsp, return_rip);
+    // current_pc = (ffi_function_pointers.get_current_pc)();
+    current_sp = (ffi_function_pointers.get_current_sp)();
+    return_pc = (ffi_function_pointers.get_return_pc)();
+    log::info!("    2 {:X}   {:X}", current_sp, return_pc);
 
     // At Frame 4 - func4() - Unwind frame 3:
     // This should trigger completion of func3() and func4() will loop
@@ -154,10 +154,10 @@ unsafe fn execute_frame_transitions(ffi_function_pointers: &FfiFunctionPointers)
         // Wait until thread gets in to frame 4 aka func4()
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    // current_rip = (ffi_function_pointers.get_current_rip)();
-    current_rsp = (ffi_function_pointers.get_current_rsp)();
-    return_rip = (ffi_function_pointers.get_return_rip)();
-    log::info!("    3 {:X}   {:X}", current_rsp, return_rip);
+    // current_pc = (ffi_function_pointers.get_current_pc)();
+    current_sp = (ffi_function_pointers.get_current_sp)();
+    return_pc = (ffi_function_pointers.get_return_pc)();
+    log::info!("    3 {:X}   {:X}", current_sp, return_pc);
 
     // Unwind frame 4:
     // This should trigger completion of func4()
@@ -192,39 +192,39 @@ unsafe fn load_functions(dll: HINSTANCE) -> Option<FfiFunctionPointers> {
         std::mem::transmute::<*mut winapi::shared::minwindef::__some_function, GetCurrentFrameNumber>(proc_address)
     };
 
-    let name_cstr = CString::new("GetCurrentRip").unwrap();
+    let name_cstr = CString::new("GetCurrentPc").unwrap();
     let proc_address = GetProcAddress(dll, name_cstr.as_ptr());
-    let get_current_rip: GetCurrentRip = if proc_address.is_null() {
-        log::info!("Failed to get function address for GetCurrentRip. Error: {}", GetLastError());
+    let get_current_pc: GetCurrentPc = if proc_address.is_null() {
+        log::info!("Failed to get function address for GetCurrentPc. Error: {}", GetLastError());
         return None;
     } else {
-        std::mem::transmute::<*mut winapi::shared::minwindef::__some_function, GetCurrentRip>(proc_address)
+        std::mem::transmute::<*mut winapi::shared::minwindef::__some_function, GetCurrentPc>(proc_address)
     };
 
-    let name_cstr = CString::new("GetReturnRip").unwrap();
+    let name_cstr = CString::new("GetReturnPc").unwrap();
     let proc_address = GetProcAddress(dll, name_cstr.as_ptr());
-    let get_return_rip: GetReturnRip = if proc_address.is_null() {
-        log::info!("Failed to get function address for GetReturnRip. Error: {}", GetLastError());
+    let get_return_pc: GetReturnPc = if proc_address.is_null() {
+        log::info!("Failed to get function address for GetReturnPc. Error: {}", GetLastError());
         return None;
     } else {
-        std::mem::transmute::<*mut winapi::shared::minwindef::__some_function, GetReturnRip>(proc_address)
+        std::mem::transmute::<*mut winapi::shared::minwindef::__some_function, GetReturnPc>(proc_address)
     };
 
-    let name_cstr = CString::new("GetCurrentRsp").unwrap();
+    let name_cstr = CString::new("GetCurrentSp").unwrap();
     let proc_address = GetProcAddress(dll, name_cstr.as_ptr());
-    let get_current_rsp: GetCurrentRsp = if proc_address.is_null() {
-        log::info!("Failed to get function address for GetCurrentRsp. Error: {}", GetLastError());
+    let get_current_sp: GetCurrentSp = if proc_address.is_null() {
+        log::info!("Failed to get function address for GetCurrentSp. Error: {}", GetLastError());
         return None;
     } else {
-        std::mem::transmute::<*mut winapi::shared::minwindef::__some_function, GetCurrentRsp>(proc_address)
+        std::mem::transmute::<*mut winapi::shared::minwindef::__some_function, GetCurrentSp>(proc_address)
     };
 
     Some(FfiFunctionPointers {
         start_call_stack,
         continue_to_next_frame,
         get_current_frame_number,
-        get_current_rip,
-        get_return_rip,
-        get_current_rsp,
+        get_current_pc,
+        get_return_pc,
+        get_current_sp,
     })
 }

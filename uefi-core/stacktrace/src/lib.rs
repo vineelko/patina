@@ -2,17 +2,23 @@
 //!
 //! ## Introduction
 //!
-//! This library implements the Stack walking logic. Given the instruction
+//! This library implements the stack walking logic. Given the instruction
 //! pointer and stack pointer, the [API](#public-api) will dump the stack trace
-//! leading to that machine state. It currently does not resolve symbols, so the
-//! "Call Site" column in the output will display `module+<relative rip>`.
-//! Outside of this library, with PDB access, these module relative rip offsets
-//! can be resolved to function relative offsets as shown below
+//! leading to that machine state. It currently does not resolve symbols, as PDB
+//! debug info is not embedded in the PE image, unlike the DWARF format for ELF
+//! images. Therefore, symbol resolution must be done offline. As a result, the
+//! "Call Site" column in the output will display `module+<relative rip>`
+//! instead of `module!function+<relative rip>`. Outside of this library, with
+//! PDB access, these module-relative RIP offsets can be resolved to
+//! function-relative offsets, as shown below.
 //!
 //! ```cmd
-//! C:\>windbgx -z x64.dll
-//! 0:000>.fnent x64+1095
-//! x64!func1+0x25    <-- function name and offset
+//! C:\>windbgx -z x64.dll -y <pdb directory path>
+//! WinDbg does not support images with a base address set to 0. Reloading at 0x100000000.
+//! 0:000>.reload x64.dll=0x100000000
+//! Resolve each stack frame's call site value to the function name and offset.
+//! 0:000>.fnent @@masm(x64)+1095
+//! x64!func1+0x25    <-- Function name and offset
 //! ```
 //!
 //! ## Prerequisites
@@ -91,24 +97,11 @@
 
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 
-#[macro_use]
 extern crate alloc;
 
+mod aarch64;
 mod byte_reader;
 pub mod error;
-
-cfg_if::cfg_if! {
-    if #[cfg(all(target_os = "uefi", target_arch = "x86_64"))] {
-        pub mod x64;
-        pub use x64::stacktrace::StackTrace as StackTrace;
-    } else if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
-        pub mod aarch64;
-        pub use aarch64::stacktrace::StackTrace as StackTrace;
-    } else if #[cfg(test)] {
-        pub mod x64;
-        pub mod aarch64;
-    } else {
-        pub mod x64;
-        pub mod aarch64;
-    }
-}
+mod pe;
+pub mod stacktrace;
+mod x64;

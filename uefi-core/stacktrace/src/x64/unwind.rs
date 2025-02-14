@@ -1,4 +1,6 @@
+use crate::alloc::format;
 use crate::alloc::string::ToString;
+
 /// Module to parse the x64 unwind data from .pdata section.
 use core::fmt;
 
@@ -6,62 +8,6 @@ use crate::{
     byte_reader::ByteReader,
     error::{Error, StResult},
 };
-
-/// `RuntimeFunction`
-/// Source: <https://learn.microsoft.com/en-us/cpp/build/exception-handling-x64?view=msvc-170#struct-runtime_function>
-#[derive(Debug, Clone)]
-pub struct RuntimeFunction<'a> {
-    /// loaded image memory as a byte slice
-    image_base: &'a [u8],
-
-    /// image name extracted from the loaded pe image
-    image_name: Option<&'a str>,
-
-    /// start of the function rva
-    pub start_rva: u32,
-
-    /// end of the function rva
-    pub end_rva: u32,
-
-    /// rva for unwind info
-    pub unwind_info: u32,
-}
-
-impl<'a> fmt::Display for RuntimeFunction<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "RuntimeFunction {{ image_base:0x{:p}, start_rva: 0x{:08X}, end_rva: 0x{:08X}, unwind_info: 0x{:08X} }}",
-            self.image_base.as_ptr(),
-            self.start_rva,
-            self.end_rva,
-            self.unwind_info
-        )
-    }
-}
-
-impl<'a> RuntimeFunction<'a> {
-    pub fn new(
-        image_base: &'a [u8],
-        image_name: Option<&'a str>,
-        start_rva: u32,
-        end_rva: u32,
-        unwind_info: u32,
-    ) -> Self {
-        Self { image_base, image_name, start_rva, end_rva, unwind_info }
-    }
-
-    /// Parse the Unwind Info data pointed by RuntimeFunction
-    pub fn get_unwind_info(&self) -> StResult<UnwindInfo> {
-        UnwindInfo::parse(&self.image_base[self.unwind_info as usize..], self.image_name).map_err(|_| {
-            Error::UnwindInfoNotFound(
-                self.image_name.map(|s| s.to_string()),
-                self.image_base.as_ptr() as u64,
-                self.unwind_info,
-            )
-        })
-    }
-}
 
 /// `UnwindInfo`
 /// Source: <https://learn.microsoft.com/en-us/cpp/build/exception-handling-x64?view=msvc-170#struct-unwind_info>
@@ -143,6 +89,15 @@ impl<'a> UnwindInfo<'a> {
     pub fn get_stack_pointer_offset(&self) -> StResult<usize> {
         UnwindCode::get_stack_pointer_offset(self.unwind_codes)
             .map_err(|_| Error::StackOffsetNotFound(self.image_name.map(|s| s.to_string())))
+    }
+
+    /// Function to calculate the current stack frame parameters
+    pub fn get_current_stack_frame(&self, rsp: u64, rip: u64) -> StResult<(u64, u64, u64, u64)> {
+        let rsp_offset = self.get_stack_pointer_offset()?;
+        let mut prev_rsp = rsp + rsp_offset as u64;
+        let prev_rip = unsafe { *(prev_rsp as *const u64) };
+        prev_rsp += 8; // pop the return address
+        Ok((rsp, rip, prev_rsp, prev_rip))
     }
 }
 
