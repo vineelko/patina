@@ -73,8 +73,8 @@
 //!
 //! `windbg_workarounds` - (Default) Enables workarounds for Windbg compatibility.
 //!
-//! `no_alloc` - Uses static buffers for all memory. This will limit functionality
-//! but allows debugging prior to allocation being initialized.
+//! `alloc` - Uses allocated buffers rather than static buffers for all memory. This provides additional functionality
+//! but prevents debugging prior to allocations being available.
 //!
 //! ## License
 //!

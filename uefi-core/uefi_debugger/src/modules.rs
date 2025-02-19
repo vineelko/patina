@@ -47,7 +47,7 @@ impl Modules {
         false
     }
 
-    #[cfg(not(feature = "no_alloc"))]
+    #[cfg(feature = "alloc")]
     pub fn add_module_breakpoint(&mut self, name: &str) {
         let trimmed = name.trim().trim_end_matches(".efi");
         if !trimmed.is_empty() {
@@ -68,13 +68,13 @@ impl Modules {
         &self.modules
     }
 
-    #[cfg(not(feature = "no_alloc"))]
+    #[cfg(feature = "alloc")]
     pub fn get_module_breakpoints(&self) -> &Vec<String> {
         &self.module_breakpoints
     }
 }
 
-#[cfg(not(feature = "no_alloc"))]
+#[cfg(feature = "alloc")]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -90,7 +90,7 @@ impl UefiTarget {
                 modules.break_on_all();
                 let _ = self.monitor_buffer.write_str("Will break for all module loads.");
             }
-            #[cfg(not(feature = "no_alloc"))]
+            #[cfg(feature = "alloc")]
             Some("break") => {
                 for module in tokens.by_ref() {
                     modules.add_module_breakpoint(module);
@@ -100,9 +100,10 @@ impl UefiTarget {
                     let _ = writeln!(self.monitor_buffer, "\t{}", module);
                 }
             }
-            #[cfg(feature = "no_alloc")]
+            #[cfg(not(feature = "alloc"))]
             Some("break") => {
-                let _ = self.monitor_buffer.write_str("Specific Module breakpoints not supported in no_alloc mode.");
+                let _ =
+                    self.monitor_buffer.write_str("Specific Module breakpoints only supported with 'alloc' feature.");
             }
             Some("clear") => {
                 modules.clear_module_breakpoints();

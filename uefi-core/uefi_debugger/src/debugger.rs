@@ -11,7 +11,7 @@
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 
-#[cfg(not(feature = "no_alloc"))]
+#[cfg(feature = "alloc")]
 use alloc::boxed::Box;
 use gdbstub::{
     conn::ConnectionExt,
@@ -33,9 +33,9 @@ use crate::{
 const GDB_BUFF_LEN: usize = 0x2000;
 const MONITOR_BUFF_LEN: usize = GDB_BUFF_LEN / 2;
 
-#[cfg(feature = "no_alloc")]
+#[cfg(not(feature = "alloc"))]
 static GDB_BUFFER: [u8; GDB_BUFF_LEN] = [0; GDB_BUFF_LEN];
-#[cfg(feature = "no_alloc")]
+#[cfg(not(feature = "alloc"))]
 static MONITOR_BUFFER: [u8; MONITOR_BUFF_LEN] = [0; MONITOR_BUFF_LEN];
 
 // SAFETY: The exception info is not actually stored globally, but this is needed to satisfy
@@ -288,16 +288,17 @@ impl<T: SerialIO> Debugger for UefiDebugger<T> {
         {
             let mut internal = self.internal.lock();
             cfg_if::cfg_if! {
-                if #[cfg(feature = "no_alloc")] {
-                    internal.gdb_buffer = unsafe { Some(&*(GDB_BUFFER.as_ptr() as *mut [u8; GDB_BUFF_LEN])) };
-                    internal.monitor_buffer = unsafe { Some(&*(MONITOR_BUFFER.as_ptr() as *mut [u8; MONITOR_BUFF_LEN])) };
-                } else {
+                if #[cfg(feature = "alloc")] {
                     if internal.gdb_buffer.is_none() {
                         internal.gdb_buffer = Some(Box::leak(Box::new([0u8; GDB_BUFF_LEN])));
                     }
                     if internal.monitor_buffer.is_none() {
                         internal.monitor_buffer = Some(Box::leak(Box::new([0u8; MONITOR_BUFF_LEN])));
                     }
+                }
+                else {
+                    internal.gdb_buffer = unsafe { Some(&*(GDB_BUFFER.as_ptr() as *mut [u8; GDB_BUFF_LEN])) };
+                    internal.monitor_buffer = unsafe { Some(&*(MONITOR_BUFFER.as_ptr() as *mut [u8; MONITOR_BUFF_LEN])) };
                 }
             }
         }
