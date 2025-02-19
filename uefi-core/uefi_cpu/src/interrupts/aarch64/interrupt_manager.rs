@@ -116,9 +116,9 @@ fn initialize_exception() -> Result<(), EfiError> {
         sp_el0_reg &= !0x0F;
         asm!("msr sp_el0, {}", in(reg) sp_el0_reg, options(nostack));
 
-        let mut hcr = unsafe { read_sysreg!(hcr_el2) as u64 };
+        let mut hcr = read_sysreg!(hcr_el2) as u64;
         hcr = hcr as u64 | 1 << 27; // Enable TGE
-        unsafe { write_sysreg!(hcr_el2, hcr) };
+        write_sysreg!(hcr_el2, hcr);
     }
 
     // Program VBar

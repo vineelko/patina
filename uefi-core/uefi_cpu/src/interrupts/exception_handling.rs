@@ -106,7 +106,7 @@ extern "efiapi" fn exception_handler(exception_type: usize, context: &mut Except
         HandlerType::None => {
             log::error!("Unhandled Exception! 0x{:x}", exception_type);
             log::error!("Exception Context: {:#x?}", context);
-            panic! {"Unhandled Exception! 0x{:x}", exception_type};
+            panic!("Unhandled Exception! 0x{:x}", exception_type);
         }
     }
 }
