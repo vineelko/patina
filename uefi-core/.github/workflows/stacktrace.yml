@@ -1,0 +1,82 @@
+# @file publish-release.yml
+#
+# This workflow validates the stack trace functionality.
+#
+##
+# Copyright (c) Microsoft Corporation.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+name: StackTrace Validator
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'stacktrace/**'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'stacktrace/**'
+
+jobs:
+  validate_stacktrace:
+    name: Validate Stack Trace
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Visual Studio Build Tools
+        shell: powershell
+        run: |
+          choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --quiet --norestart" -y
+
+      - name: Run Stack Trace Resolver
+        shell: powershell
+        run: |
+          $stackTrace = @"
+          # Child-SP              Return Address         Call Site
+          0 00000057261FFAE0      00007FFC9AC910E5       x64+1095
+          1 00000057261FFB10      00007FFC9AC9115E       x64+10E5
+          2 00000057261FFB50      00007FFC9AC911E8       x64+115E
+          3 00000057261FFB90      00007FFC9AC9125F       x64+11E8
+          4 00000057261FFBD0      00007FF6D3557236       x64+125F
+          5 00000057261FFC10      00007FFCC4BDE8D7       stacktrace-cf486b9b613e51dc+7236
+          6 00000057261FFC70      00007FFCC6B7FBCC       kernel32+2E8D7
+          7 00000057261FFCA0      0000000000000000       ntdll+34521
+          "@
+
+          $expectedOutput = @"
+           # Source Path                                                           Child-SP         Return Address   Call Site
+           0 [C:\r\uefi-core\stacktrace\src\x64\tests\collateral\x64.c     @   63] 00000057261FFAE0 00007FFC9AC910E5 x64!func1+25
+           1 [C:\r\uefi-core\stacktrace\src\x64\tests\collateral\x64.c     @   72] 00000057261FFB10 00007FFC9AC9115E x64!func2+15
+           2 [C:\r\uefi-core\stacktrace\src\x64\tests\collateral\x64.c     @   84] 00000057261FFB50 00007FFC9AC911E8 x64!func3+1E
+           3 [C:\r\uefi-core\stacktrace\src\x64\tests\collateral\x64.c     @   96] 00000057261FFB90 00007FFC9AC9125F x64!func4+28
+           4 [C:\r\uefi-core\stacktrace\src\x64\tests\collateral\x64.c     @  109] 00000057261FFBD0 00007FF6D3557236 x64!StartCallStack+1F
+           5 [Failed to load PDB file (HRESULT: 0x806D0005)                      ] 00000057261FFC10 00007FFCC4BDE8D7 stacktrace-cf486b9b613e51dc+7236
+           6 [Failed to load PDB file (HRESULT: 0x806D0005)                      ] 00000057261FFC70 00007FFCC6B7FBCC kernel32+2E8D7
+           7 [Failed to load PDB file (HRESULT: 0x806D0005)                      ] 00000057261FFCA0 0000000000000000 ntdll+34521
+          "@
+
+          $expectedOutput = $expectedOutput -replace "`r`n", "|"
+          $expectedOutput = $expectedOutput -replace "`n", "|"
+
+          $resolvedStackTrace = & ".\stacktrace\resolve_stacktrace\resolve_stacktrace.ps1" -StackTrace $stackTrace -PdbDirectory ".\stacktrace\src\x64\tests\collateral"
+          $resolvedStackTrace = $resolvedStackTrace -join "|"
+
+          if ($resolvedStackTrace.Trim() -ne $expectedOutput.Trim()) {
+              Write-Host "Stack trace output does not match the expected result!"
+              Write-Host "Expected:"
+              $expectedOutput = $expectedOutput -replace "\|", "`n"
+              Write-Host $expectedOutput
+              Write-Host "Actual:"
+              $resolvedStackTrace = $resolvedStackTrace -replace "\|", "`n"
+              Write-Host $resolvedStackTrace
+              exit 1
+          } else {
+              Write-Host "Stack trace resolved correctly."
+          }
+

@@ -26,6 +26,7 @@ words:
   - addrs
   - armasm
   - brotli
+  - Cdecl
   - Cforce
   - civac
   - ctypes
@@ -42,24 +43,30 @@ words:
   - gdbstub
   - getrsp
   - getsp
+  - HRESULT
   - icfgr
   - intid
   - irouter
   - isenabler
   - mdscr
   - mpidr
+  - msdia
   - mtrrs
+  - nologo
   - nomem
   - ntdll
+  - oleaut
   - opinfo
   - oslar
   - oslsr
   - pacibsp
   - pdata
+  - pdbhelper
   - psapi
   - pterror
   - pushfq
   - rebox
+  - regsvr
   - repr
   - rflags
   - rsplit

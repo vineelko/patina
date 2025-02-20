@@ -13,13 +13,32 @@ these module-relative RIP offsets can be resolved to function-relative offsets,
 as shown below.
 
 ```cmd
-C:\>windbgx -z x64.dll -y <pdb directory path>
-WinDbg does not support images with a base address set to 0. Reloading at 0x100000000.
-0:000>.reload x64.dll=0x100000000
-Resolve each stack frame's call site value to the function name and offset.
-0:000>.fnent @@masm(x64)+1095
-x64!func1+0x25    <-- Function name and offset
+PS C:\> .\resolve_stacktrace.ps1 -StackTrace "
+>>     # Child-SP              Return Address         Call Site
+>>     0 00000057261FFAE0      00007FFC9AC910E5       x64+1095
+>>     1 00000057261FFB10      00007FFC9AC9115E       x64+10E5
+>>     2 00000057261FFB50      00007FFC9AC911E8       x64+115E
+>>     3 00000057261FFB90      00007FFC9AC9125F       x64+11E8
+>>     4 00000057261FFBD0      00007FF6D3557236       x64+125F
+>>     5 00000057261FFC10      00007FFCC4BDE8D7       stacktrace-cf486b9b613e51dc+7236
+>>     6 00000057261FFC70      00007FFCC6B7FBCC       kernel32+2E8D7
+>>     7 00000057261FFCA0      0000000000000000       ntdll+34521
+>>
+>> " -PdbDirectory "C:\pdbs\"
+
+Output:
+  # Source Path                                                           Child-SP         Return Address   Call Site
+  0 [C:\r\uefi-core\stacktrace\src\x64\tests\collateral\x64.c     @   63] 00000057261FFAE0 00007FFC9AC910E5 x64!func1+25
+  1 [C:\r\uefi-core\stacktrace\src\x64\tests\collateral\x64.c     @   72] 00000057261FFB10 00007FFC9AC9115E x64!func2+15
+  2 [C:\r\uefi-core\stacktrace\src\x64\tests\collateral\x64.c     @   84] 00000057261FFB50 00007FFC9AC911E8 x64!func3+1E
+  3 [C:\r\uefi-core\stacktrace\src\x64\tests\collateral\x64.c     @   96] 00000057261FFB90 00007FFC9AC9125F x64!func4+28
+  4 [C:\r\uefi-core\stacktrace\src\x64\tests\collateral\x64.c     @  109] 00000057261FFBD0 00007FF6D3557236 x64!StartCallStack+1F
+  5 [C:\r\uefi-core\stacktrace\src\x64\tests\unwind_test_full.rs  @   98] 00000057261FFC10 00007FFCC4BDE8D7 stacktrace-cf486b9b613e51dc!static unsigned int stacktrace::x64::tests::unwind_test_full::call_stack_thread(union enum2$<winapi::ctypes::c_void> *)+56
+  6 [Failed to load PDB file (HRESULT: 0x806D0005)                      ] 00000057261FFC70 00007FFCC6B7FBCC kernel32+2E8D7
+  7 [Failed to load PDB file (HRESULT: 0x806D0005)                      ] 00000057261FFCA0 0000000000000000 ntdll+34521
 ```
+
+![Stack Trace Diagram](stacktrace.png)
 
 ## Prerequisites
 
@@ -29,6 +48,19 @@ compiled with the following `rustc` flag to generate the `.pdata` section in the
 PE images:
 
 `RUSTFLAGS=-Cforce-unwind-tables`
+
+## Supported Platforms
+
+- Hardware
+  - X64
+  - AArch64
+
+- File Formats
+  - PE32+
+
+- Environments
+  - UEFI
+  - Windows
 
 ## Public API
 

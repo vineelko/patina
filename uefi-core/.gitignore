@@ -5,3 +5,6 @@ Cargo.lock
 *.exp
 *.lib
 *.pdb
+
+# Exclude the stacktrace test collateral x64.pdb file from being ignored.
+!stacktrace/src/x64/tests/collateral/x64.pdb
