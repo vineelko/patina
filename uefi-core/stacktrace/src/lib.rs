@@ -116,9 +116,17 @@
 
 extern crate alloc;
 
-mod aarch64;
 mod byte_reader;
 pub mod error;
 mod pe;
-pub mod stacktrace;
-mod x64;
+mod stacktrace;
+
+cfg_if::cfg_if! {
+    if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
+        mod aarch64;
+    } else {
+        mod x64;
+    }
+}
+
+pub use stacktrace::StackTrace;
