@@ -1,4 +1,3 @@
-use crate::alloc::string::ToString;
 use crate::error::Error;
 use crate::error::StResult;
 use crate::pe::PE;
@@ -70,7 +69,7 @@ impl StackTrace {
             // Kill switch for infinite recursive calls or for something
             // terribly bad
             if i == 20 {
-                return Err(Error::StackTraceDumpFailed(image.image_name.map(|s| s.to_string())));
+                return Err(Error::StackTraceDumpFailed(image.image_name));
             }
         }
 

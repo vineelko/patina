@@ -1,6 +1,3 @@
-use crate::alloc::format;
-use crate::alloc::string::ToString;
-
 /// Module to parse the x64 unwind data from .pdata section.
 use core::fmt;
 
@@ -17,7 +14,7 @@ pub struct UnwindInfo<'a> {
     unwind_info_bytes: &'a [u8],
 
     /// image name extracted from the loaded pe image
-    image_name: Option<&'a str>,
+    image_name: Option<&'static str>,
 
     version: u8,
     flags: u8,
@@ -46,15 +43,14 @@ impl<'a> fmt::Display for UnwindInfo<'a> {
 
 impl<'a> UnwindInfo<'a> {
     /// Function to Parse the Unwind Info data pointed by RuntimeFunction
-    pub fn parse(bytes: &'a [u8], image_name: Option<&'a str>) -> StResult<UnwindInfo<'a>> {
+    pub fn parse(bytes: &'a [u8], image_name: Option<&'static str>) -> StResult<UnwindInfo<'a>> {
         let mut offset = 0usize;
         let byte = bytes.read8_with(&mut offset)?;
         let version = byte & 0b111;
         let flags = byte >> 3;
 
         if version != 1 && version != 2 {
-            let msg = format!("unsupported unwind code version ({})", version);
-            return Err(Error::Malformed(msg));
+            return Err(Error::Malformed("Unsupported unwind code version"));
         }
 
         let size_of_prolog = bytes.read8_with(&mut offset)?;
@@ -66,8 +62,7 @@ impl<'a> UnwindInfo<'a> {
         // Each unwind code is a 2 byte struct. Validate if we are well with in
         // the range
         if offset + count_of_unwind_codes as usize * 2 >= bytes.len() {
-            let msg = "Malformed unwind code bytes".to_string();
-            return Err(Error::Malformed(msg));
+            return Err(Error::Malformed("Malformed unwind code bytes"));
         }
 
         // Extract unwind codes(each unwind code is a 2 byte struct)
@@ -87,8 +82,7 @@ impl<'a> UnwindInfo<'a> {
 
     /// Function to calculate the stack pointer offset in the function
     pub fn get_stack_pointer_offset(&self) -> StResult<usize> {
-        UnwindCode::get_stack_pointer_offset(self.unwind_codes)
-            .map_err(|_| Error::StackOffsetNotFound(self.image_name.map(|s| s.to_string())))
+        UnwindCode::get_stack_pointer_offset(self.unwind_codes).map_err(|_| Error::StackOffsetNotFound(self.image_name))
     }
 
     /// Function to calculate the current stack frame parameters
@@ -171,7 +165,7 @@ impl UnwindCode {
                         // slots in little-endian format, allowing allocations
                         // up to 4GB - 8
                         1 => bytes.read32_with(&mut index)?,
-                        i => return Err(Error::Malformed(format!("unexpected opinfo {}", i))),
+                        _ => return Err(Error::Malformed("Unexpected opinfo")),
                     };
 
                     offset += size as usize;
@@ -187,7 +181,7 @@ impl UnwindCode {
                     bytes.read32_with(&mut index)?;
                 }
                 6..=10 => (), // These opcodes do not contribute to rsp offset
-                _ => panic!("unexpected opcode"),
+                _ => panic!("Unexpected opcode"),
             };
         }
         Ok(offset)
@@ -218,7 +212,7 @@ impl UnwindCode {
                         // slots in little-endian format, allowing allocations
                         // up to 4GB - 8
                         1 => bytes.read32_with(&mut offset)?,
-                        i => return Err(Error::Malformed(format!("unexpected opinfo {}", i))),
+                        _ => return Err(Error::Malformed("Unexpected opinfo")),
                     };
                     UnwindCode::AllocLarge { prolog_offset, size }
                 }
@@ -237,7 +231,7 @@ impl UnwindCode {
                 8 => UnwindCode::SaveXMM128(prolog_offset, opinfo),
                 9 => UnwindCode::SaveXMM128Far(prolog_offset, opinfo),
                 10 => UnwindCode::PushMachFrame(prolog_offset, opinfo),
-                _ => panic!("unexpected opcode"),
+                _ => panic!("Unexpected opcode"),
             };
 
             unwind_codes.push(unwind_code);

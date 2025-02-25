@@ -1,5 +1,4 @@
 use super::unwind::UnwindInfo;
-use crate::alloc::string::ToString;
 use crate::byte_reader::ByteReader;
 use crate::error::{Error, StResult};
 use crate::pe::PE;
@@ -13,7 +12,7 @@ pub struct RuntimeFunction<'a> {
     image_base: &'a [u8],
 
     /// image name extracted from the loaded pe image
-    image_name: Option<&'a str>,
+    image_name: Option<&'static str>,
 
     /// start of the function rva
     pub start_rva: u32,
@@ -41,7 +40,7 @@ impl fmt::Display for RuntimeFunction<'_> {
 impl<'a> RuntimeFunction<'a> {
     pub fn new(
         image_base: &'a [u8],
-        image_name: Option<&'a str>,
+        image_name: Option<&'static str>,
         start_rva: u32,
         end_rva: u32,
         unwind_info: u32,
@@ -51,13 +50,8 @@ impl<'a> RuntimeFunction<'a> {
 
     /// Parse the Unwind Info data pointed by RuntimeFunction
     pub fn get_unwind_info(&self) -> StResult<UnwindInfo> {
-        UnwindInfo::parse(self.image_base, self.unwind_info, self.image_name).map_err(|_| {
-            Error::UnwindInfoNotFound(
-                self.image_name.map(|s| s.to_string()),
-                self.image_base.as_ptr() as u64,
-                self.unwind_info,
-            )
-        })
+        UnwindInfo::parse(self.image_base, self.unwind_info, self.image_name)
+            .map_err(|_| Error::UnwindInfoNotFound(self.image_name, self.image_base.as_ptr() as u64, self.unwind_info))
     }
 
     /// Function to return the Runtime Function corresponding to the given
@@ -114,7 +108,7 @@ impl<'a> RuntimeFunction<'a> {
             .find(|ele| ele.0 <= pc_rva && pc_rva <= ele.1)
             .map(|ele| RuntimeFunction::new(pe.bytes, pe.image_name, ele.0, ele.1, ele.2));
 
-        runtime_function.ok_or(Error::RuntimeFunctionNotFound(pe.image_name.map(|s| s.to_string()), pc_rva))
+        runtime_function.ok_or(Error::RuntimeFunctionNotFound(pe.image_name, pc_rva))
     }
 
     /// Test function to return all Runtime Functions

@@ -1,5 +1,3 @@
-use crate::alloc::string::ToString;
-use alloc::string::String;
 use core::fmt;
 
 #[derive(Debug, PartialEq)]
@@ -11,34 +9,34 @@ pub enum Error {
     BufferUnaligned(usize),
 
     /// Unexpected values during parsing the PE
-    Malformed(String),
+    Malformed(&'static str),
 
     /// Failed to locate a PE Image in memory
     ImageNotFound(u64),
 
     /// Unable to locate the runtime function for the given rip(rva)
-    ExceptionDirectoryNotFound(Option<String>),
+    ExceptionDirectoryNotFound(Option<&'static str>),
 
     /// Unable to locate the runtime function for the given rip(rva)
-    RuntimeFunctionNotFound(Option<String>, u32),
+    RuntimeFunctionNotFound(Option<&'static str>, u32),
 
     /// Failed to locate unwind info at the given image base
-    UnwindInfoNotFound(Option<String>, u64, u32),
+    UnwindInfoNotFound(Option<&'static str>, u64, u32),
 
     /// Failed to calculate the stack offset
-    StackOffsetNotFound(Option<String>),
+    StackOffsetNotFound(Option<&'static str>),
 
     /// Failed to dump all the frames in the stack trace
-    StackTraceDumpFailed(Option<String>),
+    StackTraceDumpFailed(Option<&'static str>),
 
     /// Failed to load module(mainly in tests)
     #[cfg(test)]
-    ModuleLoadFailed(String),
+    ModuleLoadFailed(Option<&'static str>),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        let no_module_str = "<no module>".to_string();
+        let no_module_str = "<no module>";
         match self {
             Error::BufferTooShort(index) => write!(fmt, "Buffer is too short {}", index),
             Error::BufferUnaligned(addr) => write!(fmt, "Buffer is not aligned {:X}", addr),
@@ -84,11 +82,11 @@ impl fmt::Display for Error {
                 )
             }
             #[cfg(test)]
-            Error::ModuleLoadFailed(ref msg) => write!(fmt, "Failed to load module: {}", msg),
+            Error::ModuleLoadFailed(ref module) => {
+                write!(fmt, "Failed to load module: {}", module.as_ref().unwrap_or(&no_module_str))
+            }
         }
     }
 }
-
-// impl core::error::Error for Error {}
 
 pub type StResult<T> = Result<T, Error>;

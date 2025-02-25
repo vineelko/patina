@@ -1,4 +1,3 @@
-use crate::alloc::string::ToString;
 use crate::byte_reader::ByteReader;
 use crate::error::{Error, StResult};
 
@@ -33,7 +32,7 @@ pub struct PE<'a> {
     pub _size_of_image: u32,
 
     /// image name extracted from the loaded pe image
-    pub image_name: Option<&'a str>,
+    pub image_name: Option<&'static str>,
 
     /// loaded image memory as a byte slice
     pub(crate) bytes: &'a [u8],
@@ -98,7 +97,7 @@ impl<'a> PE<'a> {
         page_base: u64,
         debug_directory_rva: usize,
         debug_directory_size: usize,
-    ) -> Option<&'a str> {
+    ) -> Option<&'static str> {
         // Convert the debug data section into a slice to make it easier to interpret the fields.
         let debug_directory = unsafe {
             core::slice::from_raw_parts((page_base + debug_directory_rva as u64) as *const u8, debug_directory_size)
@@ -187,7 +186,7 @@ impl<'a> PE<'a> {
         // Bail out if exception table section(aka .pdata section) is not
         // available
         if exception_table_rva == 0 || exception_table_size == 0 {
-            return Err(Error::ExceptionDirectoryNotFound(self.image_name.map(|s| s.to_string())));
+            return Err(Error::ExceptionDirectoryNotFound(self.image_name));
         }
 
         Ok((exception_table_rva, exception_table_size))

@@ -58,8 +58,6 @@
 ///  - The unwind codes describes both prolog and epilog. Each prolog is
 ///    terminated by `End/EndC` unwind code.
 ///
-use crate::alloc::format;
-use crate::alloc::string::ToString;
 use core::fmt;
 
 use crate::{
@@ -73,7 +71,7 @@ use crate::{
 pub enum UnwindInfo<'a> {
     PackedUnwindInfo {
         /// image name extracted from the loaded pe image
-        image_name: Option<&'a str>,
+        image_name: Option<&'static str>,
 
         flag: u8,
         function_length: u16,
@@ -85,7 +83,7 @@ pub enum UnwindInfo<'a> {
     },
     UnpackedUnwindInfo {
         /// image name extracted from the loaded pe image
-        image_name: Option<&'a str>,
+        image_name: Option<&'static str>,
 
         xdata_rva: usize,
 
@@ -138,7 +136,7 @@ impl fmt::Display for UnwindInfo<'_> {
 }
 
 impl<'a> UnwindInfo<'a> {
-    pub fn parse(bytes: &'a [u8], unwind_info: u32, image_name: Option<&'a str>) -> StResult<UnwindInfo<'a>> {
+    pub fn parse(bytes: &'a [u8], unwind_info: u32, image_name: Option<&'static str>) -> StResult<UnwindInfo<'a>> {
         let flag = (unwind_info & 0x3) as u8;
         match flag {
             // 0. packed unwind data not used; remaining bits point to an .xdata record
@@ -156,8 +154,7 @@ impl<'a> UnwindInfo<'a> {
                 let vers = ((xdata_header >> 18) & 0x3) as u8;
 
                 if vers != 0 {
-                    let msg = format!("unsupported .xdata version. 'vers' field other than zero  ({})", vers);
-                    return Err(Error::Malformed(msg));
+                    return Err(Error::Malformed("Unsupported .xdata version. 'vers' field other than zero"));
                 }
 
                 let mut unwind_code_offset = 1usize; // In AArch64, one word = 4 bytes!
@@ -222,8 +219,7 @@ impl<'a> UnwindInfo<'a> {
             }
             _ => {
                 // 4. Reserved
-                let msg = "Malformed unwind info bytes with flag >= 3".to_string();
-                Err(Error::Malformed(msg))
+                Err(Error::Malformed("Malformed unwind info bytes with flag >= 3"))
             }
         }
     }
@@ -252,11 +248,11 @@ impl<'a> UnwindInfo<'a> {
         match self {
             UnwindInfo::PackedUnwindInfo { image_name, frame_size, cr, .. } => {
                 UnwindCode::get_stack_pointer_offset_packed(*frame_size, *cr)
-                    .map_err(|_| Error::StackOffsetNotFound(image_name.map(|s| s.to_string())))
+                    .map_err(|_| Error::StackOffsetNotFound(*image_name))
             }
             UnwindInfo::UnpackedUnwindInfo { image_name, bytes, .. } => {
                 UnwindCode::get_stack_pointer_offset_unpacked(bytes)
-                    .map_err(|_| Error::StackOffsetNotFound(image_name.map(|s| s.to_string())))
+                    .map_err(|_| Error::StackOffsetNotFound(*image_name))
             }
         }
     }
