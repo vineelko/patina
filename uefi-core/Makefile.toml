@@ -95,7 +95,7 @@ args = ["tarpaulin", "--output-dir", "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/
 description = "Run cargo clippy."
 clear = true
 command = "cargo"
-args = ["clippy", "--all-targets", "--", "-D", "warnings"]
+args = ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"]
 
 [tasks.doc]
 env = { RUSTDOCFLAGS = "-D warnings"}
