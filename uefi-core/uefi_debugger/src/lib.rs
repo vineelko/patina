@@ -69,6 +69,11 @@
 //!
 //! ```
 //!
+//! The debugger can be further configured by using various functions on the
+//! initialization of the debugger struct. See the definition for [debugger::UefiDebugger]
+//! for more details. Notably, if the device is using the same transport for
+//! logging and debugger, it is advisable to use `.without_log_init()`.
+//!
 //! ## Features
 //!
 //! `windbg_workarounds` - (Default) Enables workarounds for Windbg compatibility.

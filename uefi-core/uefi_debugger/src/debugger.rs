@@ -60,6 +60,8 @@ where
     exception_types: &'static [usize],
     /// Whether the debugger can log to the transport while broken in.
     debugger_log: bool,
+    /// Whether initializing the transport should be skipped.
+    no_transport_init: bool,
     /// Internal mutable debugger config.
     config: spin::RwLock<DebuggerConfig>,
     /// Internal mutable debugger state.
@@ -102,6 +104,7 @@ impl<T: SerialIO> UefiDebugger<T> {
         UefiDebugger {
             transport,
             debugger_log: false,
+            no_transport_init: false,
             exception_types: SystemArch::DEFAULT_EXCEPTION_TYPES,
             config: spin::RwLock::new(DebuggerConfig {
                 enabled: false,
@@ -135,6 +138,13 @@ impl<T: SerialIO> UefiDebugger<T> {
     /// This should only be used if the debugger and logging transport are separate.
     pub const fn with_debugger_logging(mut self) -> Self {
         self.debugger_log = true;
+        self
+    }
+
+    /// Prevents the debugger from initializing the transport. This is suggested in
+    /// cases where the transport is shared with the logging device.
+    pub const fn without_transport_init(mut self) -> Self {
+        self.no_transport_init = true;
         self
     }
 
@@ -279,7 +289,9 @@ impl<T: SerialIO> Debugger for UefiDebugger<T> {
         drop(config);
 
         // Initialize the underlying transport.
-        self.transport.init();
+        if !self.no_transport_init {
+            self.transport.init();
+        }
 
         // Initialize any architecture specifics.
         SystemArch::initialize();
