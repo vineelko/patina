@@ -17,6 +17,7 @@ edition = "2021"
 
 [workspace.dependencies]
 uefi_cpu = { path = "uefi_cpu", version = "9" }
+stacktrace = { version = "9" }
 
 # External Libraries
 arm-gic = "^0.1.2"

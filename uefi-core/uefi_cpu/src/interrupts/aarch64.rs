@@ -7,6 +7,7 @@
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 use mu_pi::protocols::cpu_arch::EfiSystemContext;
+use stacktrace::StackTrace;
 use uefi_sdk::error::EfiError;
 
 cfg_if::cfg_if! {
@@ -31,6 +32,14 @@ pub type ExceptionContextAArch64 = r_efi::protocols::debug_support::SystemContex
 impl super::EfiSystemContextFactory for ExceptionContextAArch64 {
     fn create_efi_system_context(&mut self) -> EfiSystemContext {
         EfiSystemContext { system_context_aarch64: self as *mut _ }
+    }
+}
+
+impl super::EfiExceptionStackTrace for ExceptionContextAArch64 {
+    fn dump_stack_trace(&self) {
+        if let Err(err) = unsafe { StackTrace::dump_with(self.elr, self.sp) } {
+            log::error!("StackTrace: {}", err);
+        }
     }
 }
 

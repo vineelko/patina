@@ -9,6 +9,7 @@
 
 use core::arch::asm;
 use mu_pi::protocols::cpu_arch::EfiSystemContext;
+use stacktrace::StackTrace;
 use uefi_sdk::error::EfiError;
 
 cfg_if::cfg_if! {
@@ -26,6 +27,14 @@ pub type ExceptionContextX64 = r_efi::protocols::debug_support::SystemContextX64
 impl super::EfiSystemContextFactory for ExceptionContextX64 {
     fn create_efi_system_context(&mut self) -> EfiSystemContext {
         EfiSystemContext { system_context_x64: self as *mut _ }
+    }
+}
+
+impl super::EfiExceptionStackTrace for ExceptionContextX64 {
+    fn dump_stack_trace(&self) {
+        if let Err(err) = unsafe { StackTrace::dump_with(self.rip, self.rsp) } {
+            log::error!("StackTrace: {}", err);
+        }
     }
 }
 

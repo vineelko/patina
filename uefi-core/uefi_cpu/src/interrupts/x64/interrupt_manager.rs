@@ -12,6 +12,7 @@ use lazy_static::lazy_static;
 use mu_pi::protocols::cpu_arch::EfiSystemContext;
 use paging::page_allocator::PageAllocator;
 use paging::{MemoryAttributes, PageTable, PagingType};
+use stacktrace::StackTrace;
 use uefi_sdk::base::SIZE_4GB;
 use uefi_sdk::base::{UEFI_PAGE_MASK, UEFI_PAGE_SIZE};
 use uefi_sdk::error::EfiError;
@@ -164,6 +165,10 @@ extern "efiapi" fn general_protection_fault_handler(_exception_type: isize, cont
 
     log::debug!("Full Context: {:#x?}", x64_context);
 
+    if let Err(err) = unsafe { StackTrace::dump_with(x64_context.rip, x64_context.rsp) } {
+        log::error!("StackTrace: {}", err);
+    }
+
     panic!("EXCEPTION: GP FAULT\n");
 }
 
@@ -231,6 +236,10 @@ extern "efiapi" fn page_fault_handler(_exception_type: isize, context: EfiSystem
     );
 
     log::debug!("Full Context: {:#x?}", x64_context);
+
+    if let Err(err) = unsafe { StackTrace::dump_with(x64_context.rip, x64_context.rsp) } {
+        log::error!("StackTrace: {}", err);
+    }
 
     panic!("EXCEPTION: PAGE FAULT");
 }

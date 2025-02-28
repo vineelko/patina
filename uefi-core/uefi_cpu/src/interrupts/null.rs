@@ -24,6 +24,10 @@ impl super::EfiSystemContextFactory for ExceptionContextNull {
     }
 }
 
+impl super::EfiExceptionStackTrace for ExceptionContextNull {
+    fn dump_stack_trace(&self) {}
+}
+
 pub fn enable_interrupts() {}
 
 pub fn disable_interrupts() {}

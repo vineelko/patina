@@ -12,6 +12,8 @@ use mu_pi::protocols::cpu_arch::EfiExceptionType;
 use spin::rwlock::RwLock;
 use uefi_sdk::error::EfiError;
 
+use crate::interrupts::EfiExceptionStackTrace;
+
 use super::{EfiSystemContextFactory, ExceptionContext, ExceptionType, HandlerType};
 
 // Different architecture have a different number of exception types.
@@ -106,6 +108,7 @@ extern "efiapi" fn exception_handler(exception_type: usize, context: &mut Except
         HandlerType::None => {
             log::error!("Unhandled Exception! 0x{:x}", exception_type);
             log::error!("Exception Context: {:#x?}", context);
+            context.dump_stack_trace();
             panic!("Unhandled Exception! 0x{:x}", exception_type);
         }
     }

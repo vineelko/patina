@@ -58,6 +58,12 @@ pub(crate) trait EfiSystemContextFactory {
     fn create_efi_system_context(&mut self) -> EfiSystemContext;
 }
 
+/// Trait for dumping stack trace for architecture specific context.
+pub(crate) trait EfiExceptionStackTrace {
+    /// Dump the stack trace for architecture specific context.
+    fn dump_stack_trace(&self);
+}
+
 /// Trait for structs that implement and manage interrupts.
 ///
 /// Generic trait that can be used to abstract the architecture and platform
