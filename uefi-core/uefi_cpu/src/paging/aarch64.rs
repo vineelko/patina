@@ -51,7 +51,7 @@ where
         self.paging.remap_memory_region(address, size, attributes)
     }
 
-    fn install_page_table(&self) -> Result<(), PtError> {
+    fn install_page_table(&mut self) -> Result<(), PtError> {
         self.paging.install_page_table()
     }
 

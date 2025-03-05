@@ -29,6 +29,10 @@ pub fn read_memory<Arch: DebuggerArch>(address: u64, buffer: &mut [u8], unsafe_r
     // Check that all of the pages are mapped before accessing the memory.
     let len = if !unsafe_read { check_range_accessibility(&page_table, address, buffer.len())? } else { buffer.len() };
 
+    if len == 0 {
+        return Err(());
+    }
+
     let ptr = address as *const u8;
     unsafe {
         ptr::copy(ptr, buffer.as_mut_ptr(), len);
@@ -100,8 +104,10 @@ pub fn write_memory<Arch: DebuggerArch>(address: u64, buffer: &[u8]) -> Result<(
 fn check_range_accessibility<P: PageTable>(page_table: &P, start_address: u64, length: usize) -> Result<usize, ()> {
     // This is done page-by-page because it is unknown if the memory region has
     // consistent attributes across the entire range.
+    // The length takes us to the start of the next memory range, so we go until the end of the range, e.g
+    // start_address + length - 1. This avoids overflow in the self map case
     let mut page = start_address & PAGE_MASK;
-    while page < start_address + length as u64 {
+    while page <= start_address + (length - 1) as u64 {
         let res = page_table.query_memory_region(page, PAGE_SIZE).map_err(|_| ());
         let valid = match res {
             Ok(attributes) => !attributes.contains(MemoryAttributes::ReadProtect),
@@ -118,7 +124,11 @@ fn check_range_accessibility<P: PageTable>(page_table: &P, start_address: u64, l
             }
         }
 
-        page += PAGE_SIZE;
+        // if this is the last page, return the full length
+        match page.checked_add(PAGE_SIZE) {
+            Some(next) => page = next,
+            None => break,
+        }
     }
 
     Ok(length)
@@ -155,7 +165,7 @@ mod tests {
             fn map_memory_region(&mut self, address: u64, size: u64, attributes: MemoryAttributes) -> PtResult<()>;
             fn unmap_memory_region(&mut self, address: u64, size: u64) -> PtResult<()>;
             fn remap_memory_region(&mut self, address: u64, size: u64, attributes: MemoryAttributes) -> PtResult<()>;
-            fn install_page_table(&self) -> PtResult<()>;
+            fn install_page_table(&mut self) -> PtResult<()>;
             fn query_memory_region(&self, address: u64, size: u64) -> PtResult<MemoryAttributes>;
             fn dump_page_tables(&self, address: u64, size: u64);
             fn get_page_table_pages_for_size(&self, address: u64, size: u64) -> PtResult<u64>;

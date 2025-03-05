@@ -43,7 +43,7 @@ where
         Ok(())
     }
 
-    fn install_page_table(&self) -> Result<(), PtError> {
+    fn install_page_table(&mut self) -> Result<(), PtError> {
         Ok(())
     }
 
