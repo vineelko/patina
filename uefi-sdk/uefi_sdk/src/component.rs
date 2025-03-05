@@ -56,14 +56,14 @@
 //! Below is a list of all types that implement the [Param](params::Param) trait, within this crate. Other
 //! implementations may still exist.
 //!
-//! | Param                        | Description                                                                                                                                                |
-//! |------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
-//! | Option\<P\>                  | An Option, where P implements `Param`. Allows components to run even when the underlying parameter is unavailable. See the [params] module for more info.  |
-//! | (P1, P2, ...)                | A Tuple where each entry implements `Param`. Useful when you need more parameters than the current parameter limit. See the [params] module for more info. |
-//! | Config\<T\>                  | An immutable config value that will only be available once the underlying data has been locked. See The [params] module for more info.                     |
-//! | ConfigMut\<T\>               | A mutable config value that will only be available while the underlying data is unlocked. See the [params] module for more info.                           |
-//! | &HobList                     | An immutable reference to a list of Handoff Blocks (HOBs) passed to the DXE Core.                                                                          |
-//! | StandardBootServices         | Rust implementation of Boot Services                                                                                                                       |
+//! | Param                        | Description                                                                                                                                                           |
+//! |------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+//! | Option\<P\>                  | An Option, where P implements `Param`. Allows components to run even when the underlying parameter is unavailable. See the [params] module for more info.             |
+//! | (P1, P2, ...)                | A Tuple where each entry implements `Param`. Useful when you need more parameters than the current parameter limit. See the [params] module for more info.            |
+//! | Config\<T\>                  | An immutable config value that will only be available once the underlying data has been locked. See The [params] module for more info.                                |
+//! | ConfigMut\<T\>               | A mutable config value that will only be available while the underlying data is unlocked. See the [params] module for more info.                                      |
+//! | Service\<T\>                 | A wrapper for producing and consuming services of a particular interface, `T`, that is agnostic to the underlying implementation. See [service] module for more info. |
+//! | StandardBootServices         | Rust implementation of Boot Services                                                                                                                                  |
 //!
 //! ### Examples
 //!
@@ -138,15 +138,18 @@ extern crate alloc;
 mod function_component;
 mod metadata;
 pub mod params;
+pub mod service;
 mod storage;
 mod struct_component;
+
+use crate::error::Result;
 
 #[cfg(any(feature = "doc", feature = "core"))]
 pub use metadata::MetaData;
 #[cfg(any(feature = "doc", feature = "core"))]
-pub use storage::{Storage, UnsafeStorageCell};
+pub use storage::UnsafeStorageCell;
 
-use crate::error::Result;
+pub use storage::Storage;
 
 /// A part of the private API that must be public for the component macro to work. Users should not use this directly
 /// and it is subject to change at any time.

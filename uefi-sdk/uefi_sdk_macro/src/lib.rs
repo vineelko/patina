@@ -7,6 +7,7 @@
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 mod component_macro;
+mod service_macro;
 
 /// Derive Macro for implementing the `IntoComponent` trait for a type.
 ///
@@ -65,7 +66,63 @@ mod component_macro;
 ///   }
 /// }
 /// ```
-#[proc_macro_derive(IntoComponent, attributes(entry_point))]
+#[proc_macro_derive(IntoComponent, attributes(entry_point, protocol))]
 pub fn component(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     component_macro::component2(item.into()).into()
+}
+
+/// Derive Macro for implementing the `IntoService` trait for a type.
+///
+/// This macro automatically implements the necessary traits for the provided type implementation to be used as a
+/// `Service`. By default the derive macro assumes the service is the same as the deriver, but that can be overridden
+/// with the `service` attribute to specify that the service is actually a dyn \<Trait\> that the underlying type
+/// implements.
+///
+/// ## Macro Attribute
+///
+/// - `service`: The service trait(s) that the type implements.
+/// - `protocol`: Publishes the entire struct as a protocol with the given GUID.
+///
+/// ## Member Attributes
+///
+/// - `protocol`: Publishes the field as a protocol with the given GUID.
+///
+/// ## Pure Rust Example
+///
+/// ```rust, ignore
+/// use uefi_sdk::{
+///    error::Result,
+///    component::{
+///      IntoService,
+///      params::Service,
+///    },
+/// };
+///
+/// trait MyService {
+///   fn do_something(&self) -> Result<()>;
+/// }
+///
+/// #[derive(IntoService)]
+/// #[service(MyService)]
+/// struct MyStruct;
+///
+/// impl MyService for MyStruct {
+///   fn do_something(&self) -> Result<()> {
+///    Ok(())
+///   }
+/// }
+/// ```
+///
+/// ## Pure Protocol Example
+///
+/// ```rust, ignore
+/// #[derive(IntoService)]
+/// #[protocol = "8be4df61-93ca-11d2-aa0d-00e098032b8c"]
+/// struct MyStruct {
+///   f: extern "efiapi" fn() -> r_efi::efi::Status;
+/// }
+/// ```
+#[proc_macro_derive(IntoService, attributes(protocol, service))]
+pub fn service(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    service_macro::service2(item.into()).into()
 }

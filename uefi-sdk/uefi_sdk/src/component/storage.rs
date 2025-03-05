@@ -22,6 +22,8 @@ use core::{
 };
 use r_efi::efi::BootServices;
 
+use super::service::{IntoService, Service};
+
 /// A vector whose elements are sparsely populated.
 #[derive(Debug)]
 pub(crate) struct SparseVec<V> {
@@ -147,6 +149,11 @@ pub struct Storage {
     configs: SparseVec<RefCell<ConfigRaw>>,
     /// A map to convert from a TypeId to a config index.
     config_indices: BTreeMap<TypeId, usize>,
+    /// A container for all service datums. This resource can only be accessed immutably, but one service datum can
+    /// represent multiple services. Services must have internal mutability if they need to be modified.
+    services: SparseVec<&'static dyn Any>,
+    /// A map to convert a Service type to a concrete service index.
+    service_indices: BTreeMap<TypeId, usize>,
     /// A pointer to the UEFI Boot Services Table.
     bs: AtomicPtr<BootServices>,
 }
@@ -159,7 +166,13 @@ impl Default for Storage {
 
 impl Storage {
     pub const fn new() -> Self {
-        Self { configs: SparseVec::new(), config_indices: BTreeMap::new(), bs: AtomicPtr::new(ptr::null_mut()) }
+        Self {
+            configs: SparseVec::new(),
+            config_indices: BTreeMap::new(),
+            services: SparseVec::new(),
+            service_indices: BTreeMap::new(),
+            bs: AtomicPtr::new(ptr::null_mut()),
+        }
     }
 
     /// Applies all deferred actions to the storage. Used in a multi-threaded context
@@ -246,6 +259,38 @@ impl Storage {
     /// Marks all configs present in the storage as locked (immutable).
     pub fn lock_configs(&self) {
         (&self.configs).into_iter().flatten().for_each(|config| config.borrow_mut().lock());
+    }
+
+    /// Registers a service type with the storage and returns its global id.
+    pub(crate) fn register_service<C: ?Sized + 'static>(&mut self) -> usize {
+        self.get_or_register_service(TypeId::of::<C>())
+    }
+
+    /// Gets the global id of a service, registering it if it does not exist.
+    pub(crate) fn get_or_register_service(&mut self, id: TypeId) -> usize {
+        let idx = self.service_indices.len();
+        *self.service_indices.entry(id).or_insert(idx)
+    }
+
+    /// Inserts a service into the storage.
+    pub(crate) fn insert_service(&mut self, id: usize, service: &'static dyn Any) {
+        self.services.insert(id, service);
+    }
+
+    /// Adds a new service to the storage.
+    pub fn add_service<S: IntoService + 'static>(&mut self, service: S) {
+        service.register(self);
+    }
+
+    /// Retrieves a service from the underlying storage in its untyped form.
+    pub(crate) fn try_get_raw_service(&self, id: usize) -> Option<&'static dyn Any> {
+        // Copy the reference, not the underlying value
+        self.services.get(id).copied()
+    }
+
+    pub fn try_get_service<S: ?Sized + 'static>(&self) -> Option<Service<S>> {
+        let idx = *self.service_indices.get(&TypeId::of::<S>())?;
+        Some(Service::from(self.try_get_raw_service(idx)?))
     }
 }
 
