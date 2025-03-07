@@ -258,8 +258,6 @@ if (-not $StackTrace) {
 $CurrentDirectory = Get-Location
 Write-Host "Current Directory: $CurrentDirectory"
 Set-Location -Path $PSScriptRoot
-$CurrentDirectory2 = Get-Location
-Write-Host "Current Directory2: $CurrentDirectory2"
 
 # Build the PdbHelper type
 BuildPdbHelperDll | Out-Null

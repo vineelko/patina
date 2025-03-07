@@ -70,29 +70,29 @@ HRESULT ResolveStackFrameSymbolsInternal (
     IDiaSourceFile* DiaSourceFile = NULL;
     DWORD LineNumber = 0;
     ULONG Count = 0;
-    wchar_t errorMessageFmtBuffer[256];
+    wchar_t ErrorMessageFmtBuffer[256];
 
     // Find the Symbol by RVA
-    Hr = Session->findSymbolByRVAEx(Rva, SymTagNull, &Symbol, &Displacement);
+    Hr = Session->findSymbolByRVAEx(Rva, SymTagFunction, &Symbol, &Displacement);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to find Symbol by RVA (HRESULT: 0x%lX)",
                          Hr);
         goto Exit;
     }
 
     // Get the function name
-    if (Symbol->get_undecoratedName(&FunctionName) != S_OK) {
-        if (Symbol->get_name(&FunctionName) != S_OK) {
+    if (Symbol->get_undecoratedName(&FunctionName) != S_OK || SysStringLen(FunctionName) == 0) {
+        if (Symbol->get_name(&FunctionName) != S_OK || SysStringLen(FunctionName) == 0) {
            FunctionName = SysAllocString(L"(None)");
         }
     }
 
     // Retrieve line number
     if (FAILED(Session->findLinesByRVA(Rva, 1, &DiaEnumLineNumbers))) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to find line info by RVA (HRESULT: 0x%lX)",
                          Hr);
         goto Exit;
@@ -100,8 +100,8 @@ HRESULT ResolveStackFrameSymbolsInternal (
 
     Hr = DiaEnumLineNumbers->Next(1, &DiaLineNumber, &Count);
     if (FAILED(Hr) || Count != 1) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to enumerate line number (HRESULT: 0x%lX)",
                          Hr);
         goto Exit;
@@ -110,19 +110,18 @@ HRESULT ResolveStackFrameSymbolsInternal (
     // Retrieve line number details
     Hr = DiaLineNumber->get_lineNumber(&LineNumber);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to get line number (HRESULT: 0x%lX)",
                          Hr);
         goto Exit;
     }
 
-
     // Retrieve source file name
     Hr = DiaLineNumber->get_sourceFile(&DiaSourceFile);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to get source file (HRESULT: 0x%lX)",
                          Hr);
         goto Exit;
@@ -131,8 +130,8 @@ HRESULT ResolveStackFrameSymbolsInternal (
     // Retrieve source file name path
     Hr = DiaSourceFile->get_fileName(&FileName);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to get source file name (HRESULT: 0x%lX)",
                          Hr);
         goto Exit;
@@ -151,7 +150,7 @@ Exit:
         if (FunctionName != NULL) SysFreeString(FunctionName);
     }
 
-    *ErrorMessageOut = SysAllocString(errorMessageFmtBuffer);
+    *ErrorMessageOut = SysAllocString(ErrorMessageFmtBuffer);
     return Hr;
 }
 
@@ -169,7 +168,7 @@ HRESULT ResolveStackFrameSymbols (
     HRESULT Hr = S_OK;
     IDiaDataSource* DiaDataSource = NULL;
     IDiaSession* Session = NULL;
-    wchar_t errorMessageFmtBuffer[256];
+    wchar_t ErrorMessageFmtBuffer[256];
 
     // Initialize output parameters
     *FileNameOut = NULL;
@@ -181,8 +180,8 @@ HRESULT ResolveStackFrameSymbols (
     // Initialize COM
     Hr = CoInitialize(NULL);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to initialize COM (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -195,8 +194,8 @@ HRESULT ResolveStackFrameSymbols (
                           __uuidof(IDiaDataSource),
                           (void**)&DiaDataSource);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to create DIA data source instance. (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -205,8 +204,8 @@ HRESULT ResolveStackFrameSymbols (
     // Load the PDB file
     Hr = DiaDataSource->loadDataFromPdb(PdbFilePath);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to load PDB file (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -215,8 +214,8 @@ HRESULT ResolveStackFrameSymbols (
     // Create a Session to access the symbols
     Hr = DiaDataSource->openSession(&Session);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to open DIA Session (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -238,7 +237,7 @@ Cleanup:
     if (Session != NULL) Session->Release();
     if (DiaDataSource != NULL) DiaDataSource->Release();
     CoUninitialize();
-    *ErrorMessageOut = SysAllocString(errorMessageFmtBuffer);
+    *ErrorMessageOut = SysAllocString(ErrorMessageFmtBuffer);
     return Hr;
 }
 
@@ -263,7 +262,7 @@ HRESULT MatchModuleWithPdbFile (
     DWORD PdbAge = 0;
 
     HRESULT Hr = S_OK;
-    wchar_t errorMessageFmtBuffer[256];
+    wchar_t ErrorMessageFmtBuffer[256];
 
     *IsMatched = false;
     *ErrorMessageOut = NULL;
@@ -271,8 +270,8 @@ HRESULT MatchModuleWithPdbFile (
     // Initialize COM
     Hr = CoInitialize(NULL);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to initialize COM (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -285,8 +284,8 @@ HRESULT MatchModuleWithPdbFile (
                           __uuidof(IDiaDataSource),
                           (void**)&DiaDataSource);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to create DIA data source instance. (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -295,8 +294,8 @@ HRESULT MatchModuleWithPdbFile (
     // Load the exe file
     Hr = DiaDataSource->loadDataForExe(ExePath, NULL, NULL);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to load exe file (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -305,8 +304,8 @@ HRESULT MatchModuleWithPdbFile (
     // Open a session for the exe
     Hr = DiaDataSource->openSession(&DiaSession);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to open DIA Session for exe (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -315,8 +314,8 @@ HRESULT MatchModuleWithPdbFile (
     // Retrieve the global symbol
     Hr = DiaSession->get_globalScope(&DiaSymbol);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to get global scope of the exe (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -325,8 +324,8 @@ HRESULT MatchModuleWithPdbFile (
     // Get the GUID, signature and age from the exe
     Hr = DiaSymbol->get_guid(&ExeGuid);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to get GUID of the exe (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -334,8 +333,8 @@ HRESULT MatchModuleWithPdbFile (
 
     Hr = DiaSymbol->get_signature(&ExeSignature);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to get signature of the exe (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -343,8 +342,8 @@ HRESULT MatchModuleWithPdbFile (
 
     Hr = DiaSymbol->get_age(&ExeAge);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to get age of the exe (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -364,8 +363,8 @@ HRESULT MatchModuleWithPdbFile (
                           __uuidof(IDiaDataSource),
                           (void**)&DiaDataSource);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to create DIA data source instance. (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -374,8 +373,8 @@ HRESULT MatchModuleWithPdbFile (
     // Load the PDB file
     Hr = DiaDataSource->loadDataFromPdb(PdbPath);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to load PDB file (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -384,8 +383,8 @@ HRESULT MatchModuleWithPdbFile (
     // Open a session for the PDB
     Hr = DiaDataSource->openSession(&DiaSession);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to open DIA Session for PDB (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -394,8 +393,8 @@ HRESULT MatchModuleWithPdbFile (
     // Retrieve the global symbol
     Hr = DiaSession->get_globalScope(&DiaSymbol);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to get global scope of the PDB (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -404,8 +403,8 @@ HRESULT MatchModuleWithPdbFile (
     // Get the GUID, signature and age from the PDB
     Hr = DiaSymbol->get_guid(&PdbGuid);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to get GUID of the PDB (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -413,8 +412,8 @@ HRESULT MatchModuleWithPdbFile (
 
     Hr = DiaSymbol->get_signature(&PdbSignature);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to get signature of the PDB (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -422,8 +421,8 @@ HRESULT MatchModuleWithPdbFile (
 
     Hr = DiaSymbol->get_age(&PdbAge);
     if (FAILED(Hr)) {
-        StringCchPrintfW(errorMessageFmtBuffer,
-                         _countof(errorMessageFmtBuffer),
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
                          L"Failed to get age of the PDB (HRESULT: 0x%lX)",
                          Hr);
         goto Cleanup;
@@ -441,7 +440,7 @@ Cleanup:
     if (DiaSession != NULL) DiaSession->Release();
     if (DiaDataSource != NULL) DiaDataSource->Release();
     CoUninitialize();
-    *ErrorMessageOut = SysAllocString(errorMessageFmtBuffer);
+    *ErrorMessageOut = SysAllocString(ErrorMessageFmtBuffer);
     return Hr;
 }
 
