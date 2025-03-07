@@ -23,12 +23,18 @@ runs:
           ~/.rustup/toolchains/
         key: ${{ runner.os }}-rust-tools-${{ hashFiles('**/rust-toolchain.toml' )}}
 
-    # Installs toolchain specified in the rust-toolchain.toml file
+    # Installs the toolchain specified in the rust-toolchain.toml file if rustup >= 1.28.0
+    #
+    # if rustup < 1.28.0, this command will fail, but the cargo will automatically install the toolchain in the next
+    # step. This is because rustup less than 1.28.0 automatically installs the toolchain if it is not found where as
+    # This functionality was removed in 1.28.0 in favor of being able to call rustup toolchain install without the
+    # need to specify the toolchain name.
     - name: Install toolchains
       shell: bash
       run: |
         rustup toolchain install
       if: steps.tool-cache.outputs.cache-hit != 'true'
+      continue-on-error: true
 
     - name: Install cargo-binstall
       uses: cargo-bins/cargo-binstall@v1.10.17
