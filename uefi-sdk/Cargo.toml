@@ -4,6 +4,7 @@ resolver = "2"
 members = [
   "uefi_sdk",
   "boot_services",
+  "driver_binding",
   "uefi_protocol",
   "runtime_services",
   "tpl_mutex",
@@ -19,7 +20,8 @@ edition = "2021"
 
 [workspace.dependencies]
 boot_services = { path = "./boot_services", version = "2" }
-uefi_protocol = { path = "./uefi_protocol", version = "2"}
+driver_binding = { path = "./driver_binding", version = "2" }
+uefi_protocol = { path = "./uefi_protocol", version = "2" }
 uefi_sdk_macro = { path = "./uefi_sdk_macro", version = "2" }
 runtime_services = { path = "./runtime_services", version = "2" }
 tpl_mutex = { path = "./tpl_mutex", version = "2" }
@@ -30,7 +32,9 @@ log = { version = "^0.4", default-features = false }
 mu_pi = "^5"
 r-efi = { version = "^5", default-features = false }
 uart_16550 = "^0.3.2"
-x86_64 = { version= "=0.14.12", default-features = false, features = ["instructions"] }
+x86_64 = { version = "=0.14.12", default-features = false, features = [
+  "instructions",
+] }
 
 # Proc macro dependencies
 syn = { version = "^2", features = ["full"] }

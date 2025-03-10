@@ -7,11 +7,17 @@ use core::{
     ptr,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Copy)]
 // Ptr metadata is a struct that hold everything to rebuild the original pointer from this metadata.
 pub struct PtrMetadata<'a, T> {
     pub ptr_value: usize,
     _container: PhantomData<&'a T>,
+}
+
+impl<T> Clone for PtrMetadata<'_, T> {
+    fn clone(&self) -> Self {
+        Self { ptr_value: self.ptr_value, _container: PhantomData }
+    }
 }
 
 impl<'a, R: CPtr<'a, Type = T>, T> PtrMetadata<'a, R> {

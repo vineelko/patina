@@ -29,6 +29,7 @@ pub mod log;
 pub mod serial;
 
 pub use boot_services;
+pub use driver_binding;
 pub use runtime_services;
 pub use tpl_mutex;
 pub use uefi_protocol as protocol;

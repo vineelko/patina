@@ -1,0 +1,27 @@
+[package]
+name = "driver_binding"
+version.workspace = true
+publish.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/driver_binding.rs"
+
+[features]
+mockall = ["dep:mockall"]
+
+[dependencies]
+boot_services = { workspace = true }
+uefi_protocol = { workspace = true }
+
+r-efi = { workspace = true }
+log = { workspace = true }
+mockall = { version = "*", optional = true }
+
+
+[dev-dependencies]
+mockall = { version = "0.13.0" }
+
+boot_services = { workspace = true, features = ["mockall"] }
