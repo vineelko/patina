@@ -49,6 +49,54 @@ pub enum EfiError {
     CompromisedData,
     IpAddressConflict,
     HttpError,
+    Unknown(efi::Status),
+}
+
+impl EfiError {
+    /// Converts an `r_efi::efi::Status` to a `Result`.
+    ///
+    /// If the status is `SUCCESS`, it returns `Ok(val)`.
+    /// Otherwise, it returns an `Err` with the corresponding `EfiError`.
+    /// If a Ok value other than `()` is needed, `.map(|_| val)` can be used.
+    pub fn status_to_result(status: efi::Status) -> Result<()> {
+        match status {
+            efi::Status::SUCCESS => Ok(()),
+            efi::Status::LOAD_ERROR => Err(EfiError::LoadError),
+            efi::Status::INVALID_PARAMETER => Err(EfiError::InvalidParameter),
+            efi::Status::UNSUPPORTED => Err(EfiError::Unsupported),
+            efi::Status::BAD_BUFFER_SIZE => Err(EfiError::BadBufferSize),
+            efi::Status::BUFFER_TOO_SMALL => Err(EfiError::BufferTooSmall),
+            efi::Status::NOT_READY => Err(EfiError::NotReady),
+            efi::Status::DEVICE_ERROR => Err(EfiError::DeviceError),
+            efi::Status::WRITE_PROTECTED => Err(EfiError::WriteProtected),
+            efi::Status::OUT_OF_RESOURCES => Err(EfiError::OutOfResources),
+            efi::Status::VOLUME_CORRUPTED => Err(EfiError::VolumeCorrupted),
+            efi::Status::VOLUME_FULL => Err(EfiError::VolumeFull),
+            efi::Status::NO_MEDIA => Err(EfiError::NoMedia),
+            efi::Status::MEDIA_CHANGED => Err(EfiError::MediaChanged),
+            efi::Status::NOT_FOUND => Err(EfiError::NotFound),
+            efi::Status::ACCESS_DENIED => Err(EfiError::AccessDenied),
+            efi::Status::NO_RESPONSE => Err(EfiError::NoResponse),
+            efi::Status::NO_MAPPING => Err(EfiError::NoMapping),
+            efi::Status::TIMEOUT => Err(EfiError::Timeout),
+            efi::Status::NOT_STARTED => Err(EfiError::NotStarted),
+            efi::Status::ALREADY_STARTED => Err(EfiError::AlreadyStarted),
+            efi::Status::ABORTED => Err(EfiError::Aborted),
+            efi::Status::ICMP_ERROR => Err(EfiError::IcmpError),
+            efi::Status::TFTP_ERROR => Err(EfiError::TftpError),
+            efi::Status::PROTOCOL_ERROR => Err(EfiError::ProtocolError),
+            efi::Status::INCOMPATIBLE_VERSION => Err(EfiError::IncompatibleError),
+            efi::Status::SECURITY_VIOLATION => Err(EfiError::SecurityViolation),
+            efi::Status::CRC_ERROR => Err(EfiError::CrcError),
+            efi::Status::END_OF_MEDIA => Err(EfiError::EndOfMedia),
+            efi::Status::END_OF_FILE => Err(EfiError::EndOfFile),
+            efi::Status::INVALID_LANGUAGE => Err(EfiError::InvalidLanguage),
+            efi::Status::COMPROMISED_DATA => Err(EfiError::CompromisedData),
+            efi::Status::IP_ADDRESS_CONFLICT => Err(EfiError::IpAddressConflict),
+            efi::Status::HTTP_ERROR => Err(EfiError::HttpError),
+            _ => Err(EfiError::Unknown(status)),
+        }
+    }
 }
 
 impl From<EfiError> for efi::Status {
@@ -87,6 +135,7 @@ impl From<EfiError> for efi::Status {
             EfiError::CompromisedData => efi::Status::COMPROMISED_DATA,
             EfiError::IpAddressConflict => efi::Status::IP_ADDRESS_CONFLICT,
             EfiError::HttpError => efi::Status::HTTP_ERROR,
+            EfiError::Unknown(status) => status,
         }
     }
 }
