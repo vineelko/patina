@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.0.0"
+version = "2.2.1"
 publish = ["UefiRust"]
 repository = "https://github.com/OpenDevicePartnership/uefi-sdk"
 license = "BSD-2-Clause-Patent"
