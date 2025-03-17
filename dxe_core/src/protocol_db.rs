@@ -10,7 +10,6 @@
 //!
 extern crate alloc;
 
-use ahash::AHasher;
 use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec,
@@ -191,7 +190,7 @@ impl ProtocolDb {
                 //installing on a new handle. Add a BTreeMap to track protocol instances on the new handle.
                 let mut key;
                 if self.hash_new_handles {
-                    let mut hasher = AHasher::default();
+                    let mut hasher = Xorshift64starHasher::default();
                     hasher.write_usize(self.next_handle);
                     key = hasher.finish() as usize;
                     self.next_handle += 1;
@@ -826,6 +825,48 @@ impl SpinLockedProtocolDb {
 
 unsafe impl Send for SpinLockedProtocolDb {}
 unsafe impl Sync for SpinLockedProtocolDb {}
+
+/// A hasher that uses the Xorshift64* algorithm to generate a random number to xor with the input bytes.
+///
+/// https://en.wikipedia.org/wiki/Xorshift#xorshift*
+struct Xorshift64starHasher {
+    state: u64,
+}
+
+impl Xorshift64starHasher {
+    /// Initialize the hasher with a seed.
+    fn new(seed: u64) -> Self {
+        Xorshift64starHasher { state: seed }
+    }
+
+    /// Generate a new random state.
+    fn next_state(&mut self) -> u64 {
+        self.state ^= self.state >> 12;
+        self.state ^= self.state << 25;
+        self.state ^= self.state >> 27;
+        self.state = self.state.wrapping_mul(0x2545F4914F6CDD1D);
+        self.state
+    }
+}
+
+impl Default for Xorshift64starHasher {
+    fn default() -> Self {
+        Xorshift64starHasher::new(const_random::const_random!(u64))
+    }
+}
+
+impl Hasher for Xorshift64starHasher {
+    fn finish(&self) -> u64 {
+        self.state
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.state ^= byte as u64;
+            self.state = self.next_state();
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1880,5 +1921,30 @@ mod tests {
                 assert!(child_list.contains(&child));
             }
         });
+    }
+
+    #[test]
+    fn xorshift64starhasher_test_different_seeds() {
+        let seed1 = 12345;
+        let seed2 = 54321;
+        let mut hasher1 = Xorshift64starHasher::new(seed1);
+        let mut hasher2 = Xorshift64starHasher::new(seed2);
+
+        let num1 = hasher1.next_state();
+        let num2 = hasher2.next_state();
+
+        assert_ne!(num1, num2, "Random numbers should be different for different seeds");
+    }
+
+    #[test]
+    fn xorshift64starhasher_test_same_seed() {
+        let seed = 12345;
+        let mut hasher1 = Xorshift64starHasher::new(seed);
+        let mut hasher2 = Xorshift64starHasher::new(seed);
+
+        let num1 = hasher1.next_state();
+        let num2 = hasher2.next_state();
+
+        assert_eq!(num1, num2, "Random numbers should be the same for the same seed");
     }
 }
