@@ -21,7 +21,6 @@ pub trait SerialIO: Sync {
 
 if_x64! {
     mod uart_16550;
-    pub use uart_16550::Interface as Interface;
     pub use uart_16550::Uart as Uart16550;
 }
 
