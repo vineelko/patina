@@ -171,15 +171,24 @@ function BuildPdbHelperDll {
         return
     }
 
+    $msdiaDllPath = "$($vsInstance.InstallationPath)\Common7\IDE\msdia140.dll"
+
     Write-Host "[+] Identifying Visual Studio environment"
     Write-Host "    - Instance ID: $($vsInstance.InstanceId)"
     Write-Host "    - Display Name: $($vsInstance.DisplayName)"
     Write-Host "    - Version: $($vsInstance.InstallationVersion)"
     Write-Host "    - Installation Path: $($vsInstance.InstallationPath)"
     Write-Host "    - Install Date: $($vsInstance.InstallDate)"
+    Write-Host "    - MSDIA DLL Path: $msdiaDllPath"
+
+    # Check if the script is running as an administrator
+    if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+      Write-Host "Warning: This script must be run as an administrator!" -ForegroundColor Red
+      exit
+    }
 
     # Register msdia140.dll
-    regsvr32 /s "$($vsInstance.InstallationPath)\Common7\IDE\msdia140.dll"
+    regsvr32 /s $msdiaDllPath
     Write-Host "[+] msdia140.dll registered successfully."
 
     # Check if pdbhelper.dll already exists

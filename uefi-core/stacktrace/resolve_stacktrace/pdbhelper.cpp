@@ -440,6 +440,11 @@ Cleanup:
     if (DiaSession != NULL) DiaSession->Release();
     if (DiaDataSource != NULL) DiaDataSource->Release();
     CoUninitialize();
+    if (Hr == 0x80040154) {
+        StringCchPrintfW(ErrorMessageFmtBuffer,
+                         _countof(ErrorMessageFmtBuffer),
+                         L"Failed to load DIA SDK. Please install the DIA SDK.");
+    }
     *ErrorMessageOut = SysAllocString(ErrorMessageFmtBuffer);
     return Hr;
 }
