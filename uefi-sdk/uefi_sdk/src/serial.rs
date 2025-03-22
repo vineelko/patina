@@ -1,4 +1,4 @@
-//! Serial Traits and Implementations
+//! Serial Traits and Implementations for the [SerialIO] interface.
 //!
 //! ## License
 //!
@@ -19,18 +19,7 @@ pub trait SerialIO: Sync {
     fn try_read(&self) -> Option<u8>;
 }
 
-if_x64! {
-    mod uart_16550;
-    pub use uart_16550::Uart as Uart16550;
-}
-
-if_aarch64! {
-    mod uart_pl011;
-    pub use uart_pl011::Uart as UartPl011;
-}
-
-mod uart_null;
-pub use uart_null::Uart as UartNull;
+pub mod uart;
 
 #[cfg(feature = "std")]
 mod std;
