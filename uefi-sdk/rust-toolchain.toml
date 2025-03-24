@@ -4,6 +4,7 @@ targets = ["x86_64-unknown-uefi", "aarch64-unknown-uefi"]
 components = ["rust-src", "clippy", "rustfmt", "rust-docs"]
 
 [tools]
+cargo-deny = "^0.17"
 cargo-make = "0.37.21"
 cargo-tarpaulin = "0.31.5"
 cargo-release = "0.25.12"

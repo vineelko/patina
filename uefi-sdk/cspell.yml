@@ -26,6 +26,7 @@ caseSensitive: false
 allowCompoundWords: true
 words:
   - edkii
+  - keccak
+  - withf
   - zbuild
   - zunstable
-  - withf
