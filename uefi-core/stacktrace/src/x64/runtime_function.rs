@@ -24,7 +24,7 @@ pub struct RuntimeFunction<'a> {
     pub unwind_info: u32,
 }
 
-impl<'a> fmt::Display for RuntimeFunction<'a> {
+impl fmt::Display for RuntimeFunction<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -80,9 +80,9 @@ impl<'a> RuntimeFunction<'a> {
         runtime_function.ok_or(Error::RuntimeFunctionNotFound(pe.image_name, rip_rva))
     }
 
-    /// Test function to return all Runtime Functions
-    #[cfg(test)]
-    pub unsafe fn find_all_functions(pe: &PE<'a>) -> StResult<Vec<RuntimeFunction<'a>>> {
+    /// Windows only test function to return all Runtime Functions
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", test))]
+    pub(crate) unsafe fn find_all_functions(pe: &PE<'a>) -> StResult<Vec<RuntimeFunction<'a>>> {
         let (exception_table_rva, exception_table_size) = pe.get_exception_table()?;
 
         // Jump to .pdata section and parse the Runtime Function records.

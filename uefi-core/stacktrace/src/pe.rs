@@ -38,7 +38,7 @@ pub struct PE<'a> {
     pub(crate) bytes: &'a [u8],
 }
 
-impl<'a> PE<'a> {
+impl PE<'_> {
     /// Locate the image corresponding to the rip
     pub(crate) unsafe fn locate_image(mut rip: u64) -> StResult<Self> {
         let original_rip = rip;

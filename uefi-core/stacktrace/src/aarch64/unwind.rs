@@ -643,8 +643,8 @@ impl UnwindCode {
         Ok((lr_offset as usize, offset as usize))
     }
 
-    /// Test function to parse all UnwindCodes
-    #[cfg(test)]
+    /// Windows only test function to parse all UnwindCodes
+    #[cfg(all(target_os = "windows", target_arch = "aarch64", test))]
     pub fn parse(bytes: &[u8]) -> StResult<Vec<UnwindCode>> {
         let mut len = 0;
         let mut res = Vec::<UnwindCode>::new();

@@ -25,7 +25,7 @@ pub struct UnwindInfo<'a> {
     unwind_codes: &'a [u8],
 }
 
-impl<'a> fmt::Display for UnwindInfo<'a> {
+impl fmt::Display for UnwindInfo<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -188,7 +188,7 @@ impl UnwindCode {
     }
 
     /// Test function to parse all UnwindCodes
-    #[cfg(test)]
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", test))]
     pub(crate) fn _parse(bytes: &[u8], frame_register_offset: u32) -> StResult<Vec<UnwindCode>> {
         let byte_count = bytes.len();
         let mut offset = 0;

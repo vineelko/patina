@@ -32,7 +32,7 @@ impl<'a, T: SerialIO> SerialConnection<'a, T> {
     }
 }
 
-impl<'a, T: SerialIO> Connection for SerialConnection<'a, T> {
+impl<T: SerialIO> Connection for SerialConnection<'_, T> {
     type Error = uefi_sdk::error::EfiError;
 
     /// Write a byte to the serial transport.
@@ -49,7 +49,7 @@ impl<'a, T: SerialIO> Connection for SerialConnection<'a, T> {
     }
 }
 
-impl<'a, T: SerialIO> ConnectionExt for SerialConnection<'a, T> {
+impl<T: SerialIO> ConnectionExt for SerialConnection<'_, T> {
     /// Read a byte from the serial transport.
     fn read(&mut self) -> Result<u8, Self::Error> {
         if let Some(byte) = self.peeked_byte {
@@ -127,7 +127,7 @@ impl<'a> BufferWriter<'a> {
     }
 }
 
-impl<'a> core::fmt::Write for BufferWriter<'a> {
+impl core::fmt::Write for BufferWriter<'_> {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         let bytes = s.as_bytes();
         let len = bytes.len().min(self.buffer.len() - self.pos);

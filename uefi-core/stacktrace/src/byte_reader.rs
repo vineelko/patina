@@ -2,6 +2,7 @@ use crate::error::{Error, StResult};
 
 /// `ByteReader` trait provides easy way to read u8/u16/u32/u64 fields from a u8
 /// slice. This eliminates the dependency on scroll crate.
+#[allow(dead_code)]
 pub(crate) trait ByteReader {
     fn read8(&self, index: usize) -> StResult<u8>;
     fn read16(&self, index: usize) -> StResult<u16>;

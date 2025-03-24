@@ -111,8 +111,8 @@ impl<'a> RuntimeFunction<'a> {
         runtime_function.ok_or(Error::RuntimeFunctionNotFound(pe.image_name, pc_rva))
     }
 
-    /// Test function to return all Runtime Functions
-    #[cfg(test)]
+    /// Windows only test function to return all Runtime Functions
+    #[cfg(all(target_os = "windows", target_arch = "aarch64", test))]
     pub unsafe fn find_all_functions(pe: &PE<'a>) -> StResult<Vec<RuntimeFunction<'a>>> {
         let (exception_table_rva, exception_table_size) = pe.get_exception_table()?;
 

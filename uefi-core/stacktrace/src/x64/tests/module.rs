@@ -10,7 +10,6 @@ use winapi::um::psapi::{GetModuleInformation, MODULEINFO};
 
 pub struct Module {
     pub base_address: u64,
-    pub size_of_image: u64,
     pub module: HINSTANCE,
     pub _path: String,
 }
@@ -51,12 +50,7 @@ impl Module {
                 return Err("Failed to get module information".to_string());
             }
 
-            Ok(Module {
-                base_address: module_info.lpBaseOfDll as u64,
-                size_of_image: module_info.SizeOfImage as u64,
-                module: module_handle,
-                _path: path.to_string(),
-            })
+            Ok(Module { base_address: module_info.lpBaseOfDll as u64, module: module_handle, _path: path.to_string() })
         }
     }
 
@@ -64,15 +58,6 @@ impl Module {
     pub fn unload(&self) {
         unsafe {
             FreeLibrary(self.module);
-        }
-    }
-
-    /// Return load binary memory as a u8 slice
-    pub fn read_memory(&self) -> &[u8] {
-        unsafe {
-            let module_memory: &[u8] =
-                std::slice::from_raw_parts(self.base_address as *const u8, self.size_of_image as usize);
-            module_memory
         }
     }
 }
