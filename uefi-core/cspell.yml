@@ -43,6 +43,7 @@ words:
   - intid
   - irouter
   - isenabler
+  - keccak
   - mdscr
   - mpidr
   - msdia
