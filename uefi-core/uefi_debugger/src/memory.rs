@@ -168,7 +168,6 @@ mod tests {
             fn install_page_table(&mut self) -> PtResult<()>;
             fn query_memory_region(&self, address: u64, size: u64) -> PtResult<MemoryAttributes>;
             fn dump_page_tables(&self, address: u64, size: u64);
-            fn get_page_table_pages_for_size(&self, address: u64, size: u64) -> PtResult<u64>;
         }
     }
 

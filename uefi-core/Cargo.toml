@@ -29,7 +29,7 @@ mockall = "0.13.0"
 mtrr = { version = "0.1" }
 mu_pi = { version = "5.2.0" }
 mu_rust_helpers = { version = "2", default-features = false}
-paging = { version = "2.0.0" }
+paging = { version = "3" }
 r-efi = { version = "^5", default-features = false }
 spin = "^0.9"
 uart_16550 = "^0.3.2"

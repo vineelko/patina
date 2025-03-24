@@ -59,10 +59,6 @@ where
         self.paging.query_memory_region(address, size)
     }
 
-    fn get_page_table_pages_for_size(&self, address: u64, size: u64) -> Result<u64, PtError> {
-        self.paging.get_page_table_pages_for_size(address, size)
-    }
-
     fn dump_page_tables(&self, address: u64, size: u64) {
         self.paging.dump_page_tables(address, size)
     }

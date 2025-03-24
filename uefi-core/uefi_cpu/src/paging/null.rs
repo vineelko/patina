@@ -51,10 +51,6 @@ where
         Ok(MemoryAttributes::empty())
     }
 
-    fn get_page_table_pages_for_size(&self, _address: u64, _size: u64) -> Result<u64, PtError> {
-        Ok(0)
-    }
-
     fn dump_page_tables(&self, _address: u64, _size: u64) {}
 }
 
