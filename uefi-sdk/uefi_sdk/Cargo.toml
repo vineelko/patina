@@ -22,6 +22,7 @@ uefi_protocol = { workspace = true }
 runtime_services = { workspace = true }
 tpl_mutex = { workspace = true }
 
+cfg-if = { workspace = true }
 log = { workspace = true }
 r-efi = { workspace = true }
 

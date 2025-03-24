@@ -26,6 +26,7 @@ tpl_mutex = { path = "./tpl_mutex", version = "3" }
 uefi_protocol = { path = "./uefi_protocol", version = "3" }
 uefi_sdk_macro = { path = "./uefi_sdk_macro", version = "3" }
 
+cfg-if = { version = "^1"}
 criterion = "^0.5"
 fixedbitset = { version = "^0.5", default-features = false }
 log = { version = "^0.4", default-features = false }

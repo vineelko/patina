@@ -5,8 +5,8 @@
 //!
 //! ## Features
 //!
-//! - `core`: Exposes additional items in the [component] module necessary to manage and execute components and their
-//!   dependencies.
+//! - `core`: Exposes additional items in the [component] module necessary to
+//!   manage and execute components and their dependencies.
 //!
 //! ## License
 //!
@@ -16,7 +16,6 @@
 //!
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 #![feature(const_type_name)]
-#![feature(macro_metavar_expr)]
 
 #[macro_use]
 pub mod macros;
