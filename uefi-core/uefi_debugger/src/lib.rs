@@ -30,8 +30,8 @@
 //! use uefi_cpu::interrupts::InterruptManager;
 //! use uefi_cpu::interrupts::null::InterruptManagerNull;
 //!
-//! static DEBUGGER: uefi_debugger::UefiDebugger<uefi_sdk::serial::UartNull> =
-//!     uefi_debugger::UefiDebugger::new(uefi_sdk::serial::UartNull{});
+//! static DEBUGGER: uefi_debugger::UefiDebugger<uefi_sdk::serial::uart::UartNull> =
+//!     uefi_debugger::UefiDebugger::new(uefi_sdk::serial::uart::UartNull{});
 //!
 //! fn entry() {
 //!
