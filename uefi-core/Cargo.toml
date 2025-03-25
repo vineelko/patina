@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "10.0.1"
+version = "10.0.2"
 publish = ["UefiRust"]
 repository = "https://github.com/OpenDevicePartnership/uefi-core"
 license = "BSD-2-Clause-Patent"
