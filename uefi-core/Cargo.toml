@@ -34,7 +34,7 @@ r-efi = { version = "^5", default-features = false }
 spin = "^0.9"
 uart_16550 = "^0.3.2"
 uefi_sdk = { version = "3" }
-x86_64 = { version= "=0.14.12", default-features = false, features = ["instructions", "abi_x86_interrupt"] }
+x86_64 = { version= "=0.15.2", default-features = false, features = ["instructions", "abi_x86_interrupt"] }
 
 [profile.dev]
 opt-level = 3

@@ -45,10 +45,10 @@ lazy_static! {
         // We need a valid 32 bit code segment for MpServices as they start in real mode, go through protected mode,
         // then switch to long mode. It also must come before the TSS entry as the MpDxe C code matches the TSS
         // selector to the code selector, even though it is not.
-        gdt.add_entry(Descriptor::UserSegment(DescriptorFlags::KERNEL_CODE32.bits()));
-        let code_selector = gdt.add_entry(Descriptor::kernel_code_segment());
-        let data_selector = gdt.add_entry(Descriptor::kernel_data_segment());
-        let tss_selector = gdt.add_entry(Descriptor::tss_segment(&TSS));
+        gdt.append(Descriptor::UserSegment(DescriptorFlags::KERNEL_CODE32.bits()));
+        let code_selector = gdt.append(Descriptor::kernel_code_segment());
+        let data_selector = gdt.append(Descriptor::kernel_data_segment());
+        let tss_selector = gdt.append(Descriptor::tss_segment(&TSS));
         (gdt, Selectors { code_selector, data_selector, tss_selector })
     };
 }
@@ -78,4 +78,5 @@ pub fn init() {
         load_tss(GDT.1.tss_selector);
     }
     log::info!("Loaded GDT @ {:p}", &GDT.0);
+    log::info!("GDT is: {:?}", GDT.0);
 }

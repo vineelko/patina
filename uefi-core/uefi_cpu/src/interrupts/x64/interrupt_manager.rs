@@ -38,7 +38,7 @@ lazy_static! {
 
         // Initialize all of the index-able well-known entries.
         for vector in [0, 1, 2, 3, 4, 5, 6, 7, 9, 16, 19, 20, 28] {
-            unsafe { idt[vector].set_handler_addr(get_vector_address(vector)) };
+            unsafe { idt[vector].set_handler_addr(get_vector_address(vector.into())) };
         }
 
         // Intentionally use direct function for double fault. This allows for
@@ -63,8 +63,8 @@ lazy_static! {
         }
 
         // Initialize generic interrupts.
-        for vector in 32..256 {
-            unsafe { idt[vector].set_handler_addr(get_vector_address(vector)) };
+        for vector in 32..=255 {
+            unsafe { idt[vector].set_handler_addr(get_vector_address(vector.into())) };
         }
 
         idt
