@@ -211,7 +211,7 @@ pub(crate) fn service2(item: proc_macro2::TokenStream) -> proc_macro2::TokenStre
         extern crate alloc as #alloc_name;
         impl #lhs uefi_sdk::component::service::IntoService for #name #rhs #where_clause {
 
-            fn register(self, storage: &mut Storage) {
+            fn register(self, storage: &mut uefi_sdk::component::Storage) {
                 let boxed: #alloc_name::boxed::Box<Self> = #alloc_name::boxed::Box::new(self);
                 let ptr = #alloc_name::boxed::Box::into_raw(boxed);
                 #service_register
@@ -236,7 +236,7 @@ mod tests {
         let expected = quote! {
             extern crate alloc as __alloc_MyStruct;
             impl uefi_sdk::component::service::IntoService for MyStruct {
-                fn register(self, storage: &mut Storage) {
+                fn register(self, storage: &mut uefi_sdk::component::Storage) {
                     let boxed: __alloc_MyStruct::boxed::Box<Self> = __alloc_MyStruct::boxed::Box::new(self);
                     let ptr = __alloc_MyStruct::boxed::Box::into_raw(boxed);
                     let boxed: __alloc_MyStruct::boxed::Box<dyn MyService> = unsafe { __alloc_MyStruct::boxed::Box::from_raw(ptr) };
@@ -259,7 +259,7 @@ mod tests {
         let expected = quote! {
             extern crate alloc as __alloc_MyStruct;
             impl uefi_sdk::component::service::IntoService for MyStruct {
-                fn register(self, storage: &mut Storage) {
+                fn register(self, storage: &mut uefi_sdk::component::Storage) {
                     let boxed: __alloc_MyStruct::boxed::Box<Self> = __alloc_MyStruct::boxed::Box::new(self);
                     let ptr = __alloc_MyStruct::boxed::Box::into_raw(boxed);
                     let boxed: __alloc_MyStruct::boxed::Box<dyn MyService> = unsafe { __alloc_MyStruct::boxed::Box::from_raw(ptr) };
@@ -286,7 +286,7 @@ mod tests {
         let expected = quote! {
             extern crate alloc as __alloc_MyStruct;
             impl uefi_sdk::component::service::IntoService for MyStruct {
-                fn register(self, storage: &mut Storage) {
+                fn register(self, storage: &mut uefi_sdk::component::Storage) {
                     let boxed: __alloc_MyStruct::boxed::Box<Self> = __alloc_MyStruct::boxed::Box::new(self);
                     let ptr = __alloc_MyStruct::boxed::Box::into_raw(boxed);
                     let boxed: __alloc_MyStruct::boxed::Box<dyn MyService> = unsafe { __alloc_MyStruct::boxed::Box::from_raw(ptr) };
@@ -311,7 +311,7 @@ mod tests {
         let expected = quote! {
             extern crate alloc as __alloc_MyStruct;
             impl<T: Debug> uefi_sdk::component::service::IntoService for MyStruct<T> where T: Clone {
-                fn register(self, storage: &mut Storage) {
+                fn register(self, storage: &mut uefi_sdk::component::Storage) {
                     let boxed: __alloc_MyStruct::boxed::Box<Self> = __alloc_MyStruct::boxed::Box::new(self);
                     let ptr = __alloc_MyStruct::boxed::Box::into_raw(boxed);
                     let boxed: __alloc_MyStruct::boxed::Box<dyn MyService> = unsafe { __alloc_MyStruct::boxed::Box::from_raw(ptr) };
@@ -423,7 +423,7 @@ mod tests {
         let expected = quote! {
             extern crate alloc as __alloc_MyStruct;
             impl uefi_sdk::component::service::IntoService for MyStruct {
-                fn register(self, storage: &mut Storage) {
+                fn register(self, storage: &mut uefi_sdk::component::Storage) {
                     let boxed: __alloc_MyStruct::boxed::Box<Self> = __alloc_MyStruct::boxed::Box::new(self);
                     let ptr = __alloc_MyStruct::boxed::Box::into_raw(boxed);
                     const GUID: uefi_sdk::component::service::Guid = uefi_sdk::component::service::Guid::from_fields(2347032417u32, 37834u16, 4562u16, 170u8, 13u8, &[0u8, 224u8, 152u8, 3u8, 43u8, 140u8] );
