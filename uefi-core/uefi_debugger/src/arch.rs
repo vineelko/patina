@@ -19,8 +19,6 @@ use uefi_cpu::interrupts::ExceptionContext;
 
 use crate::ExceptionInfo;
 
-mod no_arch;
-
 cfg_if::cfg_if! {
     if #[cfg(target_arch = "x86_64")] {
         mod x64;
@@ -28,8 +26,6 @@ cfg_if::cfg_if! {
     } else if #[cfg(target_arch = "aarch64")] {
         mod aarch64;
         pub type SystemArch = aarch64::Aarch64Arch;
-    } else {
-        pub type SystemArch = no_arch::NoArch;
     }
 }
 
