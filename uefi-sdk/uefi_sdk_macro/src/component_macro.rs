@@ -154,7 +154,7 @@ pub(crate) fn component2(item: proc_macro2::TokenStream) -> proc_macro2::TokenSt
     let where_clause = component.generics().where_clause;
 
     let name = component.ident();
-    let alloc_name = format_ident!("__alloc_{name}");
+    let alloc_name = format_ident!("__alloc_component_{name}");
 
     quote! {
         extern crate alloc as #alloc_name;
@@ -187,11 +187,11 @@ mod tests {
         };
 
         let expected = quote! {
-            extern crate alloc as __alloc_MyStruct;
+            extern crate alloc as __alloc_component_MyStruct;
             impl uefi_sdk::component::params::ComponentInput for MyStruct {}
             impl uefi_sdk::component::IntoComponent<fn(MyStruct)-> uefi_sdk::error::Result<()>> for MyStruct {
-                fn into_component(self) -> __alloc_MyStruct::boxed::Box<dyn uefi_sdk::component::Component> {
-                    __alloc_MyStruct::boxed::Box::new(
+                fn into_component(self) -> __alloc_component_MyStruct::boxed::Box<dyn uefi_sdk::component::Component> {
+                    __alloc_component_MyStruct::boxed::Box::new(
                         uefi_sdk::component::StructComponent::new(
                             MyStruct::entry,
                             self
@@ -214,11 +214,11 @@ mod tests {
         };
 
         let expected = quote! {
-            extern crate alloc as __alloc_MyEnum;
+            extern crate alloc as __alloc_component_MyEnum;
             impl uefi_sdk::component::params::ComponentInput for MyEnum {}
             impl uefi_sdk::component::IntoComponent<fn(MyEnum)-> uefi_sdk::error::Result<()>> for MyEnum {
-                fn into_component(self) -> __alloc_MyEnum::boxed::Box<dyn uefi_sdk::component::Component> {
-                    __alloc_MyEnum::boxed::Box::new(
+                fn into_component(self) -> __alloc_component_MyEnum::boxed::Box<dyn uefi_sdk::component::Component> {
+                    __alloc_component_MyEnum::boxed::Box::new(
                         uefi_sdk::component::StructComponent::new(
                             Self::entry_point,
                             self
@@ -254,11 +254,11 @@ mod tests {
         };
 
         let expected = quote! {
-            extern crate alloc as __alloc_MyStruct;
+            extern crate alloc as __alloc_component_MyStruct;
             impl uefi_sdk::component::params::ComponentInput for MyStruct {}
             impl uefi_sdk::component::IntoComponent<fn(MyStruct)-> uefi_sdk::error::Result<()>> for MyStruct {
-                fn into_component(self) -> __alloc_MyStruct::boxed::Box<dyn uefi_sdk::component::Component> {
-                    __alloc_MyStruct::boxed::Box::new(
+                fn into_component(self) -> __alloc_component_MyStruct::boxed::Box<dyn uefi_sdk::component::Component> {
+                    __alloc_component_MyStruct::boxed::Box::new(
                         uefi_sdk::component::StructComponent::new(
                             MyStruct::entry,
                             self
@@ -278,11 +278,11 @@ mod tests {
         };
 
         let expected = quote! {
-            extern crate alloc as __alloc_MyStruct;
+            extern crate alloc as __alloc_component_MyStruct;
             impl<T> uefi_sdk::component::params::ComponentInput for MyStruct<T> {}
             impl<T> uefi_sdk::component::IntoComponent<fn(MyStruct<T>)-> uefi_sdk::error::Result<()>> for MyStruct<T> {
-                fn into_component(self) -> __alloc_MyStruct::boxed::Box<dyn uefi_sdk::component::Component> {
-                    __alloc_MyStruct::boxed::Box::new(
+                fn into_component(self) -> __alloc_component_MyStruct::boxed::Box<dyn uefi_sdk::component::Component> {
+                    __alloc_component_MyStruct::boxed::Box::new(
                         uefi_sdk::component::StructComponent::new(
                             Self::entry_point,
                             self
@@ -305,11 +305,11 @@ mod tests {
         };
 
         let expected = quote! {
-            extern crate alloc as __alloc_MyEnum;
+            extern crate alloc as __alloc_component_MyEnum;
             impl<T> uefi_sdk::component::params::ComponentInput for MyEnum<T> {}
             impl<T> uefi_sdk::component::IntoComponent<fn(MyEnum<T>) -> uefi_sdk::error::Result<()>> for MyEnum<T> {
-                fn into_component(self) -> __alloc_MyEnum::boxed::Box<dyn uefi_sdk::component::Component> {
-                    __alloc_MyEnum::boxed::Box::new(
+                fn into_component(self) -> __alloc_component_MyEnum::boxed::Box<dyn uefi_sdk::component::Component> {
+                    __alloc_component_MyEnum::boxed::Box::new(
                         uefi_sdk::component::StructComponent::new(
                             Self::entry_point,
                             self
@@ -333,11 +333,11 @@ mod tests {
         };
 
         let expected = quote! {
-            extern crate alloc as __alloc_MyStruct;
+            extern crate alloc as __alloc_component_MyStruct;
             impl<T> uefi_sdk::component::params::ComponentInput for MyStruct<T> where T: Debug {}
             impl<T> uefi_sdk::component::IntoComponent<fn(MyStruct<T>)-> uefi_sdk::error::Result<()>> for MyStruct<T> where T: Debug {
-                fn into_component(self) -> __alloc_MyStruct::boxed::Box<dyn uefi_sdk::component::Component> {
-                    __alloc_MyStruct::boxed::Box::new(
+                fn into_component(self) -> __alloc_component_MyStruct::boxed::Box<dyn uefi_sdk::component::Component> {
+                    __alloc_component_MyStruct::boxed::Box::new(
                         uefi_sdk::component::StructComponent::new(
                             Self::entry_point,
                             self
@@ -357,11 +357,11 @@ mod tests {
         };
 
         let expected = quote! {
-            extern crate alloc as __alloc_MyStruct;
+            extern crate alloc as __alloc_component_MyStruct;
             impl<T: Debug> uefi_sdk::component::params::ComponentInput for MyStruct<T> {}
             impl<T: Debug> uefi_sdk::component::IntoComponent<fn(MyStruct<T>)-> uefi_sdk::error::Result<()>> for MyStruct<T> {
-                fn into_component(self) -> __alloc_MyStruct::boxed::Box<dyn uefi_sdk::component::Component> {
-                    __alloc_MyStruct::boxed::Box::new(
+                fn into_component(self) -> __alloc_component_MyStruct::boxed::Box<dyn uefi_sdk::component::Component> {
+                    __alloc_component_MyStruct::boxed::Box::new(
                         uefi_sdk::component::StructComponent::new(
                             Self::entry_point,
                             self
