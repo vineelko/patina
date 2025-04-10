@@ -109,6 +109,10 @@ impl Access {
         self.reads_all_configs | (self.config_read_and_writes.count_ones(..) > 0)
     }
 
+    pub fn has_writes_all_configs(&self) -> bool {
+        self.writes_all_configs
+    }
+
     pub fn reads_all_configs(&mut self) {
         self.reads_all_configs = true;
     }

@@ -345,12 +345,21 @@ unsafe impl<'c, T: Default + 'static> Param for Config<'c, T> {
         let id = storage.register_config::<T>();
         storage.try_add_config_with_id(id, T::default());
 
-        assert!(
-            !meta.access_mut().has_config_write(id),
-            "Config<{}> in system {} conflicts with a previous ConfigMut<{0}> access.",
-            core::any::type_name::<T>(),
-            meta.name(),
-        );
+        if !meta.access().has_writes_all_configs() {
+            assert!(
+                !meta.access().has_config_write(id),
+                "Config<{0}> in system {1} conflicts with a previous ConfigMut<{0}> access.",
+                core::any::type_name::<T>(),
+                meta.name(),
+            );
+        } else {
+            assert!(
+                !meta.access().has_config_write(id),
+                "Config<{0}> in system {1} conflicts with a previous &mut Storage access.",
+                core::any::type_name::<T>(),
+                meta.name(),
+            );
+        }
 
         meta.access_mut().add_config_read(id);
         id
@@ -443,19 +452,33 @@ unsafe impl<'c, T: Default + 'static> Param for ConfigMut<'c, T> {
         storage.try_add_config_with_id(id, T::default());
         storage.unlock_config(id);
 
-        assert!(
-            !meta.access().has_config_write(id),
-            "ConfigMut<{}> in system {} conflicts with a previous ConfigMut<{0}> access.",
-            core::any::type_name::<T>(),
-            meta.name(),
-        );
-
-        assert!(
-            !meta.access().has_config_read(id),
-            "ConfigMut<{}> in system {} conflicts with a previous Config<{0}> access.",
-            core::any::type_name::<T>(),
-            meta.name(),
-        );
+        if !meta.access().has_writes_all_configs() {
+            assert!(
+                !meta.access().has_config_write(id),
+                "ConfigMut<{0}> in system {1} conflicts with a previous ConfigMut<{0}> access.",
+                core::any::type_name::<T>(),
+                meta.name(),
+            );
+            assert!(
+                !meta.access().has_config_read(id),
+                "ConfigMut<{0}> in system {1} conflicts with a previous Config<{0}> access.",
+                core::any::type_name::<T>(),
+                meta.name(),
+            );
+        } else {
+            assert!(
+                !meta.access().has_config_write(id),
+                "ConfigMut<{0}> in system {1} conflicts with a previous &mut Storage access.",
+                core::any::type_name::<T>(),
+                meta.name(),
+            );
+            assert!(
+                !meta.access().has_config_read(id),
+                "ConfigMut<{0}> in system {1} conflicts with a previous &Storage access.",
+                core::any::type_name::<T>(),
+                meta.name(),
+            );
+        }
 
         meta.access_mut().add_config_write(id);
         id
@@ -525,7 +548,10 @@ impl_component_param_tuple!(T1, T2, T3, T4, T5);
 
 #[cfg(test)]
 mod tests {
-    use crate::{component::IntoComponent, error::Result};
+    use crate::{
+        component::{storage::Storage, IntoComponent},
+        error::Result,
+    };
 
     use super::*;
 
@@ -572,6 +598,58 @@ mod tests {
 
         let mut component = test_fn.into_component();
         component.initialize(&mut storage);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Config<usize> in system uefi_sdk::component::params::tests::test_mutable_storage_and_immutable_config_fail::test_fn conflicts with a previous &mut Storage access."
+    )]
+    fn test_mutable_storage_and_immutable_config_fail() {
+        fn test_fn(_storage: &mut Storage, _config: Config<usize>) -> Result<()> {
+            todo!()
+        }
+
+        let mut component = test_fn.into_component();
+        component.initialize(&mut Storage::new());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "ConfigMut<usize> in system uefi_sdk::component::params::tests::test_mutable_storage_and_mutable_config_fail::test_fn conflicts with a previous &mut Storage access."
+    )]
+    fn test_mutable_storage_and_mutable_config_fail() {
+        fn test_fn(_storage: &mut Storage, _config: ConfigMut<usize>) -> Result<()> {
+            todo!()
+        }
+
+        let mut component = test_fn.into_component();
+        component.initialize(&mut Storage::new());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "&mut Storage in system uefi_sdk::component::params::tests::test_config_and_mutable_storage_fail::test_fn conflicts with a previous Config<T> access."
+    )]
+    fn test_config_and_mutable_storage_fail() {
+        fn test_fn(_config: Config<usize>, _storage: &mut Storage) -> Result<()> {
+            todo!()
+        }
+
+        let mut component = test_fn.into_component();
+        component.initialize(&mut Storage::new());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "&mut Storage in system uefi_sdk::component::params::tests::test_mutable_config_and_mutable_storage_fail::test_fn conflicts with a previous ConfigMut<T> access."
+    )]
+    fn test_mutable_config_and_mutable_storage_fail() {
+        fn test_fn(_config: ConfigMut<usize>, _storage: &mut Storage) -> Result<()> {
+            todo!()
+        }
+
+        let mut component = test_fn.into_component();
+        component.initialize(&mut Storage::new());
     }
 
     #[test]
