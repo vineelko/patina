@@ -77,7 +77,6 @@ use boot_services::{
     c_ptr::{CPtr, PtrMetadata},
     BootServices,
 };
-use uefi_protocol::DriverBinding as DriverBindingProtocol;
 
 #[cfg_attr(any(test, feature = "mockall"), automock)]
 pub trait DriverBinding {
@@ -243,10 +242,11 @@ impl<T: DriverBinding + 'static, U: BootServices + 'static> UefiDriverBinding<T,
             return Ok(());
         };
 
+        // SAFETY: This is safe because _UefiDriverBinding interface is compliant to the expected interface of driver binding guid.
         unsafe {
             uefi_driver_binding.boot_services.install_protocol_interface_unchecked(
                 Some(uefi_driver_binding.driver_binding_protocol.driver_binding_handle),
-                &DriverBindingProtocol,
+                &efi::protocols::driver_binding::PROTOCOL_GUID,
                 // Install the driver binding protocol interface as a _UefiDriverBinding.
                 Box::as_ptr(uefi_driver_binding) as *mut _,
             )
@@ -267,12 +267,14 @@ impl<T: DriverBinding + 'static, U: BootServices + 'static> UefiDriverBinding<T,
             return Ok(());
         };
 
+        // SAFETY: This is safe because the pointer behind this metada has been leak in install an is still valid.
         let uefi_driver_binding = ManuallyDrop::new(unsafe { PtrMetadata::clone(ptr_metadata).into_original_ptr() });
 
+        // SAFETY: This is safe because _UefiDriverBinding interface is compliant to the expected interface of driver binding guid.
         unsafe {
             uefi_driver_binding.boot_services.uninstall_protocol_interface_unchecked(
                 uefi_driver_binding.driver_binding_protocol.driver_binding_handle,
-                &DriverBindingProtocol,
+                &efi::protocols::driver_binding::PROTOCOL_GUID,
                 uefi_driver_binding.as_ptr() as *mut _,
             )?;
         }
@@ -299,7 +301,6 @@ mod test {
     };
 
     use boot_services::MockBootServices;
-    use uefi_protocol::Protocol;
 
     use super::*;
 
@@ -315,7 +316,7 @@ mod test {
                 .once()
                 .withf_st(|handle, protocol, interface| {
                     assert_eq!(&Some(TEST_HANDLE), handle);
-                    assert_eq!(DriverBindingProtocol.protocol_guid(), protocol);
+                    assert_eq!(&efi::protocols::driver_binding::PROTOCOL_GUID, protocol);
 
                     let interface = (*interface as *const _UefiDriverBinding<MockDriverBinding, MockBootServices>)
                         .as_ref()
@@ -356,7 +357,7 @@ mod test {
                 .once()
                 .withf_st(|handle, protocol, interface| {
                     assert_eq!(&Some(TEST_DRIVER_HANDLE), handle);
-                    assert_eq!(DriverBindingProtocol.protocol_guid(), protocol);
+                    assert_eq!(&efi::protocols::driver_binding::PROTOCOL_GUID, protocol);
 
                     let interface = (*interface as *const _UefiDriverBinding<MockDriverBinding, MockBootServices>)
                         .as_ref()
@@ -399,7 +400,7 @@ mod test {
                 .once()
                 .withf(|handle, protocol, interface| {
                     assert_eq!(&TEST_DRIVER_HANDLE, handle);
-                    assert_eq!(DriverBindingProtocol.protocol_guid(), protocol);
+                    assert_eq!(&efi::protocols::driver_binding::PROTOCOL_GUID, protocol);
 
                     let interface = (*interface as *const _UefiDriverBinding<MockDriverBinding, MockBootServices>)
                         .as_ref()

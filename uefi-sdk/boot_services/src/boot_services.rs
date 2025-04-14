@@ -18,7 +18,7 @@ use mockall::automock;
 use alloc::vec::Vec;
 use c_ptr::{CMutPtr, CMutRef, CPtr, PtrMetadata};
 use core::{
-    any::{Any, TypeId},
+    any,
     ffi::c_void,
     marker::PhantomData,
     mem::{self, MaybeUninit},
@@ -34,7 +34,7 @@ use boxed::BootServicesBox;
 use event::{EventNotifyCallback, EventTimerType, EventType};
 use protocol_handler::{HandleSearchType, Registration};
 use tpl::{Tpl, TplGuard};
-use uefi_protocol::Protocol;
+use uefi_protocol::ProtocolInterface;
 
 /// This is the boot services used in the UEFI.
 /// it wraps an atomic ptr to [`efi::BootServices`]
@@ -269,66 +269,42 @@ pub trait BootServices {
     ///
     /// ## Example
     /// ```rust ignore
-    /// let handle = self.uefi_binding.driver_binding_handle;
-    /// let uefi_driver_binding: &'static mut UefiDriverBinding = Box::leak(Box::new(self));
-    ///
     /// let key = match static_boot_services().install_protocol_interface(
     ///     Some(handle),
-    ///     &uefi_protocol::DriverBinding,
-    ///     &mut uefi_driver_binding.uefi_binding,
+    ///     Box::new(protocol_interface),
     /// ) {
     ///     Ok((_handle, key)) => key,
-    ///     Err((uefi_driver_binding, status)) => {
-    ///         drop(unsafe {
-    ///             Box::from_raw(
-    ///                 uefi_driver_binding as *mut protocols::driver_binding::Protocol as *mut UefiDriverBinding,
-    ///             )
-    ///         });
-    ///         return Err(status);
-    ///     }
+    ///     Err((protocol_interface_box, status)) => return Err(status),
     /// };
     /// Ok(key)
     /// ```
     ///
-    fn install_protocol_interface<P, R, I>(
+    fn install_protocol_interface<T, R>(
         &self,
         handle: Option<efi::Handle>,
-        protocol: &P,
-        interface: R,
-    ) -> Result<(efi::Handle, PtrMetadata<'static, R>), (R, efi::Status)>
+        protocol_interface: R,
+    ) -> Result<(efi::Handle, PtrMetadata<'static, R>), efi::Status>
     where
-        P: Protocol<Interface = I> + 'static,
-        R: CMutRef<'static, Type = I> + 'static,
-        I: 'static,
+        R: CMutRef<'static, Type = T> + 'static,
+        T: ProtocolInterface + 'static,
     {
-        assert_ne!(
-            TypeId::of::<()>(),
-            TypeId::of::<I>(),
-            "Marker interface are not supported by install_protocol_interface, use install_protocol_marker instead."
-        );
+        let key = protocol_interface.metadata();
 
-        let key = interface.metadata();
+        let protocol_interface_ptr = match mem::size_of::<T>() {
+            0 => ptr::null_mut(),
+            _ => protocol_interface.into_mut_ptr() as *mut c_void,
+        };
+
+        // SAFETY: This is safe because ProtocolInterface provide the right guid for the interface.
         unsafe {
-            match self.install_protocol_interface_unchecked(
-                handle,
-                protocol.protocol_guid(),
-                interface.into_mut_ptr() as *mut c_void,
-            ) {
+            match self.install_protocol_interface_unchecked(handle, &T::PROTOCOL_GUID, protocol_interface_ptr) {
                 Ok(handle) => Ok((handle, key)),
-                Err(status) => Err((key.into_original_ptr(), status)),
+                Err(status) => {
+                    _ = key.into_original_ptr();
+                    Err(status)
+                }
             }
         }
-    }
-
-    /// Installs a protocol marker (null) interface on a device handle.
-    /// If the handle does not exist, it is created and added to the list of handles in the system.
-    ///
-    /// [UEFI Spec Documentation: 7.3.2. EFI_BOOT_SERVICES.InstallProtocolInterface()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-installprotocolinterface)
-    fn install_protocol_marker<P>(&self, handle: Option<efi::Handle>, protocol: &P) -> Result<efi::Handle, efi::Status>
-    where
-        P: Protocol<Interface = ()> + 'static,
-    {
-        unsafe { self.install_protocol_interface_unchecked(handle, protocol.protocol_guid(), ptr::null_mut()) }
     }
 
     /// Use [`BootServices::install_protocol_interface`] when possible.
@@ -348,32 +324,25 @@ pub trait BootServices {
     ///
     /// [UEFI Spec Documentation: 7.3.3. EFI_BOOT_SERVICES.UninstallProtocolInterface()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-uninstallprotocolinterface)
     #[allow(clippy::not_unsafe_ptr_arg_deref)] //this is triggered by the fact that efi::Handle aliases to c_void, but they are opaque to the caller.
-    fn uninstall_protocol_interface<P, R, I>(
+    fn uninstall_protocol_interface<T, R>(
         &self,
         handle: efi::Handle,
-        protocol: &P,
         key: PtrMetadata<'static, R>,
     ) -> Result<R, efi::Status>
     where
-        P: Protocol<Interface = I> + 'static,
-        R: CMutRef<'static, Type = I> + 'static,
-        I: 'static,
+        R: CMutRef<'static, Type = T> + 'static,
+        T: ProtocolInterface + 'static,
     {
-        unsafe {
-            self.uninstall_protocol_interface_unchecked(handle, protocol.protocol_guid(), key.ptr_value as *mut c_void)
-        }?;
-        Ok(unsafe { key.into_original_ptr() })
-    }
+        let interface_ptr = match mem::size_of::<T>() {
+            0 => ptr::null_mut(),
+            _ => key.ptr_value as *mut c_void,
+        };
 
-    /// Removes a protocol interface marker (null) from a device handle.
-    ///
-    /// [UEFI Spec Documentation: 7.3.3. EFI_BOOT_SERVICES.UninstallProtocolInterface()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-uninstallprotocolinterface)
-    #[allow(clippy::not_unsafe_ptr_arg_deref)] //this is triggered by the fact that efi::Handle aliases to c_void, but they are opaque to the caller.
-    fn uninstall_protocol_marker<P>(&self, handle: efi::Handle, protocol: &P) -> Result<(), efi::Status>
-    where
-        P: Protocol<Interface = ()> + 'static,
-    {
-        unsafe { self.uninstall_protocol_interface_unchecked(handle, protocol.protocol_guid(), ptr::null_mut()) }
+        // SAFETY: This is safe because ProtocolInterface provide the right guid for the interface.
+        unsafe { self.uninstall_protocol_interface_unchecked(handle, &T::PROTOCOL_GUID, interface_ptr) }?;
+
+        // SAFETY: Pointer is leak when installed and kept unchanged.
+        Ok(unsafe { key.into_original_ptr() })
     }
 
     /// Use [`BootServices::uninstall_protocol_interface`] when possible.
@@ -392,33 +361,37 @@ pub trait BootServices {
     ///
     /// [UEFI Spec Documentation: 7.3.4. EFI_BOOT_SERVICES.ReinstallProtocolInterface()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-reinstallprotocolinterface)
     #[allow(clippy::not_unsafe_ptr_arg_deref)] //this is triggered by the fact that efi::Handle aliases to c_void, but they are opaque to the caller.
-    fn reinstall_protocol_interface<P, O, N, I>(
+    fn reinstall_protocol_interface<T, K, R>(
         &self,
         handle: efi::Handle,
-        protocol: &P,
-        old_protocol_interface_key: PtrMetadata<'static, O>,
-        new_protocol_interface: N,
-    ) -> Result<(PtrMetadata<'static, N>, O), efi::Status>
+        old_protocol_interface_key: PtrMetadata<'static, K>,
+        new_protocol_interface: R,
+    ) -> Result<(PtrMetadata<'static, R>, K), efi::Status>
     where
-        P: Protocol<Interface = I> + 'static,
-        O: CMutRef<'static, Type = I> + 'static,
-        N: CMutRef<'static, Type = I> + 'static,
-        I: 'static,
+        K: CMutRef<'static, Type = T> + 'static,
+        R: CMutRef<'static, Type = T> + 'static,
+        T: ProtocolInterface + 'static,
     {
-        assert_ne!(
-            TypeId::of::<()>(),
-            TypeId::of::<I>(),
-            "Marker interface are not supported with reinstall_protocol_interface function."
-        );
         let new_key = new_protocol_interface.metadata();
+
+        let mut old_protocol_interface_ptr = old_protocol_interface_key.ptr_value as *mut c_void;
+        let mut new_protocol_interface_ptr = new_protocol_interface.into_mut_ptr() as *mut c_void;
+
+        if mem::size_of::<T>() == 0 {
+            old_protocol_interface_ptr = ptr::null_mut();
+            new_protocol_interface_ptr = ptr::null_mut();
+        };
+
+        // SAFETY: This is safe because ProtocolInterface provide the right guid for the interface.
         unsafe {
             self.reinstall_protocol_interface_unchecked(
                 handle,
-                protocol.protocol_guid(),
-                old_protocol_interface_key.ptr_value as *mut _,
-                new_protocol_interface.into_mut_ptr() as *mut _,
+                &T::PROTOCOL_GUID,
+                old_protocol_interface_ptr,
+                new_protocol_interface_ptr,
             )?;
         }
+        // SAFETY: Pointer is leak when installed and kept unchanged.
         Ok((new_key, unsafe { old_protocol_interface_key.into_original_ptr() }))
     }
 
@@ -458,35 +431,42 @@ pub trait BootServices {
     ///
     /// # Safety
     /// Make sure to not create multiple mutable reference of interface.
-    unsafe fn handle_protocol<P: Protocol<Interface = I> + 'static, I: 'static>(
-        &self,
-        handle: efi::Handle,
-        protocol: &P,
-    ) -> Result<&'static mut I, efi::Status> {
-        assert_ne!(
-            TypeId::of::<()>(),
-            TypeId::of::<I>(),
-            "Marker interface are not supported with handle_protocol function, use handle_protocol_marker instead."
-        );
-        //SAFETY: The generic Protocol ensure that the interfaces is the right type for the specified protocol.
-        unsafe {
-            self.handle_protocol_unchecked(handle, protocol.protocol_guid()).map(|i| (i as *mut I).as_mut().unwrap())
+    unsafe fn handle_protocol<T>(&self, handle: efi::Handle) -> Result<&'static mut T, efi::Status>
+    where
+        T: ProtocolInterface + 'static,
+    {
+        match self.handle_protocol_maybe_empty(handle)? {
+            Some(_) if mem::size_of::<T>() == 0 => {
+                debug_assert!(false, "Expect null interface. Type {} need to have a size of 0.", any::type_name::<T>());
+                Err(efi::Status::INVALID_PARAMETER)
+            }
+            None if mem::size_of::<T>() > 0 => {
+                debug_assert!(
+                    false,
+                    "Expect non null interface. Type {} need to have a size greater than 0.",
+                    any::type_name::<T>()
+                );
+                Err(efi::Status::INVALID_PARAMETER)
+            }
+            Some(i) => Ok(i),
+            None => {
+                static ZERO_SIZE_TYPE: () = ();
+                Ok((ptr::addr_of!(ZERO_SIZE_TYPE) as *mut T).as_mut().unwrap())
+            }
         }
     }
 
-    /// Queries a handle to determine if it supports a specified protocol marker.
+    /// Queries a handle to determine if it supports a specified protocol and return a mutable reference to the interface or None if the interface was null.
     ///
     /// [UEFI Spec Documentation: 7.3.7. EFI_BOOT_SERVICES.HandleProtocol()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-handleprotocol)
-    #[allow(clippy::not_unsafe_ptr_arg_deref)] //this is triggered by the fact that efi::Handle aliases to c_void, but they are opaque to the caller.
-    fn handle_protocol_marker<P: Protocol<Interface = ()> + 'static>(
-        &self,
-        handle: efi::Handle,
-        protocol: &P,
-    ) -> Result<(), efi::Status> {
-        //SAFETY: The generic Protocol ensure that the interfaces is the right type for the specified protocol.
-        let interface_marker = unsafe { self.handle_protocol_unchecked(handle, protocol.protocol_guid()) }?;
-        debug_assert!(interface_marker.is_null(), "Interface marker should be null.");
-        Ok(())
+    ///
+    /// # Safety
+    /// Make sure to not create multiple mutable reference of interface.
+    unsafe fn handle_protocol_maybe_empty<T>(&self, handle: efi::Handle) -> Result<Option<&'static mut T>, efi::Status>
+    where
+        T: ProtocolInterface + 'static,
+    {
+        Ok((self.handle_protocol_unchecked(handle, &T::PROTOCOL_GUID)? as *mut T).as_mut())
     }
 
     /// Use [`BootServices::handle_protocol`] when possible.
@@ -521,44 +501,59 @@ pub trait BootServices {
     /// # Safety
     ///
     /// Do not create more than one mutable reference to the interface.
-    unsafe fn open_protocol<P: Protocol<Interface = I> + 'static, I: 'static>(
+    unsafe fn open_protocol<T>(
         &self,
         handle: efi::Handle,
-        protocol: &P,
         agent_handle: efi::Handle,
         controller_handle: efi::Handle,
         attribute: u32,
-    ) -> Result<&'static mut I, efi::Status> {
-        assert_ne!(
-            TypeId::of::<()>(),
-            TypeId::of::<I>(),
-            "Marker interface are not supported with open_protocol function, use open_protocol_marker instead."
-        );
-        //SAFETY: The generic Protocol ensure that the interfaces is the right type for the specified protocol.
-        unsafe {
-            self.open_protocol_unchecked(handle, protocol, agent_handle, controller_handle, attribute)
-                .map(|i| (i as *mut I).as_mut().unwrap())
+    ) -> Result<&'static mut T, efi::Status>
+    where
+        T: ProtocolInterface + 'static,
+    {
+        match self.open_protocol_maybe_empty::<T>(handle, agent_handle, controller_handle, attribute)? {
+            Some(_) if mem::size_of::<T>() == 0 => {
+                debug_assert!(false, "Expect null interface. Type {} need to have a size of 0.", any::type_name::<T>());
+                Err(efi::Status::INVALID_PARAMETER)
+            }
+            None if mem::size_of::<T>() > 0 => {
+                debug_assert!(
+                    false,
+                    "Expect non null interface. Type {} need to have a size greater than 0.",
+                    any::type_name::<T>()
+                );
+                Err(efi::Status::INVALID_PARAMETER)
+            }
+            Some(i) => Ok(i),
+            None => {
+                static ZERO_SIZE_TYPE: () = ();
+                Ok((ptr::addr_of!(ZERO_SIZE_TYPE) as *mut T).as_mut().unwrap())
+            }
         }
     }
 
-    /// Queries a handle to determine if it supports a specified protocol marker.
+    /// Queries a handle to determine if it supports a specified protocol.
     /// If the protocol is supported by the handle, it opens the protocol on behalf of the calling agent.
+    /// Return a mutable reference to the interface or None if the interface was null.
     ///
     /// [UEFI Spec Documentation: 7.3.9. EFI_BOOT_SERVICES.OpenProtocol()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-openprotocol)
-    #[allow(clippy::not_unsafe_ptr_arg_deref)] //this is triggered by the fact that efi::Handle aliases to c_void, but they are opaque to the caller.
-    fn open_protocol_marker<P: Protocol<Interface = ()> + 'static>(
+    ///
+    /// # Safety
+    ///
+    /// Do not create more than one mutable reference to the interface.
+    unsafe fn open_protocol_maybe_empty<T>(
         &self,
         handle: efi::Handle,
-        protocol: &P,
         agent_handle: efi::Handle,
         controller_handle: efi::Handle,
         attribute: u32,
-    ) -> Result<(), efi::Status> {
-        //SAFETY: The generic Protocol ensure that the interfaces is the right type for the specified protocol.
-        let interface_marker =
-            unsafe { self.open_protocol_unchecked(handle, protocol, agent_handle, controller_handle, attribute)? };
-        assert!(interface_marker.is_null());
-        Ok(())
+    ) -> Result<Option<&'static mut T>, efi::Status>
+    where
+        T: ProtocolInterface + 'static,
+    {
+        Ok((self.open_protocol_unchecked(handle, &T::PROTOCOL_GUID, agent_handle, controller_handle, attribute)?
+            as *mut T)
+            .as_mut())
     }
 
     /// Use [`BootServices::open_protocol`] when possible.
@@ -643,44 +638,62 @@ pub trait BootServices {
     /// # Safety
     ///
     /// Make sure to not create multiple mutable reference when using this api.
-    unsafe fn locate_protocol<P, I>(
-        &self,
-        protocol: &P,
-        registration: Option<Registration>,
-    ) -> Result<&'static mut I, efi::Status>
+    unsafe fn locate_protocol<T>(&self, registration: Option<Registration>) -> Result<&'static mut T, efi::Status>
     where
-        P: Protocol<Interface = I> + 'static,
-        I: Any + 'static,
+        T: ProtocolInterface + 'static,
     {
-        assert_ne!(
-            TypeId::of::<()>(),
-            TypeId::of::<I>(),
-            "Marker interface are not supported by locate_protocol, use locate_protocol_marker instead."
-        );
+        match self.locate_protocol_maybe_empty(registration)? {
+            Some(_) if mem::size_of::<T>() == 0 => {
+                debug_assert!(false, "Expect null interface. Type {} need to have a size of 0.", any::type_name::<T>());
+                Err(efi::Status::INVALID_PARAMETER)
+            }
+            None if mem::size_of::<T>() > 0 => {
+                debug_assert!(
+                    false,
+                    "Expect non null interface. Type {} need to have a size greater than 0.",
+                    any::type_name::<T>()
+                );
+                Err(efi::Status::INVALID_PARAMETER)
+            }
+            Some(i) => Ok(i),
+            None => {
+                static ZERO_SIZE_TYPE: () = ();
+                Ok((ptr::addr_of!(ZERO_SIZE_TYPE) as *mut T).as_mut().unwrap())
+            }
+        }
+    }
 
-        //SAFETY: The generic Protocol ensure that the interfaces is the right type for the specified protocol.
-        let interface_ptr = unsafe {
-            self.locate_protocol_unchecked(
-                protocol.protocol_guid(),
-                registration.map_or(ptr::null_mut(), |r| r.as_ptr()),
-            )? as *mut I
-        };
-        Ok(interface_ptr.as_mut().unwrap())
+    /// Returns the first protocol instance that matches the given protocol or None if the found interface is null.
+    ///
+    /// [UEFI Spec Documentation: 7.3.16. EFI_BOOT_SERVICES.LocateProtocol()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-locateprotocol)
+    ///
+    /// # Safety
+    ///
+    /// Make sure to not create multiple mutable reference when using this api.
+    unsafe fn locate_protocol_maybe_empty<T>(
+        &self,
+        registration: Option<Registration>,
+    ) -> Result<Option<&'static mut T>, efi::Status>
+    where
+        T: ProtocolInterface + 'static,
+    {
+        //SAFETY: The generic ProtocolInterface ensure that the interfaces is the right type for the specified protocol.
+        Ok((self.locate_protocol_unchecked(&T::PROTOCOL_GUID, registration.map_or(ptr::null_mut(), NonNull::as_ptr))?
+            as *mut T)
+            .as_mut())
     }
 
     /// Returns the first protocol instance that matches the given marker protocol.
     ///
     /// [UEFI Spec Documentation: 7.3.16. EFI_BOOT_SERVICES.LocateProtocol()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-locateprotocol)
-    fn locate_protocol_marker<P>(&self, protocol: &P, registration: Option<Registration>) -> Result<(), efi::Status>
-    where
-        P: Protocol<Interface = ()> + 'static,
-    {
+    fn locate_protocol_marker(
+        &self,
+        protocol_guid: &'static efi::Guid,
+        registration: Option<Registration>,
+    ) -> Result<(), efi::Status> {
         //SAFETY: The generic Protocol ensure that the interfaces is the right type for the specified protocol.
         let interface_ptr = unsafe {
-            self.locate_protocol_unchecked(
-                protocol.protocol_guid(),
-                registration.map_or(ptr::null_mut(), |r| r.as_ptr()),
-            )?
+            self.locate_protocol_unchecked(protocol_guid, registration.map_or(ptr::null_mut(), |r| r.as_ptr()))?
         };
         assert_eq!(ptr::null_mut(), interface_ptr);
         Ok(())
@@ -689,6 +702,8 @@ pub trait BootServices {
     /// Use [`BootServices::locate_protocol`] when possible.
     ///
     /// # Safety
+    ///
+    /// Make sure to deref the pointer with the expected Interface and not create multiple mutable references.
     ///
     unsafe fn locate_protocol_unchecked(
         &self,
@@ -785,6 +800,7 @@ pub trait BootServices {
     ///
     /// [UEFI Spec Documentation: 7.5.3. EFI_BOOT_SERVICES.CopyMem()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-copymem)
     fn copy_mem<T: 'static>(&self, dest: &mut T, src: &T) {
+        // SAFETY: This is safe because refs are valid pointers and the size is trusted from mem size of.
         unsafe { self.copy_mem_unchecked(dest as *mut T as _, src as *const T as _, mem::size_of::<T>()) }
     }
 
@@ -792,7 +808,7 @@ pub trait BootServices {
     ///
     /// # Safety
     ///
-    /// dest and src must be valid pointer to a continuous chunk of memory of size length.
+    /// Dest and src must be valid pointer to a continuous chunk of memory of size length.
     unsafe fn copy_mem_unchecked(&self, dest: *mut c_void, src: *const c_void, length: usize);
 
     /// Fills a buffer with a specified value.
@@ -808,19 +824,23 @@ pub trait BootServices {
     /// Adds, updates, or removes a configuration table entry from the EFI System Table.
     ///
     /// [UEFI Spec Documentation: 7.5.6. EFI_BOOT_SERVICES.InstallConfigurationTable()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-installconfigurationtable)
-    fn install_configuration_table<T: CMutPtr<'static> + 'static>(
+    ///
+    /// # Safety
+    ///
+    /// The configuration table value must match the expected type for the guid.
+    unsafe fn install_configuration_table<T: CMutPtr<'static> + 'static>(
         &self,
         guid: &efi::Guid,
         table: T,
     ) -> Result<(), efi::Status> {
-        unsafe { self.install_configuration_table_unchecked(guid, table.into_mut_ptr() as *mut c_void) }
+        self.install_configuration_table_unchecked(guid, table.into_mut_ptr() as *mut c_void)
     }
 
     /// Use [`BootServices::install_configuration_table`] when possible.
     ///
     /// # Safety
     ///
-    /// The table pointer must be the right type associated with the guid.
+    /// The table pointer must be the right type associated with the guid, and boot services must not outlive the ptr.
     unsafe fn install_configuration_table_unchecked(
         &self,
         guid: &efi::Guid,
@@ -831,6 +851,7 @@ pub trait BootServices {
     ///
     /// [UEFI Spec Documentation: 7.5.7. EFI_BOOT_SERVICES.CalculateCrc32()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-calculatecrc32)
     fn calculate_crc_32<T: 'static>(&self, data: &T) -> Result<u32, efi::Status> {
+        // the mem size of ensure that the data pointer and size are correct.
         unsafe { self.calculate_crc_32_unchecked(data as *const T as _, mem::size_of::<T>()) }
     }
 
@@ -1484,7 +1505,7 @@ mod test {
     use efi::{protocols::device_path, Boolean, Char16, OpenProtocolInformationEntry};
 
     use super::*;
-    use core::{mem::MaybeUninit, ops::Deref, slice, sync::atomic::AtomicUsize};
+    use core::{mem::MaybeUninit, slice, sync::atomic::AtomicUsize};
     use std::os::raw::c_void;
 
     macro_rules! boot_services {
@@ -1503,42 +1524,20 @@ mod test {
         }};
     }
 
-    static TEST_PROTOCOL_GUID: efi::Guid =
-        efi::Guid::from_bytes(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    #[derive(Debug)]
+    struct TestProtocol(u32);
 
-    struct TestProtocol;
-    unsafe impl Protocol for TestProtocol {
-        type Interface = u32;
-
-        fn protocol_guid(&self) -> &'static efi::Guid {
-            &TEST_PROTOCOL_GUID
-        }
+    unsafe impl ProtocolInterface for TestProtocol {
+        const PROTOCOL_GUID: efi::Guid =
+            efi::Guid::from_bytes(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
     }
 
-    impl Deref for TestProtocol {
-        type Target = efi::Guid;
+    #[derive(Debug)]
+    struct TestProtocolEmpty;
 
-        fn deref(&self) -> &Self::Target {
-            self.protocol_guid()
-        }
-    }
-
-    struct TestProtocolMarker;
-
-    unsafe impl Protocol for TestProtocolMarker {
-        type Interface = ();
-
-        fn protocol_guid(&self) -> &'static efi::Guid {
-            &TEST_PROTOCOL_GUID
-        }
-    }
-
-    impl Deref for TestProtocolMarker {
-        type Target = efi::Guid;
-
-        fn deref(&self) -> &Self::Target {
-            self.protocol_guid()
-        }
+    unsafe impl ProtocolInterface for TestProtocolEmpty {
+        const PROTOCOL_GUID: efi::Guid =
+            efi::Guid::from_bytes(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
     }
 
     extern "efiapi" fn efi_allocate_pool_use_box(
@@ -2045,7 +2044,7 @@ mod test {
     #[should_panic = "Boot services function install_protocol_interface is not initialized."]
     fn test_install_protocol_interface_not_init() {
         let boot_services = boot_services!();
-        let _ = boot_services.install_protocol_interface(None, &TestProtocol, Box::new(0));
+        let _ = boot_services.install_protocol_interface(None, Box::new(TestProtocol(10)));
     }
 
     #[test]
@@ -2060,7 +2059,7 @@ mod test {
         ) -> efi::Status {
             assert_ne!(ptr::null_mut(), handle);
             assert_eq!(ptr::null_mut(), unsafe { ptr::read(handle) });
-            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(guid) });
+            assert_eq!(TestProtocol::PROTOCOL_GUID, unsafe { ptr::read(guid) });
             assert_eq!(efi::NATIVE_INTERFACE, interface_type);
             assert_eq!(42, unsafe { ptr::read(interface as *mut u32) });
 
@@ -2071,7 +2070,7 @@ mod test {
             efi::Status::SUCCESS
         }
 
-        let (handle, _) = boot_services.install_protocol_interface(None, &TestProtocol, Box::new(42)).unwrap();
+        let (handle, _) = boot_services.install_protocol_interface(None, Box::new(TestProtocol(42))).unwrap();
 
         assert_eq!(17, handle as usize);
     }
@@ -2088,7 +2087,7 @@ mod test {
         ) -> efi::Status {
             assert_ne!(ptr::null_mut(), handle);
             assert_eq!(ptr::null_mut(), unsafe { ptr::read(handle) });
-            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(guid) });
+            assert_eq!(TestProtocol::PROTOCOL_GUID, unsafe { ptr::read(guid) });
             assert_eq!(efi::NATIVE_INTERFACE, interface_type);
             assert_eq!(42, unsafe { ptr::read(interface as *mut u32) });
 
@@ -2099,15 +2098,13 @@ mod test {
             efi::Status::ALREADY_STARTED
         }
 
-        let (interface, status) =
-            boot_services.install_protocol_interface(None, &TestProtocol, Box::new(42)).err().unwrap();
+        let status = boot_services.install_protocol_interface(None, Box::new(TestProtocol(42))).err().unwrap();
 
-        assert_eq!(42, *interface);
         assert_eq!(efi::Status::ALREADY_STARTED, status);
     }
 
     #[test]
-    fn test_install_protocol_marker() {
+    fn test_install_protocol_empty() {
         let boot_services = boot_services!(install_protocol_interface = efi_install_protocol_interface);
 
         extern "efiapi" fn efi_install_protocol_interface(
@@ -2117,46 +2114,28 @@ mod test {
             interface: *mut c_void,
         ) -> efi::Status {
             assert_ne!(ptr::null_mut(), handle);
-            assert_eq!(ptr::null_mut(), unsafe { ptr::read(handle) });
-            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(guid) });
+            assert_eq!(17, unsafe { ptr::read::<efi::Handle>(handle) } as usize);
+            assert_eq!(TestProtocol::PROTOCOL_GUID, unsafe { ptr::read(guid) });
             assert_eq!(efi::NATIVE_INTERFACE, interface_type);
             assert_eq!(ptr::null_mut(), interface);
-
-            unsafe {
-                ptr::write(handle, 17_usize as _);
-            }
 
             efi::Status::SUCCESS
         }
 
-        let handle = boot_services.install_protocol_marker(None, &TestProtocolMarker).unwrap();
+        let (handle, _) = boot_services
+            .install_protocol_interface(Some(17_usize as efi::Handle), Box::new(TestProtocolEmpty))
+            .unwrap();
 
         assert_eq!(17, handle as usize);
     }
 
     #[test]
-    #[should_panic = "Marker interface are not supported by install_protocol_interface, use install_protocol_marker instead."]
-    fn test_install_protocol_marker_with_intall_protocol_interface() {
-        let boot_services = boot_services!(install_protocol_interface = efi_install_protocol_interface);
-
-        extern "efiapi" fn efi_install_protocol_interface(
-            _handle: *mut efi::Handle,
-            _guid: *mut efi::Guid,
-            _interface_type: u32,
-            _interface: *mut c_void,
-        ) -> efi::Status {
-            efi::Status::SUCCESS
-        }
-
-        _ = boot_services.install_protocol_interface(None, &TestProtocolMarker, Box::new(())).unwrap();
-    }
-    #[test]
     #[should_panic = "Boot services function uninstall_protocol_interface is not initialized."]
     fn test_uninstall_protocol_interface_not_init() {
         let boot_services = boot_services!();
-        let b = Box::new(10);
+        let b = Box::new(TestProtocol(10));
         let key = CPtr::metadata(&b);
-        _ = boot_services.uninstall_protocol_interface(ptr::null_mut(), &TestProtocol, key);
+        _ = boot_services.uninstall_protocol_interface(ptr::null_mut(), key);
     }
 
     #[test]
@@ -2171,20 +2150,20 @@ mod test {
             interface: *mut c_void,
         ) -> efi::Status {
             assert_eq!(1, handle as usize);
-            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(protocol) });
+            assert_eq!(TestProtocol::PROTOCOL_GUID, unsafe { ptr::read(protocol) });
             assert_eq!(ADDR.load(Ordering::Relaxed), interface as usize);
             efi::Status::SUCCESS
         }
-        let b = Box::new(10);
+        let b = Box::new(TestProtocol(10));
         let key = b.metadata();
         ADDR.store(key.ptr_value, Ordering::Relaxed);
         let ptr = b.into_ptr();
-        let interface = boot_services.uninstall_protocol_interface(1_usize as _, &TestProtocol, key).unwrap();
+        let interface = boot_services.uninstall_protocol_interface(1_usize as _, key).unwrap();
         assert_eq!(ptr, interface.as_ptr());
     }
 
     #[test]
-    fn test_uninstall_protocol_marker() {
+    fn test_uninstall_protocol_empty() {
         let boot_services = boot_services!(uninstall_protocol_interface = efi_uninstall_protocol_interface);
 
         extern "efiapi" fn efi_uninstall_protocol_interface(
@@ -2193,20 +2172,22 @@ mod test {
             interface: *mut c_void,
         ) -> efi::Status {
             assert_eq!(1, handle as usize);
-            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(protocol) });
+            assert_eq!(TestProtocolEmpty::PROTOCOL_GUID, unsafe { ptr::read(protocol) });
             assert_eq!(ptr::null_mut(), interface);
             efi::Status::SUCCESS
         }
-        boot_services.uninstall_protocol_marker(1_usize as _, &TestProtocolMarker).unwrap();
+        let b = Box::new(TestProtocolEmpty);
+        let key = b.metadata();
+        boot_services.uninstall_protocol_interface(1_usize as _, key).unwrap();
     }
 
     #[test]
     #[should_panic = "Boot services function reinstall_protocol_interface is not initialized."]
     fn test_reinstall_protocol_interface_not_init() {
         let boot_services = boot_services!();
-        let b = Box::new(10);
+        let b = Box::new(TestProtocol(10));
         let key = CPtr::metadata(&b);
-        _ = boot_services.reinstall_protocol_interface(ptr::null_mut(), &TestProtocol, key, Box::new(10));
+        _ = boot_services.reinstall_protocol_interface(ptr::null_mut(), key, Box::new(TestProtocol(20)));
     }
 
     #[test]
@@ -2220,19 +2201,22 @@ mod test {
             new_interface: *mut c_void,
         ) -> efi::Status {
             assert_eq!(1, handle as usize);
-            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(protocol) });
+            assert_eq!(TestProtocol::PROTOCOL_GUID, unsafe { ptr::read(protocol) });
             assert_ne!(ptr::null_mut(), old_interface);
             assert_ne!(ptr::null_mut(), new_interface);
             efi::Status::SUCCESS
         }
 
-        let old_interface = Box::new(10);
+        let old_interface = Box::new(TestProtocol(10));
         let old_key = CPtr::metadata(&old_interface);
         let old_ptr = old_interface.into_ptr();
-        let new_interface = Box::new(10);
+
+        let new_interface = Box::new(TestProtocol(20));
         let new_ptr = new_interface.as_ptr();
+
         let (new_key, old_interface) =
-            boot_services.reinstall_protocol_interface(1_usize as _, &TestProtocol, old_key, new_interface).unwrap();
+            boot_services.reinstall_protocol_interface(1_usize as _, old_key, new_interface).unwrap();
+
         assert_eq!(new_key.ptr_value, new_ptr as usize);
         assert_eq!(old_ptr, old_interface.into_ptr());
     }
@@ -2241,7 +2225,7 @@ mod test {
     #[should_panic = "Boot services function register_protocol_notify is not initialized."]
     fn test_register_protocol_notify_not_init() {
         let boot_services = boot_services!();
-        _ = boot_services.register_protocol_notify(&TEST_PROTOCOL_GUID, ptr::null_mut());
+        _ = boot_services.register_protocol_notify(&TestProtocol::PROTOCOL_GUID, ptr::null_mut());
     }
 
     #[test]
@@ -2253,14 +2237,14 @@ mod test {
             event: *mut c_void,
             registration: *mut *mut c_void,
         ) -> efi::Status {
-            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(protocol) });
+            assert_eq!(TestProtocol::PROTOCOL_GUID, unsafe { ptr::read(protocol) });
             assert_eq!(1, event as usize);
             assert_ne!(ptr::null_mut(), registration);
             unsafe { ptr::write(registration, 10_usize as _) };
             efi::Status::SUCCESS
         }
 
-        let registration = boot_services.register_protocol_notify(&TEST_PROTOCOL_GUID, 1_usize as _).unwrap();
+        let registration = boot_services.register_protocol_notify(&TestProtocol::PROTOCOL_GUID, 1_usize as _).unwrap();
         assert_eq!(10, registration.as_ptr() as usize);
     }
 
@@ -2325,7 +2309,7 @@ mod test {
             buffer: *mut efi::Handle,
         ) -> efi::Status {
             assert_eq!(efi::BY_PROTOCOL, search_type);
-            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(protocol) });
+            assert_eq!(TestProtocol::PROTOCOL_GUID, unsafe { ptr::read(protocol) });
             assert_eq!(ptr::null_mut(), search_key);
             assert_ne!(ptr::null_mut(), buffer_size);
 
@@ -2342,7 +2326,7 @@ mod test {
             efi::Status::SUCCESS
         }
 
-        let handles = boot_services.locate_handle(HandleSearchType::ByProtocol(&TestProtocol)).unwrap();
+        let handles = boot_services.locate_handle(HandleSearchType::ByProtocol(&TestProtocol::PROTOCOL_GUID)).unwrap();
         assert_eq!(1, handles.len());
         assert_eq!(10, handles[0] as usize);
     }
@@ -2391,7 +2375,7 @@ mod test {
     #[should_panic = "Boot services function handle_protocol is not initialized."]
     fn test_handle_protocol_not_init() {
         let boot_services = boot_services!();
-        _ = unsafe { boot_services.handle_protocol(ptr::null_mut(), &TestProtocol) };
+        _ = unsafe { boot_services.handle_protocol::<TestProtocol>(ptr::null_mut()) };
     }
 
     #[test]
@@ -2404,19 +2388,19 @@ mod test {
             interface: *mut *mut c_void,
         ) -> efi::Status {
             assert_eq!(1, handle as usize);
-            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(protocol) });
+            assert_eq!(TestProtocol::PROTOCOL_GUID, unsafe { ptr::read(protocol) });
             assert_ne!(ptr::null_mut(), interface);
             let b = Box::new(12);
             unsafe { ptr::write(interface, b.into_mut_ptr() as *mut _) };
             efi::Status::SUCCESS
         }
 
-        let interface = unsafe { boot_services.handle_protocol(1_usize as _, &TestProtocol) }.unwrap();
-        assert_eq!(12, *interface);
+        let interface = unsafe { boot_services.handle_protocol::<TestProtocol>(1_usize as _) }.unwrap();
+        assert_eq!(12, interface.0);
     }
 
     #[test]
-    fn test_handle_protocol_marker() {
+    fn test_handle_protocol_empty() {
         let boot_services = boot_services!(handle_protocol = efi_handle_protocol);
 
         extern "efiapi" fn efi_handle_protocol(
@@ -2425,35 +2409,19 @@ mod test {
             interface: *mut *mut c_void,
         ) -> efi::Status {
             assert_eq!(1, handle as usize);
-            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(protocol) });
+            assert_eq!(TestProtocol::PROTOCOL_GUID, unsafe { ptr::read(protocol) });
             assert_ne!(ptr::null_mut(), interface);
             efi::Status::SUCCESS
         }
 
-        boot_services.handle_protocol_marker(1_usize as _, &TestProtocolMarker).unwrap();
-    }
-
-    #[test]
-    #[should_panic = "Marker interface are not supported with handle_protocol function, use handle_protocol_marker instead."]
-    fn test_handle_protocol_with_marker_interface() {
-        let boot_services = boot_services!(handle_protocol = efi_handle_protocol);
-
-        extern "efiapi" fn efi_handle_protocol(
-            _handle: *mut c_void,
-            _protocol: *mut efi::Guid,
-            _interface: *mut *mut c_void,
-        ) -> efi::Status {
-            efi::Status::SUCCESS
-        }
-
-        _ = unsafe { boot_services.handle_protocol(1_usize as _, &TestProtocolMarker) };
+        _ = unsafe { boot_services.handle_protocol::<TestProtocolEmpty>(1_usize as _) }.unwrap();
     }
 
     #[test]
     #[should_panic = "Boot services function locate_device_path is not initialized."]
     fn test_locate_device_path_not_init() {
         let boot_services = boot_services!();
-        _ = unsafe { boot_services.locate_device_path(&TestProtocol, ptr::null_mut()) };
+        _ = unsafe { boot_services.locate_device_path(&TestProtocol::PROTOCOL_GUID, ptr::null_mut()) };
     }
 
     #[test]
@@ -2465,14 +2433,14 @@ mod test {
             device_path: *mut *mut device_path::Protocol,
             device: *mut efi::Handle,
         ) -> efi::Status {
-            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(protocol) });
+            assert_eq!(TestProtocol::PROTOCOL_GUID, unsafe { ptr::read(protocol) });
             assert_eq!(1, device_path as usize);
             assert_ne!(ptr::null_mut(), device);
             unsafe { ptr::write(device, 12_usize as _) };
             efi::Status::SUCCESS
         }
 
-        let handle = unsafe { boot_services.locate_device_path(&TestProtocol, 1_usize as _) }.unwrap();
+        let handle = unsafe { boot_services.locate_device_path(&TestProtocol::PROTOCOL_GUID, 1_usize as _) }.unwrap();
         assert_eq!(12, handle as usize);
     }
 
@@ -2480,7 +2448,9 @@ mod test {
     #[should_panic = "Boot services function open_protocol is not initialized."]
     fn test_open_protocol_not_init() {
         let boot_services = boot_services!();
-        _ = unsafe { boot_services.open_protocol(ptr::null_mut(), &TestProtocol, ptr::null_mut(), ptr::null_mut(), 0) };
+        _ = unsafe {
+            boot_services.open_protocol::<TestProtocol>(ptr::null_mut(), ptr::null_mut(), ptr::null_mut(), 0)
+        };
     }
 
     #[test]
@@ -2496,7 +2466,7 @@ mod test {
             attributes: u32,
         ) -> efi::Status {
             assert_eq!(1, handle as usize);
-            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(protocol) });
+            assert_eq!(TestProtocol::PROTOCOL_GUID, unsafe { ptr::read(protocol) });
             assert_ne!(ptr::null_mut(), interface);
             assert_eq!(2, agent_handle as usize);
             assert_eq!(3, controller_handle as usize);
@@ -2508,13 +2478,15 @@ mod test {
             efi::Status::SUCCESS
         }
 
-        let interface =
-            unsafe { boot_services.open_protocol(1_usize as _, &TestProtocol, 2_usize as _, 3_usize as _, 4).unwrap() };
-        assert_eq!(12, *interface)
+        let interface = unsafe {
+            boot_services.open_protocol::<TestProtocol>(1_usize as _, 2_usize as _, 3_usize as _, 4).unwrap()
+        };
+
+        assert_eq!(12, interface.0)
     }
 
     #[test]
-    fn test_open_protocol_marker() {
+    fn test_open_protocol_empty() {
         let boot_services = boot_services!(open_protocol = efi_open_protocol);
 
         extern "efiapi" fn efi_open_protocol(
@@ -2526,7 +2498,7 @@ mod test {
             attributes: u32,
         ) -> efi::Status {
             assert_eq!(1, handle as usize);
-            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(protocol) });
+            assert_eq!(TestProtocolEmpty::PROTOCOL_GUID, unsafe { ptr::read(protocol) });
             assert_ne!(ptr::null_mut(), interface);
             assert_eq!(2, agent_handle as usize);
             assert_eq!(3, controller_handle as usize);
@@ -2534,34 +2506,20 @@ mod test {
             efi::Status::SUCCESS
         }
 
-        boot_services.open_protocol_marker(1_usize as _, &TestProtocolMarker, 2_usize as _, 3_usize as _, 4).unwrap()
-    }
-
-    #[test]
-    #[should_panic = "Marker interface are not supported with open_protocol function, use open_protocol_marker instead."]
-    fn test_open_protocol_with_marker_interface() {
-        let boot_services = boot_services!(open_protocol = efi_open_protocol);
-
-        extern "efiapi" fn efi_open_protocol(
-            _handle: efi::Handle,
-            _protocol: *mut efi::Guid,
-            _interface: *mut *mut c_void,
-            _agent_handle: efi::Handle,
-            _controller_handle: efi::Handle,
-            _attributes: u32,
-        ) -> efi::Status {
-            efi::Status::SUCCESS
-        }
-
-        let _ =
-            unsafe { boot_services.open_protocol(1_usize as _, &TestProtocolMarker, 2_usize as _, 3_usize as _, 4) };
+        _ = unsafe { boot_services.open_protocol::<TestProtocolEmpty>(1_usize as _, 2_usize as _, 3_usize as _, 4) }
+            .unwrap()
     }
 
     #[test]
     #[should_panic = "Boot services function close_protocol is not initialized."]
     fn test_close_protocol_not_init() {
         let boot_services = boot_services!();
-        _ = boot_services.close_protocol(ptr::null_mut(), &TestProtocol, ptr::null_mut(), ptr::null_mut());
+        _ = boot_services.close_protocol(
+            ptr::null_mut(),
+            &TestProtocol::PROTOCOL_GUID,
+            ptr::null_mut(),
+            ptr::null_mut(),
+        );
     }
 
     #[test]
@@ -2575,21 +2533,21 @@ mod test {
             controller_handle: efi::Handle,
         ) -> efi::Status {
             assert_eq!(1, handle as usize);
-            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(protocol) });
+            assert_eq!(TestProtocol::PROTOCOL_GUID, unsafe { ptr::read(protocol) });
             assert_eq!(2, agent_handle as usize);
             assert_eq!(3, controller_handle as usize);
 
             efi::Status::SUCCESS
         }
 
-        boot_services.close_protocol(1_usize as _, &TestProtocol, 2_usize as _, 3_usize as _).unwrap();
+        boot_services.close_protocol(1_usize as _, &TestProtocol::PROTOCOL_GUID, 2_usize as _, 3_usize as _).unwrap();
     }
 
     #[test]
     #[should_panic = "Boot services function open_protocol_information is not initialized."]
     fn test_open_protocol_information_not_init() {
         let boot_services = boot_services!();
-        _ = boot_services.open_protocol_information(ptr::null_mut(), &TestProtocol);
+        _ = boot_services.open_protocol_information(ptr::null_mut(), &TestProtocol::PROTOCOL_GUID);
     }
 
     #[test]
@@ -2606,7 +2564,7 @@ mod test {
             entry_count: *mut usize,
         ) -> efi::Status {
             assert_eq!(1, handle as usize);
-            assert_eq!(TEST_PROTOCOL_GUID, unsafe { ptr::read(protocol) });
+            assert_eq!(TestProtocol::PROTOCOL_GUID, unsafe { ptr::read(protocol) });
             assert_ne!(ptr::null_mut(), entry_buffer);
             assert_ne!(ptr::null_mut(), entry_count);
 
@@ -2626,7 +2584,7 @@ mod test {
             efi::Status::SUCCESS
         }
 
-        let info = boot_services.open_protocol_information(1_usize as _, &TestProtocol).unwrap();
+        let info = boot_services.open_protocol_information(1_usize as _, &TestProtocol::PROTOCOL_GUID).unwrap();
         assert_eq!(1, info.len());
         assert_eq!(10, info[0].attributes);
     }
@@ -2745,8 +2703,9 @@ mod test {
             assert_ne!(ptr::null_mut(), protocol_buffer);
             assert_ne!(ptr::null_mut(), protocol_buffer_count);
 
+            static PROTOCOL_GUID: efi::Guid = TestProtocol::PROTOCOL_GUID;
             #[allow(unused_allocation)]
-            let buff = Box::new(ptr::addr_of!(TEST_PROTOCOL_GUID) as *mut efi::Guid).into_mut_ptr();
+            let buff = Box::new(ptr::addr_of!(PROTOCOL_GUID) as *mut efi::Guid).into_mut_ptr();
 
             unsafe {
                 ptr::write(protocol_buffer, buff);
@@ -2758,14 +2717,14 @@ mod test {
 
         let protocols = boot_services.protocols_per_handle(1_usize as _).unwrap();
         assert_eq!(1, protocols.len());
-        assert_eq!(TEST_PROTOCOL_GUID, *protocols[0]);
+        assert_eq!(TestProtocol::PROTOCOL_GUID, *protocols[0]);
     }
 
     #[test]
     #[should_panic = "Boot services function locate_protocol is not initialized."]
     fn test_locate_protocol_not_init() {
         let boot_services = boot_services!();
-        _ = unsafe { boot_services.locate_protocol(&TestProtocol, None) };
+        _ = unsafe { boot_services.locate_protocol::<TestProtocol>(None) };
     }
 
     #[test]
@@ -2782,17 +2741,18 @@ mod test {
             assert!(!protocol_guid.is_null());
             assert!(registration.is_null());
             assert!(!interface.is_null());
-            assert_eq!(unsafe { ptr::read(protocol_guid) }, TEST_PROTOCOL_GUID);
+            assert_eq!(unsafe { ptr::read(protocol_guid) }, TestProtocol::PROTOCOL_GUID);
             unsafe { ptr::write(interface, &PROTOCOL_INTERFACE as *const u32 as *mut u32 as *mut c_void) };
             efi::Status::SUCCESS
         }
 
-        let protocol = unsafe { boot_services.locate_protocol(&TestProtocol, None) }.unwrap();
-        assert_eq!(PROTOCOL_INTERFACE, *protocol);
+        let protocol = unsafe { boot_services.locate_protocol::<TestProtocol>(None) }.unwrap();
+
+        assert_eq!(PROTOCOL_INTERFACE, protocol.0);
     }
 
     #[test]
-    fn test_locate_protocol_marker() {
+    fn test_locate_protocol_empty() {
         let boot_services = boot_services!(locate_protocol = efi_locate_protocol);
 
         extern "efiapi" fn efi_locate_protocol(
@@ -2803,27 +2763,11 @@ mod test {
             assert!(!protocol_guid.is_null());
             assert!(registration.is_null());
             assert!(!interface.is_null());
-            assert_eq!(unsafe { ptr::read(protocol_guid) }, TEST_PROTOCOL_GUID);
+            assert_eq!(unsafe { ptr::read(protocol_guid) }, TestProtocolEmpty::PROTOCOL_GUID);
             efi::Status::SUCCESS
         }
 
-        boot_services.locate_protocol_marker(&TestProtocolMarker, None).unwrap();
-    }
-
-    #[test]
-    #[should_panic = "Marker interface are not supported by locate_protocol, use locate_protocol_marker instead."]
-    fn test_locate_protocol_marker_with_locate_protocol() {
-        let boot_services = boot_services!(locate_protocol = efi_locate_protocol);
-
-        extern "efiapi" fn efi_locate_protocol(
-            _protocol_guid: *mut efi::Guid,
-            _registration: *mut c_void,
-            _interface: *mut *mut c_void,
-        ) -> efi::Status {
-            efi::Status::SUCCESS
-        }
-
-        unsafe { boot_services.locate_protocol(&TestProtocolMarker, None) }.unwrap();
+        unsafe { boot_services.locate_protocol::<TestProtocolEmpty>(None) }.unwrap();
     }
 
     #[test]
@@ -3164,7 +3108,7 @@ mod test {
     fn test_install_configuration_table_not_init() {
         let boot_services = boot_services!();
         let table = Box::new(());
-        _ = boot_services.install_configuration_table(&efi::Guid::from_bytes(&[0; 16]), table);
+        _ = unsafe { boot_services.install_configuration_table(&efi::Guid::from_bytes(&[0; 16]), table) };
     }
 
     #[test]
@@ -3183,7 +3127,7 @@ mod test {
         }
 
         #[allow(static_mut_refs)]
-        boot_services.install_configuration_table(&GUID, unsafe { &mut TABLE }).unwrap();
+        unsafe { boot_services.install_configuration_table(&GUID, &mut TABLE) }.unwrap();
     }
 
     #[test]

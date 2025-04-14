@@ -24,7 +24,7 @@ impl<'a, R: CPtr<'a, Type = T>, T> PtrMetadata<'a, R> {
     /// retrieve the original pointer from the pointer metadata
     ///
     /// # Safety
-    /// caller must ensure that the pointed-to memory is still valid and uphold rust pointer invariants (e.g. no aliasing)
+    /// Caller must ensure that the pointed-to memory is still valid and uphold rust pointer invariants (e.g. no aliasing)
     pub unsafe fn into_original_ptr(self) -> R {
         mem::transmute_copy(&self.ptr_value)
     }
@@ -34,7 +34,7 @@ impl<'a, R: CPtr<'a, Type = T>, T> PtrMetadata<'a, R> {
 ///
 /// # Safety
 ///
-/// implementers must ensure that rust invariants around pointer usage (e.g. no aliasing) are respected.
+/// Implementers must ensure that rust invariants around pointer usage (e.g. no aliasing) are respected.
 pub unsafe trait CPtr<'a>: Sized {
     type Type: Sized;
 
@@ -88,7 +88,30 @@ pub unsafe trait CMutRef<'a>: CRef<'a> + CMutPtr<'a> {
     }
 }
 
+// *const T
+// SAFETY: Memory layout and mutability are respected for these types.
+unsafe impl<T> CPtr<'static> for *const T {
+    type Type = T;
+
+    fn as_ptr(&self) -> *const Self::Type {
+        *self
+    }
+}
+
+// *mut T
+// SAFETY: Memory layout and mutability are respected for these types.
+unsafe impl<T> CPtr<'static> for *mut T {
+    type Type = T;
+
+    fn as_ptr(&self) -> *const Self::Type {
+        *self
+    }
+}
+// SAFETY: Memory layout and mutability are respected for these types.
+unsafe impl<T> CMutPtr<'static> for *mut T {}
+
 // &T
+// SAFETY: Memory layout and mutability are respected for these types.
 unsafe impl<'a, T> CPtr<'a> for &'a T {
     type Type = T;
 
@@ -96,9 +119,11 @@ unsafe impl<'a, T> CPtr<'a> for &'a T {
         *self as *const _
     }
 }
+// SAFETY: Memory layout and mutability are respected for these types.
 unsafe impl<'a, T> CRef<'a> for &'a T {}
 
 // &mut T
+// SAFETY: Memory layout and mutability are respected for these types.
 unsafe impl<'a, T> CPtr<'a> for &'a mut T {
     type Type = T;
 
@@ -106,11 +131,15 @@ unsafe impl<'a, T> CPtr<'a> for &'a mut T {
         *self as *const _
     }
 }
+// SAFETY: Memory layout and mutability are respected for these types.
 unsafe impl<'a, T> CRef<'a> for &'a mut T {}
+// SAFETY: Memory layout and mutability are respected for these types.
 unsafe impl<'a, T> CMutPtr<'a> for &'a mut T {}
+// SAFETY: Memory layout and mutability are respected for these types.
 unsafe impl<'a, T> CMutRef<'a> for &'a mut T {}
 
 // Box<T>
+// SAFETY: Memory layout and mutability are respected for these types.
 unsafe impl<'a, T> CPtr<'a> for Box<T> {
     type Type = T;
 
@@ -118,11 +147,15 @@ unsafe impl<'a, T> CPtr<'a> for Box<T> {
         AsRef::as_ref(self) as *const _
     }
 }
+// SAFETY: Memory layout and mutability are respected for these types.
 unsafe impl<'a, T> CRef<'a> for Box<T> {}
+// SAFETY: Memory layout and mutability are respected for these types.
 unsafe impl<'a, T> CMutPtr<'a> for Box<T> {}
+// SAFETY: Memory layout and mutability are respected for these types.
 unsafe impl<'a, T> CMutRef<'a> for Box<T> {}
 
 // ()
+// SAFETY: Use null pointer wich is a valid c pointer.
 unsafe impl CPtr<'static> for () {
     type Type = c_void;
 
@@ -131,6 +164,7 @@ unsafe impl CPtr<'static> for () {
     }
 }
 
+// SAFETY: Memory layout and mutability are respected for these types.
 unsafe impl CMutPtr<'static> for () {
     fn as_mut_ptr(&mut self) -> *mut Self::Type {
         ptr::null_mut()
@@ -145,6 +179,7 @@ unsafe impl<'a, R: CPtr<'a, Type = T>, T> CPtr<'a> for Option<R> {
         self.as_ref().map_or(ptr::null(), |p| p.as_ptr())
     }
 }
+// SAFETY: Memory layout and mutability are respected for these types.
 unsafe impl<'a, R: CMutPtr<'a, Type = T>, T> CMutPtr<'a> for Option<R> {}
 
 // ManuallyDrop<T>
@@ -155,8 +190,11 @@ unsafe impl<'a, R: CPtr<'a, Type = T>, T> CPtr<'a> for ManuallyDrop<R> {
         <R as CPtr>::as_ptr(self.deref())
     }
 }
+// SAFETY: Memory layout and mutability are respected for these types.
 unsafe impl<'a, R: CMutPtr<'a, Type = T>, T> CMutPtr<'a> for ManuallyDrop<R> {}
+// SAFETY: Memory layout and mutability are respected for these types.
 unsafe impl<'a, R: CRef<'a, Type = T>, T> CRef<'a> for ManuallyDrop<R> {}
+// SAFETY: Memory layout and mutability are respected for these types.
 unsafe impl<'a, R: CMutRef<'a, Type = T>, T> CMutRef<'a> for ManuallyDrop<R> {}
 
 #[cfg(test)]
