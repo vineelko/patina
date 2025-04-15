@@ -12,19 +12,19 @@ members = [
 ]
 
 [workspace.package]
-version = "3.0.3"
+version = "4.0.0"
 publish = ["UefiRust"]
 repository = "https://github.com/OpenDevicePartnership/uefi-sdk"
 license = "BSD-2-Clause-Patent"
 edition = "2021"
 
 [workspace.dependencies]
-boot_services = { path = "./boot_services", version = "3" }
-driver_binding = { path = "./driver_binding", version = "3" }
-runtime_services = { path = "./runtime_services", version = "3" }
-tpl_mutex = { path = "./tpl_mutex", version = "3" }
-uefi_protocol = { path = "./uefi_protocol", version = "3" }
-uefi_sdk_macro = { path = "./uefi_sdk_macro", version = "3" }
+boot_services = { path = "./boot_services", version = "4" }
+driver_binding = { path = "./driver_binding", version = "4" }
+runtime_services = { path = "./runtime_services", version = "4" }
+tpl_mutex = { path = "./tpl_mutex", version = "4" }
+uefi_protocol = { path = "./uefi_protocol", version = "4" }
+uefi_sdk_macro = { path = "./uefi_sdk_macro", version = "4" }
 
 cfg-if = { version = "^1"}
 criterion = "^0.5"
