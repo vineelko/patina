@@ -134,6 +134,9 @@ pub mod memory;
 #[doc(hidden)]
 pub use r_efi::efi::Guid;
 
+pub mod mm_communicator;
+pub mod platform_mm_control;
+pub mod sw_mmi_manager;
 pub use uefi_sdk_macro::IntoService;
 
 /// A trait that allows the implementor to register a service with the underlying [Storage].

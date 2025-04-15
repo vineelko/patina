@@ -25,6 +25,7 @@ tpl_mutex = { workspace = true }
 cfg-if = { workspace = true }
 log = { workspace = true }
 r-efi = { workspace = true }
+mockall = { workspace = true, optional = true }
 
 [target.'cfg(target_arch="x86_64")'.dependencies]
 x86_64 = { workspace = true }
@@ -32,6 +33,7 @@ uart_16550 = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+mockall = { workspace = true }
 
 [features]
 core = ['alloc']
@@ -39,4 +41,7 @@ std = []
 doc = ['alloc']
 alloc = []
 boot_services_global_allocator = ["boot_services/global_allocator"]
-mockall = ["boot_services/mockall", "runtime_services/mockall"]
+mockall = ["dep:mockall"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
