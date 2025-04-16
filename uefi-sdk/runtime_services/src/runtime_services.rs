@@ -95,11 +95,6 @@ impl Debug for StandardRuntimeServices {
     }
 }
 
-///SAFETY: StandardRuntimeServices uses an atomic ptr to access the RuntimeServices.
-// unsafe impl Sync for StandardRuntimeServices<'static> {}
-///SAFETY: When the lifetime is `'static`, the pointer is guaranteed to stay valid.
-// unsafe impl Send for StandardRuntimeServices<'static> {}
-
 #[cfg_attr(any(test, feature = "mockall"), automock)]
 #[allow(clippy::needless_lifetimes)] //https://github.com/rust-lang/rust-clippy/issues/6622
 /// Interface for Rust-friendly wrappers of the UEFI Runtime Services

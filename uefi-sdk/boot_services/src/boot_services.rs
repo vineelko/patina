@@ -136,11 +136,6 @@ impl Debug for StandardBootServices {
     }
 }
 
-// SAFETY: Pointers inside StandardBootServices are set once and are valid throughout the livetime of the boot.
-unsafe impl Sync for StandardBootServices {}
-// SAFETY: Pointers inside StandardBootServices are set once and are valid throughout the livetime of the boot.
-unsafe impl Send for StandardBootServices {}
-
 /// Functions that are available *before* a successful call to EFI_BOOT_SERVICES.ExitBootServices().
 
 #[cfg_attr(any(test, feature = "mockall"), automock)]
