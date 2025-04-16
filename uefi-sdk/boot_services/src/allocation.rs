@@ -4,7 +4,7 @@ use r_efi::efi;
 
 use crate::{boxed::BootServicesBox, BootServices};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum AllocType {
     AnyPage,
     MaxAddress(usize),

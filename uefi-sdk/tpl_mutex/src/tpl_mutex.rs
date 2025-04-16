@@ -12,7 +12,7 @@ use core::{
 use boot_services::{tpl::Tpl, BootServices, StandardBootServices};
 
 /// Type use for mutual exclusion of data across Tpl (task priority level)
-pub struct TplMutex<'a, T: ?Sized, B: BootServices = StandardBootServices<'a>> {
+pub struct TplMutex<'a, T: ?Sized, B: BootServices = StandardBootServices> {
     boot_services: &'a B,
     tpl_lock_level: Tpl,
     lock: AtomicBool,

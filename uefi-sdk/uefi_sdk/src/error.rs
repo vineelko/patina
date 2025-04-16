@@ -139,3 +139,9 @@ impl From<EfiError> for efi::Status {
         }
     }
 }
+
+impl From<efi::Status> for EfiError {
+    fn from(status: efi::Status) -> EfiError {
+        EfiError::status_to_result(status).unwrap_err()
+    }
+}

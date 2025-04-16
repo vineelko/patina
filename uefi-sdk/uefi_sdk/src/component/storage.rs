@@ -11,6 +11,7 @@ extern crate alloc;
 use crate::component::{metadata::MetaData, params::Param};
 
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
+use boot_services::StandardBootServices;
 use core::{
     any::{Any, TypeId},
     cell::{Ref, RefCell, RefMut, UnsafeCell},
@@ -18,9 +19,8 @@ use core::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
     ptr,
-    sync::atomic::AtomicPtr,
 };
-use r_efi::efi::BootServices;
+use runtime_services::StandardRuntimeServices;
 
 use super::service::{IntoService, Service};
 
@@ -154,8 +154,10 @@ pub struct Storage {
     services: SparseVec<&'static dyn Any>,
     /// A map to convert a Service type to a concrete service index.
     service_indices: BTreeMap<TypeId, usize>,
-    /// A pointer to the UEFI Boot Services Table.
-    bs: AtomicPtr<BootServices>,
+    // Standard Boot Services.
+    boot_services: StandardBootServices,
+    // Standard Runtime Services.
+    runtime_services: StandardRuntimeServices,
 }
 
 impl Default for Storage {
@@ -171,7 +173,8 @@ impl Storage {
             config_indices: BTreeMap::new(),
             services: SparseVec::new(),
             service_indices: BTreeMap::new(),
-            bs: AtomicPtr::new(ptr::null_mut()),
+            boot_services: StandardBootServices::new_uninit(),
+            runtime_services: StandardRuntimeServices::new_uninit(),
         }
     }
 
@@ -181,13 +184,23 @@ impl Storage {
     }
 
     /// Stores a pointer to the UEFI Boot Services Table.
-    pub fn set_boot_services(&self, bs: *mut BootServices) {
-        self.bs.store(bs, core::sync::atomic::Ordering::SeqCst);
+    pub fn set_boot_services(&mut self, bs: StandardBootServices) {
+        self.boot_services = bs;
     }
 
-    /// Returns a pointer to the UEFI Boot Services Table.
-    pub fn boot_services(&self) -> *mut BootServices {
-        self.bs.load(core::sync::atomic::Ordering::SeqCst)
+    /// Stores a pointer to the UEFI Runtime Services Table.
+    pub fn set_runtime_services(&mut self, rs: StandardRuntimeServices) {
+        self.runtime_services = rs;
+    }
+
+    /// Returns the UEFI Boot Services Table reference.
+    pub fn boot_services(&self) -> &StandardBootServices {
+        &self.boot_services
+    }
+
+    /// Returns the UEFI Runtime Services Table reference.
+    pub fn runtime_services(&self) -> &StandardRuntimeServices {
+        &self.runtime_services
     }
 
     /// Registers a config type with the storage and returns its global id.

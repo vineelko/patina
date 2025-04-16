@@ -3,7 +3,7 @@
 //! # Example
 //!
 //! ```rust, no_run
-//! use core::ptr::NonNull;
+//! use core::{mem::MaybeUninit, ptr::NonNull};
 //!
 //! use r_efi::efi::{self, protocols::device_path::Protocol as EfiDevicePathProtocol};
 //!
@@ -248,7 +248,7 @@ impl<T: DriverBinding + 'static, U: BootServices + 'static> UefiDriverBinding<T,
                 Some(uefi_driver_binding.driver_binding_protocol.driver_binding_handle),
                 &efi::protocols::driver_binding::PROTOCOL_GUID,
                 // Install the driver binding protocol interface as a _UefiDriverBinding.
-                Box::as_ptr(uefi_driver_binding) as *mut _,
+                <Box<_> as CPtr>::as_ptr(uefi_driver_binding) as *mut _,
             )
         }?;
 

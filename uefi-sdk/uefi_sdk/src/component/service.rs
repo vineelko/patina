@@ -204,14 +204,14 @@ pub trait IntoService {
         guid: &'static r_efi::efi::Guid,
         interface: *mut core::ffi::c_void,
     ) {
-        if !boot_services::StandardBootServices::validate(&(), UnsafeStorageCell::new_readonly(storage)) {
+        if !<boot_services::StandardBootServices>::validate(&(), UnsafeStorageCell::new_readonly(storage)) {
             log::error!("Failed to register protocol {:?}, boot services are not available.", guid);
             return;
         }
 
         // SAFETY: Boot services contains interior mutability and is read-only, so we can safely get the boot services.
         let bs =
-            unsafe { boot_services::StandardBootServices::get_param(&(), UnsafeStorageCell::new_readonly(storage)) };
+            unsafe { <boot_services::StandardBootServices>::get_param(&(), UnsafeStorageCell::new_readonly(storage)) };
 
         if let Err(e) = bs.install_protocol_interface_unchecked(None, guid, interface) {
             log::error!("Failed to register protocol {:?}, error: {:?}", guid, e);

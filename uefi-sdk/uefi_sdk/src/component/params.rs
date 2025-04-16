@@ -103,6 +103,7 @@ use core::{
 };
 
 use alloc::boxed::Box;
+use runtime_services::StandardRuntimeServices;
 
 use crate::{
     boot_services::StandardBootServices,
@@ -485,19 +486,37 @@ unsafe impl<'c, T: Default + 'static> Param for ConfigMut<'c, T> {
     }
 }
 
-unsafe impl Param for StandardBootServices<'_> {
+unsafe impl Param for StandardBootServices {
     type State = ();
-    type Item<'storage, 'state> = StandardBootServices<'storage>;
+    type Item<'storage, 'state> = Self;
 
-    unsafe fn get_param<'storage, 'state>(
+    unsafe fn get_param<'state>(
         _state: &'state Self::State,
-        storage: UnsafeStorageCell<'storage>,
-    ) -> Self::Item<'storage, 'state> {
-        StandardBootServices::new(unsafe { &*storage.storage().boot_services() })
+        storage: UnsafeStorageCell<'_>,
+    ) -> Self::Item<'static, 'state> {
+        StandardBootServices::clone(storage.storage().boot_services())
     }
 
     fn validate(_state: &Self::State, storage: UnsafeStorageCell) -> bool {
-        !unsafe { storage.storage() }.boot_services().is_null()
+        unsafe { storage.storage() }.boot_services().is_init()
+    }
+
+    fn init_state(_storage: &mut Storage, _meta: &mut MetaData) -> Self::State {}
+}
+
+unsafe impl Param for StandardRuntimeServices {
+    type State = ();
+    type Item<'storage, 'state> = Self;
+
+    unsafe fn get_param<'state>(
+        _state: &'state Self::State,
+        storage: UnsafeStorageCell<'_>,
+    ) -> Self::Item<'static, 'state> {
+        StandardRuntimeServices::clone(storage.storage().runtime_services())
+    }
+
+    fn validate(_state: &Self::State, storage: UnsafeStorageCell) -> bool {
+        unsafe { storage.storage() }.runtime_services().is_init()
     }
 
     fn init_state(_storage: &mut Storage, _meta: &mut MetaData) -> Self::State {}
@@ -774,8 +793,10 @@ mod tests {
         let mut mock_metadata = MetaData::new::<i32>();
 
         <StandardBootServices as Param>::init_state(&mut storage, &mut mock_metadata);
-        assert!(<StandardBootServices as Param>::try_validate(&(), (&storage).into())
-            .is_err_and(|e| e == "boot_services::StandardBootServices"));
+        assert_eq!(
+            Err("boot_services::StandardBootServices"),
+            <StandardBootServices as Param>::try_validate(&(), (&storage).into())
+        );
     }
 
     #[test]
@@ -786,9 +807,11 @@ mod tests {
         // OOF, this is bad. But I don't wan't to write dummy functions for all the boot service functions. So we do this
         // instead, so that the pointer to the boot services table is not null.
         #[allow(invalid_value)]
-        let mut bs = unsafe { core::mem::MaybeUninit::<r_efi::efi::BootServices>::zeroed().assume_init() };
+        let efi_bs = core::mem::MaybeUninit::<r_efi::efi::BootServices>::zeroed();
 
-        storage.set_boot_services(&mut bs as *mut r_efi::efi::BootServices);
+        let bs = unsafe { StandardBootServices::new(&*efi_bs.as_ptr()) };
+
+        storage.set_boot_services(bs);
 
         <StandardBootServices as Param>::init_state(&mut storage, &mut mock_metadata);
         assert!(<StandardBootServices as Param>::try_validate(&(), (&storage).into()).is_ok());
@@ -813,7 +836,9 @@ mod tests {
         let mut storage = Storage::default();
         let mut mock_meadata = MetaData::new::<i32>();
         <(StandardBootServices, Config<i32>) as Param>::init_state(&mut storage, &mut mock_meadata);
-        assert!(<(StandardBootServices, Config<i32>) as Param>::try_validate(&((), 1), (&storage).into())
-            .is_err_and(|e| e == "boot_services::StandardBootServices"));
+        assert_eq!(
+            Err("boot_services::StandardBootServices"),
+            <(StandardBootServices, Config<i32>) as Param>::try_validate(&((), 1), (&storage).into())
+        );
     }
 }

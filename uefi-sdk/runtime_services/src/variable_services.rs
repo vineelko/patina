@@ -166,10 +166,9 @@ mod test {
 
     #[test]
     fn test_variable_name_iterator_from_first() {
-        let rs: &StandardRuntimeServices<'_> =
-            runtime_services!(get_next_variable_name = mock_efi_get_next_variable_name);
+        let rs = runtime_services!(get_next_variable_name = mock_efi_get_next_variable_name);
 
-        let mut iter = VariableNameIterator::new_from_first(rs);
+        let mut iter = VariableNameIterator::new_from_first(&rs);
 
         // Make sure the first result corresponds to DUMMY_FIRST_NAME
         let mut status = iter.next();
@@ -195,10 +194,9 @@ mod test {
 
     #[test]
     fn test_variable_name_iterator_from_second() {
-        let rs: &StandardRuntimeServices<'_> =
-            runtime_services!(get_next_variable_name = mock_efi_get_next_variable_name);
+        let rs = runtime_services!(get_next_variable_name = mock_efi_get_next_variable_name);
 
-        let mut iter = VariableNameIterator::new_from_variable(&DUMMY_FIRST_NAME, &DUMMY_FIRST_NAMESPACE, rs);
+        let mut iter = VariableNameIterator::new_from_variable(&DUMMY_FIRST_NAME, &DUMMY_FIRST_NAMESPACE, &rs);
 
         // Make sure the first result corresponds to DUMMY_SECOND_NAME
         let mut status = iter.next();

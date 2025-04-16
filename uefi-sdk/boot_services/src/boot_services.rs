@@ -20,11 +20,12 @@ use c_ptr::{CMutPtr, CMutRef, CPtr, PtrMetadata};
 use core::{
     any,
     ffi::c_void,
-    marker::PhantomData,
+    fmt::Debug,
     mem::{self, MaybeUninit},
     option::Option,
     ptr::{self, NonNull},
-    sync::atomic::{AtomicPtr, Ordering},
+    sync::atomic::AtomicPtr,
+    sync::atomic::Ordering,
 };
 
 use r_efi::efi;
@@ -37,55 +38,108 @@ use tpl::{Tpl, TplGuard};
 use uefi_protocol::ProtocolInterface;
 
 /// This is the boot services used in the UEFI.
-/// it wraps an atomic ptr to [`efi::BootServices`]
-#[derive(Debug)]
-pub struct StandardBootServices<'a> {
+/// It wraps an atomic ptr to [`efi::BootServices`]
+pub struct StandardBootServices {
     efi_boot_services: AtomicPtr<efi::BootServices>,
-    _lifetime_marker: PhantomData<&'a efi::BootServices>,
 }
 
-impl<'a> StandardBootServices<'a> {
+impl StandardBootServices {
     /// Create a new StandardBootServices with the provided [efi::BootServices].
-    pub const fn new(efi_boot_services: &'a efi::BootServices) -> Self {
-        // The efi::BootServices is only read, that is why we use a non mutable reference.
-        Self {
-            efi_boot_services: AtomicPtr::new(efi_boot_services as *const _ as *mut _),
-            _lifetime_marker: PhantomData,
-        }
+    pub fn new(efi_boot_services: &efi::BootServices) -> Self {
+        let this = Self::new_uninit();
+        this.init(efi_boot_services);
+        this
     }
 
-    /// Create a new StandardBootServices that is uninitialized.
-    /// The struct need to be initialize later with [Self::initialize], otherwise, subsequent call will panic.
+    /// Create a new StandarBootServices that has not been initialized.
     pub const fn new_uninit() -> Self {
-        Self { efi_boot_services: AtomicPtr::new(ptr::null_mut()), _lifetime_marker: PhantomData }
+        StandardBootServices { efi_boot_services: AtomicPtr::new(ptr::null_mut()) }
     }
 
-    /// Initialize the StandardBootServices with a reference to [efi::BootServices].
-    /// # Panics
-    /// This function will panic if already initialize.
-    pub fn initialize(&'a self, efi_boot_services: &'a efi::BootServices) {
-        if self.efi_boot_services.load(Ordering::Relaxed).is_null() {
-            // The efi::BootServices is only read, that is why we use a non mutable reference.
-            self.efi_boot_services.store(efi_boot_services as *const _ as *mut _, Ordering::SeqCst)
-        } else {
-            panic!("Boot services is already initialize.")
-        }
+    /// Initialize the StandardBootServices.
+    pub fn init(&self, efi_boot_services: &efi::BootServices) {
+        // This struct nevery mutate the efi_boot_services.
+        self.efi_boot_services.store(efi_boot_services as *const _ as *mut _, Ordering::Relaxed);
     }
 
-    /// # Panics
-    /// This function will panic if it was not initialize.
+    /// Return true if StandardBootServices is not initialized.
+    pub fn is_init(&self) -> bool {
+        !self.efi_boot_services.load(Ordering::Relaxed).is_null()
+    }
+
     fn efi_boot_services(&self) -> &efi::BootServices {
-        // SAFETY: This pointer is assume to be a valid efi::BootServices pointer since the only way to set it was via an efi::BootServices reference.
-        unsafe {
-            self.efi_boot_services.load(Ordering::SeqCst).as_ref::<'a>().expect("Boot services is not initialize.")
-        }
+        // SAFETY: Boot services lifetime is expected to live long enough.
+        unsafe { self.efi_boot_services.load(Ordering::Relaxed).as_ref() }
+            .expect("Standard Boot Services is not initialized!")
     }
 }
 
-///SAFETY: StandardBootServices uses an atomic ptr to access the BootServices.
-unsafe impl Sync for StandardBootServices<'static> {}
-///SAFETY: When the lifetime is `'static`, the pointer is guaranteed to stay valid.
-unsafe impl Send for StandardBootServices<'static> {}
+impl Clone for StandardBootServices {
+    fn clone(&self) -> Self {
+        Self { efi_boot_services: AtomicPtr::new(self.efi_boot_services.load(Ordering::Relaxed)) }
+    }
+}
+
+impl Debug for StandardBootServices {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("StandardBootServices")
+            .field("create_event", &(self.efi_boot_services().create_event))
+            .field("create_event_ex", &(self.efi_boot_services().create_event_ex))
+            .field("close_event", &(self.efi_boot_services().close_event))
+            .field("signal_event", &(self.efi_boot_services().signal_event))
+            .field("wait_for_event", &(self.efi_boot_services().wait_for_event))
+            .field("check_event", &(self.efi_boot_services().check_event))
+            .field("set_timer", &(self.efi_boot_services().set_timer))
+            .field("raise_tpl", &(self.efi_boot_services().raise_tpl))
+            .field("restore_tpl", &(self.efi_boot_services().restore_tpl))
+            .field("allocate_page", &(self.efi_boot_services().allocate_pages))
+            .field("free_pages", &(self.efi_boot_services().free_pages))
+            .field("get_memory_map", &(self.efi_boot_services().get_memory_map))
+            .field("allocate_pool", &(self.efi_boot_services().allocate_pool))
+            .field("free_pool", &(self.efi_boot_services().free_pool))
+            .field("install_protocol_interface", &(self.efi_boot_services().install_protocol_interface))
+            .field("uninstall_protocol_interface", &(self.efi_boot_services().uninstall_protocol_interface))
+            .field("reinstall_protocol_interface", &(self.efi_boot_services().reinstall_protocol_interface))
+            .field("register_protocol_notify", &(self.efi_boot_services().register_protocol_notify))
+            .field("locate_handle", &(self.efi_boot_services().locate_handle))
+            .field("handle_protocol", &(self.efi_boot_services().handle_protocol))
+            .field("locate_device_path", &(self.efi_boot_services().locate_device_path))
+            .field("open_protocol", &(self.efi_boot_services().open_protocol))
+            .field("close_protocol", &(self.efi_boot_services().close_protocol))
+            .field("open_protocol_information", &(self.efi_boot_services().open_protocol_information))
+            .field("connect_controller", &(self.efi_boot_services().connect_controller))
+            .field("disconnect_controller", &(self.efi_boot_services().disconnect_controller))
+            .field("protocols_per_handle", &(self.efi_boot_services().protocols_per_handle))
+            .field("locate_handle_buffer", &(self.efi_boot_services().locate_handle_buffer))
+            .field("locate_protocol", &(self.efi_boot_services().locate_protocol))
+            .field(
+                "install_multiple_protocol_interfaces",
+                &(self.efi_boot_services().install_multiple_protocol_interfaces),
+            )
+            .field(
+                "uninstall_multiple_protocol_interfaces",
+                &(self.efi_boot_services().uninstall_multiple_protocol_interfaces),
+            )
+            .field("load_image", &(self.efi_boot_services().load_image))
+            .field("start_image", &(self.efi_boot_services().start_image))
+            .field("unload_image", &(self.efi_boot_services().unload_image))
+            .field("exit", &(self.efi_boot_services().exit))
+            .field("exit_boot_services", &(self.efi_boot_services().exit_boot_services))
+            .field("set_watchdog_timer", &(self.efi_boot_services().set_watchdog_timer))
+            .field("stall", &(self.efi_boot_services().stall))
+            .field("copy_mem", &(self.efi_boot_services().copy_mem))
+            .field("set_mem", &(self.efi_boot_services().set_mem))
+            .field("get_next_monotonic_count", &(self.efi_boot_services().get_next_monotonic_count))
+            .field("install_configuration_table", &(self.efi_boot_services().install_configuration_table))
+            .field("calculate_crc32", &(self.efi_boot_services().calculate_crc32))
+            .finish()
+    }
+}
+
+// SAFETY: Pointers inside StandardBootServices are set once and are valid throughout the livetime of the boot.
+unsafe impl Sync for StandardBootServices {}
+// SAFETY: Pointers inside StandardBootServices are set once and are valid throughout the livetime of the boot.
+unsafe impl Send for StandardBootServices {}
 
 /// Functions that are available *before* a successful call to EFI_BOOT_SERVICES.ExitBootServices().
 
@@ -872,7 +926,7 @@ macro_rules! efi_boot_services_fn {
     }};
 }
 
-impl BootServices for StandardBootServices<'_> {
+impl BootServices for StandardBootServices {
     unsafe fn create_event_unchecked<T: Sized + 'static>(
         &self,
         event_type: EventType,
@@ -1505,12 +1559,11 @@ mod test {
     use efi::{protocols::device_path, Boolean, Char16, OpenProtocolInformationEntry};
 
     use super::*;
-    use core::{mem::MaybeUninit, slice, sync::atomic::AtomicUsize};
+    use core::{mem::MaybeUninit, slice, sync::atomic::AtomicUsize, sync::atomic::Ordering};
     use std::os::raw::c_void;
 
     macro_rules! boot_services {
         ($($efi_services:ident = $efi_service_fn:ident),*) => {{
-            static BOOT_SERVICE: StandardBootServices = StandardBootServices::new_uninit();
             let efi_boot_services = unsafe {
                 #[allow(unused_mut)]
                 let mut bs = MaybeUninit::<efi::BootServices>::zeroed();
@@ -1519,8 +1572,7 @@ mod test {
                 )*
                 bs.assume_init()
             };
-            BOOT_SERVICE.initialize(&efi_boot_services);
-            &BOOT_SERVICE
+            StandardBootServices::new(&efi_boot_services)
         }};
     }
 
@@ -1566,19 +1618,10 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Boot services is not initialize.")]
+    #[should_panic(expected = "Standard Boot Services is not initialized!")]
     fn test_that_accessing_uninit_boot_services_should_panic() {
         let bs = StandardBootServices::new_uninit();
         bs.efi_boot_services();
-    }
-
-    #[test]
-    #[should_panic(expected = "Boot services is already initialize.")]
-    fn test_that_initializing_boot_services_multiple_time_should_panic() {
-        let efi_bs = unsafe { MaybeUninit::<efi::BootServices>::zeroed().as_ptr().as_ref().unwrap() };
-        let bs = StandardBootServices::new_uninit();
-        bs.initialize(efi_bs);
-        bs.initialize(efi_bs);
     }
 
     #[test]

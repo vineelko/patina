@@ -23,7 +23,7 @@ use mockall::automock;
 use alloc::vec::Vec;
 use core::{
     ffi::c_void,
-    marker::PhantomData,
+    fmt::Debug,
     ptr,
     sync::atomic::{AtomicPtr, Ordering},
 };
@@ -32,61 +32,73 @@ use r_efi::efi;
 use variable_services::{GetVariableStatus, VariableInfo};
 
 /// The UEFI spec runtime services.
-/// It wraps an [`AtomicPtr`] around [`efi::RuntimeServices`]
+/// Wrapper around [`efi::RuntimeServices`]
 ///
 /// UEFI Spec Documentation: [8. Services - RuntimeServices](https://uefi.org/specs/UEFI/2.10/08_Services_Runtime_Services.html)
-///
-#[derive(Debug)]
-pub struct StandardRuntimeServices<'a> {
+pub struct StandardRuntimeServices {
     efi_runtime_services: AtomicPtr<efi::RuntimeServices>,
-    _lifetime_marker: PhantomData<&'a efi::RuntimeServices>,
 }
 
-impl<'a> StandardRuntimeServices<'a> {
+impl StandardRuntimeServices {
     /// Create a new StandardRuntimeServices with the provided [efi::RuntimeServices].
-    pub const fn new(efi_runtime_services: &'a efi::RuntimeServices) -> Self {
-        // The efi::RuntimeServices is only read, that is why we use a non mutable reference.
-        Self {
-            efi_runtime_services: AtomicPtr::new(efi_runtime_services as *const _ as *mut _),
-            _lifetime_marker: PhantomData,
-        }
+    pub fn new(efi_runtime_services: &efi::RuntimeServices) -> Self {
+        let this = StandardRuntimeServices::new_uninit();
+        this.init(efi_runtime_services);
+        this
     }
 
-    /// Create a new StandardRuntimeServices that is uninitialized.
-    /// The struct need to be initialize later with [Self::initialize], otherwise, subsequent call will panic.
+    /// Create a new StandarRuntimeServices that is not initialized.
     pub const fn new_uninit() -> Self {
-        Self { efi_runtime_services: AtomicPtr::new(ptr::null_mut()), _lifetime_marker: PhantomData }
+        Self { efi_runtime_services: AtomicPtr::new(ptr::null_mut()) }
     }
 
-    /// Initialize the StandardRuntimeServices with a reference to [efi::RuntimeServices].
-    /// # Debug asserts
-    /// This function will assert on debug if already initialized.
-    pub fn initialize(&'a self, efi_runtime_services: &'a efi::RuntimeServices) {
-        if self.efi_runtime_services.load(Ordering::Relaxed).is_null() {
-            // The efi::RuntimeServices is only read, that is why we use a non mutable reference.
-            self.efi_runtime_services.store(efi_runtime_services as *const _ as *mut _, Ordering::SeqCst)
-        } else {
-            debug_assert!(false, "Runtime services is already initialized.");
-        }
+    // Initialized the StandardRuntimeServices.
+    pub fn init(&self, efi_runtime_services: &efi::RuntimeServices) {
+        self.efi_runtime_services.store(efi_runtime_services as *const _ as *mut _, Ordering::Relaxed);
     }
 
-    /// # Panics
-    /// This function will panic if it was not initialized.
+    /// Return true if StandardRuntimeServices is not initialized.
+    pub fn is_init(&self) -> bool {
+        !self.efi_runtime_services.load(Ordering::Relaxed).is_null()
+    }
+
     fn efi_runtime_services(&self) -> &efi::RuntimeServices {
-        // SAFETY: This pointer is assumed to be a valid efi::RuntimeServices pointer since the only way to set it was via an efi::RuntimeServices reference.
-        unsafe {
-            self.efi_runtime_services
-                .load(Ordering::SeqCst)
-                .as_ref::<'a>()
-                .expect("Runtime services is not initialized.")
-        }
+        // SAFETY: Runtime services lifetime is expected to live long enough.
+        unsafe { self.efi_runtime_services.load(Ordering::Relaxed).as_ref() }
+            .expect("Standard Runtime Services is not initialized!")
+    }
+}
+
+impl Clone for StandardRuntimeServices {
+    fn clone(&self) -> Self {
+        Self { efi_runtime_services: AtomicPtr::new(self.efi_runtime_services.load(Ordering::Relaxed)) }
+    }
+}
+
+impl Debug for StandardRuntimeServices {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("StandardRuntimeServices")
+            .field("get_variable", &(self.efi_runtime_services().get_variable))
+            .field("get_next_variable_name", &(self.efi_runtime_services().get_next_variable_name))
+            .field("set_variable", &(self.efi_runtime_services().set_variable))
+            .field("query_variable_info", &(self.efi_runtime_services().query_variable_info))
+            .field("get_time", &(self.efi_runtime_services().get_time))
+            .field("set_time", &(self.efi_runtime_services().set_time))
+            .field("get_wakeup_time", &(self.efi_runtime_services().get_wakeup_time))
+            .field("set_wakeup_time", &(self.efi_runtime_services().set_wakeup_time))
+            .field("set_virtual_address_map", &(self.efi_runtime_services().set_virtual_address_map))
+            .field("convert_pointer", &(self.efi_runtime_services().convert_pointer))
+            .field("reset_system", &(self.efi_runtime_services().reset_system))
+            .field("get_next_high_mono_count", &(self.efi_runtime_services().get_next_high_mono_count))
+            .field("update_capsule", &(self.efi_runtime_services().update_capsule))
+            .finish()
     }
 }
 
 ///SAFETY: StandardRuntimeServices uses an atomic ptr to access the RuntimeServices.
-unsafe impl Sync for StandardRuntimeServices<'static> {}
+// unsafe impl Sync for StandardRuntimeServices<'static> {}
 ///SAFETY: When the lifetime is `'static`, the pointer is guaranteed to stay valid.
-unsafe impl Send for StandardRuntimeServices<'static> {}
+// unsafe impl Send for StandardRuntimeServices<'static> {}
 
 #[cfg_attr(any(test, feature = "mockall"), automock)]
 #[allow(clippy::needless_lifetimes)] //https://github.com/rust-lang/rust-clippy/issues/6622
@@ -279,7 +291,7 @@ pub trait RuntimeServices {
     ) -> Result<(), efi::Status>;
 }
 
-impl RuntimeServices for StandardRuntimeServices<'_> {
+impl RuntimeServices for StandardRuntimeServices {
     unsafe fn set_variable_unchecked(
         &self,
         name: &mut [u16],
@@ -433,37 +445,19 @@ pub(crate) mod test {
 
     macro_rules! runtime_services {
         ($($efi_services:ident = $efi_service_fn:ident),*) => {{
-        static RUNTIME_SERVICE: StandardRuntimeServices = StandardRuntimeServices::new_uninit();
-        let efi_runtime_services = unsafe {
-            #[allow(unused_mut)]
-            let mut rs = mem::MaybeUninit::<efi::RuntimeServices>::zeroed();
-            $(
-            rs.assume_init_mut().$efi_services = $efi_service_fn;
-            )*
-            rs.assume_init()
-        };
-        RUNTIME_SERVICE.initialize(&efi_runtime_services);
-        &RUNTIME_SERVICE
+            let efi_runtime_services = unsafe {
+                #[allow(unused_mut)]
+                let mut rs = mem::MaybeUninit::<efi::RuntimeServices>::zeroed();
+                $(
+                rs.assume_init_mut().$efi_services = $efi_service_fn;
+                )*
+                rs.assume_init()
+            };
+            StandardRuntimeServices::new(&efi_runtime_services)
         }};
     }
 
     pub(crate) use runtime_services;
-
-    #[test]
-    #[should_panic(expected = "Runtime services is not initialized.")]
-    fn test_that_accessing_uninit_runtime_services_should_panic() {
-        let rs = StandardRuntimeServices::new_uninit();
-        rs.efi_runtime_services();
-    }
-
-    #[test]
-    #[should_panic(expected = "Runtime services is already initialized.")]
-    fn test_that_initializing_runtime_services_multiple_time_should_panic() {
-        let efi_rs = unsafe { mem::MaybeUninit::<efi::RuntimeServices>::zeroed().as_ptr().as_ref().unwrap() };
-        let rs = StandardRuntimeServices::new_uninit();
-        rs.initialize(efi_rs);
-        rs.initialize(efi_rs);
-    }
 
     pub const DUMMY_FIRST_NAME: [u16; 3] = [0x1000, 0x1020, 0x0000];
     pub const DUMMY_NON_NULL_TERMINATED_NAME: [u16; 3] = [0x1000, 0x1020, 0x1040];
@@ -685,8 +679,15 @@ pub(crate) mod test {
     }
 
     #[test]
+    #[should_panic(expected = "Standard Runtime Services is not initialized!")]
+    fn test_that_accessing_uninit_runtime_services_should_panic() {
+        let bs = StandardRuntimeServices::new_uninit();
+        bs.efi_runtime_services();
+    }
+
+    #[test]
     fn test_get_variable() {
-        let rs: &StandardRuntimeServices<'_> = runtime_services!(get_variable = mock_efi_get_variable);
+        let rs = runtime_services!(get_variable = mock_efi_get_variable);
 
         let status = rs.get_variable::<DummyVariableType>(&DUMMY_FIRST_NAME, &DUMMY_FIRST_NAMESPACE, None);
 
@@ -699,14 +700,14 @@ pub(crate) mod test {
     #[test]
     #[should_panic(expected = "Name passed into get_variable is not null-terminated.")]
     fn test_get_variable_non_terminated() {
-        let rs: &StandardRuntimeServices<'_> = runtime_services!(get_variable = mock_efi_get_variable);
+        let rs = runtime_services!(get_variable = mock_efi_get_variable);
 
         let _ = rs.get_variable::<DummyVariableType>(&DUMMY_NON_NULL_TERMINATED_NAME, &DUMMY_FIRST_NAMESPACE, None);
     }
 
     #[test]
     fn test_get_variable_low_size_hint() {
-        let rs: &StandardRuntimeServices<'_> = runtime_services!(get_variable = mock_efi_get_variable);
+        let rs = runtime_services!(get_variable = mock_efi_get_variable);
 
         let status = rs.get_variable::<DummyVariableType>(&DUMMY_FIRST_NAME, &DUMMY_FIRST_NAMESPACE, Some(1));
 
@@ -718,7 +719,7 @@ pub(crate) mod test {
 
     #[test]
     fn test_get_variable_not_found() {
-        let rs: &StandardRuntimeServices<'_> = runtime_services!(get_variable = mock_efi_get_variable);
+        let rs = runtime_services!(get_variable = mock_efi_get_variable);
 
         let status = rs.get_variable::<DummyVariableType>(&DUMMY_UNKNOWN_NAME, &DUMMY_FIRST_NAMESPACE, Some(1));
 
@@ -728,7 +729,7 @@ pub(crate) mod test {
 
     #[test]
     fn test_get_variable_size_and_attributes() {
-        let rs: &StandardRuntimeServices<'_> = runtime_services!(get_variable = mock_efi_get_variable);
+        let rs = runtime_services!(get_variable = mock_efi_get_variable);
 
         let status = rs.get_variable_size_and_attributes(&DUMMY_FIRST_NAME, &DUMMY_FIRST_NAMESPACE);
 
@@ -740,7 +741,7 @@ pub(crate) mod test {
 
     #[test]
     fn test_set_variable() {
-        let rs: &StandardRuntimeServices<'_> = runtime_services!(set_variable = mock_efi_set_variable);
+        let rs = runtime_services!(set_variable = mock_efi_set_variable);
 
         let data = DummyVariableType { value: DUMMY_DATA };
 
@@ -753,7 +754,7 @@ pub(crate) mod test {
     #[test]
     #[should_panic(expected = "Name passed into set_variable is not null-terminated.")]
     fn test_set_variable_non_terminated() {
-        let rs: &StandardRuntimeServices<'_> = runtime_services!(set_variable = mock_efi_set_variable);
+        let rs = runtime_services!(set_variable = mock_efi_set_variable);
 
         let data = DummyVariableType { value: DUMMY_DATA };
 
@@ -767,7 +768,7 @@ pub(crate) mod test {
 
     #[test]
     fn test_set_variable_empty_name() {
-        let rs: &StandardRuntimeServices<'_> = runtime_services!(set_variable = mock_efi_set_variable);
+        let rs = runtime_services!(set_variable = mock_efi_set_variable);
 
         let data = DummyVariableType { value: DUMMY_DATA };
 
@@ -780,7 +781,7 @@ pub(crate) mod test {
 
     #[test]
     fn test_set_variable_not_found() {
-        let rs: &StandardRuntimeServices<'_> = runtime_services!(set_variable = mock_efi_set_variable);
+        let rs = runtime_services!(set_variable = mock_efi_set_variable);
 
         let data = DummyVariableType { value: DUMMY_DATA };
 
@@ -796,8 +797,7 @@ pub(crate) mod test {
         // Ensure we are testing a growing name buffer
         assert!(DUMMY_SECOND_NAME.len() > DUMMY_FIRST_NAME.len());
 
-        let rs: &StandardRuntimeServices<'_> =
-            runtime_services!(get_next_variable_name = mock_efi_get_next_variable_name);
+        let rs = runtime_services!(get_next_variable_name = mock_efi_get_next_variable_name);
 
         let status = rs.get_next_variable_name(&DUMMY_FIRST_NAME, &DUMMY_FIRST_NAMESPACE);
 
@@ -811,8 +811,7 @@ pub(crate) mod test {
 
     #[test]
     fn test_get_next_variable_name_non_terminated() {
-        let rs: &StandardRuntimeServices<'_> =
-            runtime_services!(get_next_variable_name = mock_efi_get_next_variable_name);
+        let rs = runtime_services!(get_next_variable_name = mock_efi_get_next_variable_name);
 
         let status = rs.get_next_variable_name(&DUMMY_NON_NULL_TERMINATED_NAME, &DUMMY_FIRST_NAMESPACE);
 
@@ -823,16 +822,14 @@ pub(crate) mod test {
     #[test]
     #[should_panic(expected = "Zero-length name passed into get_next_variable_name.")]
     fn test_get_next_variable_name_zero_length_name() {
-        let rs: &StandardRuntimeServices<'_> =
-            runtime_services!(get_next_variable_name = mock_efi_get_next_variable_name);
+        let rs = runtime_services!(get_next_variable_name = mock_efi_get_next_variable_name);
 
         let _ = rs.get_next_variable_name(&DUMMY_ZERO_LENGTH_NAME, &DUMMY_FIRST_NAMESPACE);
     }
 
     #[test]
     fn test_get_next_variable_name_not_found() {
-        let rs: &StandardRuntimeServices<'_> =
-            runtime_services!(get_next_variable_name = mock_efi_get_next_variable_name);
+        let rs = runtime_services!(get_next_variable_name = mock_efi_get_next_variable_name);
 
         let status = rs.get_next_variable_name(&DUMMY_UNKNOWN_NAME, &DUMMY_FIRST_NAMESPACE);
 
@@ -842,7 +839,7 @@ pub(crate) mod test {
 
     #[test]
     fn test_query_variable_info() {
-        let rs: &StandardRuntimeServices<'_> = runtime_services!(query_variable_info = mock_efi_query_variable_info);
+        let rs = runtime_services!(query_variable_info = mock_efi_query_variable_info);
 
         let status = rs.query_variable_info(DUMMY_ATTRIBUTES);
 
@@ -855,7 +852,7 @@ pub(crate) mod test {
 
     #[test]
     fn test_query_variable_info_invalid_attributes() {
-        let rs: &StandardRuntimeServices<'_> = runtime_services!(query_variable_info = mock_efi_query_variable_info);
+        let rs = runtime_services!(query_variable_info = mock_efi_query_variable_info);
 
         let status = rs.query_variable_info(DUMMY_INVALID_ATTRIBUTES);
 
