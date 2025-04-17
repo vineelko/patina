@@ -9,15 +9,15 @@ members = [
 ]
 
 [workspace.package]
-version = "11.0.1"
+version = "12.0.0"
 publish = ["UefiRust"]
 repository = "https://github.com/OpenDevicePartnership/uefi-core"
 license = "BSD-2-Clause-Patent"
 edition = "2021"
 
 [workspace.dependencies]
-uefi_cpu = { path = "uefi_cpu", version = "11" }
-stacktrace = { path = "stacktrace", version = "11" }
+uefi_cpu = { path = "uefi_cpu", version = "12" }
+stacktrace = { path = "stacktrace", version = "12" }
 
 # External Libraries
 arm-gic = "^0.1.2"
