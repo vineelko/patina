@@ -58,6 +58,7 @@
 //!
 //! | Param                        | Description                                                                                                                                                           |
 //! |------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+//! | Hob\<T\>                     | A parsed, immutable, guid HOB (Hand-Off Block) that is automatically parsed and registered. See the [hob] module for more info.                                       |
 //! | Option\<P\>                  | An Option, where P implements `Param`. Allows components to run even when the underlying parameter is unavailable. See the [params] module for more info.             |
 //! | (P1, P2, ...)                | A Tuple where each entry implements `Param`. Useful when you need more parameters than the current parameter limit. See the [params] module for more info.            |
 //! | Config\<T\>                  | An immutable config value that will only be available once the underlying data has been locked. See The [params] module for more info.                                |
@@ -136,6 +137,7 @@
 extern crate alloc;
 
 mod function_component;
+pub mod hob;
 mod metadata;
 pub mod params;
 pub mod service;

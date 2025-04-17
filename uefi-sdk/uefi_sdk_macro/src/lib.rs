@@ -7,6 +7,7 @@
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 mod component_macro;
+mod hob_macro;
 mod service_macro;
 
 /// Derive Macro for implementing the `IntoComponent` trait for a type.
@@ -125,4 +126,38 @@ pub fn component(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
 #[proc_macro_derive(IntoService, attributes(protocol, service))]
 pub fn service(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     service_macro::service2(item.into()).into()
+}
+
+/// Derive Macro for implementing the `HobConfig` trait for a type.
+///
+/// This macro automatically implements the `HobConfig` trait for the provided type
+/// by casting the passed in bytes (`&[u8]`) to the type. and cloning the struct.
+///
+/// This macro is inherently unsafe it it casts the pointer to the bytes to the type.
+/// It is the responsibility of the developer to ensure that the type is properly formatted
+/// and that the bytes are valid for the type.
+///
+/// The User must also implement the `Copy` trait for the type so that the bytes can be
+/// copied to the new instance of the type. Due to the requirements of the `IntoConfig` trait,
+/// the type must also implement the `Default` trait.
+///
+/// ## Macro Attribute
+///
+/// - `guid`: The guid to associate with the type.
+///
+/// ## Examples
+///
+/// ```rust, ignore
+/// use uefi_sdk::component::FromHob;
+///
+/// #[derive(FromHob, Copy, Clone, Default)]
+/// #[guid = "8be4df61-93ca-11d2-aa0d-00e098032b8c"]
+/// struct MyConfig {
+///   field1: u32,
+///   field2: u32,
+/// }
+/// ```
+#[proc_macro_derive(FromHob, attributes(hob))]
+pub fn hob_config(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    hob_macro::hob_config2(item.into()).into()
 }

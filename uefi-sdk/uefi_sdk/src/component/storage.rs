@@ -20,9 +20,13 @@ use core::{
     ops::{Deref, DerefMut},
     ptr,
 };
+use r_efi::efi::Guid;
 use runtime_services::StandardRuntimeServices;
 
-use super::service::{IntoService, Service};
+use super::{
+    hob::{FromHob, Hob},
+    service::{IntoService, Service},
+};
 
 /// A vector whose elements are sparsely populated.
 #[derive(Debug)]
@@ -45,7 +49,12 @@ impl<V> SparseVec<V> {
     #[inline]
     /// Returns the value at the given index, if it exists.
     pub fn get(&self, index: usize) -> Option<&V> {
-        self.values.get(index).map(|v| v.as_ref()).unwrap_or(None)
+        self.values.get(index).map(|v| v.as_ref())?
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut V> {
+        self.values.get_mut(index).map(|v| v.as_mut())?
     }
 
     #[inline]
@@ -154,6 +163,12 @@ pub struct Storage {
     services: SparseVec<&'static dyn Any>,
     /// A map to convert a Service type to a concrete service index.
     service_indices: BTreeMap<TypeId, usize>,
+    /// HOB parsers for converting guided HOBs into `Hob<T>` datums.
+    hob_parsers: BTreeMap<Guid, fn(&[u8], &mut Storage)>,
+    /// A container for all [Hob](super::hob::Hob) datums.
+    hobs: SparseVec<Vec<Box<dyn Any>>>,
+    /// a map to convert from TypeId to a hob index.
+    hob_indicies: BTreeMap<TypeId, usize>,
     // Standard Boot Services.
     boot_services: StandardBootServices,
     // Standard Runtime Services.
@@ -173,6 +188,9 @@ impl Storage {
             config_indices: BTreeMap::new(),
             services: SparseVec::new(),
             service_indices: BTreeMap::new(),
+            hob_parsers: BTreeMap::new(),
+            hobs: SparseVec::new(),
+            hob_indicies: BTreeMap::new(),
             boot_services: StandardBootServices::new_uninit(),
             runtime_services: StandardRuntimeServices::new_uninit(),
         }
@@ -304,6 +322,54 @@ impl Storage {
     pub fn try_get_service<S: ?Sized + 'static>(&self) -> Option<Service<S>> {
         let idx = *self.service_indices.get(&TypeId::of::<S>())?;
         Some(Service::from(self.try_get_raw_service(idx)?))
+    }
+
+    pub(crate) fn add_hob_parser<T: FromHob>(&mut self) {
+        self.hob_parsers.insert(T::HOB_GUID, T::register);
+    }
+
+    /// Registers a service type with the storage and returns its global id.
+    pub(crate) fn register_hob<T: FromHob>(&mut self) -> usize {
+        self.get_or_register_hob(TypeId::of::<T>())
+    }
+
+    /// Gets the global id of a service, registering it if it does not exist.
+    pub(crate) fn get_or_register_hob(&mut self, id: TypeId) -> usize {
+        let idx = self.hob_indicies.len();
+        let idx = self.hob_indicies.entry(id).or_insert(idx);
+        if self.hobs.get(*idx).is_none() {
+            self.hobs.insert(*idx, Vec::new());
+        }
+        *idx
+    }
+
+    /// Adds a hob datum to the storage, overwriting an existing value if it exists.
+    pub(crate) fn add_hob<H: FromHob>(&mut self, hob: H) {
+        let id = self.register_hob::<H>(); // This creates the index if it does not exist.
+        self.hobs.get_mut(id).expect("Hob Index should always exist.").push(Box::new(hob));
+    }
+
+    /// Retrieves the underlying HOB datum from the storage.
+    pub(crate) fn get_raw_hob(&self, id: usize) -> &[Box<dyn Any>] {
+        self.hobs
+            .get(id)
+            .unwrap_or_else(|| panic!("Could not find Hob value when with id [{}] it should always exist.", id))
+    }
+
+    /// Attempts to retrieve a HOB datum from the storage.
+    pub fn get_hob<T: FromHob>(&self) -> Option<Hob<T>> {
+        let id = self.hob_indicies.get(&TypeId::of::<T>())?;
+        self.hobs.get(*id).and_then(|hob| {
+            if hob.is_empty() {
+                return None;
+            }
+            Some(Hob::from(hob.as_slice()))
+        })
+    }
+
+    /// Attempts to retrieve a HOB parser from the storage.
+    pub fn get_hob_parser(&self, guid: &Guid) -> Option<fn(&[u8], &mut Storage)> {
+        self.hob_parsers.get(guid).copied()
     }
 }
 
@@ -481,5 +547,30 @@ mod tests {
         }
 
         assert_eq!(v.into_iter().filter(|o| o.is_some()).count(), 0);
+    }
+
+    #[test]
+    fn test_hob_functionality() {
+        use crate as uefi_sdk;
+        #[derive(Copy, Clone, FromHob)]
+        #[repr(C)]
+        #[hob = "12345678-1234-1234-1234-123456789012"]
+        struct MyStruct;
+
+        let mut storage = Storage::new();
+
+        storage.register_hob::<MyStruct>();
+        assert!(storage.get_hob::<MyStruct>().is_none());
+        assert!(storage.get_hob_parser(&MyStruct::HOB_GUID).is_none());
+
+        storage.add_hob(MyStruct);
+        assert!(storage.get_hob::<MyStruct>().is_some());
+        assert_eq!(storage.get_hob::<MyStruct>().unwrap().iter().count(), 1);
+
+        storage.add_hob(MyStruct);
+        assert_eq!(storage.get_hob::<MyStruct>().unwrap().iter().count(), 2);
+
+        storage.add_hob_parser::<MyStruct>();
+        assert!(storage.get_hob_parser(&MyStruct::HOB_GUID).is_some());
     }
 }
