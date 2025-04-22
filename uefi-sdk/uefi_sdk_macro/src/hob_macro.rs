@@ -33,7 +33,7 @@ impl HobConfig {
             Ok(id) => id,
         };
 
-        let bytes = id.as_fields();
+        let bytes = id.to_fields_le();
         let (a, b, c, [d0, d1, d2, d3, d4, d5, d6, d7]) = bytes;
 
         Ok(quote! {
@@ -144,9 +144,10 @@ mod tests {
             #[hob = "8be4df61-93ca-11d2-aa0d-00e098032b8c"]
             struct MyStruct(u32);
         };
+
         let expected = quote! {
             impl uefi_sdk::component::hob::FromHob for MyStruct {
-                const HOB_GUID: uefi_sdk::component::service::Guid = uefi_sdk::component::service::Guid::from_fields(2347032417u32, 37834u16, 4562u16, 170u8, 13u8, &[0u8, 224u8, 152u8, 3u8, 43u8, 140u8]);
+                const HOB_GUID: uefi_sdk::component::service::Guid = uefi_sdk::component::service::Guid::from_fields(1642062987u32, 51859u16, 53777u16, 170u8, 13u8, &[0u8, 224u8, 152u8, 3u8, 43u8, 140u8]);
                 fn parse(bytes: &[u8]) -> Self {
                     assert!(
                         bytes.len() >= core::mem::size_of::<Self>(),
@@ -170,7 +171,7 @@ mod tests {
         };
         let expected = quote! {
             impl<T> uefi_sdk::component::hob::FromHob for MyStruct<T> {
-                const HOB_GUID: uefi_sdk::component::service::Guid = uefi_sdk::component::service::Guid::from_fields(2347032417u32, 37834u16, 4562u16, 170u8, 13u8, &[0u8, 224u8, 152u8, 3u8, 43u8, 140u8]);
+                const HOB_GUID: uefi_sdk::component::service::Guid = uefi_sdk::component::service::Guid::from_fields(1642062987u32, 51859u16, 53777u16, 170u8, 13u8, &[0u8, 224u8, 152u8, 3u8, 43u8, 140u8]);
                 fn parse(bytes: &[u8]) -> Self {
                     assert!(
                         bytes.len() >= core::mem::size_of::<Self>(),
