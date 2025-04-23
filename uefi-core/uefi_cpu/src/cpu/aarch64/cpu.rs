@@ -6,7 +6,7 @@
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
-use crate::cpu::EfiCpuInit;
+use crate::cpu::Cpu;
 #[cfg(all(not(test), target_arch = "aarch64"))]
 use core::arch::asm;
 use mu_pi::protocols::cpu_arch::{CpuFlushType, CpuInitType};
@@ -14,10 +14,16 @@ use r_efi::efi;
 use uefi_sdk::error::EfiError;
 
 /// Struct to implement AArch64 Cpu Init.
+///
+/// This struct cannot be used directly. It replaces the `EfiCpu` struct when compiling for the AArch64 architecture.
 #[derive(Default)]
-pub struct EfiCpuInitAArch64 {}
+pub struct EfiCpuAarch64;
 
-impl EfiCpuInitAArch64 {
+impl EfiCpuAarch64 {
+    /// This function initializes the CPU for the AArch64 architecture.
+    pub fn initialize(&mut self) -> Result<(), EfiError> {
+        Ok(())
+    }
     // AArch64 related cache functions
     fn cache_range_operation(&self, _start: efi::PhysicalAddress, _length: u64, _op: CpuFlushType) {
         let cacheline_alignment = self.data_cache_line_len() - 1;
@@ -92,11 +98,7 @@ impl EfiCpuInitAArch64 {
     }
 }
 
-impl EfiCpuInit for EfiCpuInitAArch64 {
-    fn initialize(&mut self) -> Result<(), EfiError> {
-        Ok(())
-    }
-
+impl Cpu for EfiCpuAarch64 {
     fn flush_data_cache(
         &self,
         _start: efi::PhysicalAddress,
@@ -122,13 +124,13 @@ mod tests {
 
     #[test]
     fn test_initialize() {
-        let mut cpu_init = EfiCpuInitAArch64::default();
+        let mut cpu_init = EfiCpuAarch64;
         assert!(cpu_init.initialize().is_ok());
     }
 
     #[test]
     fn test_flush_data_cache() {
-        let cpu_init = EfiCpuInitAArch64::default();
+        let cpu_init = EfiCpuAarch64;
 
         let start: efi::PhysicalAddress = 0;
         let length: u64 = 0;
@@ -148,7 +150,7 @@ mod tests {
 
     #[test]
     fn test_get_timer_value() {
-        let cpu_init = EfiCpuInitAArch64::default();
+        let cpu_init = EfiCpuAarch64;
 
         assert_eq!(cpu_init.get_timer_value(1), Err(EfiError::Unsupported));
         assert_eq!(cpu_init.get_timer_value(0), Err(EfiError::Unsupported));

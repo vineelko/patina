@@ -8,4 +8,4 @@
 //!
 mod cpu;
 
-pub use cpu::EfiCpuInitAArch64;
+pub use cpu::EfiCpuAarch64;

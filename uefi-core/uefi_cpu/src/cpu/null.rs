@@ -6,20 +6,24 @@
 //!
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
-use crate::cpu::EfiCpuInit;
+use crate::cpu::Cpu;
 use mu_pi::protocols::cpu_arch::{CpuFlushType, CpuInitType};
 use r_efi::efi;
 use uefi_sdk::error::EfiError;
 
 /// Struct to implement Null Cpu Init.
+///
+/// This struct cannot be used directly. It replaces the `EfiCpu` struct when not compiling for x86_64 or AArch64 UEFI architectures.
 #[derive(Default, Copy, Clone)]
-pub struct EfiCpuInitNull {}
+pub struct EfiCpuNull;
 
-impl EfiCpuInit for EfiCpuInitNull {
-    fn initialize(&mut self) -> Result<(), EfiError> {
+impl EfiCpuNull {
+    pub fn initialize(&mut self) -> Result<(), EfiError> {
         Ok(())
     }
+}
 
+impl Cpu for EfiCpuNull {
     fn flush_data_cache(
         &self,
         _start: efi::PhysicalAddress,

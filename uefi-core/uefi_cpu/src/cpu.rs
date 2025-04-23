@@ -1,6 +1,8 @@
 //! UEFI CPU Module
 //!
-//! This module provides implementation for Cpu.
+//! This module provides implementation for Cpu. The [EfiCpu] struct is the only accessible struct when using this
+//! module. The other structs are architecture specific implementations and replace the [EfiCpu] struct at compile time
+//! based on the target architecture.
 //!
 //! ## License
 //!
@@ -12,28 +14,29 @@
 cfg_if::cfg_if! {
     if #[cfg(all(target_os = "uefi", target_arch = "x86_64"))] {
         mod x64;
-        mod null;
-        pub use x64::EfiCpuInitX64 as EfiCpuInitX64;
-        pub use null::EfiCpuInitNull as EfiCpuInitNull;
+        pub type EfiCpu = x64::EfiCpuX64;
     } else if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
-        pub mod aarch64;
-        pub mod null;
-        pub use aarch64::EfiCpuInitAArch64 as EfiCpuInitAArch64;
-        pub use null::EfiCpuInitNull as EfiCpuInitNull;
+        mod aarch64;
+        pub type EfiCpu = aarch64::EfiCpuAarch64;
     } else if #[cfg(feature = "doc")] {
-        pub mod x64;
-        pub mod aarch64;
-        pub mod null;
-        pub use x64::EfiCpuInitX64 as EfiCpuInitX64;
-        pub use aarch64::EfiCpuInitAArch64 as EfiCpuInitAArch64;
-        pub use null::EfiCpuInitNull as EfiCpuInitNull;
-    } else if #[cfg(test)] {
-        pub mod x64;
-        pub mod aarch64;
-        pub mod null;
-        pub use x64::EfiCpuInitX64 as EfiCpuInitX64;
-        pub use aarch64::EfiCpuInitAArch64 as EfiCpuInitAArch64;
-        pub use null::EfiCpuInitNull as EfiCpuInitNull;
+        mod x64;
+        mod aarch64;
+        mod null;
+        pub use x64::EfiCpuX64;
+        pub use aarch64::EfiCpuAarch64;
+        pub use null::EfiCpuNull;
+
+        /// Type alias whose implementation is [EfiCpuX64], [EfiCpuAarch64], or [EfiCpuNull] depending on the compilation target.
+        ///
+        /// This struct is for documentation purposes only. Please refer to the individual implementations for specific details.
+        pub type EfiCpu = EfiCpuNull;
+    } else {
+        mod x64;
+        mod aarch64;
+        mod null;
+        pub use x64::EfiCpuX64;
+        pub use aarch64::EfiCpuAarch64;
+        pub use null::EfiCpuNull;
     }
 }
 
@@ -43,11 +46,7 @@ use uefi_sdk::error::EfiError;
 
 /// A trait to facilitate architecture-specific implementations.
 /// TODO: This trait will be further broken down in future.
-pub trait EfiCpuInit {
-    /// The first function called by DxeCore to initialize the cpu lib before
-    /// setting up heap. Cannot use heap related structures like Box, Rc etc.
-    fn initialize(&mut self) -> Result<(), EfiError>;
-
+pub trait Cpu {
     /// Flush CPU data cache. If the instruction cache is fully coherent
     /// with all DMA operations then function can just return Success.
     ///

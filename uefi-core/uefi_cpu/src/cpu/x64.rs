@@ -9,4 +9,4 @@
 mod cpu;
 mod gdt;
 
-pub use cpu::EfiCpuInitX64;
+pub use cpu::EfiCpuX64;

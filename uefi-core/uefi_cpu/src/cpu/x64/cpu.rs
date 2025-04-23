@@ -8,7 +8,7 @@
 //!
 #[cfg(not(test))]
 use super::gdt;
-use crate::{cpu::EfiCpuInit, interrupts};
+use crate::{cpu::Cpu, interrupts};
 #[cfg(not(test))]
 use core::arch::asm;
 use mu_pi::protocols::cpu_arch::{CpuFlushType, CpuInitType};
@@ -16,15 +16,32 @@ use r_efi::efi;
 use uefi_sdk::error::EfiError;
 
 /// Struct to implement X64 Cpu Init.
-pub struct EfiCpuInitX64 {
+///
+/// This struct cannot be used directly. It replaces the `EfiCpu` struct when compiling for the x86_64 architecture.
+pub struct EfiCpuX64 {
     timer_period: u64,
 }
 
-impl EfiCpuInitX64 {
+impl EfiCpuX64 {
     pub fn new() -> Self {
-        let mut x64_efi_init = EfiCpuInitX64 { timer_period: 0 };
+        let mut x64_efi_init = EfiCpuX64 { timer_period: 0 };
         x64_efi_init.calculate_timer_period();
         x64_efi_init
+    }
+
+    /// This function initializes the CPU for the x86_64 architecture.
+    pub fn initialize(&mut self) -> Result<(), EfiError> {
+        // Initialize floating point units
+
+        // disable interrupts
+        interrupts::disable_interrupts();
+
+        // Initialize GDT
+        self.initialize_gdt();
+
+        interrupts::enable_interrupts();
+
+        Ok(())
     }
 
     fn calculate_timer_period(&mut self) {
@@ -74,22 +91,7 @@ impl EfiCpuInitX64 {
 }
 
 /// The x86_64 implementation of EFI Cpu Init.
-impl EfiCpuInit for EfiCpuInitX64 {
-    /// This function initializes the CPU for the x86_64 architecture.
-    fn initialize(&mut self) -> Result<(), EfiError> {
-        // Initialize floating point units
-
-        // disable interrupts
-        interrupts::disable_interrupts();
-
-        // Initialize GDT
-        self.initialize_gdt();
-
-        interrupts::enable_interrupts();
-
-        Ok(())
-    }
-
+impl Cpu for EfiCpuX64 {
     fn flush_data_cache(
         &self,
         _start: efi::PhysicalAddress,
@@ -124,9 +126,9 @@ impl EfiCpuInit for EfiCpuInitX64 {
     }
 }
 
-impl Default for EfiCpuInitX64 {
+impl Default for EfiCpuX64 {
     fn default() -> Self {
-        EfiCpuInitX64::new()
+        EfiCpuX64::new()
     }
 }
 
@@ -137,7 +139,7 @@ mod tests {
 
     #[test]
     fn test_initialize() {
-        let mut x64_cpu_init = EfiCpuInitX64 { timer_period: 0 };
+        let mut x64_cpu_init = EfiCpuX64 { timer_period: 0 };
         x64_cpu_init.calculate_timer_period();
 
         assert_eq!(x64_cpu_init.initialize(), Ok(()));
@@ -145,7 +147,7 @@ mod tests {
 
     #[test]
     fn test_flush_data_cache() {
-        let mut x64_cpu_init = EfiCpuInitX64 { timer_period: 0 };
+        let mut x64_cpu_init = EfiCpuX64 { timer_period: 0 };
         x64_cpu_init.calculate_timer_period();
 
         assert_eq!(x64_cpu_init.initialize(), Ok(()));
@@ -167,7 +169,7 @@ mod tests {
 
     #[test]
     fn test_get_timer_value() {
-        let mut x64_cpu_init = EfiCpuInitX64 { timer_period: 0 };
+        let mut x64_cpu_init = EfiCpuX64 { timer_period: 0 };
         x64_cpu_init.calculate_timer_period();
 
         assert_eq!(x64_cpu_init.initialize(), Ok(()));
