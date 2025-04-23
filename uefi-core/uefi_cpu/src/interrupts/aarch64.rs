@@ -15,14 +15,11 @@ cfg_if::cfg_if! {
         mod interrupt_manager;
         mod sysreg;
         pub mod gic_manager;
-        pub use interrupt_manager::InterruptManagerAArch64;
-        pub use interrupt_manager::InterruptBasesAArch64;
-
+        pub use interrupt_manager::InterruptsAarch64;
         use core::arch::asm;
         use crate::interrupts::aarch64::sysreg::read_sysreg;
     } else if #[cfg(feature = "doc")] {
-        pub use interrupt_manager::InterruptManagerAArch64;
-        pub use interrupt_manager::InterruptBasesAArch64;
+        pub use interrupt_manager::InterruptsAarch64;
         mod interrupt_manager;
     }
 }
@@ -43,6 +40,7 @@ impl super::EfiExceptionStackTrace for ExceptionContextAArch64 {
     }
 }
 
+#[allow(unused)]
 pub fn enable_interrupts() {
     #[cfg(all(not(test), target_arch = "aarch64"))]
     {
@@ -57,6 +55,7 @@ pub fn enable_interrupts() {
     }
 }
 
+#[allow(unused)]
 pub fn disable_interrupts() {
     #[cfg(all(not(test), target_arch = "aarch64"))]
     {
@@ -71,6 +70,7 @@ pub fn disable_interrupts() {
     }
 }
 
+#[allow(unused)]
 pub fn get_interrupt_state() -> Result<bool, EfiError> {
     #[cfg(all(not(test), target_arch = "aarch64"))]
     {

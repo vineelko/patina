@@ -76,16 +76,20 @@ lazy_static! {
 /// An x64 version of the InterruptManager for managing IDT based interrupts.
 ///
 #[derive(Default, Copy, Clone)]
-pub struct InterruptManagerX64 {}
+pub struct InterruptsX64 {}
 
-impl InterruptManagerX64 {
+impl InterruptsX64 {
     pub const fn new() -> Self {
         Self {}
     }
-}
 
-impl InterruptManager for InterruptManagerX64 {
-    fn initialize(&mut self) -> Result<(), EfiError> {
+    /// Initializes the hardware and software structures for interrupts and exceptions.
+    ///
+    /// This routine will initialize the architecture and platforms specific mechanisms
+    /// for interrupts and exceptions to be taken. This routine may install some
+    /// architecture specific default handlers for exceptions.
+    ///
+    pub fn initialize(&mut self) -> Result<(), EfiError> {
         if &IDT as *const _ as usize >= SIZE_4GB {
             // TODO: Come back and ensure the GDT is below 4GB
             panic!("GDT above 4GB, MP services will fail");
@@ -102,6 +106,8 @@ impl InterruptManager for InterruptManagerX64 {
         Ok(())
     }
 }
+
+impl InterruptManager for InterruptsX64 {}
 
 /// Handler for double faults.
 ///

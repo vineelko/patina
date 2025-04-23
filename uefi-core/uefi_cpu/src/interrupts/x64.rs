@@ -15,9 +15,9 @@ use uefi_sdk::error::EfiError;
 cfg_if::cfg_if! {
     if #[cfg(all(target_os = "uefi", target_arch = "x86_64"))] {
         mod interrupt_manager;
-        pub use interrupt_manager::InterruptManagerX64;
+        pub use interrupt_manager::InterruptsX64;
     } else if #[cfg(feature = "doc")] {
-        pub use interrupt_manager::InterruptManagerX64;
+        pub use interrupt_manager::InterruptsX64;
         mod interrupt_manager;
     }
 }
@@ -38,18 +38,21 @@ impl super::EfiExceptionStackTrace for ExceptionContextX64 {
     }
 }
 
+#[allow(unused)]
 pub fn enable_interrupts() {
     unsafe {
         asm!("sti", options(preserves_flags, nostack));
     }
 }
 
+#[allow(unused)]
 pub fn disable_interrupts() {
     unsafe {
         asm!("cli", options(preserves_flags, nostack));
     }
 }
 
+#[allow(unused)]
 pub fn get_interrupt_state() -> Result<bool, EfiError> {
     let eflags: u64;
     const IF: u64 = 0x200;

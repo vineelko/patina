@@ -34,6 +34,7 @@ cfg_if::cfg_if! {
         mod x64;
         mod aarch64;
         mod null;
+        pub type EfiCpu = null::EfiCpuNull;
         pub use x64::EfiCpuX64;
         pub use aarch64::EfiCpuAarch64;
         pub use null::EfiCpuNull;

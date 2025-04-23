@@ -2,6 +2,12 @@
 //!
 //! This module provides implementation for handling interrupts.
 //!
+//! This module provides implementation for [InterruptManager]. The [Interrupts] struct is the only accessible struct
+//! when using this module. The other structs are architecture specific implementations and replace the [Interrupts]
+//! struct at compile time based on the target architecture.
+//!
+//! If compiling for AARCH64, the `gic_manager` module is also available.
+//!
 //! ## License
 //!
 //! Copyright (C) Microsoft Corporation. All rights reserved.
@@ -13,24 +19,37 @@ use mu_pi::protocols::cpu_arch::EfiSystemContext;
 use uefi_sdk::error::EfiError;
 
 mod exception_handling;
-pub mod null;
 
 cfg_if::cfg_if! {
     if #[cfg(all(target_os = "uefi", target_arch = "x86_64"))] {
-        pub mod x64;
-        pub use x64::InterruptManagerX64 as InterruptManagerX64;
-        pub use null::InterruptManagerNull as InterruptManagerNull;
-        pub use null::InterruptBasesNull as InterruptBasesNull;
+        mod x64;
+        pub type Interrupts = x64::InterruptsX64;
     } else if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
-        pub mod aarch64;
-        pub use aarch64::InterruptManagerAArch64 as InterruptManagerAArch64;
-        pub use null::InterruptManagerNull as InterruptManagerNull;
-        pub use aarch64::InterruptBasesAArch64 as InterruptBasesAArch64;
+        mod aarch64;
+        pub type Interrupts = aarch64::InterruptsAarch64;
+        pub use aarch64::gic_manager;
+    } else if #[cfg(feature = "doc")] {
+        mod x64;
+        mod aarch64;
+        mod null;
+        pub use x64::InterruptsX64;
+        pub use aarch64::InterruptsAarch64;
+        pub use null::InterruptsNull;
+
+        struct DocsInterrupts;
+        /// Type alias whose implementation is [InterruptsX64], [InterruptsAarch64], or
+        /// [InterruptsNull] depending on the compilation target.
+        ///
+        /// This struct is for documentation purposes only. Please refer to the individual implementations for specific
+        /// details.
+        #[allow(private_interfaces)]
+        pub type Interrupts = DocsInterrupts;
+
     } else {
-        pub mod x64;
-        pub mod aarch64;
-        pub use null::InterruptManagerNull as InterruptManagerNull;
-        pub use null::InterruptBasesNull as InterruptBasesNull;
+        mod x64;
+        mod aarch64;
+        mod null;
+        pub type Interrupts = null::InterruptsNull;
     }
 }
 
@@ -72,14 +91,6 @@ pub(crate) trait EfiExceptionStackTrace {
 /// and provide a callback mechanism for callers to handle exceptions.
 ///
 pub trait InterruptManager {
-    /// Initializes the hardware and software structures for interrupts and exceptions.
-    ///
-    /// This routine will initialize the architecture and platforms specific mechanisms
-    /// for interrupts and exceptions to be taken. This routine may install some
-    /// architecture specific default handlers for exceptions.
-    ///
-    fn initialize(&mut self) -> Result<(), EfiError>;
-
     /// Registers a callback for the given exception type.
     fn register_exception_handler(&self, exception_type: ExceptionType, handler: HandlerType) -> Result<(), EfiError> {
         exception_handling::register_exception_handler(exception_type, handler)
@@ -89,14 +100,6 @@ pub trait InterruptManager {
     fn unregister_exception_handler(&self, exception_type: ExceptionType) -> Result<(), EfiError> {
         exception_handling::unregister_exception_handler(exception_type)
     }
-}
-
-pub trait InterruptBases {
-    /// Returns the base address of the interrupt controller.
-    fn get_interrupt_base_d(&self) -> u64;
-
-    /// Returns the base address of the interrupt controller.
-    fn get_interrupt_base_r(&self) -> u64;
 }
 
 /// Type for storing the handler for a given exception.
@@ -134,40 +137,16 @@ pub trait InterruptHandler: Sync {
 
 cfg_if::cfg_if! {
     if #[cfg(all(target_os = "uefi", target_arch = "x86_64"))] {
-        pub fn enable_interrupts() {
-            x64::enable_interrupts();
-        }
-
-        pub fn disable_interrupts() {
-            x64::disable_interrupts();
-        }
-
-        pub fn get_interrupt_state() -> Result<bool, EfiError> {
-            x64::get_interrupt_state()
-        }
+        pub use x64::enable_interrupts;
+        pub use x64::disable_interrupts;
+        pub use x64::get_interrupt_state;
     } else if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
-        pub fn enable_interrupts() {
-            aarch64::enable_interrupts();
-        }
-
-        pub fn disable_interrupts() {
-            aarch64::disable_interrupts();
-        }
-
-        pub fn get_interrupt_state() -> Result<bool, EfiError> {
-            aarch64::get_interrupt_state()
-        }
+        pub use aarch64::enable_interrupts;
+        pub use aarch64::disable_interrupts;
+        pub use aarch64::get_interrupt_state;
     } else  {
-        pub fn enable_interrupts() {
-            null::enable_interrupts();
-        }
-
-        pub fn disable_interrupts() {
-            null::disable_interrupts();
-        }
-
-        pub fn get_interrupt_state() -> Result<bool, EfiError> {
-            null::get_interrupt_state()
-        }
+        pub use null::enable_interrupts;
+        pub use null::disable_interrupts;
+        pub use null::get_interrupt_state;
     }
 }

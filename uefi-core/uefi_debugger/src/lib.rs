@@ -27,8 +27,7 @@
 //! extern crate uefi_sdk;
 //! extern crate uefi_cpu;
 //!
-//! use uefi_cpu::interrupts::InterruptManager;
-//! use uefi_cpu::interrupts::null::InterruptManagerNull;
+//! use uefi_cpu::interrupts::{Interrupts, InterruptManager};
 //!
 //! static DEBUGGER: uefi_debugger::UefiDebugger<uefi_sdk::serial::uart::UartNull> =
 //!     uefi_debugger::UefiDebugger::new(uefi_sdk::serial::uart::UartNull{});
@@ -49,7 +48,7 @@
 //! }
 //!
 //! fn start() {
-//!     let mut interrupt_manager = InterruptManagerNull::default();
+//!     let mut interrupt_manager = Interrupts::default();
 //!
 //!     // Initialize the debugger. This will cause a debug break because of the
 //!     // initial break configuration set above.

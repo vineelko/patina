@@ -8,9 +8,7 @@
 //!
 
 mod interrupt_manager;
-
-pub use interrupt_manager::InterruptBasesNull;
-pub use interrupt_manager::InterruptManagerNull;
+pub use interrupt_manager::InterruptsNull;
 use mu_pi::protocols::cpu_arch::EfiSystemContext;
 use uefi_sdk::error::EfiError;
 
@@ -28,10 +26,13 @@ impl super::EfiExceptionStackTrace for ExceptionContextNull {
     fn dump_stack_trace(&self) {}
 }
 
+#[allow(unused)]
 pub fn enable_interrupts() {}
 
+#[allow(unused)]
 pub fn disable_interrupts() {}
 
+#[allow(unused)]
 pub fn get_interrupt_state() -> Result<bool, EfiError> {
     Ok(false)
 }

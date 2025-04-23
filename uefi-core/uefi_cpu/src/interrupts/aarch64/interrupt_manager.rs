@@ -12,8 +12,8 @@ use uefi_sdk::error::EfiError;
 
 #[cfg(all(not(test), target_arch = "aarch64"))]
 use crate::interrupts::aarch64::sysreg::{read_sysreg, write_sysreg};
+use crate::interrupts::InterruptManager;
 use crate::interrupts::{disable_interrupts, enable_interrupts};
-use crate::interrupts::{InterruptBases, InterruptManager};
 
 #[cfg(all(not(test), target_arch = "aarch64"))]
 use crate::interrupts::aarch64::gic_manager::get_current_el;
@@ -29,44 +29,26 @@ extern "C" {
 
 /// AARCH64 Implementation of the InterruptManager.
 #[derive(Default, Copy, Clone)]
-pub struct InterruptManagerAArch64 {}
+pub struct InterruptsAarch64 {}
 
-impl InterruptManagerAArch64 {
+impl InterruptsAarch64 {
     pub const fn new() -> Self {
         Self {}
     }
-}
 
-impl InterruptManager for InterruptManagerAArch64 {
-    fn initialize(&mut self) -> Result<(), EfiError> {
+    /// Initializes the hardware and software structures for interrupts and exceptions.
+    ///
+    /// This routine will initialize the architecture and platforms specific mechanisms
+    /// for interrupts and exceptions to be taken. This routine may install some
+    /// architecture specific default handlers for exceptions.
+    ///
+    pub fn initialize(&mut self) -> Result<(), EfiError> {
         // Initialize exception entrypoint
         initialize_exception()
     }
 }
 
-/// AARCH64 Implementation of the InterruptManager.
-#[derive(Default, Copy, Clone)]
-pub struct InterruptBasesAArch64 {
-    gicd_base: u64,
-    gicr_base: u64,
-}
-
-impl InterruptBasesAArch64 {
-    pub fn new(gicd_base: u64, gicr_base: u64) -> Self {
-        Self { gicd_base, gicr_base }
-    }
-}
-
-/// AArch64 Implementation of the InterruptBases.
-impl InterruptBases for InterruptBasesAArch64 {
-    fn get_interrupt_base_d(&self) -> u64 {
-        self.gicd_base
-    }
-
-    fn get_interrupt_base_r(&self) -> u64 {
-        self.gicr_base
-    }
-}
+impl InterruptManager for InterruptsAarch64 {}
 
 fn enable_fiq() {
     unsafe {
