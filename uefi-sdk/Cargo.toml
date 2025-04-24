@@ -24,6 +24,7 @@ driver_binding = { path = "./driver_binding", version = "5" }
 runtime_services = { path = "./runtime_services", version = "5" }
 tpl_mutex = { path = "./tpl_mutex", version = "5" }
 uefi_protocol = { path = "./uefi_protocol", version = "5" }
+uefi_sdk = { path = "./uefi_sdk", version = "5" }
 uefi_sdk_macro = { path = "./uefi_sdk_macro", version = "5" }
 
 cfg-if = { version = "^1"}

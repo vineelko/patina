@@ -33,8 +33,12 @@ impl HobConfig {
             Ok(id) => id,
         };
 
-        let bytes = id.to_fields_le();
-        let (a, b, c, [d0, d1, d2, d3, d4, d5, d6, d7]) = bytes;
+        let fields = id.as_fields();
+        let node: &[u8; 6] =
+            &fields.3[2..].try_into().map_err(|_| syn::Error::new(attr.span(), "Invalid GUID format"))?;
+        let (a, b, c) = (fields.0, fields.1, fields.2);
+        let (d0, d1) = (fields.3[0], fields.3[1]);
+        let [d2, d3, d4, d5, d6, d7] = *node;
 
         Ok(quote! {
             uefi_sdk::component::service::Guid::from_fields(#a, #b, #c, #d0, #d1, &[#d2, #d3, #d4, #d5, #d6, #d7])
@@ -136,6 +140,9 @@ mod tests {
     use super::*;
     use proc_macro2::TokenStream;
     use quote::quote;
+    extern crate alloc;
+    use alloc::format;
+    use uefi_sdk::component;
 
     #[test]
     fn test_config_basic() {
@@ -145,9 +152,17 @@ mod tests {
             struct MyStruct(u32);
         };
 
+        const TEST_HOB_GUID: component::service::Guid = component::service::Guid::from_fields(
+            2347032417u32,
+            37834u16,
+            4562u16,
+            170u8,
+            13u8,
+            &[0u8, 224u8, 152u8, 3u8, 43u8, 140u8],
+        );
         let expected = quote! {
             impl uefi_sdk::component::hob::FromHob for MyStruct {
-                const HOB_GUID: uefi_sdk::component::service::Guid = uefi_sdk::component::service::Guid::from_fields(1642062987u32, 51859u16, 53777u16, 170u8, 13u8, &[0u8, 224u8, 152u8, 3u8, 43u8, 140u8]);
+                const HOB_GUID: uefi_sdk::component::service::Guid = uefi_sdk::component::service::Guid::from_fields(2347032417u32, 37834u16, 4562u16, 170u8, 13u8, &[0u8, 224u8, 152u8, 3u8, 43u8, 140u8]);
                 fn parse(bytes: &[u8]) -> Self {
                     assert!(
                         bytes.len() >= core::mem::size_of::<Self>(),
@@ -160,6 +175,52 @@ mod tests {
 
         let output = hob_config2(input);
         assert_eq!(output.to_string(), expected.to_string());
+
+        let (f0, f1, f2, f3, f4, &[f5, f6, f7, f8, f9, f10]) = TEST_HOB_GUID.as_fields();
+        let name =
+            format!("{f0:08x}-{f1:04x}-{f2:04x}-{f3:02x}{f4:02x}-{f5:02x}{f6:02x}{f7:02x}{f8:02x}{f9:02x}{f10:02x}");
+        assert_eq!(name, "8be4df61-93ca-11d2-aa0d-00e098032b8c");
+    }
+
+    #[test]
+    fn test_config_basic_pcd_db_hob_guid() {
+        let input: TokenStream = quote! {
+            #[derive(HobConfig)]
+            #[hob = "ea296d92-0b69-423c-8c28-33b4e0a91268"]
+            struct MyStruct(u32);
+        };
+
+        const TEST_HOB_GUID: component::service::Guid = component::service::Guid::from_fields(
+            0xea296d92u32,
+            0x0b69u16,
+            0x423cu16,
+            0x8cu8,
+            0x28u8,
+            &[0x33u8, 0xb4u8, 0xe0u8, 0xa9u8, 0x12u8, 0x68u8],
+        );
+        let expected = quote! {
+            impl uefi_sdk::component::hob::FromHob for MyStruct {
+
+                const HOB_GUID: uefi_sdk::component::service::Guid = uefi_sdk::component::service::Guid::from_fields(3928583570u32, 2921u16, 16956u16, 140u8, 40u8, &[51u8, 180u8, 224u8, 169u8, 18u8, 104u8]);
+                fn parse(bytes: &[u8]) -> Self {
+                    assert!(
+                        bytes.len() >= core::mem::size_of::<Self>(),
+                        "Guided Hob [{:#?}] parse failed. Buffer to small for type {}", Self::HOB_GUID, core::any::type_name::<Self>()
+                    );
+                    unsafe { *(bytes.as_ptr() as *const Self) }
+                }
+            }
+        };
+
+        let output = hob_config2(input);
+        assert_eq!(output.to_string(), expected.to_string());
+
+        // Test that the hex string provided in the attribute matches the well known PCD Database HOB GUID
+        let (f0, f1, f2, f3, f4, &[f5, f6, f7, f8, f9, f10]) = TEST_HOB_GUID.as_fields();
+        let name = alloc::format!(
+            "{f0:08x}-{f1:04x}-{f2:04x}-{f3:02x}{f4:02x}-{f5:02x}{f6:02x}{f7:02x}{f8:02x}{f9:02x}{f10:02x}"
+        );
+        assert_eq!(name, "ea296d92-0b69-423c-8c28-33b4e0a91268");
     }
 
     #[test]
@@ -171,7 +232,7 @@ mod tests {
         };
         let expected = quote! {
             impl<T> uefi_sdk::component::hob::FromHob for MyStruct<T> {
-                const HOB_GUID: uefi_sdk::component::service::Guid = uefi_sdk::component::service::Guid::from_fields(1642062987u32, 51859u16, 53777u16, 170u8, 13u8, &[0u8, 224u8, 152u8, 3u8, 43u8, 140u8]);
+                const HOB_GUID: uefi_sdk::component::service::Guid = uefi_sdk::component::service::Guid::from_fields(2347032417u32, 37834u16, 4562u16, 170u8, 13u8, &[0u8, 224u8, 152u8, 3u8, 43u8, 140u8]);
                 fn parse(bytes: &[u8]) -> Self {
                     assert!(
                         bytes.len() >= core::mem::size_of::<Self>(),
