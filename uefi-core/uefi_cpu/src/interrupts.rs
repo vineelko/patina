@@ -36,14 +36,12 @@ cfg_if::cfg_if! {
         pub use aarch64::InterruptsAarch64;
         pub use null::InterruptsNull;
 
-        struct DocsInterrupts;
         /// Type alias whose implementation is [InterruptsX64], [InterruptsAarch64], or
         /// [InterruptsNull] depending on the compilation target.
         ///
         /// This struct is for documentation purposes only. Please refer to the individual implementations for specific
         /// details.
-        #[allow(private_interfaces)]
-        pub type Interrupts = DocsInterrupts;
+        pub type Interrupts = InterruptsNull;
 
     } else {
         mod x64;
