@@ -306,13 +306,13 @@ unsafe impl<T: ?Sized + 'static> Param for Service<T> {
         state: &'state Self::State,
         storage: UnsafeStorageCell<'storage>,
     ) -> Self::Item<'storage, 'state> {
-        Service::from(storage.storage().try_get_raw_service(*state).unwrap_or_else(|| {
+        Service::from(storage.storage().get_raw_service(*state).unwrap_or_else(|| {
             panic!("Could not find Service value with id [{}] even though it was just validated.", *state)
         }))
     }
 
     fn validate(state: &Self::State, storage: UnsafeStorageCell) -> bool {
-        unsafe { storage.storage() }.try_get_raw_service(*state).is_some()
+        unsafe { storage.storage() }.get_raw_service(*state).is_some()
     }
 
     fn init_state(storage: &mut Storage, _meta: &mut MetaData) -> Self::State {
@@ -362,11 +362,11 @@ mod tests {
         let mut storage = Storage::new();
         storage.add_service(MyServiceImpl);
 
-        let s = storage.try_get_service::<dyn MyService>().unwrap();
+        let s = storage.get_service::<dyn MyService>().unwrap();
         assert_eq!(42, s.do_something());
 
         storage.add_service(MyService2Impl { inner: s });
-        let s2 = storage.try_get_service::<dyn MyService2>().unwrap();
+        let s2 = storage.get_service::<dyn MyService2>().unwrap();
         assert_eq!(42, s2.do_something2());
 
         storage.add_service(MyServiceImpl);
@@ -378,7 +378,7 @@ mod tests {
         }
 
         storage.add_service(SomeStruct { x: 1 });
-        let s3 = storage.try_get_service::<SomeStruct>().unwrap();
+        let s3 = storage.get_service::<SomeStruct>().unwrap();
         assert_eq!(1, s3.x)
     }
 

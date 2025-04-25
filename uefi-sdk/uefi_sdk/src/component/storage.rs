@@ -238,15 +238,15 @@ impl Storage {
         self.configs.insert(id, RefCell::new(ConfigRaw::new(true, Box::new(config))));
     }
 
-    /// Gets an immutable reference to a config datum in the storage.
-    pub fn try_get_config<C: Default + 'static>(&self) -> Option<crate::component::params::Config<C>> {
+    /// Attempts to retrieve a config datum from the storage.
+    pub fn get_config<C: Default + 'static>(&self) -> Option<crate::component::params::Config<C>> {
         let id = self.config_indices.get(&TypeId::of::<C>())?;
         let untyped = self.get_raw_config(*id);
         Some(crate::component::params::Config::from(untyped))
     }
 
-    /// Gets a mutable reference to a config datum in the storage.
-    pub fn try_get_config_mut<C: Default + 'static>(&mut self) -> Option<crate::component::params::ConfigMut<C>> {
+    /// Attempts to retrieve a mutable config datum from the storage.
+    pub fn get_config_mut<C: Default + 'static>(&mut self) -> Option<crate::component::params::ConfigMut<C>> {
         let id = self.config_indices.get(&TypeId::of::<C>())?;
         let untyped = self.get_raw_config_mut(*id);
         Some(crate::component::params::ConfigMut::from(untyped))
@@ -314,14 +314,15 @@ impl Storage {
     }
 
     /// Retrieves a service from the underlying storage in its untyped form.
-    pub(crate) fn try_get_raw_service(&self, id: usize) -> Option<&'static dyn Any> {
+    pub(crate) fn get_raw_service(&self, id: usize) -> Option<&'static dyn Any> {
         // Copy the reference, not the underlying value
         self.services.get(id).copied()
     }
 
-    pub fn try_get_service<S: ?Sized + 'static>(&self) -> Option<Service<S>> {
+    /// Attempts to retrieve a service from the storage.
+    pub fn get_service<S: ?Sized + 'static>(&self) -> Option<Service<S>> {
         let idx = *self.service_indices.get(&TypeId::of::<S>())?;
-        Some(Service::from(self.try_get_raw_service(idx)?))
+        Some(Service::from(self.get_raw_service(idx)?))
     }
 
     pub(crate) fn add_hob_parser<T: FromHob>(&mut self) {
