@@ -290,6 +290,14 @@ impl<T: ?Sized + 'static> Deref for Service<T> {
     }
 }
 
+impl<T: ?Sized + 'static> Clone for Service<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: ?Sized + 'static> Copy for Service<T> {}
+
 unsafe impl<T: ?Sized + 'static> Param for Service<T> {
     type State = usize;
     type Item<'storage, 'state> = Service<T>;
@@ -447,5 +455,28 @@ mod tests {
 
         let service = Service::mock(Box::new(MockService));
         assert_eq!(42, service.do_something());
+    }
+
+    #[test]
+    fn test_services_can_be_copied() {
+        trait MyService {
+            fn do_something(&self) -> u32;
+        }
+
+        struct MockService;
+
+        impl MyService for MockService {
+            fn do_something(&self) -> u32 {
+                42
+            }
+        }
+
+        fn consume_service(service: Service<dyn MyService>) {
+            assert_eq!(42, service.do_something());
+        }
+
+        let service: Service<dyn MyService> = Service::mock(Box::new(MockService));
+        consume_service(service);
+        consume_service(service); // This should work as well, since Service is Copy
     }
 }
