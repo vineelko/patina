@@ -14,7 +14,6 @@ use syn::{parse::Parse, spanned::Spanned, Attribute, Generics, ItemEnum, ItemStr
 #[derive(Clone)]
 struct AttrConfig {
     pub services: Vec<TokenStream>,
-    pub protocol_guid: Option<TokenStream>,
 }
 
 /// A struct containing the parsed struct and its attribute configs.
@@ -26,12 +25,10 @@ struct Service {
 impl Service {
     /// Parses all attributes of the struct
     fn parse_attr(attrs: &mut Vec<Attribute>) -> syn::Result<AttrConfig> {
-        let mut config = AttrConfig { services: vec![], protocol_guid: None };
+        let mut config = AttrConfig { services: vec![] };
         for attr in attrs {
             if attr.path().is_ident("service") {
                 config.services = Self::parse_service_attr(attr)?;
-            } else if attr.path().is_ident("protocol") {
-                config.protocol_guid = Some(Self::parse_protocol_attr(attr)?);
             }
         }
 
@@ -75,25 +72,6 @@ impl Service {
         Ok(services)
     }
 
-    /// Parses the `#[protocol = "..."]` attribute.
-    fn parse_protocol_attr(attr: &Attribute) -> syn::Result<TokenStream> {
-        let Meta::NameValue(nv) = &attr.meta else {
-            return Err(syn::Error::new(attr.span(), "Expected #[protocol(...)]"));
-        };
-
-        let id = match uuid::Uuid::parse_str(&nv.value.to_token_stream().to_string().replace("\"", "")) {
-            Err(_) => return Err(syn::Error::new(nv.value.span(), "Invalid GUID format.")),
-            Ok(id) => id,
-        };
-
-        let bytes = id.as_fields();
-        let (a, b, c, [d0, d1, d2, d3, d4, d5, d6, d7]) = bytes;
-
-        Ok(quote! {
-            uefi_sdk::component::service::Guid::from_fields(#a, #b, #c, #d0, #d1, &[#d2, #d3, #d4, #d5, #d6, #d7] )
-        })
-    }
-
     /// Returns the name [Ident](syn::Ident) of the struct
     fn ident(&self) -> &syn::Ident {
         &self.item.ident
@@ -107,16 +85,6 @@ impl Service {
     /// Returns a unique identifier for the allocator.
     fn alloc_name(&self) -> proc_macro2::Ident {
         format_ident!("__alloc_service_{}", self.ident())
-    }
-
-    /// Returns a token stream containing code to register 0..1 protocol.
-    fn protocol_register(&self) -> TokenStream {
-        let Some(guid) = &self.config.protocol_guid else { return quote!() };
-
-        quote! {
-            const GUID: uefi_sdk::component::service::Guid = #guid;
-            unsafe { Self::register_protocol(storage, &GUID, ptr as *mut core::ffi::c_void) };
-        }
     }
 
     /// Returns a token stream containing code to register 0..N services.
@@ -190,10 +158,10 @@ pub(crate) fn service2(item: proc_macro2::TokenStream) -> proc_macro2::TokenStre
 
     let config = service.config();
 
-    if config.services.is_empty() && config.protocol_guid.is_none() {
+    if config.services.is_empty() {
         return syn::Error::new(
             service.ident().span(),
-            "At least one #[service(...)] or #[protocol = \"...\"] must be specified.",
+            "At least one Service #[service(Service1, Service2, ...)] must be specified.",
         )
         .to_compile_error();
     }
@@ -205,7 +173,6 @@ pub(crate) fn service2(item: proc_macro2::TokenStream) -> proc_macro2::TokenStre
     let where_clause = &service.generics().where_clause;
     let alloc_name = service.alloc_name();
     let service_register = service.service_register();
-    let protocol_register = service.protocol_register();
 
     quote! {
         extern crate alloc as #alloc_name;
@@ -215,7 +182,6 @@ pub(crate) fn service2(item: proc_macro2::TokenStream) -> proc_macro2::TokenStre
                 let boxed: #alloc_name::boxed::Box<Self> = #alloc_name::boxed::Box::new(self);
                 let ptr = #alloc_name::boxed::Box::into_raw(boxed);
                 #service_register
-                #protocol_register
             }
         }
     }
@@ -268,32 +234,6 @@ mod tests {
                     let boxed: __alloc_service_MyStruct::boxed::Box<dyn MyService2> = unsafe { __alloc_service_MyStruct::boxed::Box::from_raw(ptr) };
                     let leaked: &'static dyn core::any::Any = __alloc_service_MyStruct::boxed::Box::leak(__alloc_service_MyStruct::boxed::Box::new(boxed));
                     Self::register_service::<dyn MyService2>(storage, leaked);
-                }
-            }
-        };
-
-        assert_eq!(expected.to_string(), service2(input).to_string());
-    }
-
-    #[test]
-    fn test_service_with_service_and_protocol() {
-        let input = quote! {
-            #[service(dyn MyService)]
-            #[protocol = "8be4df61-93ca-11d2-aa0d-00e098032b8c"]
-            struct MyStruct;
-        };
-
-        let expected = quote! {
-            extern crate alloc as __alloc_service_MyStruct;
-            impl uefi_sdk::component::service::IntoService for MyStruct {
-                fn register(self, storage: &mut uefi_sdk::component::Storage) {
-                    let boxed: __alloc_service_MyStruct::boxed::Box<Self> = __alloc_service_MyStruct::boxed::Box::new(self);
-                    let ptr = __alloc_service_MyStruct::boxed::Box::into_raw(boxed);
-                    let boxed: __alloc_service_MyStruct::boxed::Box<dyn MyService> = unsafe { __alloc_service_MyStruct::boxed::Box::from_raw(ptr) };
-                    let leaked: &'static dyn core::any::Any = __alloc_service_MyStruct::boxed::Box::leak(__alloc_service_MyStruct::boxed::Box::new(boxed));
-                    Self::register_service::<dyn MyService>(storage, leaked);
-                    const GUID: uefi_sdk::component::service::Guid = uefi_sdk::component::service::Guid::from_fields(2347032417u32, 37834u16, 4562u16, 170u8, 13u8, &[ 0u8, 224u8, 152u8, 3u8, 43u8, 140u8] );
-                    unsafe { Self::register_protocol(storage, &GUID, ptr as *mut core::ffi::c_void) };
                 }
             }
         };
@@ -407,57 +347,7 @@ mod tests {
         };
 
         let expected = quote! {
-            :: core :: compile_error ! { "At least one #[service(...)] or #[protocol = \"...\"] must be specified." }
-        };
-
-        assert_eq!(expected.to_string(), service2(input).to_string());
-    }
-
-    #[test]
-    fn test_struct_protocol_attr() {
-        let input = quote! {
-            #[protocol = "8be4df61-93ca-11d2-aa0d-00e098032b8c"]
-            struct MyStruct;
-        };
-
-        let expected = quote! {
-            extern crate alloc as __alloc_service_MyStruct;
-            impl uefi_sdk::component::service::IntoService for MyStruct {
-                fn register(self, storage: &mut uefi_sdk::component::Storage) {
-                    let boxed: __alloc_service_MyStruct::boxed::Box<Self> = __alloc_service_MyStruct::boxed::Box::new(self);
-                    let ptr = __alloc_service_MyStruct::boxed::Box::into_raw(boxed);
-                    const GUID: uefi_sdk::component::service::Guid = uefi_sdk::component::service::Guid::from_fields(2347032417u32, 37834u16, 4562u16, 170u8, 13u8, &[0u8, 224u8, 152u8, 3u8, 43u8, 140u8] );
-                    unsafe { Self::register_protocol(storage, &GUID, ptr as *mut core::ffi::c_void) };
-                }
-            }
-        };
-
-        assert_eq!(expected.to_string(), service2(input).to_string());
-    }
-
-    #[test]
-    fn test_struct_protocol_attr_bad_format() {
-        let input = quote! {
-            #[protocol = "93ca-11d2-aa0d-00e098032b8"]
-            struct MyStruct;
-        };
-
-        let expected = quote! {
-            :: core :: compile_error ! { "Invalid GUID format." }
-        };
-
-        assert_eq!(expected.to_string(), service2(input).to_string());
-    }
-
-    #[test]
-    fn test_struct_protocol_attr_bad_format2() {
-        let input = quote! {
-            #[protocol("8be4df61-93ca-11d2-aa0d-00e098032b8c")]
-            struct MyStruct;
-        };
-
-        let expected = quote! {
-            :: core :: compile_error ! { "Expected #[protocol(...)]" }
+            :: core :: compile_error ! { "At least one Service #[service(Service1, Service2, ...)] must be specified." }
         };
 
         assert_eq!(expected.to_string(), service2(input).to_string());

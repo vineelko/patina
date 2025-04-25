@@ -113,17 +113,7 @@ pub fn component(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
 ///   }
 /// }
 /// ```
-///
-/// ## Pure Protocol Example
-///
-/// ```rust, ignore
-/// #[derive(IntoService)]
-/// #[protocol = "8be4df61-93ca-11d2-aa0d-00e098032b8c"]
-/// struct MyStruct {
-///   f: extern "efiapi" fn() -> r_efi::efi::Status;
-/// }
-/// ```
-#[proc_macro_derive(IntoService, attributes(protocol, service))]
+#[proc_macro_derive(IntoService, attributes(service))]
 pub fn service(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     service_macro::service2(item.into()).into()
 }
