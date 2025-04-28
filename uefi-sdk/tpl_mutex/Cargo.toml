@@ -16,5 +16,5 @@ r-efi = { workspace=true }
 boot_services = { workspace=true }
 
 [dev-dependencies]
-mockall = { version = "0.13.0" }
+mockall = { workspace = true }
 boot_services = { workspace=true, features = ["mockall"]}

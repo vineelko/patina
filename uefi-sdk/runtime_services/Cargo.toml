@@ -22,4 +22,4 @@ mockall = { version = "*", optional = true }
 fallible-streaming-iterator = { version = "0.1.9" }
 
 [dev-dependencies]
-mockall = { version = "^0.13" }
+mockall = { workspace = true }
