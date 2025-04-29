@@ -69,6 +69,12 @@ impl StandardRuntimeServices {
     }
 }
 
+impl AsRef<StandardRuntimeServices> for StandardRuntimeServices {
+    fn as_ref(&self) -> &StandardRuntimeServices {
+        self
+    }
+}
+
 impl Clone for StandardRuntimeServices {
     fn clone(&self) -> Self {
         Self { efi_runtime_services: AtomicPtr::new(self.efi_runtime_services.load(Ordering::Relaxed)) }

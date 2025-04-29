@@ -74,6 +74,12 @@ impl StandardBootServices {
     }
 }
 
+impl AsRef<StandardBootServices> for StandardBootServices {
+    fn as_ref(&self) -> &StandardBootServices {
+        self
+    }
+}
+
 impl Clone for StandardBootServices {
     fn clone(&self) -> Self {
         Self { efi_boot_services: AtomicPtr::new(self.efi_boot_services.load(Ordering::Relaxed)) }
