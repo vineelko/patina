@@ -25,7 +25,7 @@ pub struct MetaData {
 
 impl MetaData {
     /// Creates a new metadata object for a component.
-    pub const fn new<S>() -> Self {
+    pub fn new<S>() -> Self {
         Self { access: Access::new(), name: core::any::type_name::<S>(), last_failed_param: None }
     }
 

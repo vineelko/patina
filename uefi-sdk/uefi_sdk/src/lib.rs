@@ -15,7 +15,6 @@
 //! SPDX-License-Identifier: BSD-2-Clause-Patent
 //!
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
-#![feature(const_type_name)]
 
 #[macro_use]
 pub mod macros;
