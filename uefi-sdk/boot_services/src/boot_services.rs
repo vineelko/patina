@@ -58,7 +58,7 @@ impl StandardBootServices {
 
     /// Initialize the StandardBootServices.
     pub fn init(&self, efi_boot_services: &efi::BootServices) {
-        // This struct nevery mutate the efi_boot_services.
+        // This struct never mutate the efi_boot_services.
         self.efi_boot_services.store(efi_boot_services as *const _ as *mut _, Ordering::Relaxed);
     }
 
