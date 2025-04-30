@@ -15,7 +15,7 @@ use paging::{MemoryAttributes, PageTable, PagingType};
 use stacktrace::StackTrace;
 use uefi_sdk::base::SIZE_4GB;
 use uefi_sdk::base::{UEFI_PAGE_MASK, UEFI_PAGE_SIZE};
-use uefi_sdk::error::EfiError;
+use uefi_sdk::{component::service::IntoService, error::EfiError};
 use x86_64::structures::idt::InterruptDescriptorTable;
 use x86_64::structures::idt::InterruptStackFrame;
 use x86_64::VirtAddr;
@@ -75,7 +75,8 @@ lazy_static! {
 ///
 /// An x64 version of the InterruptManager for managing IDT based interrupts.
 ///
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, IntoService)]
+#[service(dyn InterruptManager)]
 pub struct InterruptsX64 {}
 
 impl InterruptsX64 {

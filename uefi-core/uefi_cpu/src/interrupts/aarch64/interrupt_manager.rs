@@ -8,7 +8,7 @@
 //!
 
 use core::arch::{asm, global_asm};
-use uefi_sdk::error::EfiError;
+use uefi_sdk::{component::service::IntoService, error::EfiError};
 
 #[cfg(all(not(test), target_arch = "aarch64"))]
 use crate::interrupts::aarch64::sysreg::{read_sysreg, write_sysreg};
@@ -28,7 +28,8 @@ extern "C" {
 }
 
 /// AARCH64 Implementation of the InterruptManager.
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, IntoService)]
+#[service(dyn InterruptManager)]
 pub struct InterruptsAarch64 {}
 
 impl InterruptsAarch64 {

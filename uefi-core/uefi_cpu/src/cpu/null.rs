@@ -9,12 +9,13 @@
 use crate::cpu::Cpu;
 use mu_pi::protocols::cpu_arch::{CpuFlushType, CpuInitType};
 use r_efi::efi;
-use uefi_sdk::error::EfiError;
+use uefi_sdk::{component::service::IntoService, error::EfiError};
 
 /// Struct to implement Null Cpu Init.
 ///
 /// This struct cannot be used directly. It replaces the `EfiCpu` struct when not compiling for x86_64 or AArch64 UEFI architectures.
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, IntoService)]
+#[service(dyn Cpu)]
 pub struct EfiCpuNull;
 
 impl EfiCpuNull {

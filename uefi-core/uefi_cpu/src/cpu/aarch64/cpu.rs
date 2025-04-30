@@ -11,12 +11,13 @@ use crate::cpu::Cpu;
 use core::arch::asm;
 use mu_pi::protocols::cpu_arch::{CpuFlushType, CpuInitType};
 use r_efi::efi;
-use uefi_sdk::error::EfiError;
+use uefi_sdk::{component::service::IntoService, error::EfiError};
 
 /// Struct to implement AArch64 Cpu Init.
 ///
 /// This struct cannot be used directly. It replaces the `EfiCpu` struct when compiling for the AArch64 architecture.
-#[derive(Default)]
+#[derive(Default, IntoService)]
+#[service(dyn Cpu)]
 pub struct EfiCpuAarch64;
 
 impl EfiCpuAarch64 {

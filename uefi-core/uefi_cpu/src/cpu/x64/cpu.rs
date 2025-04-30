@@ -13,11 +13,13 @@ use crate::{cpu::Cpu, interrupts};
 use core::arch::asm;
 use mu_pi::protocols::cpu_arch::{CpuFlushType, CpuInitType};
 use r_efi::efi;
-use uefi_sdk::error::EfiError;
+use uefi_sdk::{component::service::IntoService, error::EfiError};
 
 /// Struct to implement X64 Cpu Init.
 ///
 /// This struct cannot be used directly. It replaces the `EfiCpu` struct when compiling for the x86_64 architecture.
+#[derive(IntoService)]
+#[service(dyn Cpu)]
 pub struct EfiCpuX64 {
     timer_period: u64,
 }
