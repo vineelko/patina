@@ -18,9 +18,8 @@ mockall = ["dep:mockall"]
 
 [dependencies]
 uefi_protocol = { workspace=true }
-
 r-efi = { workspace = true }
-mockall = { version = "*", optional = true }
+mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
 mockall = { workspace = true }

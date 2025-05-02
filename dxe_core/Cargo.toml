@@ -24,22 +24,25 @@ required-features = ["std"]
 
 [dependencies]
 compile-time = { workspace = true }
-crc32fast = { workspace = true }
-goblin = {workspace = true}
-lazy_static = { workspace = true }
+crc32fast = { workspace = true  }
+goblin = {workspace = true, features = [
+    "pe32",
+    "pe64",
+    "te",
+] }
+lazy_static = { workspace = true, features = ["spin_no_std"] }
 linked_list_allocator = { workspace = true }
 log = { workspace = true }
 mu_pi = { workspace = true }
 mu_rust_helpers = { workspace = true }
 paging = { workspace = true }
 r-efi = { workspace = true }
-scroll = {workspace = true}
+scroll = {workspace = true, features = ["derive"]}
 spin = { workspace = true }
-uefi_corosensei = { workspace = true }
-uuid = { workspace = true }
-
+uefi_corosensei = { workspace = true  }
+uuid = { workspace = true  }
 uefi_sdk = { workspace = true, features = ["core"] }
-uefi_collections = { workspace = true }
+uefi_collections = { workspace = true  }
 uefi_cpu = { workspace = true }
 uefi_debugger = { workspace = true }
 uefi_device_path = { workspace = true }
@@ -51,9 +54,9 @@ uefi_performance = { workspace = true }
 # cargo-release, however they are still used when verifying the package is compileable. Any dev-dependency that is
 # local to the workspace should be added via `path` instead of `workspace = true` so that that it does not fail to
 # compile due to the dev-dependency not being published yet.
-sample_components = { path = "../sample_components" }
+sample_components = { workspace = true }
 section_extractor = { workspace = true }
-uefi_collections = { path = "../crates/uefi_collections" }
+uefi_collections = { workspace = true }
 mockall = { workspace = true }
 
 [target.'cfg(all(target_arch="aarch64"))'.dependencies]

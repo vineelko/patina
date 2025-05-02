@@ -14,7 +14,7 @@ path = "src/lib.rs"
 
 [dependencies]
 r-efi = { workspace = true }
-scroll = { workspace = true }
+scroll = { workspace = true, features = ["derive"] }
 log = { workspace = true }
 uuid = { workspace = true }
 

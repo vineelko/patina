@@ -26,9 +26,9 @@ proc-macro = true
 
 [dependencies]
 uuid = { workspace = true}
-syn = { workspace = true }
+syn = { workspace = true, features = ["full"] }
 quote = { workspace = true }
 proc-macro2 = { workspace = true }
 
 [dev-dependencies]
-uefi_sdk = { path = "../uefi_sdk" }
+uefi_sdk = { workspace = true }

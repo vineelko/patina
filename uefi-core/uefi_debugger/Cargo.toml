@@ -14,7 +14,7 @@ path = "src/lib.rs"
 
 [dependencies]
 cfg-if = { workspace = true }
-gdbstub = { version = "0.7.3", default-features = false }
+gdbstub = { workspace = true }
 uefi_sdk = { workspace = true }
 uefi_cpu = { workspace = true }
 log = { workspace = true }

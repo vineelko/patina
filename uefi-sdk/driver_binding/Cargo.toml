@@ -17,13 +17,11 @@ mockall = ["dep:mockall"]
 [dependencies]
 boot_services = { workspace = true }
 uefi_protocol = { workspace = true }
-
 r-efi = { workspace = true }
 log = { workspace = true }
-mockall = { version = "*", optional = true }
-
+mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
-mockall = { version = "0.13.0" }
+mockall = { workspace = true }
 
 boot_services = { workspace = true, features = ["mockall"] }

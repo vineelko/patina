@@ -12,9 +12,9 @@ description = "Support for mutual exclusion across Task Priority Levels (TPLs)."
 path = "src/tpl_mutex.rs"
 
 [dependencies]
-r-efi = { workspace=true }
-boot_services = { workspace=true }
+r-efi = { workspace = true }
+boot_services = { workspace = true }
 
 [dev-dependencies]
 mockall = { workspace = true }
-boot_services = { workspace=true, features = ["mockall"]}
+boot_services = { workspace = true, features = ["mockall"] }

@@ -18,16 +18,12 @@ log = { workspace = true }
 uefi_sdk = { workspace = true }
 mu_pi = { workspace = true }
 r-efi = { workspace = true }
-
-# brotli support.
-brotli-decompressor = { version= "4.0.0", default-features = false, optional = true}
-alloc-no-stdlib = { version = "~2.0", optional = true}
-
-# uefi decompress support.
-mu_rust_helpers = { workspace = true, optional = true, features = ["uefi_decompress"]}
-
-#crc32 support.
-crc32fast = { version = "1.4", default-features = false, optional = true}
+brotli-decompressor = { workspace = true, optional = true }
+alloc-no-stdlib = { workspace = true, optional = true }
+mu_rust_helpers = { workspace = true, optional = true, features = [
+    "uefi_decompress",
+] }
+crc32fast = { workspace = true, optional = true }
 
 [features]
 default = ["brotli", "uefi_decompress", "crc32"]

@@ -13,5 +13,4 @@ path = "src/uefi_protocol.rs"
 
 [dependencies]
 mu_pi = { workspace = true }
-
 r-efi = { workspace = true }

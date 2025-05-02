@@ -18,8 +18,8 @@ mockall = ["dep:mockall"]
 
 [dependencies]
 r-efi = { workspace = true }
-mockall = { version = "*", optional = true }
-fallible-streaming-iterator = { version = "0.1.9" }
+mockall = { workspace = true, optional = true }
+fallible-streaming-iterator = { workspace = true }
 
 [dev-dependencies]
 mockall = { workspace = true }

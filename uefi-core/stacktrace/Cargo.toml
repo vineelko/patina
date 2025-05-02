@@ -13,7 +13,16 @@ cfg-if = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
-winapi = { version = "0.3", features = ["psapi", "libloaderapi", "minwinbase", "errhandlingapi", "processthreadsapi", "winbase", "synchapi", "debugapi"] }
+winapi = { workspace = true, features = [
+    "psapi",
+    "libloaderapi",
+    "minwinbase",
+    "errhandlingapi",
+    "processthreadsapi",
+    "winbase",
+    "synchapi",
+    "debugapi",
+] }
 
 [features]
 std = []

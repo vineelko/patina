@@ -28,7 +28,9 @@ r-efi = { workspace = true }
 mockall = { workspace = true, optional = true }
 
 [target.'cfg(target_arch="x86_64")'.dependencies]
-x86_64 = { workspace = true }
+x86_64 = { workspace = true, features = [
+  "instructions",
+] }
 uart_16550 = { workspace = true }
 
 [dev-dependencies]

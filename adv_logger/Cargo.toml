@@ -28,7 +28,7 @@ mu_rust_helpers = { workspace = true }
 uefi_test = { workspace = true }
 
 # Only used for CLI
-clap = { version = '4.5.36', features = ['derive'], optional = true }
+clap = { workspace = true, features = ['derive'], optional = true }
 
 [features]
 default = []
