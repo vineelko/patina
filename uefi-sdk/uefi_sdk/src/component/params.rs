@@ -343,8 +343,7 @@ unsafe impl<'c, T: Default + 'static> Param for Config<'c, T> {
     }
 
     fn init_state(storage: &mut Storage, meta: &mut MetaData) -> Self::State {
-        let id = storage.register_config::<T>();
-        storage.try_add_config_with_id(id, T::default());
+        let id = storage.add_config_default_if_not_present::<T>();
 
         if !meta.access().has_writes_all_configs() {
             assert!(
@@ -447,10 +446,9 @@ unsafe impl<'c, T: Default + 'static> Param for ConfigMut<'c, T> {
     }
 
     fn init_state(storage: &mut Storage, meta: &mut MetaData) -> Self::State {
-        let id = storage.register_config::<T>();
+        let id = storage.add_config_default_if_not_present::<T>();
         // All config is locked by default. We only unlock it (like below) when a component is detected that needs
         // it to be mutable.
-        storage.try_add_config_with_id(id, T::default());
         storage.unlock_config(id);
 
         if !meta.access().has_writes_all_configs() {

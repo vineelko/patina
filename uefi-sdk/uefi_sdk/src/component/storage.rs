@@ -223,13 +223,18 @@ impl Storage {
 
     /// Registers a config type with the storage and returns its global id.
     pub(crate) fn register_config<C: Default + 'static>(&mut self) -> usize {
-        self.get_or_register_config(TypeId::of::<C>())
+        let idx = self.config_indices.len();
+        let idx = *self.config_indices.entry(TypeId::of::<C>()).or_insert(idx);
+        idx
     }
 
-    /// Gets the global id of a config, registering it if it does not exist.
-    pub(crate) fn get_or_register_config(&mut self, id: TypeId) -> usize {
-        let idx = self.config_indices.len();
-        *self.config_indices.entry(id).or_insert(idx)
+    /// Adds a default valued config datum to the storage if it does not exist.
+    pub(crate) fn add_config_default_if_not_present<C: Default + 'static>(&mut self) -> usize {
+        let idx = self.register_config::<C>();
+        if !self.configs.contains(idx) {
+            self.configs.insert(idx, RefCell::new(ConfigRaw::new(true, Box::<C>::default())));
+        }
+        idx
     }
 
     /// Adds a config datum to the storage, overwriting an existing value if it exists.
@@ -250,18 +255,6 @@ impl Storage {
         let id = self.config_indices.get(&TypeId::of::<C>())?;
         let untyped = self.get_raw_config_mut(*id);
         Some(crate::component::params::ConfigMut::from(untyped))
-    }
-
-    /// Adds a config datum to the storage if one does not already exist.
-    ///
-    /// Returns true if the config was added, false if it already exists.
-    pub(crate) fn try_add_config_with_id<C: Default + 'static>(&mut self, id: usize, config: C) -> bool {
-        // Add new config if it does not exist.
-        if self.configs.contains(id) {
-            return false;
-        }
-        self.configs.insert(id, RefCell::new(ConfigRaw::new(true, Box::new(config))));
-        true
     }
 
     /// Retrieves a config from the storage.
