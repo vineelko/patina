@@ -567,4 +567,38 @@ mod tests {
         storage.add_hob_parser::<MyStruct>();
         assert!(storage.get_hob_parser(&MyStruct::HOB_GUID).is_some());
     }
+
+    #[test]
+    fn test_services_still_work_if_storage_requires_re_alloc() {
+        use crate as uefi_sdk;
+        trait TestService {
+            fn test(&self) -> usize;
+        }
+
+        #[derive(IntoService)]
+        #[service(dyn TestService)]
+        struct TestServiceImpl {
+            id: usize,
+        }
+
+        impl TestService for TestServiceImpl {
+            fn test(&self) -> usize {
+                self.id
+            }
+        }
+
+        let mut storage = Storage::new();
+
+        storage.add_service(TestServiceImpl { id: 42 });
+        let service = storage.get_service::<dyn TestService>().unwrap();
+
+        assert_eq!(service.test(), 42);
+
+        // Mimic all of storage's service storage being reallocated (due to possible vec reallocations when inserting)
+        // by dropping the entire storage.
+        drop(storage);
+
+        // service should still work as it is pointing to the static leaked memory, not the reference in the storage.
+        assert_eq!(service.test(), 42);
+    }
 }
