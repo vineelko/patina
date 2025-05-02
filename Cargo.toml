@@ -30,11 +30,12 @@ members = [
   "./uefi-sdk/uefi_protocol",
   "./uefi-sdk/uefi_sdk_macro",
   "./uefi-sdk/uefi_sdk",
+  "./uefi-corosensei",
 ]
 
 [workspace.package]
 version = "1.0.0"
-name = "Patina"
+# name = "Patina"
 license = "BSD-2-Clause-Patent"
 edition = "2021"
 repository = "https://github.com/OpenDevicePartnership/patina"
@@ -58,7 +59,7 @@ log = { version = "0.4", default-features = false }
 # -----------------------------------
 # mu-rust-helpers\uefi-decompress dependencies
 # -----------------------------------
-bitvec = { version = "1" }
+bitvec = { version = "1", default-features = false }
 
 # -----------------------------------
 # mu-rust-helpers\mu_rust_helpers dependencies
@@ -213,7 +214,7 @@ compile-time = { version = "0.2" }
 goblin = { version = "^0.9", default-features = false }
 linked_list_allocator = { version = "^0.10" }
 uefi_collections = { version = "1.0.0", path = "./uefi-dxe-core/crates/uefi_collections", default-features = false }
-uefi_corosensei = { version = "0.1", default-features = false }
+uefi_corosensei = { version = "1.0.0", path = "./uefi-corosensei", default-features = false }
 uefi_depex = { version = "1.0.0", path = "./uefi-dxe-core/crates/uefi_depex" }
 uefi_performance = { version = "1.0.0", path = "./uefi-dxe-core/crates/uefi_performance" }
 # arm-gic = { version = "^0.1.2" }
@@ -319,3 +320,12 @@ uefi_sdk_macro = { version = "1.0.0", path = "./uefi-sdk/uefi_sdk_macro" }
 # uuid = { version = "1.8", default-features = false }
 # dev dependencies
 # uefi_sdk = { version = "1.0.0", path = "./uefi-sdk/uefi_sdk" }
+
+[profile.release]
+debug = true
+
+[profile.dev]
+opt-level = 3
+
+[profile.test]
+opt-level = 0
