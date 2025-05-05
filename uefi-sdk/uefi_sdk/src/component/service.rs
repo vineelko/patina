@@ -129,6 +129,8 @@ use crate::{
     },
 };
 
+pub mod memory;
+
 #[doc(hidden)]
 pub use r_efi::efi::Guid;
 

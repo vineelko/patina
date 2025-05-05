@@ -66,6 +66,6 @@ macro_rules! uefi_size_to_pages {
 #[macro_export]
 macro_rules! uefi_pages_to_size {
     ($pages:expr) => {
-        ($pages) * uefi_sdk::base::UEFI_PAGE_SIZE
+        ($pages) * $crate::base::UEFI_PAGE_SIZE
     };
 }
