@@ -66,6 +66,8 @@ pub struct Access {
     reads_all_configs: bool,
     /// is `true` if the component has mutable access to all config resources.
     writes_all_configs: bool,
+    /// is `true` if the component accesses the deferred queue.
+    has_deferred: bool,
 }
 
 impl Access {
@@ -75,6 +77,7 @@ impl Access {
             config_read_and_writes: FixedBitSet::new(),
             reads_all_configs: false,
             writes_all_configs: false,
+            has_deferred: false,
         }
     }
 }
@@ -113,6 +116,10 @@ impl Access {
         self.writes_all_configs
     }
 
+    pub fn has_deferred(&self) -> bool {
+        self.has_deferred
+    }
+
     pub fn reads_all_configs(&mut self) {
         self.reads_all_configs = true;
     }
@@ -120,6 +127,10 @@ impl Access {
     pub fn writes_all_configs(&mut self) {
         self.writes_all_configs = true;
         self.reads_all_configs = true;
+    }
+
+    pub fn deferred(&mut self) {
+        self.has_deferred = true;
     }
 }
 

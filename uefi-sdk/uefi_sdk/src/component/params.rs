@@ -109,7 +109,8 @@ use crate::{
     boot_services::StandardBootServices,
     component::{
         metadata::MetaData,
-        storage::{Storage, UnsafeStorageCell},
+        service::IntoService,
+        storage::{Deferred, Storage, UnsafeStorageCell},
     },
 };
 
@@ -484,6 +485,92 @@ unsafe impl<'c, T: Default + 'static> Param for ConfigMut<'c, T> {
     }
 }
 
+/// A Command queue to apply structural changes to [Storage] sometime after component execution has completed.
+///
+/// Allows for a non-conflicting way to manipulate [Storage] while also accessing parameters that would be in conflict
+/// with [Storage] access, such as [Config] and [ConfigMut] by deferring structural manipulation of [Storage] until
+/// sometime after the component has executed.
+///
+/// **Prefer using this over using [Storage] directly in a component.**
+///
+/// As an example, a component with the interface ``fn(&mut Storage, Config<i32>) -> Result<()>`` would
+/// normally be in conflict, as it allows for the usage of [Storage::add_config]`, which could invalidate the requested
+/// ``Config<i32>`` parameter.
+pub struct Commands<'storage> {
+    queue: &'storage mut Deferred,
+}
+
+impl Commands<'_> {
+    /// Adds a config to storage sometime after the component has been executed.
+    pub fn add_config<C: Default + 'static>(&mut self, config: C) {
+        self.queue.add_command(move |storage| {
+            storage.add_config(config);
+        });
+    }
+
+    /// Adds a service to storage sometime after the component has been executed.
+    pub fn add_service<S: IntoService + 'static>(&mut self, service: S) {
+        self.queue.add_command(move |storage| {
+            storage.add_service(service);
+        });
+    }
+
+    /// Creates an instance of Commands that will never apply any commands to the storage.
+    ///
+    /// This function is intended for testing purposes only. Dropping the returned value will cause a memory leak as
+    /// the underlying (leaked) Vec cannot be deallocated.
+    ///
+    /// ## Example
+    /// ``` rust
+    /// use uefi_sdk::component::params::Commands;
+    ///
+    /// fn my_component_to_test(mut commands: Commands) {
+    ///     commands.add_config(42);
+    /// }
+    ///
+    /// #[test]
+    /// fn test_my_component() {
+    ///     my_component_to_test(Commands::mock());
+    /// }
+    /// ```
+    #[allow(clippy::test_attr_in_doctest)]
+    pub fn mock() -> Self {
+        Commands { queue: Box::leak(Box::new(Deferred::default())) }
+    }
+
+    /// Returns if the queue is empty.
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+}
+
+unsafe impl<'c> Param for Commands<'c> {
+    type State = ();
+    type Item<'storage, 'state> = Commands<'storage>;
+
+    /// SAFETY: Deferred access is properly registered with the component's metadata.
+    unsafe fn get_param<'storage, 'state>(
+        _state: &'state Self::State,
+        storage: UnsafeStorageCell<'storage>,
+    ) -> Self::Item<'storage, 'state> {
+        Commands { queue: storage.storage_mut().deferred() }
+    }
+
+    fn validate(_state: &Self::State, _storage: UnsafeStorageCell) -> bool {
+        true
+    }
+
+    fn init_state(_storage: &mut Storage, meta: &mut MetaData) -> Self::State {
+        assert!(
+            !meta.access().has_deferred(),
+            "Commands in system {0} conflicts with a previous Commands access.",
+            meta.name(),
+        );
+        meta.access_mut().deferred();
+    }
+}
+
 unsafe impl Param for StandardBootServices {
     type State = ();
     type Item<'storage, 'state> = Self;
@@ -838,5 +925,38 @@ mod tests {
             Err("boot_services::StandardBootServices"),
             <(StandardBootServices, Config<i32>) as Param>::try_validate(&((), 1), (&storage).into())
         );
+    }
+
+    #[test]
+    fn test_get_commands() {
+        let mut storage = Storage::default();
+        let mut mock_metadata = MetaData::new::<i32>();
+
+        {
+            <Commands as Param>::init_state(&mut storage, &mut mock_metadata);
+            assert!(<Commands as Param>::try_validate(&(), (&storage).into()).is_ok());
+
+            let cell_storage = UnsafeStorageCell::new_mutable(&mut storage);
+            let mut commands = unsafe { <Commands as Param>::get_param(&(), cell_storage) };
+            assert!(commands.is_empty());
+            commands.add_config(42i32);
+        }
+
+        let cell_storage = UnsafeStorageCell::new_mutable(&mut storage);
+        let commands = unsafe { <Commands as Param>::get_param(&(), cell_storage) };
+        assert!(!commands.is_empty());
+    }
+
+    #[test]
+    /// Ensure the common story of "Create service from Config" works
+    fn test_deferred_and_config_compatability() {
+        fn test_component(_cmds: Commands, _config: Config<i32>, _config2: ConfigMut<u32>) -> Result<()> {
+            Ok(())
+        }
+
+        let mut storage = Storage::new();
+
+        let mut component = test_component.into_component();
+        component.initialize(&mut storage);
     }
 }

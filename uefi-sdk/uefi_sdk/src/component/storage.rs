@@ -130,6 +130,39 @@ impl DerefMut for ConfigRaw {
     }
 }
 
+/// A container for deferred commands that will be executed later.
+#[derive(Default)]
+#[allow(clippy::type_complexity)]
+pub(crate) struct Deferred {
+    queue: Vec<Box<dyn FnOnce(&mut Storage)>>,
+}
+
+impl Deferred {
+    /// Adds a command to the deferred command queue.
+    pub(crate) fn add_command<F: FnOnce(&mut Storage) + 'static>(&mut self, command: F) {
+        self.queue.push(Box::new(command));
+    }
+
+    /// applies state changes to the storage via the deferred command queue.
+    fn apply(&mut self, storage: &mut Storage) {
+        for command in self.queue.drain(..) {
+            command(storage);
+        }
+    }
+
+    /// Returns if the deferred command queue is empty.
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+}
+
+impl Debug for Deferred {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Deferred").field("queue", &self.queue.len()).finish()
+    }
+}
+
 /// Storage container for all datums that can be consumed by a Component.
 ///
 /// The [Component](crate::component::Component) trait provides the interface that a component must implement to be
@@ -150,8 +183,13 @@ impl DerefMut for ConfigRaw {
 /// it. Directly accessing the [Storage] object in a component used to make changes to the underlying storage that
 /// require exclusive access to the storage. Examples of this is inserting or removing data from storage, as this can
 /// invalidate any references to data in the [Storage] object.
+///
+/// **Users should prefer the param [Commands](super::params::Commands) to make structural changes to the storage.**)
 #[derive(Debug)]
 pub struct Storage {
+    /// A container for all deferred commands that components can register. This is used to delay the execution of
+    /// commands that can result in structural changes to the storage.
+    deferred: Option<Deferred>,
     /// A container for all [Config](super::params::Config) and [ConfigMut](super::params::ConfigMut) datums. This
     /// resource can be accessed both immutably and mutably, so it must be tracked by
     /// [Access](super::metadata::Access).
@@ -184,6 +222,7 @@ impl Default for Storage {
 impl Storage {
     pub const fn new() -> Self {
         Self {
+            deferred: None,
             configs: SparseVec::new(),
             config_indices: BTreeMap::new(),
             services: SparseVec::new(),
@@ -197,8 +236,17 @@ impl Storage {
     }
 
     /// Applies all deferred actions to the storage. Used in a multi-threaded context
-    pub fn apply_deferred(&self) {
-        // TODO
+    pub(crate) fn apply_deferred(&mut self) {
+        if let Some(mut deferred) = self.deferred.take() {
+            deferred.apply(self);
+        }
+    }
+
+    pub(crate) fn deferred(&mut self) -> &mut Deferred {
+        if self.deferred.is_none() {
+            self.deferred = Some(Deferred::default());
+        }
+        self.deferred.as_mut().unwrap()
     }
 
     /// Stores a pointer to the UEFI Boot Services Table.
@@ -599,6 +647,44 @@ mod tests {
         drop(storage);
 
         // service should still work as it is pointing to the static leaked memory, not the reference in the storage.
+        assert_eq!(service.test(), 42);
+    }
+
+    #[test]
+    fn test_apply_deferred_storage() {
+        use crate as uefi_sdk;
+        use uefi_sdk::component::params::Commands;
+
+        trait TestService {
+            fn test(&self) -> usize;
+        }
+
+        #[derive(IntoService)]
+        #[service(dyn TestService)]
+        struct TestServiceImpl {
+            id: usize,
+        }
+
+        impl TestService for TestServiceImpl {
+            fn test(&self) -> usize {
+                self.id
+            }
+        }
+
+        let mut storage = Storage::new();
+
+        assert!(storage.get_service::<dyn TestService>().is_none());
+
+        {
+            let mut commands = unsafe { <Commands as Param>::get_param(&(), UnsafeStorageCell::from(&mut storage)) };
+            commands.add_service(TestServiceImpl { id: 42 });
+        }
+
+        assert!(storage.get_service::<dyn TestService>().is_none());
+
+        storage.apply_deferred();
+        assert!(storage.get_service::<dyn TestService>().is_some());
+        let service = storage.get_service::<dyn TestService>().unwrap();
         assert_eq!(service.test(), 42);
     }
 }
