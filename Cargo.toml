@@ -2,121 +2,59 @@
 resolver = "2"
 
 members = [
-  "./qemu-rust-bins",
-  "./uefi-core/section_extractor",
-  "./uefi-core/stacktrace",
-  "./uefi-core/uefi_cpu",
-  "./uefi-core/uefi_debugger",
-  "./uefi-dxe-core/adv_logger",
-  "./uefi-dxe-core/dxe_core",
-  "./uefi-dxe-core/sample_components",
-  "./uefi-dxe-core/crates/uefi_collections",
-  "./uefi-dxe-core/crates/uefi_depex",
-  "./uefi-dxe-core/crates/uefi_device_path",
-  "./uefi-dxe-core/crates/uefi_performance",
-  "./uefi-dxe-core/crates/uefi_test_macro",
-  "./uefi-dxe-core/uefi_test",
-  "./uefi-sdk/boot_services",
-  "./uefi-sdk/driver_binding",
-  "./uefi-sdk/runtime_services",
-  "./uefi-sdk/tpl_mutex",
-  "./uefi-sdk/uefi_protocol",
-  "./uefi-sdk/uefi_sdk_macro",
-  "./uefi-sdk/uefi_sdk",
+  "./components/adv_logger",
+  "./components/sample_components",
+  "./core/dxe_core",
+  "./core/section_extractor",
+  "./core/stacktrace",
+  "./core/uefi_collections",
+  "./core/uefi_cpu",
+  "./core/uefi_debugger",
+  "./core/uefi_depex",
+  "./core/uefi_device_path",
+  "./core/uefi_performance",
+  "./sdk/boot_services",
+  "./sdk/driver_binding",
+  "./sdk/runtime_services",
+  "./sdk/tpl_mutex",
+  "./sdk/uefi_protocol",
+  "./sdk/uefi_sdk_macro",
+  "./sdk/uefi_sdk",
+  "./sdk/uefi_test_macro",
+  "./sdk/uefi_test",
 ]
 
 [workspace.package]
-version = "1.0.0"
-# name = "Patina"
+version = "15.0.0"
 license = "BSD-2-Clause-Patent"
 edition = "2021"
 repository = "https://github.com/OpenDevicePartnership/patina"
-publish = false
+publish = true
 
 [workspace.dependencies]
-# -----------------------------------
-# MTRR dependencies
-# -----------------------------------
-bitfield-struct = { version = "0.10", default-features = false }
-cfg-if = { version = "1" }
-# dev dependencies
-rand = { version = "0.8" }
 
 # -----------------------------------
-# mu-rust-helpers\perf_timer dependencies
-# -----------------------------------
-aarch64-cpu = { version = "10.0.0" }
-log = { version = "0.4", default-features = false }
-
-# -----------------------------------
-# mu-rust-helpers\uefi-decompress dependencies
-# -----------------------------------
-bitvec = { version = "1", default-features = false }
-
-# -----------------------------------
-# mu-rust-helpers\mu_rust_helpers dependencies
-# -----------------------------------
-mu_uefi_decompress = { version = "3.0.1" }
-mu_uefi_guid = { version = "3.0.1" }
-mu_uefi_perf_timer = { version = "3.0.1" }
-# dev dependencies
-r-efi = { version = "5.0.0", default-features = false }
-
-# -----------------------------------
-# mu-rust-pi dependencies
-# -----------------------------------
-indoc = { version = "2.0" }
-num-traits = { version = "0.2", default-features = false }
-uuid = { version = "1.8", default-features = false }
-# r-efi = { version = "5.0.0", default-features = false }
-# dev dependencies
-serde = { version = "1.0.197" }
-serde_yaml = { version = "0.9.34" }
-brotli-decompressor = { version = "4.0.0", default-features = false }
-alloc-no-stdlib = { version = "~2.0" }
-
-# -----------------------------------
-# paging dependencies
-# -----------------------------------
-bitflags = { version = "2.6.0" }
-# bitfield-struct = { version = "0.10" }
-# log = { version = "0.4", default-features = false }
-# cfg-if = { version = "1.0.0" }
-
-# -----------------------------------
-# qemu-rust-bins dependencies
-# -----------------------------------
-adv_logger = { version = "1.0.0", path = "./uefi-dxe-core/adv_logger" }
-dxe_core = { version = "1.0.0", path = "./uefi-dxe-core/dxe_core" }
-sample_components = { version = "1.0.0", path = "./uefi-dxe-core/sample_components" }
-section_extractor = { version = "1.0.0", path = "./uefi-core/section_extractor" }
-stacktrace = { version = "1.0.0", path = "./uefi-core/stacktrace" }
-uefi_debugger = { version = "1.0.0", path = "./uefi-core/uefi_debugger" }
-uefi_sdk = { version = "1.0.0", path = "./uefi-sdk/uefi_sdk" }
-# log = { version = "0.4", default-features = false }
-
-# -----------------------------------
-# uefi-core\section_extractor dependencies
+# core\section_extractor dependencies
 # -----------------------------------
 crc32fast = { version = "1.4", default-features = false }
 mu_pi = { version = "5.2.3" }
 mu_rust_helpers = { version = "3.0.1" }
-# log = { version = "0.4", default-features = false }
-# uefi_sdk = { version = "1.0.0", path = "./uefi-sdk/uefi_sdk" }
-# r-efi = { version = "5.0.0", default-features = false }
-# brotli-decompressor = { version = "4.0.0" }
-# alloc-no-stdlib = { version = "~2.0" }
+log = { version = "0.4", default-features = false }
+uefi_sdk = { version = "15.0.0", path = "./sdk/uefi_sdk" }
+r-efi = { version = "5.0.0", default-features = false }
+brotli-decompressor = { version = "4.0.0", default-features = false }
+alloc-no-stdlib = { version = "~2.0" }
 
 # -----------------------------------
-# uefi-core\stacktrace dependencies
+# core\stacktrace dependencies
 # -----------------------------------
-# cfg-if = { version = "1" }
+cfg-if = { version = "1" }
 # log = { version = "0.4", default-features = false }
 # dev dependencies
 winapi = { version = "0.3" }
 
 # -----------------------------------
-# uefi-core\uefi_cpu dependencies
+# core\uefi_cpu dependencies
 # -----------------------------------
 arm-gic = { version = "^0.1.2" }
 lazy_static = { version = "^1" }
@@ -128,190 +66,191 @@ x86_64 = { version = "=0.15.2", default-features = false }
 # log = { version = "0.4", default-features = false }
 # mu_pi = { version = "5.2.3"}
 # r-efi = { version = "5.0.0", default-features = false }
-# stacktrace = { version = "1.0.0", path = "./uefi-core/stacktrace" }
-# uefi_sdk = { version = "1.0.0", path = "./uefi-sdk/uefi_sdk" }
+stacktrace = { version = "15.0.0", path = "./core/stacktrace" }
+# uefi_sdk = { version = "15.0.0", path = "./sdk/uefi_sdk" }
 # dev dependencies
 mockall = { version = "0.13.0" }
 
 # -----------------------------------
-# uefi-core\uefi_debugger dependencies
+# core\uefi_debugger dependencies
 # -----------------------------------
 gdbstub = { version = "0.7.3", default-features = false }
-uefi_cpu = { version = "1.0.0", path = "./uefi-core/uefi_cpu" }
-# bitfield-struct = { version = "0.10" }
+uefi_cpu = { version = "15.0.0", path = "./core/uefi_cpu" }
+bitfield-struct = { version = "0.10" }
 # cfg-if = { version = "1" }
 # log = { version = "0.4", default-features = false }
 # paging = { version = "4.0.1" }
 # spin = { version = "^0.9" }
-# uefi_sdk = { version = "1.0.0", path = "./uefi-sdk/uefi_sdk" }
+# uefi_sdk = { version = "15.0.0", path = "./sdk/uefi_sdk" }
 # dev dependencies
 # mockall = { version = "0.13.0" }
 
 # -----------------------------------
-# uefi-dxe-core\adv_logger dependencies
-# -----------------------------------
-clap = { version = '4.5.36' }
-uefi_test = { version = "1.0.0", path = "./uefi-dxe-core/uefi_test" }
-# log = { version = "0.4", default-features = false }
-# mu_pi = { version = "5.2.3"}
-# mu_rust_helpers = { version = "1.0.0", path = "./mu-rust-helpers/mu_rust_helpers" }
-# r-efi = { version = "5.0.0", default-features = false }
-# spin = { version = "^0.9" }
-# uefi_sdk = { version = "1.0.0", path = "./uefi-sdk/uefi_sdk" }
-
-# -----------------------------------
-# uefi-dxe-core/crates/uefi_collections dependencies
+# core/uefi_collections dependencies
 # -----------------------------------
 criterion = { version = "^0.5" }
 uint = { version = "^0.10" }
 # dev dependencies
-# log = { workspace=true}
-# rand = { version = "0.8" }
+# log = { version = "0.4", default-features = false }
+rand = { version = "0.8" }
 
 # -----------------------------------
-# uefi-dxe-core/crates/uefi_depex dependencies
+# core/uefi_depex dependencies
 # -----------------------------------
 # log = { version = "0.4", default-features = false }
 # r-efi = { version = "5.0.0", default-features = false }
-# uuid = { version = "1.8", default-features = false }
+uuid = { version = "1.8", default-features = false }
 
 # -----------------------------------
-# uefi-dxe-core/crates/uefi_device_path dependencies
+# core/uefi_device_path dependencies
 # -----------------------------------
 # r-efi = { version = "5.0.0", default-features = false }
 
 # -----------------------------------
-# uefi-dxe-core/crates/uefi_performance dependencies
+# core/uefi_performance dependencies
 # -----------------------------------
 scroll = { version = "^0.12", default-features = false }
-uefi_device_path = { version = "1.0.0", path = "./uefi-dxe-core/crates/uefi_device_path" }
+uefi_device_path = { version = "15.0.0", path = "./core/uefi_device_path" }
 # log = { version = "0.4", default-features = false }
 # mu_pi = { version = "5.2.3"}
-# mu_rust_helpers = { version = "1.0.0", path = "./mu-rust-helpers/mu_rust_helpers" }
+# mu_rust_helpers = { version = "3.0.1" }
 # r-efi = { version = "5.0.0", default-features = false }
-# uefi_sdk = { version = "1.0.0", path = "./uefi-sdk/uefi_sdk" }
+# uefi_sdk = { version = "15.0.0", path = "./sdk/uefi_sdk" }
 # uuid = { version = "1.8", default-features = false }
 
 # -----------------------------------
-# uefi-dxe-core/crates/uefi_test_macro dependencies
+# core/uefi_test_macro dependencies
 # -----------------------------------
 proc-macro2 = { version = "1" }
 quote = { version = "1" }
 syn = { version = "2" }
 
 # -----------------------------------
-# uefi-dxe-core/dxe_core dependencies
+# core/dxe_core dependencies
 # -----------------------------------
 compile-time = { version = "0.2" }
 goblin = { version = "^0.9", default-features = false }
 linked_list_allocator = { version = "^0.10" }
-uefi_collections = { version = "1.0.0", path = "./uefi-dxe-core/crates/uefi_collections", default-features = false }
+uefi_collections = { version = "15.0.0", path = "./core/uefi_collections", default-features = false }
 uefi_corosensei = { version = "0.1.3", default-features = false }
-uefi_depex = { version = "1.0.0", path = "./uefi-dxe-core/crates/uefi_depex" }
-uefi_performance = { version = "1.0.0", path = "./uefi-dxe-core/crates/uefi_performance" }
+uefi_depex = { version = "15.0.0", path = "./core/uefi_depex" }
+uefi_performance = { version = "15.0.0", path = "./core/uefi_performance" }
 # arm-gic = { version = "^0.1.2" }
-# crc32fast = { version = "1.4" }
+# crc32fast = { version = "1.4", default-features = false }
 # lazy_static = { version = "^1" }
 # log = { version = "0.4", default-features = false }
 # mockall = { version = "0.13.0" }
 # mu_pi = { version = "5.2.3"}
-# mu_rust_helpers = { version = "1.0.0", path = "./mu-rust-helpers/mu_rust_helpers" }
+# mu_rust_helpers = { version = "3.0.1" }
 # paging = { version = "4.0.1" }
 # r-efi = { version = "5.0.0", default-features = false }
-# sample_components = { path = "../sample_components" }
-# scroll = { version = "^0.12"}
-# section_extractor = { version = "1.0.0", path = "./uefi-core/section_extractor" }
+sample_components = { version = "15.0.0", path = "./components/sample_components" }
+# scroll = { version = "^0.12", default-features = false }
+section_extractor = { version = "15.0.0", path = "./core/section_extractor" }
 # spin = { version = "^0.9" }
-# uefi_collections = { path = "../crates/uefi_collections" }
-# uefi_cpu = { version = "1.0.0", path = "./uefi-core/uefi_cpu" }
-# uefi_debugger = { version = "1.0.0", path = "./uefi-core/uefi_debugger" }
-# uefi_device_path = { version = "1.0.0", path = "./uefi-dxe-core/crates/uefi_device_path" }
-# uefi_sdk = { version = "1.0.0", path = "./uefi-sdk/uefi_sdk" }
+# uefi_collections = { version = "15.0.0", path = "./core/uefi_collections" }
+# uefi_cpu = { version = "15.0.0", path = "./core/uefi_cpu" }
+uefi_debugger = { version = "15.0.0", path = "./core/uefi_debugger" }
+# uefi_device_path = { version = "15.0.0", path = "./core/uefi_device_path" }
+# uefi_sdk = { version = "15.0.0", path = "./sdk/uefi_sdk" }
 # uuid = { version = "1.8", default-features = false }
 
+
 # -----------------------------------
-# uefi-dxe-core/sample_components dependencies
+# components\adv_logger dependencies
+# -----------------------------------
+clap = { version = '4.5.36' }
+uefi_test = { version = "15.0.0", path = "./sdk/uefi_test" }
+# log = { version = "0.4", default-features = false }
+# mu_pi = { version = "5.2.3"}
+# mu_rust_helpers = { version = "3.0.1" }
+# r-efi = { version = "5.0.0", default-features = false }
+# spin = { version = "^0.9" }
+# uefi_sdk = { version = "15.0.0", path = "./sdk/uefi_sdk" }
+
+# -----------------------------------
+# components/sample_components dependencies
 # -----------------------------------
 linkme = { version = "^0.3.29" }
-uefi_test_macro = { version = "1.0.0", path = "./uefi-dxe-core/crates/uefi_test_macro" }
+uefi_test_macro = { version = "15.0.0", path = "./sdk/uefi_test_macro" }
 # log = { version = "0.4", default-features = false }
-# uefi_sdk = { version = "1.0.0", path = "./uefi-sdk/uefi_sdk" }
+# uefi_sdk = { version = "15.0.0", path = "./sdk/uefi_sdk" }
 # dev dependencies
 # mockall = { version = "0.13.0" }
 # r-efi = { version = "5.0.0", default-features = false }
 
 # -----------------------------------
-# uefi-sdk/boot_services dependencies
+# sdk/boot_services dependencies
 # -----------------------------------
-uefi_protocol = { version = "1.0.0", path = "./uefi-sdk/uefi_protocol" }
+uefi_protocol = { version = "15.0.0", path = "./sdk/uefi_protocol" }
 # mockall = { version = "*", optional = true }
 # r-efi = { version = "5.0.0", default-features = false }
 # dev dependencies
 # mockall = { version = "0.13.0" }
 
 # -----------------------------------
-# uefi-sdk/driver_binding dependencies
+# sdk/driver_binding dependencies
 # -----------------------------------
-boot_services = { version = "1.0.0", path = "./uefi-sdk/boot_services" }
+boot_services = { version = "15.0.0", path = "./sdk/boot_services" }
 # log = { version = "0.4", default-features = false }
 # mockall = { version = "0.13.0", optional = true }
 # r-efi = { version = "5.0.0", default-features = false }
-# uefi_protocol = { version = "1.0.0", path = "./uefi-sdk/uefi_protocol" }
+# uefi_protocol = { version = "15.0.0", path = "./sdk/uefi_protocol" }
 # dev dependencies
 # mockall = { version = "0.13.0" }
 
 # -----------------------------------
-# uefi-sdk/runtime_services dependencies
+# sdk/runtime_services dependencies
 # -----------------------------------
 fallible-streaming-iterator = { version = "0.1.9" }
 # mockall = { version = "0.13.0", optional = true }
 # r-efi = { version = "5.0.0", default-features = false }
 # dev dependencies
-# mockall = { version = "^0.13" }
-
-# -----------------------------------
-# uefi-sdk/tpl_mutex dependencies
-# -----------------------------------
-# boot_services = { version = "1.0.0", path = "./uefi-sdk/boot_services" }
-# r-efi = { version = "5.0.0", default-features = false }
-# dev dependencies
-# boot_services = { version = "1.0.0", path = "./uefi-sdk/boot_services", features = ["mockall"] }
 # mockall = { version = "0.13.0" }
 
 # -----------------------------------
-# uefi-sdk/uefi_protocol dependencies
+# sdk/tpl_mutex dependencies
+# -----------------------------------
+# boot_services = { version = "15.0.0", path = "./sdk/boot_services" }
+# r-efi = { version = "5.0.0", default-features = false }
+# dev dependencies
+# boot_services = { version = "15.0.0", path = "./sdk/boot_services", features = ["mockall"] }
+# mockall = { version = "0.13.0" }
+
+# -----------------------------------
+# sdk/uefi_protocol dependencies
 # -----------------------------------
 # mu_pi = { version = "5.2.3"}
 # r-efi = { version = "5.0.0", default-features = false }
 
 # -----------------------------------
-# uefi-sdk/uefi_sdk dependencies
+# sdk/uefi_sdk dependencies
 # -----------------------------------
-driver_binding = { version = "1.0.0", path = "./uefi-sdk/driver_binding" }
+driver_binding = { version = "15.0.0", path = "./sdk/driver_binding" }
 fixedbitset = { version = "^0.5", default-features = false }
-runtime_services = { version = "1.0.0", path = "./uefi-sdk/runtime_services" }
-tpl_mutex = { version = "1.0.0", path = "./uefi-sdk/tpl_mutex" }
+runtime_services = { version = "15.0.0", path = "./sdk/runtime_services" }
+tpl_mutex = { version = "15.0.0", path = "./sdk/tpl_mutex" }
 uart_16550 = { version = "^0.3.2" }
-uefi_sdk_macro = { version = "1.0.0", path = "./uefi-sdk/uefi_sdk_macro" }
-# boot_services = { version = "1.0.0", path = "./uefi-sdk/boot_services" }
+uefi_sdk_macro = { version = "15.0.0", path = "./sdk/uefi_sdk_macro" }
+# boot_services = { version = "15.0.0", path = "./sdk/boot_services" }
 # cfg-if = { version = "1" }
 # log = { version = "0.4", default-features = false }
 # mu_pi = { version = "5.2.3"}
 # r-efi = { version = "5.0.0", default-features = false }
-# uefi_protocol = { version = "1.0.0", path = "./uefi-sdk/uefi_protocol" }
+# uefi_protocol = { version = "15.0.0", path = "./sdk/uefi_protocol" }
 # x86_64 = { version = "=0.15.2", default-features = false }
 # dev dependencies
 # criterion = { version = "^0.5" }
 
 # -----------------------------------
-# uefi-sdk/uefi_sdk_macro dependencies
+# sdk/uefi_sdk_macro dependencies
 # -----------------------------------
 # proc-macro2 = { version = "1" }
 # quote = { version = "1" }
 # syn = { version = "2" }
 # uuid = { version = "1.8", default-features = false }
 # dev dependencies
-# uefi_sdk = { version = "1.0.0", path = "./uefi-sdk/uefi_sdk" }
+# uefi_sdk = { version = "15.0.0", path = "./sdk/uefi_sdk" }
 
 [profile.release]
 debug = true
