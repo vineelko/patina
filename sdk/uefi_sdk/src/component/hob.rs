@@ -204,7 +204,7 @@ impl<'h, T: FromHob + 'static> From<&'h [Box<dyn Any>]> for Hob<'h, T> {
     }
 }
 
-impl<'h, T: FromHob + 'static> Deref for Hob<'h, T> {
+impl<T: FromHob + 'static> Deref for Hob<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -212,7 +212,7 @@ impl<'h, T: FromHob + 'static> Deref for Hob<'h, T> {
     }
 }
 
-unsafe impl<'h, T: FromHob + 'static> Param for Hob<'h, T> {
+unsafe impl<T: FromHob + 'static> Param for Hob<'_, T> {
     type State = usize;
     type Item<'storage, 'state> = Hob<'storage, T>;
 

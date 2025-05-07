@@ -3100,7 +3100,7 @@ mod test {
         static mut B: [i32; 5] = [0; 5];
 
         extern "efiapi" fn efi_copy_mem(dest: *mut c_void, src: *mut c_void, length: usize) {
-            assert_eq!(unsafe { ptr::addr_of!(B) } as usize, dest as usize);
+            assert_eq!(ptr::addr_of!(B) as usize, dest as usize);
             assert_eq!(ptr::addr_of!(A) as usize, src as usize);
             assert_eq!(5 * mem::size_of::<i32>(), length);
         }
@@ -3122,7 +3122,7 @@ mod test {
         static mut BUFFER: [u8; 16] = [0; 16];
 
         extern "efiapi" fn efi_set_mem(buffer: *mut c_void, size: usize, value: u8) {
-            assert_eq!(unsafe { ptr::addr_of!(BUFFER) } as usize, buffer as usize);
+            assert_eq!(ptr::addr_of!(BUFFER) as usize, buffer as usize);
             assert_eq!(16, size);
             assert_eq!(8, value);
         }
@@ -3164,7 +3164,7 @@ mod test {
 
         extern "efiapi" fn efi_install_configuration_table(guid: *mut efi::Guid, table: *mut c_void) -> efi::Status {
             assert_eq!(ptr::addr_of!(GUID) as usize, guid as usize);
-            assert_eq!(unsafe { ptr::addr_of!(TABLE) } as usize, table as usize);
+            assert_eq!(ptr::addr_of!(TABLE) as usize, table as usize);
             assert_eq!(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], unsafe { ptr::read(guid) }.as_bytes());
             assert_eq!(10, unsafe { ptr::read(table as *mut i32) });
             efi::Status::SUCCESS

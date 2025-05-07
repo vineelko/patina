@@ -140,7 +140,7 @@ unsafe impl<'a, T> CMutRef<'a> for &'a mut T {}
 
 // Box<T>
 // SAFETY: Memory layout and mutability are respected for these types.
-unsafe impl<'a, T> CPtr<'a> for Box<T> {
+unsafe impl<T> CPtr<'_> for Box<T> {
     type Type = T;
 
     fn as_ptr(&self) -> *const Self::Type {
@@ -148,11 +148,11 @@ unsafe impl<'a, T> CPtr<'a> for Box<T> {
     }
 }
 // SAFETY: Memory layout and mutability are respected for these types.
-unsafe impl<'a, T> CRef<'a> for Box<T> {}
+unsafe impl<T> CRef<'_> for Box<T> {}
 // SAFETY: Memory layout and mutability are respected for these types.
-unsafe impl<'a, T> CMutPtr<'a> for Box<T> {}
+unsafe impl<T> CMutPtr<'_> for Box<T> {}
 // SAFETY: Memory layout and mutability are respected for these types.
-unsafe impl<'a, T> CMutRef<'a> for Box<T> {}
+unsafe impl<T> CMutRef<'_> for Box<T> {}
 
 // ()
 // SAFETY: Use null pointer wich is a valid c pointer.

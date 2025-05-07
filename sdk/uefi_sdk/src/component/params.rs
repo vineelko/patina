@@ -283,7 +283,7 @@ pub struct Config<'c, T: Default + 'static> {
     _marker: PhantomData<T>,
 }
 
-impl<'c, T: Default + 'static> Config<'c, T> {
+impl<T: Default + 'static> Config<'_, T> {
     /// Creates an instance of Config by creating a RefCell and leaking it.
     ///
     /// This function is intended for testing purposes only. Dropping the returned value will cause a memory leak as
@@ -311,7 +311,7 @@ impl<'c, T: Default + 'static> Config<'c, T> {
     }
 }
 
-impl<'c, T: Default + 'static> Deref for Config<'c, T> {
+impl<T: Default + 'static> Deref for Config<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -325,7 +325,7 @@ impl<'c, T: Default + 'static> From<Ref<'c, ConfigRaw>> for Config<'c, T> {
     }
 }
 
-unsafe impl<'c, T: Default + 'static> Param for Config<'c, T> {
+unsafe impl<T: Default + 'static> Param for Config<'_, T> {
     /// The id of the Config, so we can request it directly without converting T->id.
     type State = usize;
     type Item<'storage, 'state> = Config<'storage, T>;
@@ -375,7 +375,7 @@ pub struct ConfigMut<'c, T: Default + 'static> {
     _marker: PhantomData<T>,
 }
 
-impl<'c, T: Default + 'static> ConfigMut<'c, T> {
+impl<T: Default + 'static> ConfigMut<'_, T> {
     /// Creates an instance of Config by creating a RefCell and leaking it.
     ///
     /// This function is intended for testing purposes only. Dropping the returned value will cause a memory leak as
@@ -408,7 +408,7 @@ impl<'c, T: Default + 'static> ConfigMut<'c, T> {
     }
 }
 
-impl<'c, T: Default + 'static> Deref for ConfigMut<'c, T> {
+impl<T: Default + 'static> Deref for ConfigMut<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -416,7 +416,7 @@ impl<'c, T: Default + 'static> Deref for ConfigMut<'c, T> {
     }
 }
 
-impl<'c, T: Default + 'static> DerefMut for ConfigMut<'c, T> {
+impl<T: Default + 'static> DerefMut for ConfigMut<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         self.value.downcast_mut().unwrap_or_else(|| panic!("Config should be of type {}", core::any::type_name::<T>()))
     }
@@ -428,7 +428,7 @@ impl<'c, T: Default + 'static> From<RefMut<'c, ConfigRaw>> for ConfigMut<'c, T> 
     }
 }
 
-unsafe impl<'c, T: Default + 'static> Param for ConfigMut<'c, T> {
+unsafe impl<T: Default + 'static> Param for ConfigMut<'_, T> {
     /// The id of the Config, so we can request it directly without converting T->id.
     type State = usize;
     type Item<'storage, 'state> = ConfigMut<'storage, T>;
@@ -545,7 +545,7 @@ impl Commands<'_> {
     }
 }
 
-unsafe impl<'c> Param for Commands<'c> {
+unsafe impl Param for Commands<'_> {
     type State = ();
     type Item<'storage, 'state> = Commands<'storage>;
 

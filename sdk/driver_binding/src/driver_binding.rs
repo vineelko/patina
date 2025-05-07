@@ -55,7 +55,7 @@
 //! ```
 
 #![cfg_attr(all(not(test), not(feature = "mockall")), no_std)]
-
+#![allow(static_mut_refs)]
 #[cfg(any(test, feature = "mockall"))]
 use mockall::automock;
 

@@ -41,18 +41,18 @@ where
     }
 }
 
-impl<'a, S> log::Log for Logger<'a, S>
+impl<S> log::Log for Logger<'_, S>
 where
     S: SerialIO + Send,
 {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        return metadata.level().to_level_filter()
+        metadata.level().to_level_filter()
             <= *self
                 .target_filters
                 .iter()
                 .find(|(name, _)| metadata.target().starts_with(name))
                 .map(|(_, level)| level)
-                .unwrap_or(&self.max_level);
+                .unwrap_or(&self.max_level)
     }
 
     fn log(&self, record: &log::Record) {

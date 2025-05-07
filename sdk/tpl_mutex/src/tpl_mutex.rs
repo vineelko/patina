@@ -81,7 +81,7 @@ impl<'a, T: ?Sized, B: BootServices> DerefMut for TplMutexGuard<'a, T, B> {
     }
 }
 
-impl<'a, T: ?Sized + fmt::Debug, B: BootServices> fmt::Debug for TplMutex<'a, T, B> {
+impl<T: ?Sized + fmt::Debug, B: BootServices> fmt::Debug for TplMutex<'_, T, B> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut dbg = f.debug_struct("TplMutex");
         match self.try_lock() {
@@ -92,13 +92,13 @@ impl<'a, T: ?Sized + fmt::Debug, B: BootServices> fmt::Debug for TplMutex<'a, T,
     }
 }
 
-impl<'a, T: ?Sized + fmt::Debug, B: BootServices> fmt::Debug for TplMutexGuard<'a, T, B> {
+impl<T: ?Sized + fmt::Debug, B: BootServices> fmt::Debug for TplMutexGuard<'_, T, B> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         Debug::fmt(self.deref(), f)
     }
 }
 
-impl<'a, T: ?Sized + fmt::Display, B: BootServices> fmt::Display for TplMutexGuard<'a, T, B> {
+impl<T: ?Sized + fmt::Display, B: BootServices> fmt::Display for TplMutexGuard<'_, T, B> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         Display::fmt(self.deref(), f)
     }

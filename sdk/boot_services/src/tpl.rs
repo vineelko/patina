@@ -13,7 +13,7 @@ pub struct TplGuard<'a, T: BootServices + ?Sized> {
     pub(crate) retore_tpl: Tpl,
 }
 
-impl<'a, T: BootServices + ?Sized> Drop for TplGuard<'a, T> {
+impl<T: BootServices + ?Sized> Drop for TplGuard<'_, T> {
     fn drop(&mut self) {
         self.boot_services.restore_tpl(self.retore_tpl);
     }

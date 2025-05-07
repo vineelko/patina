@@ -116,7 +116,7 @@ impl<'a, R: RuntimeServices> VariableNameIterator<'a, R> {
     }
 }
 
-impl<'a, R: RuntimeServices> FallibleStreamingIterator for VariableNameIterator<'a, R> {
+impl<R: RuntimeServices> FallibleStreamingIterator for VariableNameIterator<'_, R> {
     type Item = VariableIdentifier;
     type Error = efi::Status;
 
