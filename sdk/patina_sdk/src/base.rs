@@ -146,6 +146,17 @@ pub const SIZE_256TB: usize = 0x1000000000000;
 /// Patina uses write back as the default cache attribute for memory allocations.
 pub const DEFAULT_CACHE_ATTR: u64 = efi::MEMORY_WB;
 
+/// A macro to generate a bit mask with the nth bit set.
+///
+/// This macro should generally be used to simplify bit references in
+/// in masking operations where bit position is significant.
+#[macro_export]
+macro_rules! bit {
+    ($n:expr) => {
+        1 << $n
+    };
+}
+
 /// Checks if the given value is a power of two.
 /// This function checks if the value `x` is greater than zero and if it is a power of two.
 /// # Parameters
@@ -451,5 +462,50 @@ mod tests {
 
         const TEST7: u64 = signature!('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H');
         assert_eq!(TEST7, 0x4847464544434241);
+    }
+
+    #[test]
+    fn test_bit_macro_simple() {
+        assert_eq!(bit!(0), 0b1);
+        assert_eq!(bit!(1), 0b10);
+        assert_eq!(bit!(2), 0b100);
+        assert_eq!(bit!(3), 0b1000);
+        assert_eq!(bit!(4), 0b1_0000);
+        assert_eq!(bit!(5), 0b10_0000);
+        assert_eq!(bit!(6), 0b100_0000);
+        assert_eq!(bit!(7), 0b1000_0000);
+        assert_eq!(bit!(8), 0b1_0000_0000);
+        assert_eq!(bit!(9), 0b10_0000_0000);
+        assert_eq!(bit!(10), 0b100_0000_0000);
+        assert_eq!(bit!(20), 0b1_0000_0000_0000_0000_0000);
+        assert_eq!(bit!(30), 0b100_0000_0000_0000_0000_0000_0000_0000u64);
+        assert_eq!(bit!(63), 0x8000_0000_0000_0000u64);
+    }
+
+    #[test]
+    fn test_bit_macro_or() {
+        let combined = bit!(1) | bit!(3) | bit!(5);
+        assert_eq!(combined, 0b101010);
+
+        let combined = bit!(0) | bit!(2) | bit!(4) | bit!(6) | bit!(8);
+        assert_eq!(combined, 0b101010101);
+    }
+
+    #[test]
+    fn test_bit_with_types_specified_works() {
+        let b1: u8 = bit!(3);
+        assert_eq!(b1, 0b0000_1000u8);
+
+        let b2: u16 = bit!(10);
+        assert_eq!(b2, 0b0000_0100_0000_0000u16);
+
+        let b3: u32 = bit!(20);
+        assert_eq!(b3, 0x0010_0000u32);
+
+        let b4: u64 = bit!(40);
+        assert_eq!(b4, 0x0100_0000_0000u64);
+
+        let b5: u128 = bit!(50);
+        assert_eq!(b5, 0x0004_0000_0000_0000u128);
     }
 }
