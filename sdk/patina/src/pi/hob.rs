@@ -5,7 +5,7 @@
 //!
 //! ## Example
 //! ```
-//! use patina_pi::{BootMode, hob, hob::Hob, hob::HobList};
+//! use patina::pi::{BootMode, hob, hob::Hob, hob::HobList};
 //! use core::mem::size_of;
 //!
 //! // Generate HOBs to initialize a new HOB list
@@ -67,7 +67,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
-use crate::{
+use crate::pi::{
     BootMode,
     address_helper::{align_down, align_up},
 };
@@ -118,7 +118,7 @@ pub const UNUSED: u16 = 0xFFFE;
 pub const END_OF_HOB_LIST: u16 = 0xFFFF;
 
 pub mod header {
-    use crate::hob::EfiPhysicalAddress;
+    use crate::pi::hob::EfiPhysicalAddress;
     use r_efi::system::MemoryType;
 
     /// Describes the format and size of the data inside the HOB.
@@ -726,7 +726,7 @@ impl HobTrait for Hob<'_> {
 /// # Example
 ///
 /// ```no_run
-/// use patina_pi::hob::get_c_hob_list_size;
+/// use patina::pi::hob::get_c_hob_list_size;
 /// use core::ffi::c_void;
 ///
 /// // Assuming `hob_list` is a valid pointer to a HOB list
@@ -766,7 +766,7 @@ impl<'a> HobList<'a> {
     ///
     /// ```no_run
     /// use core::ffi::c_void;
-    /// use patina_pi::hob::HobList;
+    /// use patina::pi::hob::HobList;
     ///
     /// fn example(hob_list: *const c_void) {
     ///     // example discovering and adding hobs to a hob list
@@ -788,7 +788,7 @@ impl<'a> HobList<'a> {
     ///
     /// ```no_run
     /// use core::ffi::c_void;
-    /// use patina_pi::hob::HobList;
+    /// use patina::pi::hob::HobList;
     ///
     /// fn example(hob_list: *const c_void) {
     ///     // example discovering and adding hobs to a hob list
@@ -809,7 +809,7 @@ impl<'a> HobList<'a> {
     ///
     /// ```no_run
     /// use core::ffi::c_void;
-    /// use patina_pi::hob::HobList;
+    /// use patina::pi::hob::HobList;
     ///
     /// fn example(hob_list: *const c_void) {
     ///     // example discovering and adding hobs to a hob list
@@ -835,7 +835,7 @@ impl<'a> HobList<'a> {
     /// # Example(s)
     /// ```no_run
     /// use core::ffi::c_void;
-    /// use patina_pi::hob::HobList;
+    /// use patina::pi::hob::HobList;
     ///
     /// fn example(hob_list: *const c_void) {
     ///    // example discovering and adding hobs to a hob list
@@ -856,7 +856,7 @@ impl<'a> HobList<'a> {
     /// # Example(s)
     /// ```no_run
     /// use core::ffi::c_void;
-    /// use patina_pi::hob::HobList;
+    /// use patina::pi::hob::HobList;
     ///
     /// fn example(hob_list: *const c_void) {
     ///    // example discovering and adding hobs to a hob list
@@ -879,7 +879,7 @@ impl<'a> HobList<'a> {
     /// # Example(s)
     /// ```no_run
     /// use core::{ffi::c_void, mem::size_of};
-    /// use patina_pi::hob::{HobList, Hob, header, FirmwareVolume, FV};
+    /// use patina::pi::hob::{HobList, Hob, header, FirmwareVolume, FV};
     ///
     /// fn example(hob_list: *const c_void) {
     ///   // example discovering and adding hobs to a hob list
@@ -914,7 +914,7 @@ impl<'a> HobList<'a> {
     ///
     /// ```no_run
     /// use core::ffi::c_void;
-    /// use patina_pi::hob::HobList;
+    /// use patina::pi::hob::HobList;
     ///
     /// fn example(hob_list: *const c_void) {
     ///     // example discovering and adding hobs to a hob list
@@ -1022,7 +1022,7 @@ impl<'a> HobList<'a> {
     ///
     /// ```no_run
     /// use core::ffi::c_void;
-    /// use patina_pi::hob::HobList;
+    /// use patina::pi::hob::HobList;
     ///
     /// fn example(hob_list: *const c_void) {
     ///     // example discovering and adding hobs to a hob list
@@ -1328,7 +1328,7 @@ pub struct EFiMemoryTypeInformation {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
+    use crate::pi::{
         BootMode, hob,
         hob::{Hob, HobList, HobTrait},
     };

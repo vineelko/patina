@@ -42,7 +42,7 @@ use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
 use num_traits::WrappingSub;
 use r_efi::efi;
 
-use crate::address_helper::align_up;
+use crate::pi::address_helper::align_up;
 
 pub mod guid {
     use r_efi::efi;
@@ -66,7 +66,7 @@ pub mod guid {
 /// ## Example
 ///```
 /// # use std::{env, fs, path::Path, error::Error};
-/// use patina_pi::fw_fs::{FirmwareVolume, Section, SectionExtractor};
+/// use patina::pi::fw_fs::{FirmwareVolume, Section, SectionExtractor};
 /// use r_efi::efi;
 ///
 /// struct ExampleSectionExtractor {}
@@ -140,7 +140,7 @@ impl fmt::Debug for FirmwareVolumeExtHeader<'_> {
 /// ## Example
 ///```
 /// # use std::{env, fs, path::Path, error::Error};
-/// use patina_pi::fw_fs::FirmwareVolume;
+/// use patina::pi::fw_fs::FirmwareVolume;
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// # let root = Path::new(&env::var("CARGO_MANIFEST_DIR")?).join("test_resources");
 /// # let fv_bytes = fs::read(root.join("GIGANTOR.Fv"))?;
@@ -393,7 +393,7 @@ impl fmt::Debug for FirmwareVolume<'_> {
 /// ## Example
 ///```
 /// # use std::{env, fs, path::Path, error::Error};
-/// use patina_pi::fw_fs::FirmwareVolume;
+/// use patina::pi::fw_fs::FirmwareVolume;
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// # let root = Path::new(&env::var("CARGO_MANIFEST_DIR")?).join("test_resources");
 /// # let fv_bytes = fs::read(root.join("GIGANTOR.Fv"))?;
@@ -632,7 +632,7 @@ pub enum SectionMetaData {
 /// ## Example
 ///```
 /// # use std::{env, fs, path::Path, error::Error};
-/// use patina_pi::fw_fs::FirmwareVolume;
+/// use patina::pi::fw_fs::FirmwareVolume;
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// # let root = Path::new(&env::var("CARGO_MANIFEST_DIR")?).join("test_resources");
 /// # let fv_bytes = fs::read(root.join("GIGANTOR.Fv"))?;
@@ -945,7 +945,7 @@ mod unit_tests {
     use serde::Deserialize;
     use uuid::Uuid;
 
-    use crate::fw_fs::{SectionMetaData, guid};
+    use crate::pi::fw_fs::{SectionMetaData, guid};
 
     use super::{FfsSectionType, FirmwareVolume, NullSectionExtractor, Section, SectionExtractor, fv};
 
