@@ -9,6 +9,10 @@
 mod fixed_size_block_allocator;
 mod uefi_allocator;
 
+#[cfg(test)]
+#[coverage(off)]
+mod usage_tests;
+
 use core::{
     ffi::c_void,
     fmt::Debug,
