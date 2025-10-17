@@ -148,7 +148,7 @@ The below is a list of requirements for the crate, but it does not prevent addit
 2. `component` module: This module may optionally exist if the crate produces a component. It must contain the publicly
    importable component(s) for the crate.
 3. `config` module: This module may optionally exist if the component consumes configuration data that is registered
-   with the platform via `.with_config` and this config is not accessible via `patina_sdk` or elsewhere.
+   with the platform via `.with_config` and this config is not accessible via the `patina` crate or elsewhere.
 4. `error` module: This module may optionally exist if a `service` module is present and the public Service's interface
    contains custom errors.
 5. `hob` module: This module may optionally exist if a new guided HOB type has been created for this component. The
@@ -158,7 +158,7 @@ The below is a list of requirements for the crate, but it does not prevent addit
    exists elsewhere, the crate should consume that definition instead of making their own.
 6. `service` module: This module may optionally exist if the crate produces a service implementation that can be
    directly instantiated and passed to the core with the `.with_service` method. If the service trait defintion is not
-   accessible via `patina_sdk` or another crate, then the public defintion should also be defined in this module.
+   accessible via `patina` or another crate, then the public defintion should also be defined in this module.
 
 **Note**: Type re-exports are allowed, and can be re-exported in the same locations as would a public new type for
 your crate.
