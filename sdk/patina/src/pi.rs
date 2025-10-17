@@ -29,7 +29,6 @@
 
 #![allow(missing_docs)]
 
-mod address_helper;
 mod boot_mode;
 
 pub mod dxe_services;

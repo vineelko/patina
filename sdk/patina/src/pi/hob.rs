@@ -67,9 +67,9 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
-use crate::pi::{
-    BootMode,
-    address_helper::{align_down, align_up},
+use crate::{
+    base::{align_down, align_up},
+    pi::BootMode,
 };
 use core::{
     ffi::c_void,
@@ -1101,10 +1101,10 @@ impl fmt::Debug for HobList<'_> {
                         hob.header.length,
                         hob.version,
                         hob.boot_mode,
-                        align_up(hob.memory_bottom, 0x1000),
-                        align_down(hob.memory_top, 0x1000),
-                        align_up(hob.free_memory_bottom, 0x1000),
-                        align_down(hob.free_memory_top, 0x1000),
+                        align_up(hob.memory_bottom, 0x1000).unwrap_or(0),
+                        align_down(hob.memory_top, 0x1000).unwrap_or(0),
+                        align_up(hob.free_memory_bottom, 0x1000).unwrap_or(0),
+                        align_down(hob.free_memory_top, 0x1000).unwrap_or(0),
                         hob.end_of_hob_list
                     )?;
                 }

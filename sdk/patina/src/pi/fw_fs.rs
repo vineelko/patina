@@ -38,11 +38,10 @@ pub use fv::{
 };
 pub use fvb::attributes::{EfiFvbAttributes2, Fvb2 as Fvb2Attributes, raw::fvb2 as Fvb2RawAttributes};
 
+use crate::base::align_up;
 use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
 use num_traits::WrappingSub;
 use r_efi::efi;
-
-use crate::pi::address_helper::align_up;
 
 pub mod guid {
     use r_efi::efi;
@@ -292,7 +291,7 @@ impl<'a> FirmwareVolume<'a> {
             }
         };
 
-        let data_offset = align_up(data_offset as u64, 8) as usize;
+        let data_offset = align_up(data_offset as u64, 8).map_err(|_| efi::Status::VOLUME_CORRUPTED)? as usize;
         let erase_byte = if fv_header.attributes & Fvb2RawAttributes::ERASE_POLARITY != 0 { 0xff } else { 0 };
 
         Ok(Self { data: buffer, attributes: fv_header.attributes, block_map, ext_header, data_offset, erase_byte })
@@ -854,7 +853,10 @@ impl<'a> Iterator for FvFileIterator<'a> {
         if let Ok(ref file) = result {
             // per the PI spec, "Given a file F, the next file FvHeader is located at the next 8-byte aligned firmware volume
             // offset following the last byte the file F"
-            self.next_offset = align_up(self.next_offset as u64 + file.size(), 8) as usize;
+            match align_up(self.next_offset as u64 + file.size(), 8) {
+                Ok(aligned_offset) => self.next_offset = aligned_offset as usize,
+                Err(_) => self.error = true,
+            }
         } else {
             self.error = true;
         }
@@ -922,7 +924,10 @@ impl Iterator for FileSectionIterator<'_> {
                     }
                 }
             }
-            self.next_offset += align_up(section.section_size() as u64, 4) as usize;
+            match align_up(section.section_size() as u64, 4) {
+                Ok(aligned_offset) => self.next_offset += aligned_offset as usize,
+                Err(_) => self.error = true,
+            }
         } else {
             self.error = true;
         }
