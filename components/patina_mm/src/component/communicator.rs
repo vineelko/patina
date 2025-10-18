@@ -67,12 +67,10 @@ impl MmExecutor for RealMmExecutor {
     #[coverage(off)]
     fn execute_mm(&self, _comm_buffer: &mut CommunicateBuffer) -> Result<(), Status> {
         log::debug!(target: "mm_comm", "Triggering SW MMI for MM communication");
-        unsafe {
-            self.sw_mmi_trigger_service.trigger_sw_mmi(0xFF, 0).map_err(|err| {
-                log::error!(target: "mm_comm", "SW MMI trigger failed: {:?}", err);
-                Status::SwMmiFailed
-            })
-        }
+        self.sw_mmi_trigger_service.trigger_sw_mmi(0xFF, 0).map_err(|err| {
+            log::error!(target: "mm_comm", "SW MMI trigger failed: {:?}", err);
+            Status::SwMmiFailed
+        })
     }
 }
 
@@ -541,6 +539,7 @@ mod tests {
         mock_executor.expect_execute_mm().times(1).returning(|comm_buffer| {
             // Simulate MM handler corrupting the buffer state by directly writing to memory
             // This should be caught by the state verification
+            // SAFETY: Test intentionally corrupts buffer to verify error detection
             unsafe {
                 let ptr = comm_buffer.as_ptr();
                 *ptr = 0xFF; // Corrupt the first byte of the header
