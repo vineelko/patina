@@ -26,6 +26,10 @@ This RFC proposes a process for releasing Patina crates.
     - Indicate all previously unresolved questions have been resolved.
 - 2025-09-16:
   - Initial draft of RFC amendment to include criteria for merging feature branches into `main`.
+- 2025-10-20:
+  - Initial draft of RFC amendment to include PR title requirements for PRs into feature and major branches.
+  - Add a note in the Branching section that the "major" branch process has not been adopted by the project
+    yet at this time.
 
 ## Motivation
 
@@ -196,6 +200,11 @@ The following changes are considered **breaking** and may require a major versio
 
 ### Branching
 
+> Note: The "major branch" process is not being followed in Patina as of 10/20/2025.
+>
+> The project will choose when to adopt this process in the future. At that time, an amendment will be made to this
+> RFC along with an announcement in the GitHub repo.
+
 - The `main` branch is the primary development branch.
   - Any release made from a non-`main` branch must have a pre-release identifier in the version.
 - A `feature` branch may be created for an involved feature or enhancement.
@@ -204,6 +213,9 @@ The following changes are considered **breaking** and may require a major versio
   - **Branch name**: `feature/<feature-name>`
   - **Version Format**: `<major>.<minor>.<patch>-feature<feature-name>.<feature_release_number>`
     - **Example**: `4.1.0-featureabc.1`
+  - **PR Title Convention for PRs Into a Feature Branch**: `[<branchname>] <PR Title>`
+    - For example, a PR for "Adding API ABC" targeting the `feature/new_feature1` branch would be titled as:
+      `[feature/new_feature1] Adding API ABC"`.
   - Changes must be submitted by PR so feature changes are visible to the project, however, PR requirements may vary
     from those in the `main` branch. The final feature merge to `main` will be subject to the normal `main` branch PR
     requirements.
@@ -214,6 +226,8 @@ The following changes are considered **breaking** and may require a major versio
     - The `major` branch may be merged into `main` sooner if all breaking changes are complete, ready for release,
       and required before the monthly cadence merge.
   - **Branch name**: `major`
+  - **PR Title Convention for PRs Into a Major Branch**: `[major] <PR Title>`
+    - For example, a PR for "Change ABC" into the `major` branch would be titled as: `[major] Change ABC`
   - PR requirements into `major` are the exact same as those to the `main` branch.
 
 ```mermaid
