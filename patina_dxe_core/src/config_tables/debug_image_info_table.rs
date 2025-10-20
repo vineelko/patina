@@ -143,7 +143,7 @@ pub(crate) fn initialize_debug_image_info_table(system_table: &mut EfiSystemTabl
         GcdMemoryType::SystemMemory,
         ALIGNMENT_SHIFT_4MB,
         UEFI_PAGE_SIZE,
-        protocol_db::DXE_CORE_HANDLE,
+        protocol_db::EFI_BOOT_SERVICES_DATA_ALLOCATOR_HANDLE,
         None,
     ) {
         Ok(address) => address,
