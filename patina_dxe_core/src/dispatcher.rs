@@ -524,6 +524,13 @@ pub fn display_discovered_not_dispatched() {
     }
 }
 
+/// Reset the dispatcher context to a clean default state for testing.
+/// Note: This function should only be called from tests to ensure clean state between test runs.
+#[cfg(test)]
+pub(crate) fn reset_dispatcher_context_for_tests() {
+    *DISPATCHER_CONTEXT.lock() = DispatcherContext::new();
+}
+
 extern "efiapi" fn core_fw_vol_event_protocol_notify(_event: efi::Event, _context: *mut c_void) {
     //Note: runs at TPL_CALLBACK
     match PROTOCOL_DB.locate_handles(Some(firmware_volume_block::PROTOCOL_GUID)) {
