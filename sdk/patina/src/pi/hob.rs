@@ -1993,4 +1993,25 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_hoblist_debug_display() {
+        use alloc::format;
+
+        let mut hoblist = HobList::new();
+        let handoff = gen_phase_handoff_information_table();
+        hoblist.push(Hob::Handoff(&handoff));
+
+        let debug_output = format!("{:?}", hoblist);
+
+        assert!(debug_output.contains("PHASE HANDOFF INFORMATION TABLE"));
+        assert!(debug_output.contains("HOB Length:"));
+        assert!(debug_output.contains("Version:"));
+        assert!(debug_output.contains("Boot Mode:"));
+        assert!(debug_output.contains("Memory Bottom:"));
+        assert!(debug_output.contains("Memory Top:"));
+        assert!(debug_output.contains("Free Memory Bottom:"));
+        assert!(debug_output.contains("Free Memory Top:"));
+        assert!(debug_output.contains("End of HOB List:"));
+    }
 }
