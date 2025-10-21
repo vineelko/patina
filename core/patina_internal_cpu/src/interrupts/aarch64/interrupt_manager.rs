@@ -21,7 +21,6 @@ use patina_stacktrace::StackTrace;
 use crate::interrupts::aarch64::sysreg::{read_sysreg, write_sysreg};
 use crate::interrupts::{
     EfiExceptionStackTrace, EfiSystemContext, HandlerType, InterruptManager, aarch64::ExceptionContextAArch64,
-    exception_handling::FaultAllocator,
 };
 use crate::interrupts::{disable_interrupts, enable_interrupts};
 
@@ -197,10 +196,16 @@ extern "efiapi" fn synchronous_exception_handler(_exception_type: isize, context
 }
 
 fn dump_pte(far: u64) {
+    // SAFETY: Reading the TTBR0_EL2 register has no side effects and is safe to do.
     let ttbr0_el2 = unsafe { read_sysreg!(ttbr0_el2) };
 
+    // SAFETY: TTBR0 must be valid as it is the current page table base.
     if let Ok(pt) = unsafe {
-        patina_paging::aarch64::AArch64PageTable::from_existing(ttbr0_el2, FaultAllocator {}, PagingType::Paging4Level)
+        patina_paging::aarch64::AArch64PageTable::from_existing(
+            ttbr0_el2,
+            patina_paging::page_allocator::PageAllocatorStub,
+            PagingType::Paging4Level,
+        )
     } {
         let _ = pt.dump_page_tables(far & !(UEFI_PAGE_MASK as u64), UEFI_PAGE_SIZE as u64);
         log::error!("");
