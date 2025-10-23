@@ -14,7 +14,7 @@
 //!
 //! ```cmd
 //! PS C:\> .\resolve_stacktrace.ps1 -StackTrace "
-//! >>     # Child-SP              Return Address         Call Site
+//! >>     # Child-FP              Return Address         Call Site
 //! >>     0 00000057261FFAE0      00007FFC9AC910E5       x64+1095
 //! >>     1 00000057261FFB10      00007FFC9AC9115E       x64+10E5
 //! >>     2 00000057261FFB50      00007FFC9AC911E8       x64+115E
@@ -27,7 +27,7 @@
 //! >> " -PdbDirectory "C:\pdbs\"
 //!
 //! Output:
-//! # Source Path                                                           Child-SP         Return Address   Call Site
+//! # Source Path                                                           Child-FP         Return Address   Call Site
 //! 0 [C:\r\patina\core\patina_stacktrace\src\x64\tests\collateral\x64.c     @   63] 00000057261FFAE0 00007FFC9AC910E5 x64!func1+25
 //! 1 [C:\r\patina\core\patina_stacktrace\src\x64\tests\collateral\x64.c     @   72] 00000057261FFB10 00007FFC9AC9115E x64!func2+15
 //! 2 [C:\r\patina\core\patina_stacktrace\src\x64\tests\collateral\x64.c     @   84] 00000057261FFB50 00007FFC9AC911E8 x64!func3+1E
@@ -40,12 +40,11 @@
 //!
 //! ## Prerequisites
 //!
-//! This library uses the PE image `.pdata` section to calculate the stack
-//! unwind information required to walk the call stack. Therefore, all binaries
-//! should be compiled with the following `rustc` flag to generate the `.pdata`
-//! sections in the PE images:
+//! This library uses the X64/AArch64 frame pointer chaining to perform the
+//! stack walk. Therefore, all binaries should be compiled with the following
+//! `rustc` flags:
 //!
-//! `RUSTFLAGS=-Cforce-unwind-tables`
+//! `RUSTFLAGS=-Cforce-unwind-tables -Cforce-frame-pointers=yes`
 //!
 //! ## Public API
 //!
@@ -53,17 +52,17 @@
 //! `StackTrace` module.
 //!
 //! ```ignore
-//!    /// Dumps the stack trace for the given RIP and RSP values.
+//!    /// Dumps the stack trace for the given RIP and RBP values.
 //!    ///
 //!    /// # Safety
 //!    ///
 //!    /// This function is marked `unsafe` to indicate that the caller is
-//!    /// responsible for validating the provided RIP and RSP values. Invalid
+//!    /// responsible for validating the provided RIP and RBP values. Invalid
 //!    /// values can result in undefined behavior, including potential page
 //!    /// faults.
 //!    ///
 //!    /// ```text
-//!    /// # Child-SP              Return Address         Call Site
+//!    /// # Child-FP              Return Address         Call Site
 //!    /// 0 000000346BCFFAC0      00007FF8A0A710E5       x64+1095
 //!    /// 1 000000346BCFFAF0      00007FF8A0A7115E       x64+10E5
 //!    /// 2 000000346BCFFB30      00007FF8A0A711E8       x64+115E
@@ -73,18 +72,18 @@
 //!    /// 6 000000346BCFFC60      00007FF8A749FBCC       kernel32+2E8D7
 //!    /// 7 000000346BCFFC90      0000000000000000       ntdll+2FBCC
 //!    /// ```
-//!     pub unsafe fn dump_with(rip: u64, rsp: u64) -> StResult<()>;
-//!    /// Dumps the stack trace. This function reads the RIP and RSP registers and
+//!     pub unsafe fn dump_with(rip: u64, rbp: u64) -> StResult<()>;
+//!    /// Dumps the stack trace. This function reads the RIP and RBP registers and
 //!    /// attempts to dump the call stack.
 //!    ///
 //!    /// # Safety
 //!    ///
 //!    /// It is marked `unsafe` to indicate that the caller is responsible for the
-//!    /// validity of the RIP and RSP values. Invalid or corrupt machine state can
+//!    /// validity of the RIP and RBP values. Invalid or corrupt machine state can
 //!    /// result in undefined behavior, including potential page faults.
 //!    ///
 //!    /// ```text
-//!    /// # Child-SP              Return Address         Call Site
+//!    /// # Child-FP              Return Address         Call Site
 //!    /// 0 000000346BCFFAC0      00007FF8A0A710E5       x64+1095
 //!    /// 1 000000346BCFFAF0      00007FF8A0A7115E       x64+10E5
 //!    /// 2 000000346BCFFB30      00007FF8A0A711E8       x64+115E
@@ -102,7 +101,7 @@
 //!
 //! ```ignore
 //!     // Inside exception handler
-//!     StackTrace::dump_with(rip, rsp);
+//!     StackTrace::dump_with(rip, rbp);
 //!
 //!     // Inside rust panic handler and drivers
 //!     StackTrace::dump();
@@ -121,13 +120,4 @@ mod byte_reader;
 pub mod error;
 mod pe;
 mod stacktrace;
-
-cfg_if::cfg_if! {
-    if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
-        mod aarch64;
-    } else {
-        mod x64;
-    }
-}
-
 pub use stacktrace::StackTrace;

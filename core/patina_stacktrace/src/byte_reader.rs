@@ -80,6 +80,10 @@ impl ByteReader for [u8] {
     }
 }
 
+pub fn read_pointer64(pointer: u64) -> u64 {
+    unsafe { *(pointer as *const u64) }
+}
+
 #[cfg(test)]
 #[coverage(off)]
 mod tests {

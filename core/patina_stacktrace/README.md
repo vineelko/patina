@@ -14,7 +14,7 @@ as shown below.
 
 ```cmd
 PS C:\> .\resolve_stacktrace.ps1 -StackTrace "
->>     # Child-SP              Return Address         Call Site
+>>     # Child-FP              Return Address         Call Site
 >>     0 00000057261FFAE0      00007FFC9AC910E5       x64+1095
 >>     1 00000057261FFB10      00007FFC9AC9115E       x64+10E5
 >>     2 00000057261FFB50      00007FFC9AC911E8       x64+115E
@@ -27,7 +27,7 @@ PS C:\> .\resolve_stacktrace.ps1 -StackTrace "
 >> " -PdbDirectory "C:\pdbs\"
 
 Output:
-  # Source Path                                                           Child-SP         Return Address   Call Site
+  # Source Path                                                           Child-FP         Return Address   Call Site
   0 [C:\r\patina\core\patina_stacktrace\src\x64\tests\collateral\x64.c     @   63] 00000057261FFAE0 00007FFC9AC910E5 x64!func1+25
   1 [C:\r\patina\core\patina_stacktrace\src\x64\tests\collateral\x64.c     @   72] 00000057261FFB10 00007FFC9AC9115E x64!func2+15
   2 [C:\r\patina\core\patina_stacktrace\src\x64\tests\collateral\x64.c     @   84] 00000057261FFB50 00007FFC9AC911E8 x64!func3+1E
@@ -47,7 +47,7 @@ Each of these examples will produce the same output:
 
 ```cmd
 .\resolve_stacktrace\resolve_stacktrace.ps1 -StackTrace "
-> 13:39:09.014 : INFO -       # Child-SP              Return Address         Call Site
+> 13:39:09.014 : INFO -       # Child-FP              Return Address         Call Site
 > 13:39:09.014 : INFO -       0 000000007E96F930      000000007E982668       qemu_q35_dxe_core-2d9bed3cc1f2b4ea+6E1BF
 > 13:39:09.014 : INFO -       1 000000007E96F960      000000007EA8B92F       qemu_q35_dxe_core-2d9bed3cc1f2b4ea+12668
 > 13:39:09.014 : INFO -       2 000000007E96FA70      000000007E9739E0       qemu_q35_dxe_core-2d9bed3cc1f2b4ea+11B92F
@@ -59,7 +59,7 @@ Each of these examples will produce the same output:
 
 ```cmd
 .\resolve_stacktrace\resolve_stacktrace.ps1 -StackTrace "
-> INFO -       # Child-SP              Return Address         Call Site
+> INFO -       # Child-FP              Return Address         Call Site
 > INFO -       0 000000007E96F930      000000007E982668       qemu_q35_dxe_core-2d9bed3cc1f2b4ea+6E1BF
 > INFO -       1 000000007E96F960      000000007EA8B92F       qemu_q35_dxe_core-2d9bed3cc1f2b4ea+12668
 > INFO -       2 000000007E96FA70      000000007E9739E0       qemu_q35_dxe_core-2d9bed3cc1f2b4ea+11B92F
@@ -71,7 +71,7 @@ Each of these examples will produce the same output:
 
 ```cmd
 .\resolve_stacktrace\resolve_stacktrace.ps1 -StackTrace "
-> # Child-SP              Return Address         Call Site
+> # Child-FP              Return Address         Call Site
 > 0 000000007E96F930      000000007E982668       qemu_q35_dxe_core-2d9bed3cc1f2b4ea+6E1BF
 > 1 000000007E96F960      000000007EA8B92F       qemu_q35_dxe_core-2d9bed3cc1f2b4ea+12668
 > 2 000000007E96FA70      000000007E9739E0       qemu_q35_dxe_core-2d9bed3cc1f2b4ea+11B92F
@@ -85,16 +85,20 @@ Each of these examples will produce the same output:
 
 ## Prerequisites
 
-This library uses the PE image `.pdata` section to calculate the stack unwind
-information required to walk the call stack. Therefore, all binaries should be
-compiled with the following `rustc` flag to generate the `.pdata` section in the
-PE images:
+This library uses the X64/AArch64 frame pointer chaining to perform the stack
+walk. Therefore, all binaries should be compiled with the following `rustc`
+flags:
 
-`RUSTFLAGS=-Cforce-unwind-tables`
+`RUSTFLAGS=-Cforce-unwind-tables -Cforce-frame-pointers=yes`
 
-In order to preserve stack data about C binaries, this needs to be set in the platform DSC's build options section:
+In order to preserve stack unwind data in C binaries, this needs to be set in the platform DSC's build options section:
 
 `*_*_*_GENFW_FLAGS   = --keepexceptiontable`
+
+In order to preserve frame pointers used for stack tracing, this needs to be set in the platform DSC’s build options
+section:
+
+`*_*_*_CC_FLAGS   = /Oy-`
 
 ## Supported Platforms
 
@@ -114,17 +118,17 @@ In order to preserve stack data about C binaries, this needs to be set in the pl
 The main API for public use is the `dump()` function in the `StackTrace` module.
 
 ```rust
-    /// Dumps the stack trace for the given RIP and RSP values.
+    /// Dumps the stack trace for the given RIP and RBP values.
     ///
     /// # Safety
     ///
     /// This function is marked `unsafe` to indicate that the caller is
-    /// responsible for validating the provided RIP and RSP values. Invalid
+    /// responsible for validating the provided RIP and RBP values. Invalid
     /// values can result in undefined behavior, including potential page
     /// faults.
     ///
     /// ```text
-    /// # Child-SP              Return Address         Call Site
+    /// # Child-FP              Return Address         Call Site
     /// 0 000000346BCFFAC0      00007FF8A0A710E5       x64+1095
     /// 1 000000346BCFFAF0      00007FF8A0A7115E       x64+10E5
     /// 2 000000346BCFFB30      00007FF8A0A711E8       x64+115E
@@ -134,19 +138,19 @@ The main API for public use is the `dump()` function in the `StackTrace` module.
     /// 6 000000346BCFFC60      00007FF8A749FBCC       kernel32+2E8D7
     /// 7 000000346BCFFC90      0000000000000000       ntdll+2FBCC
     /// ```
-    pub unsafe fn dump(rip: u64, rsp: u64) -> StResult<()>;
+    pub unsafe fn dump(rip: u64, rbp: u64) -> StResult<()>;
 
-    /// Dumps the stack trace. This function reads the RIP and RSP registers and
+    /// Dumps the stack trace. This function reads the RIP and RBP registers and
     /// attempts to dump the call stack.
     ///
     /// # Safety
     ///
     /// It is marked `unsafe` to indicate that the caller is responsible for the
-    /// validity of the RIP and RSP values. Invalid or corrupt machine state can
+    /// validity of the RIP and RBP values. Invalid or corrupt machine state can
     /// result in undefined behavior, including potential page faults.
     ///
     /// ```text
-    /// # Child-SP              Return Address         Call Site
+    /// # Child-FP              Return Address         Call Site
     /// 0 000000346BCFFAC0      00007FF8A0A710E5       x64+1095
     /// 1 000000346BCFFAF0      00007FF8A0A7115E       x64+10E5
     /// 2 000000346BCFFB30      00007FF8A0A711E8       x64+115E
@@ -163,7 +167,7 @@ The main API for public use is the `dump()` function in the `StackTrace` module.
 
 ```rust
     // Inside exception handler
-    StackTrace::dump_with(rip, rsp);
+    StackTrace::dump_with(rip, rbp);
 
     // Inside rust panic handler and drivers
     StackTrace::dump();

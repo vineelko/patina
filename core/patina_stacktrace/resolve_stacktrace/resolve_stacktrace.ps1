@@ -15,7 +15,7 @@
 # Usage:
 # ------
 # PS C:\> .\resolve_stacktrace.ps1 -StackTrace "
-# >>     # Child-SP              Return Address         Call Site
+# >>     # Child-FP              Return Address         Call Site
 # >>     0 00000057261FFAE0      00007FFC9AC910E5       x64+1095
 # >>     1 00000057261FFB10      00007FFC9AC9115E       x64+10E5
 # >>     2 00000057261FFB50      00007FFC9AC911E8       x64+115E
@@ -28,7 +28,7 @@
 # >> " -PdbDirectory "C:\pdbs\"
 #
 # Output:
-# # Source Path                                                           Child-SP         Return Address   Call Site
+# # Source Path                                                           Child-FP         Return Address   Call Site
 # 0 [C:\r\patina\core\patina_stacktrace\src\x64\tests\collateral\x64.c     @   63] 00000057261FFAE0 00007FFC9AC910E5 x64!func1+25
 # 1 [C:\r\patina\core\patina_stacktrace\src\x64\tests\collateral\x64.c     @   72] 00000057261FFB10 00007FFC9AC9115E x64!func2+15
 # 2 [C:\r\patina\core\patina_stacktrace\src\x64\tests\collateral\x64.c     @   84] 00000057261FFB50 00007FFC9AC911E8 x64!func3+1E
@@ -292,14 +292,14 @@ foreach ($line in $lines) {
     } else {
         # Skip the header line, but allow for prefixes and timestamps
         if ($line -match "^(?:.*?\d{2}:\d{2}:\d{2}\.\d{3}\s*:\s*)?\s*[^#]*#") {
-            Write-Output " # Source Path                                                           Child-SP         Return Address   Call Site"
+            Write-Output " # Source Path                                                           Child-FP         Return Address   Call Site"
             continue
         }
         # If it doesn't match, skip the line
         continue
     }
 
-    # Now $columns[0] is the frame number, $columns[1] is Child-SP, $columns[2] is Return Address, $columns[3] is Call Site
+    # Now $columns[0] is the frame number, $columns[1] is Child-FP, $columns[2] is Return Address, $columns[3] is Call Site
     if ($columns.Count -lt 4) {
         continue
     }
@@ -310,7 +310,8 @@ foreach ($line in $lines) {
     if ($callSite -match "\+") {
         # Split the Call Site into module and RVA
         $module = $callSite -replace "\+.*", ""  # Extract everything before the +
-        $rva = $callSite -replace ".*\+", ""  # Extract everything after the +
+        $module = $module -replace ".*/", ""     # Handle Linux file paths
+        $rva = $callSite -replace ".*\+", ""     # Extract everything after the +
 
         # Construct the PDB file path
         $pdbFile = Join-Path -Path $PdbDirectory -ChildPath "$module.pdb"

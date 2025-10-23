@@ -1,15 +1,14 @@
+use core::fmt;
+
 use crate::byte_reader::ByteReader;
 use crate::error::{Error, StResult};
 
 // PE Header related constants
 const MZ_SIGNATURE: u16 = 0x5A4D; // 'MZ' in little-endian.
 const PAGE_SIZE: u64 = 0x1000; // 4KB pages.
-const PE_MAGIC_OFFSET: usize = 0x18;
 const PE_POINTER_OFFSET: usize = 0x3C;
 const PE_SIGNATURE: u32 = 0x0000_4550; // 'PE\0\0' in little-endian.
-const PE64_EXECUTABLE: u16 = 0x20B; // PE32+
 const SIZE_OF_IMAGE_OFFSET: usize = 0x50;
-const EXCEPTION_TABLE_POINTER_PE32_OFFSET: usize = 0x90;
 const EXCEPTION_TABLE_POINTER_PE64_OFFSET: usize = 0xA0;
 
 // PE Debug directory related constants
@@ -158,37 +157,18 @@ impl PE<'_> {
 
         Some(file_name)
     }
+}
 
-    pub(crate) unsafe fn get_exception_table(&self) -> StResult<(u32, u32)> {
-        // Get PE Header offset
-        let pe_header_offset = self.bytes.read32(PE_POINTER_OFFSET)? as usize;
-
-        // Determine PE Type(PE32 or PE32+)
-        let pe_type = self.bytes.read16(pe_header_offset + PE_MAGIC_OFFSET)?;
-
-        // Jump to exception table data directory and read the exception table
-        // rva
-        let offset = if pe_type == PE64_EXECUTABLE {
-            pe_header_offset + EXCEPTION_TABLE_POINTER_PE64_OFFSET
-        } else {
-            pe_header_offset + EXCEPTION_TABLE_POINTER_PE32_OFFSET
-        };
-        let exception_table_rva = self.bytes.read32(offset)?;
-
-        // Jump to exception table section size
-        let offset = if pe_type == PE64_EXECUTABLE {
-            pe_header_offset + EXCEPTION_TABLE_POINTER_PE64_OFFSET + 4
-        } else {
-            pe_header_offset + EXCEPTION_TABLE_POINTER_PE32_OFFSET + 4
-        };
-        let exception_table_size = self.bytes.read32(offset)?;
-
-        // Bail out if exception table section(aka .pdata section) is not
-        // available
-        if exception_table_rva == 0 || exception_table_size == 0 {
-            return Err(Error::ExceptionDirectoryNotFound(self.image_name));
-        }
-
-        Ok((exception_table_rva, exception_table_size))
+impl<'a> fmt::Display for PE<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "PE Image:\n  Name: {}\n  Base Address: 0x{:016X}-{:016X}\n  Size: {} bytes\n  Bytes: {} bytes",
+            self.image_name.unwrap_or("<unknown>"),
+            self.base_address,
+            self.base_address + self._size_of_image as u64,
+            self._size_of_image,
+            self.bytes.len()
+        )
     }
 }
