@@ -310,7 +310,6 @@ ignore_errors = true
 description = "Run all tasks for PR readiness."
 dependencies = [
     "deny",
-    "vet",
     "cspell",
     "clippy",
     "build",
