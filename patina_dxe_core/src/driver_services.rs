@@ -531,12 +531,15 @@ pub unsafe fn core_disconnect_controller(
         child_handles.retain(|x| child_set.insert(*x));
 
         let total_children = child_handles.len();
-        let mut is_only_child = false;
         if let Some(handle) = child_handle {
-            // if the child was specified, but was the only child, then the driver should be disconnected.
-            // if the child was specified, but other children were present, then the driver should not be disconnected.
-            child_handles.retain(|x| x == &handle);
-            is_only_child = total_children == child_handles.len();
+            // A specific child was requested so keep only that child. `child_handles` was deduplicated
+            // above, so this leaves at most one entry.
+            child_handles.retain(|x| *x == handle);
+
+            // If the requested child isn't managed by this driver, skip it.
+            if child_handles.is_empty() {
+                continue;
+            }
         }
 
         // resolve the handle to the driver_binding.
@@ -570,7 +573,7 @@ pub unsafe fn core_disconnect_controller(
                 )
             };
         }
-        if status == efi::Status::SUCCESS && (child_handle.is_none() || is_only_child) {
+        if status == efi::Status::SUCCESS && (child_handle.is_none() || total_children == child_handles.len()) {
             // SAFETY: driver_binding_interface is a valid pointer to a driver binding protocol instance
             // as ensured by the construction of driver_candidates above.
             status =
@@ -1842,6 +1845,469 @@ mod tests {
                     "Should return InvalidParameter for invalid driver handle"
                 );
             }
+        });
+    }
+
+    #[test]
+    fn test_disconnect_specific_child_not_managed_by_driver() {
+        // Verifies that when a specific child handle is requested but not managed by
+        // any driver, the driver is skipped and returns not found
+        with_locked_state(|| {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+
+            static STOP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+            extern "efiapi" fn mock_stop_tracking(
+                _this: *mut efi::protocols::driver_binding::Protocol,
+                _controller_handle: efi::Handle,
+                _num_children: usize,
+                _child_handle_buffer: *mut efi::Handle,
+            ) -> efi::Status {
+                STOP_CALLS.fetch_add(1, Ordering::SeqCst);
+                efi::Status::SUCCESS
+            }
+
+            let guid1 = patina::Guid::from_string("0e896c7a-57dc-4987-bc22-abc3a8263210");
+            let interface1: *mut c_void = 0x1234 as *mut c_void;
+            let (handle1, _) = PROTOCOL_DB.install_protocol_interface(None, guid1.to_efi_guid(), interface1).unwrap();
+
+            // Create controller handle
+            let (controller_handle, _) = PROTOCOL_DB
+                .install_protocol_interface(
+                    None,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    0x1111 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+
+            // Create driver handle
+            let (driver_handle, _) = PROTOCOL_DB
+                .install_protocol_interface(
+                    None,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    0x2222 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+
+            // Create a child handle that is managed by the driver
+            let (managed_child_handle, _) = PROTOCOL_DB
+                .install_protocol_interface(
+                    None,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    0x3333 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+
+            // Create a child handle that is not managed by the driver
+            let (unmanaged_child_handle, _) = PROTOCOL_DB
+                .install_protocol_interface(
+                    None,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    0x4444 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+
+            // Create driver binding protocol
+            let binding = Box::new(efi::protocols::driver_binding::Protocol {
+                version: 10,
+                supported: mock_supported_success,
+                start: mock_start_success,
+                stop: mock_stop_tracking,
+                driver_binding_handle: driver_handle,
+                image_handle: DXE_CORE_HANDLE,
+            });
+            let binding_ptr = Box::into_raw(binding) as *mut core::ffi::c_void;
+
+            PROTOCOL_DB
+                .install_protocol_interface(
+                    Some(driver_handle),
+                    efi::protocols::driver_binding::PROTOCOL_GUID,
+                    binding_ptr,
+                )
+                .unwrap();
+
+            // Have the driver manage the controller
+            PROTOCOL_DB
+                .add_protocol_usage(
+                    controller_handle,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    Some(driver_handle),
+                    Some(handle1),
+                    efi::OPEN_PROTOCOL_BY_DRIVER,
+                )
+                .unwrap();
+
+            // The driver only manages managed_child_handle, not unmanaged_child_handle
+            PROTOCOL_DB
+                .add_protocol_usage(
+                    controller_handle,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    Some(driver_handle),
+                    Some(managed_child_handle),
+                    efi::OPEN_PROTOCOL_BY_CHILD_CONTROLLER,
+                )
+                .unwrap();
+
+            STOP_CALLS.store(0, Ordering::SeqCst);
+
+            // Attempt to disconnect unmanaged_child_handle (not managed by this driver)
+            // SAFETY: No concurrent driver unload occurs in this single-threaded test. The
+            // driver binding remains valid for the duration of the call.
+            let result = unsafe { core_disconnect_controller(controller_handle, None, Some(unmanaged_child_handle)) };
+            // Should return not found since no driver manages this child
+            assert_eq!(
+                result,
+                Err(EfiError::NotFound),
+                "disconnect should fail when child is not managed by any driver"
+            );
+
+            // Driver's stop function should not have been called since the child wasn't found
+            assert_eq!(
+                STOP_CALLS.load(Ordering::SeqCst),
+                0,
+                "Driver stop should not be called when specified child is not managed by driver"
+            );
+        });
+    }
+
+    #[test]
+    fn test_disconnect_specific_child_among_multiple_children() {
+        // Checks that when a specific child is requested and the driver has multiple children,
+        // only that specific child is disconnected (not the entire driver).
+        with_locked_state(|| {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+
+            static CHILD_STOP_CALLS: AtomicUsize = AtomicUsize::new(0);
+            static DRIVER_STOP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+            extern "efiapi" fn mock_stop_tracking(
+                _this: *mut efi::protocols::driver_binding::Protocol,
+                _controller_handle: efi::Handle,
+                num_children: usize,
+                _child_handle_buffer: *mut efi::Handle,
+            ) -> efi::Status {
+                if num_children == 0 {
+                    DRIVER_STOP_CALLS.fetch_add(1, Ordering::SeqCst);
+                } else {
+                    CHILD_STOP_CALLS.fetch_add(1, Ordering::SeqCst);
+                }
+                efi::Status::SUCCESS
+            }
+
+            let guid1 = patina::Guid::from_string("0e896c7a-57dc-4987-bc22-abc3a8263210");
+            let interface1: *mut c_void = 0x1234 as *mut c_void;
+            let (handle1, _) = PROTOCOL_DB.install_protocol_interface(None, guid1.to_efi_guid(), interface1).unwrap();
+
+            // Create controller handle
+            let (controller_handle, _) = PROTOCOL_DB
+                .install_protocol_interface(
+                    None,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    0x1111 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+
+            // Create driver handle
+            let (driver_handle, _) = PROTOCOL_DB
+                .install_protocol_interface(
+                    None,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    0x2222 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+
+            // Create multiple child handles
+            let (child_handle_a, _) = PROTOCOL_DB
+                .install_protocol_interface(
+                    None,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    0x3333 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+
+            let (child_handle_b, _) = PROTOCOL_DB
+                .install_protocol_interface(
+                    None,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    0x4444 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+
+            let (child_handle_c, _) = PROTOCOL_DB
+                .install_protocol_interface(
+                    None,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    0x5555 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+
+            // Create driver binding protocol
+            let binding = Box::new(efi::protocols::driver_binding::Protocol {
+                version: 10,
+                supported: mock_supported_success,
+                start: mock_start_success,
+                stop: mock_stop_tracking,
+                driver_binding_handle: driver_handle,
+                image_handle: DXE_CORE_HANDLE,
+            });
+            let binding_ptr = Box::into_raw(binding) as *mut core::ffi::c_void;
+
+            PROTOCOL_DB
+                .install_protocol_interface(
+                    Some(driver_handle),
+                    efi::protocols::driver_binding::PROTOCOL_GUID,
+                    binding_ptr,
+                )
+                .unwrap();
+
+            // Have the driver manage the controller
+            PROTOCOL_DB
+                .add_protocol_usage(
+                    controller_handle,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    Some(driver_handle),
+                    Some(handle1),
+                    efi::OPEN_PROTOCOL_BY_DRIVER,
+                )
+                .unwrap();
+
+            // Add all three child handles as managed by this driver
+            PROTOCOL_DB
+                .add_protocol_usage(
+                    controller_handle,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    Some(driver_handle),
+                    Some(child_handle_a),
+                    efi::OPEN_PROTOCOL_BY_CHILD_CONTROLLER,
+                )
+                .unwrap();
+
+            PROTOCOL_DB
+                .add_protocol_usage(
+                    controller_handle,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    Some(driver_handle),
+                    Some(child_handle_b),
+                    efi::OPEN_PROTOCOL_BY_CHILD_CONTROLLER,
+                )
+                .unwrap();
+
+            PROTOCOL_DB
+                .add_protocol_usage(
+                    controller_handle,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    Some(driver_handle),
+                    Some(child_handle_c),
+                    efi::OPEN_PROTOCOL_BY_CHILD_CONTROLLER,
+                )
+                .unwrap();
+
+            CHILD_STOP_CALLS.store(0, Ordering::SeqCst);
+            DRIVER_STOP_CALLS.store(0, Ordering::SeqCst);
+
+            // Disconnect only child_handle_a (one of the three children)
+            // Because total_children != child_handles.len(), the driver should not be fully stopped
+            // SAFETY: No concurrent driver unload occurs in this single-threaded test. The
+            // driver binding remains valid for the duration of the call.
+            let result = unsafe { core_disconnect_controller(controller_handle, None, Some(child_handle_a)) };
+            assert!(result.is_ok(), "disconnect should succeed");
+
+            assert_eq!(
+                CHILD_STOP_CALLS.load(Ordering::SeqCst),
+                1,
+                "Child stop should be called once for the specified child"
+            );
+            assert_eq!(
+                DRIVER_STOP_CALLS.load(Ordering::SeqCst),
+                0,
+                "Driver stop should not be called when other children still exist"
+            );
+        });
+    }
+
+    #[test]
+    fn test_disconnect_specific_child_not_owned_by_either_driver() {
+        // Two drivers manage the same controller and each owns a distinct child. A specific child
+        // owned by neither driver is requested. Every driver in the loop must be skipped (its stop
+        // function must never be called) and the call must return NotFound.
+        with_locked_state(|| {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+
+            static A_STOP_CALLS: AtomicUsize = AtomicUsize::new(0);
+            static B_STOP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+            extern "efiapi" fn mock_stop_driver_a(
+                _this: *mut efi::protocols::driver_binding::Protocol,
+                _controller_handle: efi::Handle,
+                _num_children: usize,
+                _child_handle_buffer: *mut efi::Handle,
+            ) -> efi::Status {
+                A_STOP_CALLS.fetch_add(1, Ordering::SeqCst);
+                efi::Status::SUCCESS
+            }
+
+            extern "efiapi" fn mock_stop_driver_b(
+                _this: *mut efi::protocols::driver_binding::Protocol,
+                _controller_handle: efi::Handle,
+                _num_children: usize,
+                _child_handle_buffer: *mut efi::Handle,
+            ) -> efi::Status {
+                B_STOP_CALLS.fetch_add(1, Ordering::SeqCst);
+                efi::Status::SUCCESS
+            }
+
+            // Arbitrary valid handle recorded in the controller field of the BY_DRIVER usages.
+            let guid1 = patina::Guid::from_string("0e896c7a-57dc-4987-bc22-abc3a8263210");
+            let (handle1, _) =
+                PROTOCOL_DB.install_protocol_interface(None, guid1.to_efi_guid(), 0x1234 as *mut c_void).unwrap();
+
+            // Controller managed by both drivers. Driver A opens the device path protocol BY_DRIVER.
+            // Driver B opens a second protocol BY_DRIVER, because BY_DRIVER is exclusive per protocol interface.
+            let (controller_handle, _) = PROTOCOL_DB
+                .install_protocol_interface(
+                    None,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    0x1111 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+            let driver_b_protocol = patina::Guid::from_string("2f7d3b1e-9c4a-4f8b-8a2d-1e6c5b4a3f21");
+            PROTOCOL_DB
+                .install_protocol_interface(
+                    Some(controller_handle),
+                    driver_b_protocol.to_efi_guid(),
+                    0x2211 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+
+            // Driver handles.
+            let (driver_a_handle, _) = PROTOCOL_DB
+                .install_protocol_interface(
+                    None,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    0x2222 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+            let (driver_b_handle, _) = PROTOCOL_DB
+                .install_protocol_interface(
+                    None,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    0x3333 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+
+            // Child handles: child_a owned by driver A, child_b owned by driver B, and orphan_child
+            // owned by neither driver (this is the handle that will be requested for disconnect).
+            let (child_a, _) = PROTOCOL_DB
+                .install_protocol_interface(
+                    None,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    0x4444 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+            let (child_b, _) = PROTOCOL_DB
+                .install_protocol_interface(
+                    None,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    0x5555 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+            let (orphan_child, _) = PROTOCOL_DB
+                .install_protocol_interface(
+                    None,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    0x6666 as *mut core::ffi::c_void,
+                )
+                .unwrap();
+
+            // Install both driver binding protocols.
+            let binding_a = Box::new(efi::protocols::driver_binding::Protocol {
+                version: 10,
+                supported: mock_supported_success,
+                start: mock_start_success,
+                stop: mock_stop_driver_a,
+                driver_binding_handle: driver_a_handle,
+                image_handle: DXE_CORE_HANDLE,
+            });
+            PROTOCOL_DB
+                .install_protocol_interface(
+                    Some(driver_a_handle),
+                    efi::protocols::driver_binding::PROTOCOL_GUID,
+                    Box::into_raw(binding_a) as *mut core::ffi::c_void,
+                )
+                .unwrap();
+
+            let binding_b = Box::new(efi::protocols::driver_binding::Protocol {
+                version: 10,
+                supported: mock_supported_success,
+                start: mock_start_success,
+                stop: mock_stop_driver_b,
+                driver_binding_handle: driver_b_handle,
+                image_handle: DXE_CORE_HANDLE,
+            });
+            PROTOCOL_DB
+                .install_protocol_interface(
+                    Some(driver_b_handle),
+                    efi::protocols::driver_binding::PROTOCOL_GUID,
+                    Box::into_raw(binding_b) as *mut core::ffi::c_void,
+                )
+                .unwrap();
+
+            // Driver A manages the controller (BY_DRIVER on the device path protocol) with child_a.
+            PROTOCOL_DB
+                .add_protocol_usage(
+                    controller_handle,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    Some(driver_a_handle),
+                    Some(handle1),
+                    efi::OPEN_PROTOCOL_BY_DRIVER,
+                )
+                .unwrap();
+            PROTOCOL_DB
+                .add_protocol_usage(
+                    controller_handle,
+                    efi::protocols::device_path::PROTOCOL_GUID,
+                    Some(driver_a_handle),
+                    Some(child_a),
+                    efi::OPEN_PROTOCOL_BY_CHILD_CONTROLLER,
+                )
+                .unwrap();
+
+            // Driver B manages the controller (BY_DRIVER on the second protocol) with child_b.
+            PROTOCOL_DB
+                .add_protocol_usage(
+                    controller_handle,
+                    driver_b_protocol.to_efi_guid(),
+                    Some(driver_b_handle),
+                    Some(handle1),
+                    efi::OPEN_PROTOCOL_BY_DRIVER,
+                )
+                .unwrap();
+            PROTOCOL_DB
+                .add_protocol_usage(
+                    controller_handle,
+                    driver_b_protocol.to_efi_guid(),
+                    Some(driver_b_handle),
+                    Some(child_b),
+                    efi::OPEN_PROTOCOL_BY_CHILD_CONTROLLER,
+                )
+                .unwrap();
+
+            A_STOP_CALLS.store(0, Ordering::SeqCst);
+            B_STOP_CALLS.store(0, Ordering::SeqCst);
+
+            // Disconnect orphan_child, which is owned by neither driver.
+            // SAFETY: No concurrent driver unload occurs in this single-threaded test. The
+            // driver bindings remain valid for the duration of the call.
+            let result = unsafe { core_disconnect_controller(controller_handle, None, Some(orphan_child)) };
+            assert_eq!(
+                result,
+                Err(EfiError::NotFound),
+                "disconnect should return NotFound when no driver owns the requested child"
+            );
+
+            // Neither driver owns the requested child, so neither stop function may be called.
+            assert_eq!(A_STOP_CALLS.load(Ordering::SeqCst), 0, "Driver A should be skipped. It does not own the child");
+            assert_eq!(B_STOP_CALLS.load(Ordering::SeqCst), 0, "Driver B should be skipped.t does not own the child");
         });
     }
 
