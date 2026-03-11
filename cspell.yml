@@ -208,6 +208,7 @@ words:
   - socketr
   - sodimm
   - srimm
+  - swapgs
   - swmmis
   - syscall
   - syscalls
