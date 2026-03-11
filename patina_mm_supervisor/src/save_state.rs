@@ -1,0 +1,630 @@
+//! Save State Read Operations for the MM Supervisor Syscall Dispatcher
+//!
+//! Implements the two-phase save state read protocol used by the
+//! `EFI_MM_CPU_PROTOCOL.ReadSaveState()` user-space API.
+//!
+//! **Phase 1** (`SyscallIndex::SaveStateRead`): stores the requested register
+//! and CPU index in a per-BSP holder.
+//!
+//! **Phase 2** (`SyscallIndex::SaveStateRead2`): validates the request against
+//! the MM security policy, reads the register value from the CPU's SMRAM save
+//! state area, and copies the result into the caller-supplied buffer.
+//!
+//! ## Security Model
+//!
+//! - User buffer addresses are validated via page-table ownership queries.
+//! - Policy-gated registers (RAX, IO) are checked through
+//!   [`PolicyGate::is_save_state_read_allowed`](patina_mm_policy::PolicyGate::is_save_state_read_allowed).
+//! - `PROCESSOR_ID` is always allowed (informational, not security-sensitive).
+//! - Other architectural registers pass through without policy gating, matching
+//!   the C reference implementation's allow-list semantics.
+//!
+//! ## Vendor Selection
+//!
+//! The SMRAM save state layout (Intel vs AMD) is selected **at build time**
+//! via Cargo features on the `patina` crate (`save_state_intel` or
+//! `save_state_amd`).  All vendor-specific register offsets and I/O field
+//! parsing live in the SDK; this module is vendor-agnostic.
+//!
+//! ## License
+//!
+//! Copyright (c) Microsoft Corporation.
+//!
+//! SPDX-License-Identifier: Apache-2.0
+
+use crate::mm_policy::{SaveStateCondition, SaveStateField};
+use patina_internal_cpu::save_state::{
+    self, IA32_EFER_LMA, IO_INFO_SIZE, IO_TYPE_INPUT, IO_TYPE_OUTPUT, LMA_32BIT, LMA_64BIT, MmSaveStateIoInfo,
+    MmSaveStateRegister, PROCESSOR_INFO_ENTRY_SIZE,
+};
+
+use crate::{PageOwnership, privilege_mgmt::SyscallResult, query_address_ownership, state::security_state};
+
+/// Size in bytes of one `SMRAM_SAVE_STATE_MAP` region.
+///
+/// The relocation code sets every CPU's save-state size to
+/// `sizeof(SMRAM_SAVE_STATE_MAP)` — a fixed 0x400-byte region spanning
+/// SMBASE+0x7C00..SMBASE+0x8000 (Intel SDM Vol 3C, §34.4). Because it is
+/// identical for every CPU, it is a constant here rather than a per-CPU array
+/// passed through the HOB.
+const SMRAM_SAVE_STATE_MAP_SIZE: u64 = 0x400;
+
+/// Offset of the `SMRAM_SAVE_STATE_MAP` from a CPU's SMBASE.
+///
+/// A fixed architectural offset (Intel SDM Vol 3C, §34.4;
+/// `SMRAM_SAVE_STATE_MAP_OFFSET` in MdePkg). The per-CPU save-state region base
+/// is `sm_base[i] + SMRAM_SAVE_STATE_MAP_OFFSET`, derived here so the loader only
+/// has to pass the raw SMBASE array.
+const SMRAM_SAVE_STATE_MAP_OFFSET: u64 = 0xfc00;
+
+/// Per-CPU save-state metadata needed by the save-state read syscall.
+///
+/// Assembled at initialization from two public sources instead of the private
+/// `SMM_CPU_PRIVATE_DATA` layout:
+///
+/// - `number_of_cpus` and `processor_info` come from the MP Information HOB
+///   (`gMpInformationHobGuid`).
+/// - `sm_base` (the per-CPU SMBASE array) is passed through the MM Supervisor
+///   PassDown HOB. The save-state region base is derived as
+///   `sm_base[i] + SMRAM_SAVE_STATE_MAP_OFFSET` with the fixed
+///   [`SMRAM_SAVE_STATE_MAP_SIZE`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SaveStateInfo {
+    /// Number of CPUs (from `MP_INFORMATION_HOB_DATA.NumberOfProcessors`).
+    pub(crate) number_of_cpus: u64,
+    /// Pointer to the `EFI_PROCESSOR_INFORMATION[]` array (from the MP Information HOB).
+    pub(crate) processor_info: u64,
+    /// Pointer to the per-CPU SMBASE array (`u64[number_of_cpus]`).
+    pub(crate) sm_base: u64,
+}
+
+/// Holds the parameters from Phase 1 until Phase 2 completes the read.
+pub(crate) struct SaveStateAccessHolder {
+    /// User protocol pointer (must match across both phases).
+    pub(crate) user_protocol: u64,
+    /// Register to read.
+    pub(crate) register: MmSaveStateRegister,
+    /// CPU index to read from.
+    pub(crate) cpu_index: u64,
+}
+
+/// Maps a save state register to a policy-gated [`SaveStateField`], if any.
+///
+/// Only RAX and IO are subject to policy gating.  All other registers are
+/// either always allowed or have special handling (PROCESSOR_ID).
+fn to_policy_field(reg: MmSaveStateRegister) -> Option<SaveStateField> {
+    match reg {
+        MmSaveStateRegister::Rax => Some(SaveStateField::Rax),
+        MmSaveStateRegister::Io => Some(SaveStateField::IoTrap),
+        _ => None,
+    }
+}
+
+/// Processes Phase 1 of the save state read syscall.
+///
+/// Validates and stores the register and CPU index for the subsequent Phase 2
+/// call. The `protocol` pointer is retained for a consistency check in Phase 2,
+/// and `register_raw` is the raw `EFI_MM_SAVE_STATE_REGISTER` value.
+pub fn save_state_read_phase1(protocol: u64, register_raw: u64, cpu_index: u64) -> SyscallResult {
+    // Validate register
+    let register = match MmSaveStateRegister::from_u64(register_raw) {
+        Some(r) => r,
+        None => {
+            log::error!("SAVE_STATE_READ: Unknown register value: {}", register_raw);
+            return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+        }
+    };
+
+    // Validate CPU index against NumberOfCpus
+    let num_cpus = match get_number_of_cpus() {
+        Ok(n) => n,
+        Err(status) => return SyscallResult::error(status),
+    };
+
+    if cpu_index >= num_cpus {
+        log::error!("SAVE_STATE_READ: CPU index {} >= NumberOfCpus {}", cpu_index, num_cpus);
+        return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+    }
+
+    // Store for Phase 2
+    let mut access = security_state().lock_save_state_access();
+    *access = Some(SaveStateAccessHolder { user_protocol: protocol, register, cpu_index });
+
+    log::debug!("SAVE_STATE_READ: Stored register={:?}, cpu_index={} for Phase 2", register, cpu_index);
+    SyscallResult::success(0)
+}
+
+/// Processes Phase 2 of the save state read syscall.
+///
+/// Validates the request against the MM security policy, reads the register
+/// from the CPU's SMRAM save state area, and copies the result into the user
+/// buffer. The `protocol` pointer must match the one supplied in Phase 1.
+pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> SyscallResult {
+    // Retrieve and consume the Phase 1 state
+    let holder = {
+        let mut access = security_state().lock_save_state_access();
+        match access.take() {
+            Some(h) => h,
+            None => {
+                log::error!("SAVE_STATE_READ2: Phase 1 not completed");
+                return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+            }
+        }
+    };
+
+    // Verify protocol matches Phase 1
+    if holder.user_protocol != protocol {
+        log::error!("SAVE_STATE_READ2: Protocol mismatch: expected 0x{:x}, got 0x{:x}", holder.user_protocol, protocol);
+        return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+    }
+
+    // Validate width and buffer
+    if width == 0 || buffer == 0 {
+        log::error!("SAVE_STATE_READ2: Invalid width ({}) or null buffer", width);
+        return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+    }
+
+    let register = holder.register;
+    let cpu_index = holder.cpu_index;
+
+    // Determine the actual number of bytes we'll write
+    let write_size = actual_write_size(register, width);
+    if write_size == 0 {
+        log::error!("SAVE_STATE_READ2: Unsupported width {} for register {:?}", width, register);
+        return SyscallResult::error(SyscallResult::EFI_UNSUPPORTED);
+    }
+
+    // Validate buffer is in user-owned memory
+    match query_address_ownership(buffer, write_size as u64) {
+        Some(PageOwnership::User) => {}
+        Some(owner) => {
+            log::error!("SAVE_STATE_READ2: Buffer 0x{:x} owned by {:?}, expected User", buffer, owner);
+            return SyscallResult::error(SyscallResult::EFI_ACCESS_DENIED);
+        }
+        None => {
+            log::error!("SAVE_STATE_READ2: Buffer 0x{:x} not in mapped memory", buffer);
+            return SyscallResult::error(SyscallResult::EFI_ACCESS_DENIED);
+        }
+    }
+
+    // Create a single mutable slice over the validated user output buffer so the
+    // individual read handlers write through safe slice operations.
+    //
+    // SAFETY: `buffer` was validated above as a user-owned, writable region of
+    // at least `write_size` bytes.  User code is not executing concurrently
+    // while the supervisor services this syscall, so there is no aliasing.
+    let out = unsafe { core::slice::from_raw_parts_mut(buffer as *mut u8, write_size) };
+
+    // Special case: PROCESSOR_ID — always allowed, no policy check
+    if register == MmSaveStateRegister::ProcessorId {
+        return read_processor_id(cpu_index, out);
+    }
+
+    // Build a safe view over this CPU's save state region.
+    let view = match get_save_state_view(cpu_index) {
+        Ok(v) => v,
+        Err(status) => return SyscallResult::error(status),
+    };
+
+    // Policy check for gated registers (RAX, IO)
+    if let Some(policy_field) = to_policy_field(register) {
+        let condition = inspect_io_condition(&view);
+        let gate = match security_state().policy_gate() {
+            Some(g) => g,
+            None => {
+                log::error!("SAVE_STATE_READ2: Policy gate not initialized");
+                return SyscallResult::error(SyscallResult::EFI_NOT_READY);
+            }
+        };
+
+        if let Err(e) = gate.is_save_state_read_allowed(policy_field, width as usize, condition) {
+            log::error!("SAVE_STATE_READ2: Policy denied read of {:?}: {:?}", register, e);
+            return SyscallResult::error(SyscallResult::EFI_ACCESS_DENIED);
+        }
+    }
+
+    // Dispatch to the appropriate read handler.  Each handler reads from the
+    // save state `view` and writes into the validated `out` buffer using only
+    // safe slice operations.
+    let status = match register {
+        MmSaveStateRegister::Io => read_io_register(&view, out),
+        MmSaveStateRegister::Lma => read_lma_register(&view, width, out),
+        _ => read_architectural_register(&view, register, width, out),
+    };
+
+    if status == SyscallResult::EFI_SUCCESS {
+        log::debug!("SAVE_STATE_READ2: Read {:?} (cpu={}, width={}) successfully", register, cpu_index, width);
+        SyscallResult::success(0)
+    } else {
+        SyscallResult::error(status)
+    }
+}
+
+/// Returns the per-CPU save-state metadata captured at initialization.
+fn save_state_info() -> Result<SaveStateInfo, u64> {
+    match security_state().save_state_info() {
+        Some(info) => Ok(info),
+        None => {
+            log::error!("Save-state metadata not initialized");
+            Err(SyscallResult::EFI_NOT_READY)
+        }
+    }
+}
+
+/// Returns the number of CPUs from the save-state metadata.
+fn get_number_of_cpus() -> Result<u64, u64> {
+    Ok(save_state_info()?.number_of_cpus)
+}
+
+/// A read-only byte view over a CPU's SMRAM save state region.
+struct SaveStateView {
+    bytes: &'static [u8],
+}
+
+impl SaveStateView {
+    /// Creates a view over `size` bytes of the save state region at `base`.
+    ///
+    /// ## Safety
+    ///
+    /// `base` must point to a readable SMRAM save state region of at least
+    /// `size` bytes that is not mutated for the lifetime of the view and lives
+    /// for the duration of the program.
+    unsafe fn new(base: *const u8, size: usize) -> Self {
+        // SAFETY: guaranteed by the caller's contract.
+        Self { bytes: unsafe { core::slice::from_raw_parts(base, size) } }
+    }
+
+    /// Reads the byte at `offset`.
+    fn read_u8(&self, offset: usize) -> u8 {
+        self.bytes[offset]
+    }
+
+    /// Reads a little-endian `u16` at `offset`.
+    fn read_u16(&self, offset: usize) -> u16 {
+        u16::from_le_bytes(self.bytes[offset..offset + 2].try_into().expect("offset within save state region"))
+    }
+
+    /// Reads a little-endian `u32` at `offset`.
+    fn read_u32(&self, offset: usize) -> u32 {
+        u32::from_le_bytes(self.bytes[offset..offset + 4].try_into().expect("offset within save state region"))
+    }
+
+    /// Reads a little-endian `u64` at `offset`.
+    fn read_u64(&self, offset: usize) -> u64 {
+        u64::from_le_bytes(self.bytes[offset..offset + 8].try_into().expect("offset within save state region"))
+    }
+}
+
+/// Builds a [`SaveStateView`] for the given CPU index.
+///
+/// The region base is derived from the CPU's SMBASE as
+/// `sm_base[cpu_index] + SMRAM_SAVE_STATE_MAP_OFFSET`, with the SMBASE array
+/// passed through the MM Supervisor PassDown HOB. The region length is the fixed
+/// [`SMRAM_SAVE_STATE_MAP_SIZE`].
+fn get_save_state_view(cpu_index: u64) -> Result<SaveStateView, u64> {
+    let info = save_state_info()?;
+
+    let num_cpus = info.number_of_cpus;
+    if cpu_index >= num_cpus {
+        log::error!("Save state read: CPU index {} >= NumberOfCpus {}", cpu_index, num_cpus);
+        return Err(SyscallResult::EFI_INVALID_PARAMETER);
+    }
+
+    if info.sm_base == 0 {
+        log::error!("SmBase array pointer is null");
+        return Err(SyscallResult::EFI_NOT_READY);
+    }
+
+    // The SMBASE array holds `num_cpus` per-CPU SMBASE values set up by the
+    // relocation code. The save-state region base is `SmBase + 0xfc00` and every
+    // region is the fixed `SMRAM_SAVE_STATE_MAP_SIZE`.
+    //
+    // SAFETY: `sm_base` references a valid array of at least `num_cpus` `u64`
+    // entries in SMRAM (from the PassDown HOB), so the slice covers only valid,
+    // initialized memory.
+    let sm_bases = unsafe { core::slice::from_raw_parts(info.sm_base as *const u64, num_cpus as usize) };
+
+    let smbase = sm_bases[cpu_index as usize];
+    if smbase == 0 {
+        log::error!("SmBase[{}] is null", cpu_index);
+        return Err(SyscallResult::EFI_INVALID_PARAMETER);
+    }
+    let base = smbase + SMRAM_SAVE_STATE_MAP_OFFSET;
+
+    // SAFETY: `base` points to a valid save state region of
+    // `SMRAM_SAVE_STATE_MAP_SIZE` bytes in SMRAM that is stable while this SMI
+    // is serviced and lives for the program's duration.
+    Ok(unsafe { SaveStateView::new(base as *const u8, SMRAM_SAVE_STATE_MAP_SIZE as usize) })
+}
+
+/// Determines the actual number of bytes that will be written to the user buffer.
+///
+/// Returns 0 if the width is not supported for the given register.
+fn actual_write_size(register: MmSaveStateRegister, width: u64) -> usize {
+    match register {
+        MmSaveStateRegister::Io => IO_INFO_SIZE,
+        MmSaveStateRegister::ProcessorId => 8,
+        MmSaveStateRegister::Lma => {
+            if width == 4 || width == 8 {
+                width as usize
+            } else {
+                0
+            }
+        }
+        _ => {
+            if let Some(info) = save_state::register_info(register) {
+                if width == 2 && info.native_width >= 2 {
+                    2
+                } else if width == 4 && info.native_width >= 4 {
+                    4
+                } else if width == 8 && info.native_width == 8 {
+                    8
+                } else {
+                    0
+                }
+            } else {
+                0
+            }
+        }
+    }
+}
+
+/// Reads the PROCESSOR_ID for a given CPU and writes it to the user buffer.
+///
+/// The ProcessorId (APIC ID) is read from the `EFI_PROCESSOR_INFORMATION` array
+/// carried by the MP Information HOB (`gMpInformationHobGuid`).
+fn read_processor_id(cpu_index: u64, out: &mut [u8]) -> SyscallResult {
+    let info = match save_state_info() {
+        Ok(i) => i,
+        Err(status) => return SyscallResult::error(status),
+    };
+
+    if info.processor_info == 0 {
+        log::error!("PROCESSOR_ID: ProcessorInfo array is null");
+        return SyscallResult::error(SyscallResult::EFI_NOT_READY);
+    }
+
+    let num_cpus = info.number_of_cpus;
+
+    // View the processor information array as bytes so the per-CPU entry can be
+    // read through safe slice operations.
+    //
+    // SAFETY: `processor_info` points to a valid array of `num_cpus`
+    // `EFI_PROCESSOR_INFORMATION` entries (PROCESSOR_INFO_ENTRY_SIZE bytes
+    // each) in firmware memory, and `cpu_index` is < `num_cpus`.
+    let entries = unsafe {
+        core::slice::from_raw_parts(info.processor_info as *const u8, num_cpus as usize * PROCESSOR_INFO_ENTRY_SIZE)
+    };
+
+    // ProcessorId is the first field (u64) of EFI_PROCESSOR_INFORMATION.
+    let offset = cpu_index as usize * PROCESSOR_INFO_ENTRY_SIZE;
+    let processor_id = u64::from_le_bytes(entries[offset..offset + 8].try_into().expect("entry within array"));
+
+    // Write the 8-byte ProcessorId to the user buffer.
+    out[..8].copy_from_slice(&processor_id.to_le_bytes());
+
+    log::debug!("PROCESSOR_ID: CPU {} = 0x{:x}", cpu_index, processor_id);
+    SyscallResult::success(0)
+}
+
+/// Inspects the I/O condition (IN vs OUT) from the save state for policy checking.
+///
+/// Reads the vendor-specific IO field from the CPU's save state and uses the
+/// SDK's [`save_state::parse_io_field`] to determine whether the I/O trap was
+/// caused by an IN or OUT instruction.
+fn inspect_io_condition(view: &SaveStateView) -> Option<SaveStateCondition> {
+    let vc = save_state::vendor_constants();
+
+    // Verify the save state revision supports IO info before reading the field.
+    let smm_rev_id = view.read_u32(vc.smmrevid_offset as usize);
+    if smm_rev_id < vc.min_rev_id_io {
+        log::warn!(
+            "inspect_io_condition: SMMRevId 0x{:x} < 0x{:x}, IO info not available",
+            smm_rev_id,
+            vc.min_rev_id_io
+        );
+        return None;
+    }
+
+    // Read the vendor-specific IO information field.
+    let io_field = view.read_u32(vc.io_info_offset as usize);
+    log::info!("Inspecting IO condition: IO field = 0x{:x}", io_field);
+
+    // Use the SDK's vendor-specific parser.
+    match save_state::parse_io_field(io_field) {
+        Some(parsed) => match parsed.io_type {
+            IO_TYPE_INPUT => Some(SaveStateCondition::IoRead),
+            IO_TYPE_OUTPUT => Some(SaveStateCondition::IoWrite),
+            _ => Some(SaveStateCondition::IoWrite),
+        },
+        None => {
+            // No valid IO info (Intel: SmiFlag not set, AMD: reserved size) —
+            // default to write condition (matching C behaviour).
+            Some(SaveStateCondition::IoWrite)
+        }
+    }
+}
+
+/// Reads an architectural register from the vendor save state map into `out`.
+fn read_architectural_register(view: &SaveStateView, register: MmSaveStateRegister, width: u64, out: &mut [u8]) -> u64 {
+    let info = match save_state::register_info(register) {
+        Some(i) => i,
+        None => {
+            log::error!("Register {:?} not found in save state map", register);
+            return SyscallResult::EFI_UNSUPPORTED;
+        }
+    };
+
+    let lo = info.lo_offset as usize;
+    if width == 2 {
+        if info.native_width < 2 {
+            return SyscallResult::EFI_UNSUPPORTED;
+        }
+        // Read the low 2 bytes (AMD segment selectors, DT limits).
+        out[..2].copy_from_slice(&view.read_u16(lo).to_le_bytes());
+    } else if width == 4 {
+        if info.native_width < 4 {
+            return SyscallResult::EFI_UNSUPPORTED;
+        }
+        // Read the low 4 bytes.
+        out[..4].copy_from_slice(&view.read_u32(lo).to_le_bytes());
+    } else if width == 8 {
+        if info.native_width != 8 {
+            return SyscallResult::EFI_UNSUPPORTED;
+        }
+        // Read lo u32 then hi u32 (handles both contiguous and split
+        // layouts) and write them as two adjacent u32 (matching C
+        // split-register behaviour).
+        out[..4].copy_from_slice(&view.read_u32(lo).to_le_bytes());
+        out[4..8].copy_from_slice(&view.read_u32(info.hi_offset as usize).to_le_bytes());
+    } else {
+        return SyscallResult::EFI_INVALID_PARAMETER;
+    }
+
+    SyscallResult::EFI_SUCCESS
+}
+
+/// Reads the IO pseudo-register and writes an `EFI_MM_SAVE_STATE_IO_INFO`
+/// structure to `out`.
+///
+/// The IO pseudo-register provides information about the I/O instruction that
+/// triggered the SMI, including the port, width, direction, and data value.
+fn read_io_register(view: &SaveStateView, out: &mut [u8]) -> u64 {
+    let vc = save_state::vendor_constants();
+
+    // 1. Read SMMRevId to verify IO info is available.
+    let smm_rev_id = view.read_u32(vc.smmrevid_offset as usize);
+    if smm_rev_id < vc.min_rev_id_io {
+        log::error!("IO_READ: SMMRevId 0x{:x} < 0x{:x}, IO info not supported", smm_rev_id, vc.min_rev_id_io);
+        return SyscallResult::EFI_UNSUPPORTED;
+    }
+
+    // 2. Read the vendor-specific IO information field and parse it.
+    let io_field = view.read_u32(vc.io_info_offset as usize);
+    let parsed = match save_state::parse_io_field(io_field) {
+        Some(p) => p,
+        None => {
+            log::debug!("IO_READ: IO field 0x{:x} did not indicate a valid I/O trap", io_field);
+            return SyscallResult::EFI_UNSUPPORTED;
+        }
+    };
+
+    // 3. Read I/O data from RAX (only the significant bytes).
+    let rax = vc.rax_offset as usize;
+    let io_data: u64 = match parsed.byte_count {
+        1 => view.read_u8(rax) as u64,
+        2 => view.read_u16(rax) as u64,
+        4 => view.read_u32(rax) as u64,
+        _ => 0,
+    };
+
+    // 4. Serialize the EFI_MM_SAVE_STATE_IO_INFO structure into the output
+    //    buffer.  The field layout matches the #[repr(C)] definition:
+    //    io_data@0 (u64), io_port@8 (u64), io_width@16 (u32), io_type@20 (u32).
+    let io_info = MmSaveStateIoInfo {
+        io_data,
+        io_port: parsed.io_port as u64,
+        io_width: parsed.io_width,
+        io_type: parsed.io_type,
+    };
+    out[0..8].copy_from_slice(&io_info.io_data.to_le_bytes());
+    out[8..16].copy_from_slice(&io_info.io_port.to_le_bytes());
+    out[16..20].copy_from_slice(&io_info.io_width.to_le_bytes());
+    out[20..24].copy_from_slice(&io_info.io_type.to_le_bytes());
+
+    SyscallResult::EFI_SUCCESS
+}
+
+/// Reads the LMA pseudo-register (processor Long Mode Active state) into `out`.
+///
+/// Returns `LMA_32BIT` (32) or `LMA_64BIT` (64) depending on the IA32_EFER.LMA
+/// bit in the save state.
+fn read_lma_register(view: &SaveStateView, width: u64, out: &mut [u8]) -> u64 {
+    let vc = save_state::vendor_constants();
+
+    // AMD64 always operates in 64-bit mode during SMM.
+    let lma_value = if vc.lma_always_64 {
+        LMA_64BIT
+    } else {
+        // Read IA32_EFER from the save state.
+        let efer = view.read_u64(vc.efer_offset as usize);
+        if (efer & IA32_EFER_LMA) != 0 { LMA_64BIT } else { LMA_32BIT }
+    };
+
+    if width == 4 {
+        out[..4].copy_from_slice(&(lma_value as u32).to_le_bytes());
+    } else if width == 8 {
+        out[..8].copy_from_slice(&lma_value.to_le_bytes());
+    } else {
+        return SyscallResult::EFI_INVALID_PARAMETER;
+    }
+
+    SyscallResult::EFI_SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_register_from_u64() {
+        assert_eq!(MmSaveStateRegister::from_u64(38), Some(MmSaveStateRegister::Rax));
+        assert_eq!(MmSaveStateRegister::from_u64(512), Some(MmSaveStateRegister::Io));
+        assert_eq!(MmSaveStateRegister::from_u64(514), Some(MmSaveStateRegister::ProcessorId));
+        assert_eq!(MmSaveStateRegister::from_u64(999), None);
+        assert_eq!(MmSaveStateRegister::from_u64(0), None);
+    }
+
+    #[test]
+    fn test_to_policy_field() {
+        assert_eq!(to_policy_field(MmSaveStateRegister::Rax), Some(SaveStateField::Rax));
+        assert_eq!(to_policy_field(MmSaveStateRegister::Io), Some(SaveStateField::IoTrap));
+        assert_eq!(to_policy_field(MmSaveStateRegister::Rbx), None);
+        assert_eq!(to_policy_field(MmSaveStateRegister::ProcessorId), None);
+    }
+
+    #[test]
+    fn test_actual_write_size() {
+        // IO always writes IO_INFO_SIZE
+        assert_eq!(actual_write_size(MmSaveStateRegister::Io, 4), IO_INFO_SIZE);
+        assert_eq!(actual_write_size(MmSaveStateRegister::Io, 24), IO_INFO_SIZE);
+
+        // PROCESSOR_ID always writes 8
+        assert_eq!(actual_write_size(MmSaveStateRegister::ProcessorId, 8), 8);
+
+        // LMA supports 4 and 8
+        assert_eq!(actual_write_size(MmSaveStateRegister::Lma, 4), 4);
+        assert_eq!(actual_write_size(MmSaveStateRegister::Lma, 8), 8);
+        assert_eq!(actual_write_size(MmSaveStateRegister::Lma, 3), 0);
+
+        // RAX (native 8): supports Width=2, 4, and 8
+        assert_eq!(actual_write_size(MmSaveStateRegister::Rax, 2), 2);
+        assert_eq!(actual_write_size(MmSaveStateRegister::Rax, 4), 4);
+        assert_eq!(actual_write_size(MmSaveStateRegister::Rax, 8), 8);
+        assert_eq!(actual_write_size(MmSaveStateRegister::Rax, 16), 0);
+    }
+
+    #[test]
+    fn test_save_state_access_holder() {
+        // Test that the mutex works correctly for Phase 1/Phase 2.
+        {
+            let mut access = crate::state::security_state().lock_save_state_access();
+            assert!(access.is_none());
+            *access =
+                Some(SaveStateAccessHolder { user_protocol: 0xDEAD, register: MmSaveStateRegister::Rax, cpu_index: 0 });
+        }
+
+        {
+            let mut access = crate::state::security_state().lock_save_state_access();
+            let holder = access.take().unwrap();
+            assert_eq!(holder.user_protocol, 0xDEAD);
+            assert_eq!(holder.register, MmSaveStateRegister::Rax);
+            assert_eq!(holder.cpu_index, 0);
+        }
+
+        {
+            let access = crate::state::security_state().lock_save_state_access();
+            assert!(access.is_none());
+        }
+    }
+}
