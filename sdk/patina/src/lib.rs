@@ -32,6 +32,8 @@ pub mod component;
 pub mod debug;
 pub mod management_mode;
 #[cfg(any(test, feature = "alloc"))]
+pub mod mm_services;
+#[cfg(any(test, feature = "alloc"))]
 pub mod performance;
 pub mod peripheral;
 pub mod pi;
