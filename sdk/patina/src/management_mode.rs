@@ -12,6 +12,8 @@
 pub mod comm_buffer_hob;
 pub mod event;
 pub mod guid;
+#[cfg(any(test, feature = "alloc"))]
+pub mod mm_services;
 pub mod protocol;
 
 // Re-export commonly used items for easier access
