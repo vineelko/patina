@@ -172,6 +172,16 @@ extern "efiapi" fn watchdog_arch_available(event: efi::Event, _context: *mut c_v
     }
 }
 
+/// Terminates all boot services.
+///
+/// # Safety Considerations
+///
+/// This function is not marked `unsafe` because both parameters are safe to accept from unverified
+/// sources:
+/// - `_handle` is currently unused and has no effect on execution.
+/// - `map_key` is validated against the current memory map key in [`terminate_memory_map`]; an
+///   invalid key causes the call to fail gracefully with an error status rather than undefined
+///   behavior.
 pub extern "efiapi" fn exit_boot_services(_handle: efi::Handle, map_key: usize) -> efi::Status {
     static EXIT_BOOT_SERVICES_CALLED: Once<()> = Once::new();
 
@@ -550,7 +560,9 @@ mod tests {
             init_misc_boot_services_support(st);
             // Call exit_boot_services with a valid map_key
             let handle: efi::Handle = 0x1000 as efi::Handle; // Example handle
-            let _status = (st.boot_services().get().exit_boot_services)(handle, valid_map_key);
+            // SAFETY: The unsafe block is required because r-efi declares exit_boot_services as an
+            // unsafe extern "efiapi" function pointer. The Patina implementation is fully safe.
+            let _status = unsafe { (st.boot_services().get().exit_boot_services)(handle, valid_map_key) };
         });
     }
 }
