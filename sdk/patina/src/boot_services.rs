@@ -1755,10 +1755,20 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// Sets the system's watchdog timer.
+    ///
+    /// # Safety Considerations
+    ///
+    /// This function is not marked `unsafe` because `timeout` is safe to accept from unverified
+    /// sources. The implementation uses saturating arithmetic when converting the timeout value,
+    /// and will not cause undefined behavior.
     fn set_watchdog_timer(&self, timeout: usize) -> Result<(), efi::Status> {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let set_watchdog_timer = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), set_watchdog_timer) };
-        match set_watchdog_timer(timeout, 0, 0, ptr::null_mut()) {
+
+        // SAFETY: The unsafe block is required because r-efi declares set_watchdog_timer as an
+        // unsafe extern "efiapi" function pointer. The Patina implementation is fully safe.
+        match unsafe { set_watchdog_timer(timeout, 0, 0, ptr::null_mut()) } {
             s if s.is_error() => Err(s),
             _ => Ok(()),
         }
