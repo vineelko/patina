@@ -1803,8 +1803,11 @@ impl BootServices for StandardBootServices {
         let mut count = MaybeUninit::uninit();
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let get_next_monotonic_count = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), get_next_monotonic_count) };
-        match get_next_monotonic_count(count.as_mut_ptr()) {
-            s if s.is_error() => Err(s),
+        // SAFETY: The unsafe block is required because r-efi declares get_next_monotonic_count as
+        // an unsafe extern "efiapi" function pointer. The Patina do not provide an implementation
+        // for this function.
+        match unsafe { get_next_monotonic_count(count.as_mut_ptr()) } {
+            status if status.is_error() => Err(status),
             // SAFETY: If the UEFI call succeeded, count has been initialized.
             _ => Ok(unsafe { count.assume_init() }),
         }
