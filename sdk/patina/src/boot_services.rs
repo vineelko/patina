@@ -902,6 +902,13 @@ pub trait BootServices {
     ///
     /// [UEFI Spec Documentation: EFI_BOOT_SERVICES.ExitBootServices()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-exitbootservices)
     ///
+    /// # Safety Considerations
+    ///
+    /// This function is not marked `unsafe` because both parameters are safe to accept from
+    /// unverified sources:
+    /// - `image_handle` is passed through to the firmware which validates it internally.
+    /// - `map_key` is validated against the current memory map key; an invalid key causes the call
+    ///   to fail gracefully with an error status rather than undefined behavior.
     fn exit_boot_services(&self, image_handle: efi::Handle, map_key: usize) -> Result<(), efi::Status>;
 
     /// Sets the system’s watchdog timer.
@@ -1711,10 +1718,27 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// Terminates all boot services.
+    ///
+    /// # Safety Considerations
+    ///
+    /// This function is not marked `unsafe` because both parameters are safe to accept from
+    /// unverified sources:
+    /// - `image_handle` is passed through to the firmware which validates it internally.
+    /// - `map_key` is validated against the current memory map key; an invalid key causes the call
+    ///   to fail gracefully with an error status rather than undefined behavior.
+    // This is triggered by the fact that efi::Event aliases to *mut c_void, but
+    // it is an opaque handle used as a database key.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn exit_boot_services(&self, image_handle: efi::Handle, map_key: usize) -> Result<(), efi::Status> {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let exit_boot_services = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), exit_boot_services) };
-        match exit_boot_services(image_handle, map_key) {
+
+        // SAFETY: The unsafe block is required because r-efi declares exit_boot_services as an
+        // unsafe extern "efiapi" function pointer. The Patina implementation is fully safe: both
+        // `image_handle` and `map_key` are validated internally and invalid values result in an
+        // error status rather than undefined behavior.
+        match unsafe { exit_boot_services(image_handle, map_key) } {
             s if s.is_error() => Err(s),
             _ => Ok(()),
         }
