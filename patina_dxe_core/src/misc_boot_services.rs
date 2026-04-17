@@ -419,7 +419,9 @@ mod tests {
             init_misc_boot_services_support(st);
 
             // Test case 1: Set watchdog timer with null data - should return NOT_READY (no watchdog available in test)
-            let status = (st.boot_services().get().set_watchdog_timer)(300, 0, 0, ptr::null_mut());
+            // SAFETY: The unsafe block is required because r-efi declares set_watchdog_timer as an
+            // unsafe extern "efiapi" function pointer. The Patina implementation is fully safe.
+            let status = unsafe { (st.boot_services().get().set_watchdog_timer)(300, 0, 0, ptr::null_mut()) };
             if status == efi::Status::NOT_READY {
                 log::debug!("Set watchdog timer correctly returned NOT_READY (no watchdog protocol)");
             } else {
@@ -427,7 +429,9 @@ mod tests {
             }
 
             // Test case 2: Disable watchdog timer with null data - should return NOT_READY
-            let status = (st.boot_services().get().set_watchdog_timer)(0, 0, 0, ptr::null_mut());
+            // SAFETY: The unsafe block is required because r-efi declares set_watchdog_timer as an
+            // unsafe extern "efiapi" function pointer. The Patina implementation is fully safe.
+            let status = unsafe { (st.boot_services().get().set_watchdog_timer)(0, 0, 0, ptr::null_mut()) };
             if status == efi::Status::NOT_READY {
                 log::debug!("Disable watchdog timer correctly returned NOT_READY");
             } else {
@@ -438,7 +442,9 @@ mod tests {
             let data_ptr = data.as_ptr() as *mut efi::Char16;
 
             // Test case 3: Set the watchdog timer with non-null data - should return NOT_READY
-            let status = (st.boot_services().get().set_watchdog_timer)(300, 0, data.len(), data_ptr);
+            // SAFETY: The unsafe block is required because r-efi declares set_watchdog_timer as an
+            // unsafe extern "efiapi" function pointer. The Patina implementation is fully safe.
+            let status = unsafe { (st.boot_services().get().set_watchdog_timer)(300, 0, data.len(), data_ptr) };
             if status == efi::Status::NOT_READY {
                 log::debug!("Set watchdog timer with data correctly returned NOT_READY");
             } else {
@@ -446,7 +452,9 @@ mod tests {
             }
 
             // Test case 4: Disable the watchdog timer with non-null data - should return NOT_READY
-            let status = (st.boot_services().get().set_watchdog_timer)(0, 0, data.len(), data_ptr);
+            // SAFETY: The unsafe block is required because r-efi declares set_watchdog_timer as an
+            // unsafe extern "efiapi" function pointer. The Patina implementation is fully safe.
+            let status = unsafe { (st.boot_services().get().set_watchdog_timer)(0, 0, data.len(), data_ptr) };
             if status == efi::Status::NOT_READY {
                 log::debug!("Disable watchdog timer with data correctly returned NOT_READY");
             } else {
@@ -482,7 +490,9 @@ mod tests {
                 WATCHDOG_ARCH_PTR.init(&watchdog as *const _ as *mut c_void);
             };
             // Test case 5: Set watchdog timer with null data - should return SUCCESS (watchdog protocol available)
-            let status = (st.boot_services().get().set_watchdog_timer)(300, 0, 0, ptr::null_mut());
+            // SAFETY: The unsafe block is required because r-efi declares set_watchdog_timer as an
+            // unsafe extern "efiapi" function pointer. The Patina implementation is fully safe.
+            let status = unsafe { (st.boot_services().get().set_watchdog_timer)(300, 0, 0, ptr::null_mut()) };
             if status == efi::Status::SUCCESS {
                 log::debug!("Set watchdog timer correctly returned SUCCESS (watchdog protocol available)");
                 assert!(SET_PERIOD_CALLED.is_completed(), "set_timer_period was not called during set_watchdog_timer.");
