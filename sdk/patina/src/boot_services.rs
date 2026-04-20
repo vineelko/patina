@@ -1436,12 +1436,21 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    // This is triggered by the fact that efi::Event aliases to *mut c_void, but
+    // it is an opaque handle used as a database key.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn register_protocol_notify(&self, protocol: &efi::Guid, event: efi::Event) -> Result<Registration, efi::Status> {
         let mut registration = MaybeUninit::uninit();
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let register_protocol_notify = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), register_protocol_notify) };
-        match register_protocol_notify(protocol as *const _ as *mut _, event, registration.as_mut_ptr() as *mut _) {
-            s if s.is_error() => Err(s),
+
+        // SAFETY: `protocol` is a valid reference cast to a pointer. `event` is validated by the
+        // implementation. `registration` is a local `MaybeUninit` whose address is valid for writes.
+        let status = unsafe {
+            register_protocol_notify(protocol as *const _ as *mut _, event, registration.as_mut_ptr() as *mut _)
+        };
+        match status {
+            status if status.is_error() => Err(status),
             // SAFETY: If the call succeeded, registration has been initialized.
             _ => Ok(unsafe { registration.assume_init() }),
         }

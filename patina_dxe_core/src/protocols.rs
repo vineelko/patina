@@ -286,7 +286,14 @@ unsafe extern "efiapi" fn reinstall_protocol_interface(
     efi::Status::SUCCESS
 }
 
-extern "efiapi" fn register_protocol_notify(
+/// Registers for notification when a protocol interface is installed.
+///
+/// # Safety
+///
+/// `protocol` must be a valid pointer to an `efi::Guid`. `registration` must be a valid pointer
+/// to receive the registration key. Both are null checked, but validity of the referenced memory
+/// is the caller's responsibility.
+unsafe extern "efiapi" fn register_protocol_notify(
     protocol: *mut efi::Guid,
     event: efi::Event,
     registration: *mut *mut c_void,
