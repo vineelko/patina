@@ -1395,6 +1395,10 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// # Safety
+    ///
+    /// Throughout the lifetime of the installed interface, the caller must ensure
+    /// that `new_protocol_interface` remains valid.
     unsafe fn reinstall_protocol_interface_unchecked(
         &self,
         handle: efi::Handle,
@@ -1405,13 +1409,19 @@ impl BootServices for StandardBootServices {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let reinstall_protocol_interface =
             unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), reinstall_protocol_interface) };
-        match reinstall_protocol_interface(
-            handle,
-            protocol as *const _ as *mut _,
-            old_protocol_interface,
-            new_protocol_interface,
-        ) {
-            s if s.is_error() => Err(s),
+        // SAFETY: `protocol` is a valid reference cast to a pointer. `old_protocol_interface` and
+        // `new_protocol_interface` validity is the caller's responsibility as documented by the
+        // `unsafe` on this function.
+        let status = unsafe {
+            reinstall_protocol_interface(
+                handle,
+                protocol as *const _ as *mut _,
+                old_protocol_interface,
+                new_protocol_interface,
+            )
+        };
+        match status {
+            status if status.is_error() => Err(status),
             _ => Ok(()),
         }
     }
