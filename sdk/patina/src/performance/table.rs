@@ -117,18 +117,34 @@ impl FBPT {
 
         let address = previous_address
             .and_then(|address| {
-                boot_services
-                    .allocate_pages(AllocType::Address(address), EfiMemoryType::ReservedMemoryType, allocation_nb_page)
-                    .ok()
+                // SAFETY: `AllocType::Address` provides a specific physical address. The address
+                // comes from a prior boot's stored FBPT pointer, which was a valid firmware
+                // allocation; if it is no longer valid the allocator will return an error, which
+                // is handled by `.ok()` falling through to the `MaxAddress` path below.
+                unsafe {
+                    boot_services
+                        .allocate_pages(
+                            AllocType::Address(address),
+                            EfiMemoryType::ReservedMemoryType,
+                            allocation_nb_page,
+                        )
+                        .ok()
+                }
             })
             .map_or_else(
                 || {
                     // Allocate at a new address if no address found or if the previous address allocation failed.
-                    boot_services.allocate_pages(
-                        AllocType::MaxAddress(u32::MAX as usize),
-                        EfiMemoryType::ReservedMemoryType,
-                        allocation_nb_page,
-                    )
+                    // SAFETY: `AllocType::MaxAddress` requests any physical address below the given
+                    // bound (u32::MAX = 4 GiB). The firmware chooses the actual address, so no
+                    // specific physical address is supplied by the caller and the safety contract
+                    // of `allocate_pages` is trivially satisfied.
+                    unsafe {
+                        boot_services.allocate_pages(
+                            AllocType::MaxAddress(u32::MAX as usize),
+                            EfiMemoryType::ReservedMemoryType,
+                            allocation_nb_page,
+                        )
+                    }
                 },
                 Result::Ok,
             )? as *mut u8;
