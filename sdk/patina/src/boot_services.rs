@@ -1289,8 +1289,11 @@ impl BootServices for StandardBootServices {
         let mut buffer = ptr::null_mut();
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let allocate_pool = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), allocate_pool) };
-        match allocate_pool(memory_type.into(), size, ptr::addr_of_mut!(buffer)) {
-            s if s.is_error() => Err(s),
+        // SAFETY: buffer is declared above, we pass the address which guarantees it is a valid pointer. Unsafe block is
+        // still needed because the API itself is declared unsafe in r-efi.
+        let status = unsafe { allocate_pool(memory_type.into(), size, ptr::addr_of_mut!(buffer)) };
+        match status {
+            status if status.is_error() => Err(status),
             _ => Ok(buffer as *mut u8),
         }
     }
