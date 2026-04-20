@@ -247,7 +247,7 @@ pub trait MemoryManager {
     ///
     /// # Safety
     ///
-    /// Changing tha attributes of a page of memory can result in undefined behavior
+    /// Changing the attributes of a page of memory can result in undefined behavior
     /// if the attributes are not correct for the memory usage. The caller is responsible
     /// for understanding the use of the memory and verifying that all current and
     /// future accesses of the memory align to the attributes configured.
