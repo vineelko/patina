@@ -395,7 +395,8 @@ pub trait BootServices {
     /// # Safety
     ///
     /// When calling this method, you have to make sure that if *interface* pointer is non-null, it is adhereing to
-    /// the structure associated with the protocol.
+    /// the structure associated with the protocol. Throughout the lifetime of the interface reference, the caller
+    /// must ensure it remains valid.
     unsafe fn install_protocol_interface_unchecked(
         &self,
         handle: Option<efi::Handle>,
@@ -1348,6 +1349,10 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// # Safety
+    ///
+    /// Throughout the lifetime of the installed interface, the caller must ensure
+    /// that `interface` remains valid.
     unsafe fn install_protocol_interface_unchecked(
         &self,
         handle: Option<efi::Handle>,
@@ -1358,13 +1363,19 @@ impl BootServices for StandardBootServices {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let install_protocol_interface =
             unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), install_protocol_interface) };
-        match install_protocol_interface(
-            ptr::addr_of_mut!(handle),
-            protocol as *const _ as *mut _,
-            efi::NATIVE_INTERFACE,
-            interface,
-        ) {
-            s if s.is_error() => Err(s),
+        // SAFETY: `handle` is a local variable whose address is valid. `protocol` is a valid
+        // reference cast to a pointer. `interface` validity is the caller's responsibility as
+        // documented by the `unsafe` on this function.
+        let status = unsafe {
+            install_protocol_interface(
+                ptr::addr_of_mut!(handle),
+                protocol as *const _ as *mut _,
+                efi::NATIVE_INTERFACE,
+                interface,
+            )
+        };
+        match status {
+            status if status.is_error() => Err(status),
             _ => Ok(handle),
         }
     }

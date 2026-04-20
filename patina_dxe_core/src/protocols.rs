@@ -28,6 +28,10 @@ use crate::{
 
 pub static PROTOCOL_DB: SpinLockedProtocolDb = SpinLockedProtocolDb::new();
 
+/// Installs a protocol interface on a handle.
+///
+/// This function is safe because `interface` is an opaque pointer that is stored but never
+/// dereferenced. All other parameters are value types.
 pub fn core_install_protocol_interface(
     handle: Option<efi::Handle>,
     protocol: efi::Guid,
@@ -50,7 +54,18 @@ pub fn core_install_protocol_interface(
     Ok(handle)
 }
 
-extern "efiapi" fn install_protocol_interface(
+/// Installs a protocol interface on a handle.
+///
+/// # Safety
+///
+/// `handle` must be a valid pointer to an `efi::Handle` (may point to a null handle for new handle
+/// creation). `protocol` must be a valid pointer to an `efi::Guid`. Both are null checked, but
+/// validity of the referenced memory is the caller's responsibility. The `interface` pointer is
+/// stored in the protocol database and the caller must ensure it remains valid for as long as the
+/// interface is registered in the protocol database (i.e. until it is uninstalled via
+/// `uninstall_protocol_interface` or `uninstall_multiple_protocol_interfaces`, or replaced via
+/// `reinstall_protocol_interface`).
+unsafe extern "efiapi" fn install_protocol_interface(
     handle: *mut efi::Handle,
     protocol: *mut efi::Guid,
     interface_type: efi::InterfaceType,
@@ -512,6 +527,11 @@ extern "efiapi" fn open_protocol_information(
     }
 }
 
+/// # Safety
+///
+/// `handle` must be a valid pointer to an `efi::Handle` (may point to a null handle for new
+/// handle creation). `args` must consist of paired `(*mut efi::Guid, *mut c_void)` entries
+/// terminated by a null `*mut efi::Guid` sentinel.
 unsafe extern "C" fn install_multiple_protocol_interfaces(handle: *mut efi::Handle, mut args: ...) -> efi::Status {
     // The UEFI spec does not indicate whether the protocols installed here are atomic with respect to notify  - i.e.
     // whether any registered notifies should be invoked between the installation of the multiple protocols, or only
@@ -557,7 +577,10 @@ unsafe extern "C" fn install_multiple_protocol_interfaces(handle: *mut efi::Hand
 
     let mut interfaces_to_uninstall_on_error = Vec::new();
     for (protocol, interface) in interfaces_to_install {
-        match install_protocol_interface(handle, protocol, efi::NATIVE_INTERFACE, interface) {
+        // SAFETY: `handle` is null checked above. `protocol` is null checked when building
+        // interfaces_to_install. `interface` validity is the caller's responsibility per the
+        // function level safety contract.
+        match unsafe { install_protocol_interface(handle, protocol, efi::NATIVE_INTERFACE, interface) } {
             efi::Status::SUCCESS => interfaces_to_uninstall_on_error.push((protocol, interface)),
             err => {
                 //on error, attempt to uninstall all the previously installed interfaces. best-effort, errors are ignored.
