@@ -879,7 +879,15 @@ unsafe extern "efiapi" fn set_mem(buffer: *mut c_void, size: usize, value: u8) {
     }
 }
 
-extern "efiapi" fn get_memory_map(
+/// Returns the current UEFI memory map.
+///
+/// # Safety
+///
+/// `memory_map_size` must be a valid pointer to a `usize` indicating the buffer size.
+/// `memory_map` must point to a writable buffer of at least `*memory_map_size` bytes, or be null
+/// (in which case only the required size is returned). `map_key`, `descriptor_size`, and
+/// `descriptor_version` must each be valid pointers or null.
+unsafe extern "efiapi" fn get_memory_map(
     memory_map_size: *mut usize,
     memory_map: *mut efi::MemoryDescriptor,
     map_key: *mut usize,
@@ -2058,13 +2066,17 @@ mod tests {
             let mut map_key = 0;
             let mut descriptor_size = 0;
             let mut version = 0;
-            let status = get_memory_map(
-                core::ptr::addr_of_mut!(memory_map_size),
-                core::ptr::null_mut(),
-                core::ptr::addr_of_mut!(map_key),
-                core::ptr::addr_of_mut!(descriptor_size),
-                core::ptr::addr_of_mut!(version),
-            );
+            // SAFETY: all pointers are derived from local variables declared above and are valid.
+            // memory_map is null to perform a size query.
+            let status = unsafe {
+                get_memory_map(
+                    core::ptr::addr_of_mut!(memory_map_size),
+                    core::ptr::null_mut(),
+                    core::ptr::addr_of_mut!(map_key),
+                    core::ptr::addr_of_mut!(descriptor_size),
+                    core::ptr::addr_of_mut!(version),
+                )
+            };
             assert_eq!(status, efi::Status::BUFFER_TOO_SMALL);
             assert_ne!(memory_map_size, 0);
             assert_eq!(descriptor_size, core::mem::size_of::<efi::MemoryDescriptor>());
@@ -2082,13 +2094,17 @@ mod tests {
                 memory_map_size / descriptor_size
             ];
 
-            let status = get_memory_map(
-                core::ptr::addr_of_mut!(memory_map_size),
-                memory_map_buffer.as_mut_ptr(),
-                core::ptr::addr_of_mut!(map_key),
-                core::ptr::addr_of_mut!(descriptor_size),
-                core::ptr::addr_of_mut!(version),
-            );
+            // SAFETY: all pointers are derived from local variables. memory_map_buffer is
+            // properly sized from the previous size query.
+            let status = unsafe {
+                get_memory_map(
+                    core::ptr::addr_of_mut!(memory_map_size),
+                    memory_map_buffer.as_mut_ptr(),
+                    core::ptr::addr_of_mut!(map_key),
+                    core::ptr::addr_of_mut!(descriptor_size),
+                    core::ptr::addr_of_mut!(version),
+                )
+            };
             assert_eq!(status, efi::Status::SUCCESS);
             assert_eq!(descriptor_size, core::mem::size_of::<efi::MemoryDescriptor>());
             assert_eq!(version, 1);
@@ -2126,13 +2142,17 @@ mod tests {
                 .expect("Failed to find runtime allocation.");
 
             //get_memory_map with null size should return invalid parameter
-            let status = get_memory_map(
-                core::ptr::null_mut(),
-                memory_map_buffer.as_mut_ptr(),
-                core::ptr::addr_of_mut!(map_key),
-                core::ptr::addr_of_mut!(descriptor_size),
-                core::ptr::addr_of_mut!(version),
-            );
+            // SAFETY: memory_map_size is intentionally null to test the error path.
+            // All other pointers are valid local variables.
+            let status = unsafe {
+                get_memory_map(
+                    core::ptr::null_mut(),
+                    memory_map_buffer.as_mut_ptr(),
+                    core::ptr::addr_of_mut!(map_key),
+                    core::ptr::addr_of_mut!(descriptor_size),
+                    core::ptr::addr_of_mut!(version),
+                )
+            };
             assert_eq!(status, efi::Status::INVALID_PARAMETER);
         })
     }
@@ -2175,13 +2195,17 @@ mod tests {
             let mut map_key = 0;
             let mut descriptor_size = 0;
             let mut version = 0;
-            let status = get_memory_map(
-                core::ptr::addr_of_mut!(memory_map_size),
-                core::ptr::null_mut(),
-                core::ptr::addr_of_mut!(map_key),
-                core::ptr::addr_of_mut!(descriptor_size),
-                core::ptr::addr_of_mut!(version),
-            );
+            // SAFETY: all pointers are derived from local variables declared above and are valid.
+            // memory_map is null to perform a size query.
+            let status = unsafe {
+                get_memory_map(
+                    core::ptr::addr_of_mut!(memory_map_size),
+                    core::ptr::null_mut(),
+                    core::ptr::addr_of_mut!(map_key),
+                    core::ptr::addr_of_mut!(descriptor_size),
+                    core::ptr::addr_of_mut!(version),
+                )
+            };
             assert_eq!(status, efi::Status::BUFFER_TOO_SMALL);
 
             let mut memory_map_buffer: Vec<efi::MemoryDescriptor> = vec![
@@ -2195,13 +2219,17 @@ mod tests {
                 memory_map_size / descriptor_size
             ];
 
-            let status = get_memory_map(
-                core::ptr::addr_of_mut!(memory_map_size),
-                memory_map_buffer.as_mut_ptr(),
-                core::ptr::addr_of_mut!(map_key),
-                core::ptr::addr_of_mut!(descriptor_size),
-                core::ptr::addr_of_mut!(version),
-            );
+            // SAFETY: all pointers are derived from local variables. memory_map_buffer is
+            // properly sized from the previous size query.
+            let status = unsafe {
+                get_memory_map(
+                    core::ptr::addr_of_mut!(memory_map_size),
+                    memory_map_buffer.as_mut_ptr(),
+                    core::ptr::addr_of_mut!(map_key),
+                    core::ptr::addr_of_mut!(descriptor_size),
+                    core::ptr::addr_of_mut!(version),
+                )
+            };
             assert_eq!(status, efi::Status::SUCCESS);
 
             assert!(terminate_memory_map(map_key).is_ok());

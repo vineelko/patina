@@ -1265,6 +1265,10 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// This is a pure Rust function that does not rely on external input. All
+    /// pointer arguments to the underlying `get_memory_map` call are derived
+    /// from local variables, so the caller does not need to uphold any safety
+    /// invariants.
     fn get_memory_map(&self) -> Result<MemoryMap<'_, Self>, (efi::Status, usize)> {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let get_memory_map = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), get_memory_map) };
@@ -1274,26 +1278,35 @@ impl BootServices for StandardBootServices {
         let mut descriptor_size = 0;
         let mut descriptor_version = 0;
 
-        match get_memory_map(
-            ptr::addr_of_mut!(memory_map_size),
-            ptr::null_mut(),
-            ptr::addr_of_mut!(map_key),
-            ptr::addr_of_mut!(descriptor_size),
-            ptr::addr_of_mut!(descriptor_version),
-        ) {
+        // SAFETY: All pointer arguments are derived from local variables declared above,
+        // so they are guaranteed to be valid and writable. The memory_map pointer is null,
+        // which is valid for a size-query call.
+        match unsafe {
+            get_memory_map(
+                ptr::addr_of_mut!(memory_map_size),
+                ptr::null_mut(),
+                ptr::addr_of_mut!(map_key),
+                ptr::addr_of_mut!(descriptor_size),
+                ptr::addr_of_mut!(descriptor_version),
+            )
+        } {
             s if s == efi::Status::BUFFER_TOO_SMALL => memory_map_size += 0x400, // add more space in case allocation makes the memory map bigger.
             _ => (),
         };
 
         let buffer = self.allocate_pool(EfiMemoryType::BootServicesData, memory_map_size).map_err(|s| (s, 0))?;
 
-        match get_memory_map(
-            ptr::addr_of_mut!(memory_map_size),
-            buffer as *mut _,
-            ptr::addr_of_mut!(map_key),
-            ptr::addr_of_mut!(descriptor_size),
-            ptr::addr_of_mut!(descriptor_version),
-        ) {
+        // SAFETY: All pointer arguments are derived from local variables. The memory_map
+        // buffer was allocated via allocate_pool above with sufficient size for the map.
+        match unsafe {
+            get_memory_map(
+                ptr::addr_of_mut!(memory_map_size),
+                buffer as *mut _,
+                ptr::addr_of_mut!(map_key),
+                ptr::addr_of_mut!(descriptor_size),
+                ptr::addr_of_mut!(descriptor_version),
+            )
+        } {
             s if s == efi::Status::BUFFER_TOO_SMALL => return Err((s, memory_map_size)),
             s if s.is_error() => return Err((s, 0)),
             _ => (),
