@@ -591,7 +591,17 @@ fn alloc_error_handler(layout: alloc::alloc::Layout) -> ! {
     panic!("allocation error: {:?}", layout)
 }
 
-extern "efiapi" fn allocate_pool(pool_type: efi::MemoryType, size: usize, buffer: *mut *mut c_void) -> efi::Status {
+/// Allocates pool memory of the specified type.
+///
+/// # Safety
+///
+/// `buffer` must be a pointer pointing to valid, writable memory for a `*mut c_void`.
+/// The pointer is null-checked, but validity of the referenced memory is the caller's responsibility.
+unsafe extern "efiapi" fn allocate_pool(
+    pool_type: efi::MemoryType,
+    size: usize,
+    buffer: *mut *mut c_void,
+) -> efi::Status {
     if buffer.is_null() {
         return efi::Status::INVALID_PARAMETER;
     }
@@ -606,6 +616,10 @@ extern "efiapi" fn allocate_pool(pool_type: efi::MemoryType, size: usize, buffer
     }
 }
 
+/// Allocates pool memory of the specified type.
+///
+/// This function is safe because all input parameters are value types and any internal unsafe
+/// operations are fully encapsulated with validated preconditions.
 pub fn core_allocate_pool(pool_type: efi::MemoryType, size: usize) -> Result<*mut c_void, EfiError> {
     // It is not valid to attempt to allocate these memory types
     if matches!(pool_type, efi::CONVENTIONAL_MEMORY | efi::PERSISTENT_MEMORY | efi::UNACCEPTED_MEMORY_TYPE) {
@@ -1596,32 +1610,38 @@ mod tests {
 
             // test that disallowed types cannot be allocated
             assert_eq!(
-                allocate_pool(efi::CONVENTIONAL_MEMORY, 0x1000, core::ptr::addr_of_mut!(buffer_ptr)),
+                // SAFETY: `buffer_ptr` is a valid local variable and its address points to writable memory.
+                unsafe { allocate_pool(efi::CONVENTIONAL_MEMORY, 0x1000, core::ptr::addr_of_mut!(buffer_ptr)) },
                 efi::Status::INVALID_PARAMETER
             );
 
             assert_eq!(
-                allocate_pool(efi::PERSISTENT_MEMORY, 0x1000, core::ptr::addr_of_mut!(buffer_ptr)),
+                // SAFETY: `buffer_ptr` is a valid local variable and its address points to writable memory.
+                unsafe { allocate_pool(efi::PERSISTENT_MEMORY, 0x1000, core::ptr::addr_of_mut!(buffer_ptr)) },
                 efi::Status::INVALID_PARAMETER
             );
 
             assert_eq!(
-                allocate_pool(efi::UNUSABLE_MEMORY, 0x1000, core::ptr::addr_of_mut!(buffer_ptr)),
+                // SAFETY: `buffer_ptr` is a valid local variable and its address points to writable memory.
+                unsafe { allocate_pool(efi::UNUSABLE_MEMORY, 0x1000, core::ptr::addr_of_mut!(buffer_ptr)) },
                 efi::Status::SUCCESS
             );
 
             assert_eq!(
-                allocate_pool(efi::UNACCEPTED_MEMORY_TYPE, 0x1000, core::ptr::addr_of_mut!(buffer_ptr)),
+                // SAFETY: `buffer_ptr` is a valid local variable and its address points to writable memory.
+                unsafe { allocate_pool(efi::UNACCEPTED_MEMORY_TYPE, 0x1000, core::ptr::addr_of_mut!(buffer_ptr)) },
                 efi::Status::INVALID_PARAMETER
             );
 
             assert_eq!(
-                allocate_pool(efi::BOOT_SERVICES_DATA, 0x1000, core::ptr::addr_of_mut!(buffer_ptr)),
+                // SAFETY: `buffer_ptr` is a valid local variable and its address points to writable memory.
+                unsafe { allocate_pool(efi::BOOT_SERVICES_DATA, 0x1000, core::ptr::addr_of_mut!(buffer_ptr)) },
                 efi::Status::SUCCESS
             );
 
             assert_eq!(
-                allocate_pool(efi::BOOT_SERVICES_DATA, 0x2000000, core::ptr::null_mut()),
+                // SAFETY: null pointer is passed intentionally to validate the error path.
+                unsafe { allocate_pool(efi::BOOT_SERVICES_DATA, 0x2000000, core::ptr::null_mut()) },
                 efi::Status::INVALID_PARAMETER
             );
         });
@@ -1632,7 +1652,8 @@ mod tests {
         with_locked_state(GcdInit::WithSize(0x1000000), |_physical_hob_list| {
             let mut buffer_ptr = core::ptr::null_mut();
             assert_eq!(
-                allocate_pool(efi::BOOT_SERVICES_DATA, 0x1000, core::ptr::addr_of_mut!(buffer_ptr)),
+                // SAFETY: `buffer_ptr` is a valid local variable and its address points to writable memory.
+                unsafe { allocate_pool(efi::BOOT_SERVICES_DATA, 0x1000, core::ptr::addr_of_mut!(buffer_ptr)) },
                 efi::Status::SUCCESS
             );
 
