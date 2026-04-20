@@ -219,13 +219,17 @@ mod tests {
             let mut descriptor_size: usize = 0;
             let mut descriptor_version: u32 = 0;
 
-            let status = get_memory_map(
-                ptr::from_mut(&mut memory_map_size),
-                ptr::null_mut(),
-                ptr::from_mut(&mut map_key),
-                ptr::from_mut(&mut descriptor_size),
-                ptr::from_mut(&mut descriptor_version),
-            );
+            // SAFETY: all pointers are derived from local variables and are valid.
+            // memory_map is null to perform a size query.
+            let status = unsafe {
+                get_memory_map(
+                    ptr::from_mut(&mut memory_map_size),
+                    ptr::null_mut(),
+                    ptr::from_mut(&mut map_key),
+                    ptr::from_mut(&mut descriptor_size),
+                    ptr::from_mut(&mut descriptor_version),
+                )
+            };
 
             if status != efi::Status::BUFFER_TOO_SMALL {
                 return Err(format!("Expected BUFFER_TOO_SMALL, got {:?}", status));
@@ -237,13 +241,17 @@ mod tests {
             // SAFETY: Capacity was reserved for `descriptor_count` elements and the length below matches that.
             unsafe { descriptors.set_len(descriptor_count) };
 
-            let status = get_memory_map(
-                ptr::from_mut(&mut memory_map_size),
-                descriptors.as_mut_ptr().cast(),
-                ptr::from_mut(&mut map_key),
-                ptr::from_mut(&mut descriptor_size),
-                ptr::from_mut(&mut descriptor_version),
-            );
+            // SAFETY: all pointers are derived from local variables. descriptors buffer
+            // is properly sized from the previous size query.
+            let status = unsafe {
+                get_memory_map(
+                    ptr::from_mut(&mut memory_map_size),
+                    descriptors.as_mut_ptr().cast(),
+                    ptr::from_mut(&mut map_key),
+                    ptr::from_mut(&mut descriptor_size),
+                    ptr::from_mut(&mut descriptor_version),
+                )
+            };
 
             if status != efi::Status::SUCCESS {
                 return Err(format!("get_memory_map() failed: {:?}", status));
