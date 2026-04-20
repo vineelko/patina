@@ -213,7 +213,14 @@ fn uninstall_dummy_interface(handle: efi::Handle) -> Result<(), EfiError> {
     PROTOCOL_DB.uninstall_protocol_interface(handle, PRIVATE_DUMMY_INTERFACE_GUID, core::ptr::null_mut())
 }
 
-extern "efiapi" fn reinstall_protocol_interface(
+/// Reinstalls a protocol interface on a handle.
+///
+/// # Safety
+///
+/// `protocol` must be a valid pointer to an `efi::Guid`. It is null checked, but validity of the
+/// referenced memory is the caller's responsibility. Throughout the lifetime of the interface
+/// reference, the caller must ensure it remains valid.
+unsafe extern "efiapi" fn reinstall_protocol_interface(
     handle: efi::Handle,
     protocol: *mut efi::Guid,
     old_interface: *mut c_void,
