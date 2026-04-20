@@ -1215,13 +1215,21 @@ impl BootServices for StandardBootServices {
         };
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let allocate_pages = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), allocate_pages) };
-        match allocate_pages(
-            alloc_type.into(),
-            memory_type.into(),
-            nb_pages,
-            ptr::addr_of_mut!(memory_address) as *mut u64,
-        ) {
-            s if s.is_error() => Err(s),
+
+        // SAFETY: Although the current function `allocate_pages` is a safe Rust wrapper, the
+        // address contained in `AllocType::Address` or `AllocType::MaxAddress` will be dereferenced
+        // by the `core_allocate_pages()` during allocation. It is the caller's responsibility to
+        // ensure that any address provided in `alloc_type` is valid.
+        let status = unsafe {
+            allocate_pages(
+                alloc_type.into(),
+                memory_type.into(),
+                nb_pages,
+                ptr::addr_of_mut!(memory_address) as *mut u64,
+            )
+        };
+        match status {
+            status if status.is_error() => Err(status),
             _ => Ok(memory_address),
         }
     }
@@ -2275,6 +2283,7 @@ mod tests {
     #[should_panic = "Boot services function allocate_pages is not initialized."]
     fn test_allocate_pages_not_init() {
         let boot_services = boot_services!();
+        // The call is expected to panic before reaching the FFI layer because `allocate_pages` is not initialized.
         let _ = boot_services.allocate_pages(AllocType::AnyPage, EfiMemoryType::ACPIMemoryNVS, 0);
     }
 

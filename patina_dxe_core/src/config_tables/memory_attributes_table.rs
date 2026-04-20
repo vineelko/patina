@@ -314,27 +314,22 @@ mod tests {
                 let page_count =
                     entry_count * uefi_size_to_pages!(crate::allocator::RUNTIME_PAGE_ALLOCATION_GRANULARITY);
 
-                let mut buffer_ptr: *mut u8 = core::ptr::null_mut();
-                match core_allocate_pages(
-                    efi::ALLOCATE_ANY_PAGES,
-                    page_type.0,
-                    page_count,
-                    core::ptr::addr_of_mut!(buffer_ptr) as *mut efi::PhysicalAddress,
-                    None,
-                ) {
+                let address = match core_allocate_pages(efi::ALLOCATE_ANY_PAGES, page_type.0, page_count, 0, None) {
                     // because we allocate top down, we need to insert at the front of the vector
-                    Ok(_) if page_type.0 != efi::BOOT_SERVICES_DATA => {
-                        allocated_pages.insert(0, (buffer_ptr, page_type, page_count))
+                    Ok(address) => {
+                        if page_type.0 != efi::BOOT_SERVICES_DATA {
+                            allocated_pages.insert(0, (address, page_type, page_count));
+                        }
+                        address
                     }
-                    Ok(_) => (),
                     _ => panic!("Failed to allocate pages"),
-                }
+                };
 
                 let len = page_count * UEFI_PAGE_SIZE;
                 // ignore failures here, we can't set attributes in the actual page table here, but the GCD will
                 // get updated
-                let _ = core_set_memory_space_capabilities(buffer_ptr as u64, len as u64, u64::MAX);
-                let _ = core_set_memory_space_attributes(buffer_ptr as u64, len as u64, page_type.1);
+                let _ = core_set_memory_space_capabilities(address, len as u64, u64::MAX);
+                let _ = core_set_memory_space_attributes(address, len as u64, page_type.1);
             }
 
             // before we create the MAT, we expect MEMORY_ATTRIBUTES_TABLE to be None
@@ -369,7 +364,7 @@ mod tests {
                 // We don't assume ordering; find by physical_start and number_of_pages.
                 for page in allocated_pages.iter() {
                     let expected_type = page.1.0;
-                    let expected_physical_start = page.0 as u64;
+                    let expected_physical_start = page.0;
                     let expected_number_of_pages = page.2 as u64;
                     // expected_attribute from setup isn't used directly; MAT constrains attrs based on type.
 
