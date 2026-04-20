@@ -49,7 +49,9 @@ impl<T: BootServices> BootServicesGlobalAllocator<T> {
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         match layout.align() {
-            0..=8 => _ = self.free_pool(ptr),
+            // SAFETY: This dealloc call is safe because the caller(GlobalAlloc)
+            // guarantees that the pointer was allocated with the same layout.
+            0..=8 => _ = unsafe { self.free_pool(ptr) },
             _ => {
                 let Ok((extended_layout, tracker_offset)) = layout.extend(Layout::new::<*mut *mut u8>()) else {
                     return;
@@ -60,7 +62,8 @@ impl<T: BootServices> BootServicesGlobalAllocator<T> {
                 let original_ptr = unsafe { ptr::read(tracker_ptr) };
                 // SAFETY: Verifying alignment matches what we calculated during allocation.
                 debug_assert_eq!(ptr, unsafe { original_ptr.add(original_ptr.align_offset(extended_layout.align())) });
-                let _ = self.free_pool(original_ptr);
+                // SAFETY: The pointer was allocated by BootServicesGlobalAllocator and is valid.
+                let _ = unsafe { self.free_pool(original_ptr) };
             }
         }
     }

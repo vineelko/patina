@@ -631,14 +631,31 @@ pub fn core_allocate_pool(pool_type: efi::MemoryType, size: usize) -> Result<*mu
     }
 }
 
-extern "efiapi" fn free_pool(buffer: *mut c_void) -> efi::Status {
-    match core_free_pool(buffer) {
+/// Frees pool memory previously allocated with [`allocate_pool`].
+///
+/// # Safety
+///
+/// `buffer` must be a pointer pointing to valid, previously allocated memory
+/// from [`allocate_pool`]. This is needed to locate allocation signatures. The
+/// current implementation does not track allocations, so the caller is
+/// responsible for ensuring the pointer is valid.
+unsafe extern "efiapi" fn free_pool(buffer: *mut c_void) -> efi::Status {
+    // SAFETY: The caller is responsible for ensuring `buffer` points to a valid allocation.
+    match unsafe { core_free_pool(buffer) } {
         Ok(_) => efi::Status::SUCCESS,
         Err(status) => status.into(),
     }
 }
 
-pub fn core_free_pool(buffer: *mut c_void) -> Result<(), EfiError> {
+/// Frees pool memory previously allocated with [`core_allocate_pool`].
+///
+/// # Safety
+///
+/// `buffer` must be a pointer pointing to valid, previously allocated memory
+/// from [`core_allocate_pool`]. This is needed to locate allocation signatures.
+/// The current implementation does not track allocations, so the caller is
+/// responsible for ensuring the pointer is valid.
+pub unsafe fn core_free_pool(buffer: *mut c_void) -> Result<(), EfiError> {
     if buffer.is_null() {
         return Err(EfiError::InvalidParameter);
     }
@@ -2262,9 +2279,11 @@ mod tests {
                 efi::Status::SUCCESS
             );
 
-            assert_eq!(free_pool(buffer_ptr), efi::Status::SUCCESS);
+            // SAFETY: `buffer_ptr` was successfully allocated above and points to valid pool memory.
+            assert_eq!(unsafe { free_pool(buffer_ptr) }, efi::Status::SUCCESS);
 
-            assert_eq!(free_pool(core::ptr::null_mut()), efi::Status::INVALID_PARAMETER);
+            // SAFETY: null pointer is intentional to test the error path.
+            assert_eq!(unsafe { free_pool(core::ptr::null_mut()) }, efi::Status::INVALID_PARAMETER);
             //TODO: these cause non-unwinding panic which crashes the test even with "#[should_panic]".
             //assert_eq!(free_pool(buffer_ptr), efi::Status::INVALID_PARAMETER);
             //assert_eq!(free_pool(((buffer_ptr as usize) + 10) as *mut c_void), efi::Status::INVALID_PARAMETER);

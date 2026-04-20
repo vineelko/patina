@@ -329,7 +329,14 @@ pub trait BootServices {
     /// Returns pool memory to the system.
     ///
     /// [UEFI Spec Documentation: 7.2.5. EFI_BOOT_SERVICES.FreePool()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-freepool)
-    fn free_pool(&self, buffer: *mut u8) -> Result<(), efi::Status>;
+    ///
+    /// # Safety
+    ///
+    /// `buffer` must be a valid pointer pointing to valid readable memory previously allocated from
+    /// [`Self::allocate_pool`]. This is needed to locate allocation signatures. The current
+    /// implementation does not track allocations, so the caller is responsible for ensuring the
+    /// pointer is valid.
+    unsafe fn free_pool(&self, buffer: *mut u8) -> Result<(), efi::Status>;
 
     /// Installs a protocol interface on a device handle.
     /// If the handle does not exist, it is created and added to the list of handles in the system.
@@ -1289,7 +1296,7 @@ impl BootServices for StandardBootServices {
         let mut buffer = ptr::null_mut();
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let allocate_pool = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), allocate_pool) };
-        // SAFETY: buffer is declared above, we pass the address which guarantees it is a valid pointer. Unsafe block is
+        // SAFETY: buffer is declared above, we pass the address which guarantees it is a valid pointer.
         // still needed because the API itself is declared unsafe in r-efi.
         let status = unsafe { allocate_pool(memory_type.into(), size, ptr::addr_of_mut!(buffer)) };
         match status {
@@ -1298,11 +1305,17 @@ impl BootServices for StandardBootServices {
         }
     }
 
-    fn free_pool(&self, buffer: *mut u8) -> Result<(), efi::Status> {
+    /// # Safety
+    ///
+    /// `buffer` must be a valid pointer pointing to valid readable memory previously allocated from
+    /// [`BootServices::allocate_pool`]. The caller must have exclusive ownership of the allocation
+    /// being freed and must not use `buffer` after this call.
+    unsafe fn free_pool(&self, buffer: *mut u8) -> Result<(), efi::Status> {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let free_pool = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), free_pool) };
-        match free_pool(buffer as *mut c_void) {
-            s if s.is_error() => Err(s),
+        // SAFETY: The caller is responsible for ensuring `buffer` points to a valid allocation.
+        match unsafe { free_pool(buffer as *mut c_void) } {
+            status if status.is_error() => Err(status),
             _ => Ok(()),
         }
     }
@@ -2427,11 +2440,13 @@ mod tests {
         }
 
         // positive test
-        let status = boot_services.free_pool(0xffff0000 as *mut u8);
+        // SAFETY: `0xffff0000` is a non-null test address accepted by the mock; no real memory is freed.
+        let status = unsafe { boot_services.free_pool(0xffff0000 as *mut u8) };
         assert_eq!(status, Ok(()));
 
         // negative test
-        let status = boot_services.free_pool(ptr::null_mut());
+        // SAFETY: null pointer is intentional to test the error path.
+        let status = unsafe { boot_services.free_pool(ptr::null_mut()) };
         assert_eq!(status, Err(efi::Status::INVALID_PARAMETER));
     }
 

@@ -139,8 +139,8 @@ where
             }
         };
 
-        //TODO: trusting that "buffer" is legit is pretty naive - but performant. Presently the allocator doesn't have
-        //tracking mechanisms that permit the validation of the pointer (hence the unsafe).
+        // TODO: trusting that "buffer" is legit is pretty naive - but performant. Presently the allocator doesn't have
+        // tracking mechanisms that permit the validation of the pointer (hence the unsafe).
 
         // SAFETY: Caller must follow safety contract defined by this function.
         let mut ptr = unsafe {
@@ -159,7 +159,7 @@ where
         if allocation_info.memory_type != self.memory_type() {
             return Err(EfiError::NotFound);
         }
-        //zero after check so it doesn't get reused.
+        // zero after check so it doesn't get reused.
         allocation_info.signature = 0;
 
         // SAFETY: Caller must follow safety contract defined by this function.

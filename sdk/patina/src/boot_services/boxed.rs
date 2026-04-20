@@ -78,7 +78,8 @@ impl<'a, T, B: BootServices> BootServicesBox<'a, [T], B> {
 
 impl<T: ?Sized, B: BootServices + ?Sized> Drop for BootServicesBox<'_, T, B> {
     fn drop(&mut self) {
-        let _ = self.boot_services.free_pool(self.ptr as *mut u8);
+        // SAFETY: The pointer was allocated by BootServicesBox and is valid.
+        let _ = unsafe { self.boot_services.free_pool(self.ptr as *mut u8) };
     }
 }
 
