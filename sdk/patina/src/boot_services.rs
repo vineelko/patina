@@ -307,8 +307,15 @@ pub trait BootServices {
 
     /// Frees memory pages.
     ///
-    /// [UEFI Spec Documentation: 7.2.2. EFI_BOOT_SERVICES.FreePages()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-freepages)
-    fn free_pages(&self, address: usize, nb_pages: usize) -> Result<(), efi::Status>;
+    /// [UEFI Spec Documentation: 7.2.2.
+    /// EFI_BOOT_SERVICES.FreePages()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-freepages)
+    ///
+    /// # Safety
+    ///
+    /// `address` must be a valid physical address corresponding to a previously
+    /// allocated page range from [`Self::allocate_pages`]. The caller must have
+    /// exclusive ownership of the memory being freed.
+    unsafe fn free_pages(&self, address: usize, nb_pages: usize) -> Result<(), efi::Status>;
 
     /// Returns the current memory map.
     ///
@@ -1241,11 +1248,19 @@ impl BootServices for StandardBootServices {
         }
     }
 
-    fn free_pages(&self, address: usize, nb_pages: usize) -> Result<(), efi::Status> {
+    /// # Safety
+    ///
+    /// `address` must be a valid physical address corresponding to a previously allocated page
+    /// range from [`BootServices::allocate_pages`], and `nb_pages` must match the number of pages
+    /// originally allocated at that address. The caller must have exclusive ownership of the memory
+    /// being freed and must not access it after this call.
+    unsafe fn free_pages(&self, address: usize, nb_pages: usize) -> Result<(), efi::Status> {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let free_pages = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), free_pages) };
-        match free_pages(address as u64, nb_pages) {
-            s if s.is_error() => Err(s),
+        // SAFETY: `address` must be a valid physical address corresponding to a previously allocated
+        // page range. The caller must have exclusive ownership of the memory being freed.
+        match unsafe { free_pages(address as u64, nb_pages) } {
+            status if status.is_error() => Err(status),
             _ => Ok(()),
         }
     }
@@ -2360,7 +2375,8 @@ mod tests {
     #[should_panic = "Boot services function free_pages is not initialized."]
     fn test_free_pages_not_init() {
         let boot_services = boot_services!();
-        _ = boot_services.free_pages(0, 0);
+        // SAFETY: parameters are dummy values; the call is expected to panic before reaching the FFI layer.
+        _ = unsafe { boot_services.free_pages(0, 0) };
     }
 
     #[test]
@@ -2374,7 +2390,8 @@ mod tests {
             efi::Status::SUCCESS
         }
 
-        let status = boot_services.free_pages(0x100000, 10);
+        // SAFETY: `0x100000` is a valid test address accepted by the mock; the mock validates the parameters.
+        let status = unsafe { boot_services.free_pages(0x100000, 10) };
         assert!(status.is_ok());
     }
 

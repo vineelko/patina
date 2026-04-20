@@ -80,7 +80,8 @@ impl MemoryManager for CoreMemoryManager {
     /// Caller must ensure that the given address corresponds to a valid block of pages that was allocated with
     /// [Self::allocate_pages].
     unsafe fn free_pages(&self, address: usize, page_count: usize) -> Result<(), MemoryError> {
-        let result = core_free_pages(address as efi::PhysicalAddress, page_count);
+        // SAFETY: The caller must ensure that the provided address is valid.
+        let result = unsafe { core_free_pages(address as efi::PhysicalAddress, page_count) };
         match result {
             Ok(_) => Ok(()),
             Err(EfiError::NotFound) => Err(MemoryError::InvalidAddress),
@@ -99,7 +100,7 @@ impl MemoryManager for CoreMemoryManager {
 
     /// # Safety
     ///
-    /// Changing tha attributes of a page of memory can result in undefined behavior
+    /// Changing the attributes of a page of memory can result in undefined behavior
     /// if the attributes are not correct for the memory usage. The caller is responsible
     /// for understanding the use of the memory and verifying that all current and
     /// future accesses of the memory align to the attributes configured.

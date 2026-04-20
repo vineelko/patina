@@ -773,14 +773,27 @@ pub fn memory_type_for_handle(handle: efi::Handle) -> Option<efi::MemoryType> {
     ALLOCATORS.lock().memory_type_for_handle(handle)
 }
 
-extern "efiapi" fn free_pages(memory: efi::PhysicalAddress, pages: usize) -> efi::Status {
-    match core_free_pages(memory, pages) {
+/// Frees pages previously allocated with [`allocate_pages`].
+///
+/// # Safety
+///
+/// `memory` must be a valid physical address corresponding to a previously allocated page range.
+/// The caller must have exclusive ownership of the memory being freed.
+unsafe extern "efiapi" fn free_pages(memory: efi::PhysicalAddress, pages: usize) -> efi::Status {
+    // SAFETY: The caller is responsible for ensuring `memory` is a valid, previously allocated address.
+    match unsafe { core_free_pages(memory, pages) } {
         Ok(_) => efi::Status::SUCCESS,
         Err(status) => status.into(),
     }
 }
 
-pub fn core_free_pages(memory: efi::PhysicalAddress, pages: usize) -> Result<(), EfiError> {
+/// Frees pages previously allocated with [`core_allocate_pages`].
+///
+/// # Safety
+///
+/// `memory` must be a valid physical address corresponding to a previously allocated page range.
+/// The caller must have exclusive ownership of the memory being freed.
+pub unsafe fn core_free_pages(memory: efi::PhysicalAddress, pages: usize) -> Result<(), EfiError> {
     let size = match pages.checked_mul(UEFI_PAGE_SIZE) {
         Some(size) => size,
         None => return Err(EfiError::InvalidParameter),
@@ -2431,7 +2444,8 @@ mod tests {
                 },
                 efi::Status::SUCCESS
             );
-            free_pages(buffer_ptr as u64, 0x10);
+            // SAFETY: `buffer_ptr` was successfully allocated above and points to a valid page range of 0x10 pages.
+            unsafe { free_pages(buffer_ptr as u64, 0x10) };
 
             //test successful allocate_address at the address that was just freed
             assert_eq!(
@@ -2446,7 +2460,8 @@ mod tests {
                 },
                 efi::Status::SUCCESS
             );
-            free_pages(buffer_ptr as u64, 0x10);
+            // SAFETY: `buffer_ptr` was successfully allocated above and points to a valid page range of 0x10 pages.
+            unsafe { free_pages(buffer_ptr as u64, 0x10) };
 
             //test successful allocate_max where max is greater than the address that was just freed.
             buffer_ptr = buffer_ptr.wrapping_add(0x11 * 0x1000);
@@ -2462,7 +2477,8 @@ mod tests {
                 },
                 efi::Status::SUCCESS
             );
-            free_pages(buffer_ptr as u64, 0x10);
+            // SAFETY: `buffer_ptr` was successfully allocated above and points to a valid page range of 0x10 pages.
+            unsafe { free_pages(buffer_ptr as u64, 0x10) };
 
             //test invalid allocation type
             assert_eq!(
@@ -2491,7 +2507,8 @@ mod tests {
                 },
                 efi::Status::SUCCESS
             );
-            free_pages(buffer_ptr as u64, 0x10);
+            // SAFETY: `buffer_ptr` was successfully allocated above and points to a valid page range of 0x10 pages.
+            unsafe { free_pages(buffer_ptr as u64, 0x10) };
             let allocators = ALLOCATORS.lock();
             let allocator = allocators.get_allocator(0x71234567).unwrap();
             let handle = allocator.handle();
@@ -2531,10 +2548,14 @@ mod tests {
     #[test]
     fn free_pages_error_scenarios_should_be_handled_properly() {
         with_locked_state(GcdInit::WithSize(0x1000000), |_physical_hob_list| {
-            assert_eq!(free_pages(0x12345000, !0xFFF), efi::Status::INVALID_PARAMETER);
-            assert_eq!(free_pages(!0xFFF, 0x10), efi::Status::INVALID_PARAMETER);
-            assert_eq!(free_pages(0x12345678, 1), efi::Status::INVALID_PARAMETER);
-            assert_eq!(free_pages(0x12345000, 1), efi::Status::NOT_FOUND);
+            // SAFETY: invalid page count to test overflow detection.
+            assert_eq!(unsafe { free_pages(0x12345000, !0xFFF) }, efi::Status::INVALID_PARAMETER);
+            // SAFETY: address near end of address space to test overflow detection.
+            assert_eq!(unsafe { free_pages(!0xFFF, 0x10) }, efi::Status::INVALID_PARAMETER);
+            // SAFETY: misaligned address to test alignment validation.
+            assert_eq!(unsafe { free_pages(0x12345678, 1) }, efi::Status::INVALID_PARAMETER);
+            // SAFETY: valid-looking but unallocated address to test not-found path.
+            assert_eq!(unsafe { free_pages(0x12345000, 1) }, efi::Status::NOT_FOUND);
         });
     }
 
