@@ -110,6 +110,7 @@ pub trait MemoryManager {
     ///     // to free it.
     ///     let alloc = memory_manager.allocate_pages(1, AllocationOptions::new())?;
     ///     let ptr = alloc.into_raw_ptr::<u8>().unwrap();
+    ///     // SAFETY: ptr was just obtained from allocate_pages, so it is a valid page-aligned address.
     ///     unsafe { memory_manager.free_pages(ptr as usize, 1)? };
     ///
     ///     Ok(())

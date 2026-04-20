@@ -502,11 +502,10 @@ impl AcpiTable {
         };
 
         // Allocate memory in appropriate ACPI region, up to page granularity.
+        let alloc_options =
+            AllocationOptions::new().with_memory_type(allocator_type).with_strategy(allocation_strategy);
         let table_page_alloc = mm
-            .allocate_pages(
-                uefi_size_to_pages!(table_length),
-                AllocationOptions::new().with_memory_type(allocator_type).with_strategy(allocation_strategy),
-            )
+            .allocate_pages(uefi_size_to_pages!(table_length), alloc_options)
             .map_err(|_e| AcpiError::AllocationFailed)?;
 
         // Get the raw pointer to the allocated memory for copying.

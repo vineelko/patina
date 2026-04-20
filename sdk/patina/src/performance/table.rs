@@ -123,7 +123,11 @@ impl FBPT {
             })
             .map_or_else(
                 || {
-                    // Allocate at a new address if no address found or if the previous address allocation failed.
+                    // Allocate at a new address if no address found or if the previous address
+                    // allocation failed. `AllocType::MaxAddress` requests any physical address
+                    // below the given bound (u32::MAX = 4 GiB). The firmware chooses the actual
+                    // address, so no specific physical address is supplied by the caller and the
+                    // safety contract of `allocate_pages` is trivially satisfied.
                     boot_services.allocate_pages(
                         AllocType::MaxAddress(u32::MAX as usize),
                         EfiMemoryType::ReservedMemoryType,
@@ -133,7 +137,7 @@ impl FBPT {
                 Result::Ok,
             )? as *mut u8;
 
-        // SAFETY: the allocation at this addres was of size `allocation_size`
+        // SAFETY: the allocation at this address was of size `allocation_size`
         Ok(unsafe { slice::from_raw_parts_mut(address, allocation_size) })
     }
 }
