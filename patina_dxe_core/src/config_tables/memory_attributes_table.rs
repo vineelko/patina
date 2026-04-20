@@ -314,13 +314,16 @@ mod tests {
                     entry_count * uefi_size_to_pages!(crate::allocator::RUNTIME_PAGE_ALLOCATION_GRANULARITY);
 
                 let mut buffer_ptr: *mut u8 = core::ptr::null_mut();
-                match core_allocate_pages(
-                    efi::ALLOCATE_ANY_PAGES,
-                    page_type.0,
-                    page_count,
-                    core::ptr::addr_of_mut!(buffer_ptr) as *mut efi::PhysicalAddress,
-                    None,
-                ) {
+                // SAFETY: the parameters are as expected for the test.
+                match unsafe {
+                    core_allocate_pages(
+                        efi::ALLOCATE_ANY_PAGES,
+                        page_type.0,
+                        page_count,
+                        core::ptr::addr_of_mut!(buffer_ptr) as *mut efi::PhysicalAddress,
+                        None,
+                    )
+                } {
                     // because we allocate top down, we need to insert at the front of the vector
                     Ok(_) if page_type.0 != efi::BOOT_SERVICES_DATA => {
                         allocated_pages.insert(0, (buffer_ptr, page_type, page_count))

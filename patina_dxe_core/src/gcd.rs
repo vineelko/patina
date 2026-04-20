@@ -1058,10 +1058,16 @@ mod tests {
             let mut loader_code_mem = 0;
             let mut loader_data_mem = 0;
 
-            allocator::core_allocate_pages(efi::ALLOCATE_ANY_PAGES, efi::LOADER_CODE, 2, &mut loader_code_mem, None)
-                .expect("Failed to allocate loader code memory");
-            allocator::core_allocate_pages(efi::ALLOCATE_ANY_PAGES, efi::LOADER_DATA, 2, &mut loader_data_mem, None)
-                .expect("Failed to allocate loader data memory");
+            // SAFETY: the parameters are as expected for the test.
+            unsafe {
+                allocator::core_allocate_pages(efi::ALLOCATE_ANY_PAGES, efi::LOADER_CODE, 2, &mut loader_code_mem, None)
+            }
+            .expect("Failed to allocate loader code memory");
+            // SAFETY: the parameters are as expected for the test.
+            unsafe {
+                allocator::core_allocate_pages(efi::ALLOCATE_ANY_PAGES, efi::LOADER_DATA, 2, &mut loader_data_mem, None)
+            }
+            .expect("Failed to allocate loader data memory");
 
             // loader code/data should be XP by default
             let loader_code_ranges = allocator::get_memory_ranges_for_memory_type(efi::LOADER_CODE);
@@ -1080,13 +1086,16 @@ mod tests {
             }
 
             let mut image_base_page = 0;
-            allocator::core_allocate_pages(
-                efi::ALLOCATE_ANY_PAGES,
-                efi::BOOT_SERVICES_DATA,
-                4,
-                &mut image_base_page,
-                None,
-            )
+            // SAFETY: the parameters are as expected for the test.
+            unsafe {
+                allocator::core_allocate_pages(
+                    efi::ALLOCATE_ANY_PAGES,
+                    efi::BOOT_SERVICES_DATA,
+                    4,
+                    &mut image_base_page,
+                    None,
+                )
+            }
             .expect("Failed to allocate loader code memory");
             let image_num_pages = 4;
             let filename = "legacy_app.efi";
