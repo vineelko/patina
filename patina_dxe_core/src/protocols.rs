@@ -619,6 +619,12 @@ unsafe extern "C" fn install_multiple_protocol_interfaces(handle: *mut efi::Hand
     efi::Status::SUCCESS
 }
 
+/// Uninstalls multiple protocol interfaces from a handle.
+///
+/// # Safety
+///
+/// `args` must consist of paired `(*mut efi::Guid, *mut c_void)` entries terminated by a null
+/// `*mut efi::Guid` sentinel.
 unsafe extern "C" fn uninstall_multiple_protocol_interfaces(handle: efi::Handle, mut args: ...) -> efi::Status {
     if handle.is_null() {
         return efi::Status::INVALID_PARAMETER;
@@ -892,12 +898,12 @@ extern "efiapi" fn locate_device_path(
 pub fn init_protocol_support(st: &mut EfiSystemTable) {
     let mut bs = st.boot_services().get();
 
-    //This bit of trickery is needed because r_efi definition of (Un)InstallMultipleProtocolInterfaces
-    //is not variadic, due to rust only supporting variadic for "unsafe extern C" and not "efiapi"
-    //until rust 1.91. For our purposes "efiapi" and "extern C" match, so we can get away with a
-    //transmute here. Fixing it properly would require an upstream change in r_efi to pick up. There is also a bug in
-    //the r_efi definition for uninstall_multiple_protocol_interfaces - per spec, the first argument is a handle, but
-    //r_efi has it as *mut handle.
+    // This bit of trickery is needed because r_efi definition of (Un)InstallMultipleProtocolInterfaces
+    // is not variadic, due to rust only supporting variadic for "unsafe extern C" and not "efiapi"
+    // until rust 1.91. For our purposes "efiapi" and "extern C" match, so we can get away with a
+    // transmute here. Fixing it properly would require an upstream change in r_efi to pick up. There is also a bug in
+    // the r_efi definition for uninstall_multiple_protocol_interfaces - per spec, the first argument is a handle, but
+    // r_efi has it as *mut handle.
     // SAFETY: Transmute bridges r_efi signature mismatch for variadic interface. ABI matches for efiapi/extern C.
     bs.install_multiple_protocol_interfaces = unsafe {
         let ptr = install_multiple_protocol_interfaces as *const ();
