@@ -1510,6 +1510,11 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// # Safety
+    ///
+    /// The caller must cast the returned pointer to the correct protocol
+    /// interface type corresponding to `protocol`. Using an incorrect type
+    /// leads to undefined behavior when the pointer is dereferenced.
     unsafe fn handle_protocol_unchecked(
         &self,
         handle: efi::Handle,
@@ -1518,8 +1523,13 @@ impl BootServices for StandardBootServices {
         let mut interface = ptr::null_mut();
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let handle_protocol = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), handle_protocol) };
-        match handle_protocol(handle, protocol as *const _ as *mut _, ptr::addr_of_mut!(interface)) {
-            s if s.is_error() => Err(s),
+        // SAFETY: `handle` is validated by the implementation and returns an error if not found.
+        // `protocol` is a valid reference cast to a pointer. `interface` is a local variable
+        // whose address is valid for writes. The returned `interface` pointer is the caller's
+        // responsibility to use correctly, as documented by the `unsafe` on this function.
+        let status = unsafe { handle_protocol(handle, protocol as *const _ as *mut _, ptr::addr_of_mut!(interface)) };
+        match status {
+            status if status.is_error() => Err(status),
             _ => Ok(interface),
         }
     }
