@@ -315,7 +315,16 @@ unsafe extern "efiapi" fn register_protocol_notify(
     }
 }
 
-extern "efiapi" fn locate_handle(
+/// Locates handles that support a specified protocol.
+///
+/// # Safety
+///
+/// `protocol` must be a valid pointer to an `efi::Guid` when `search_type` is `BY_PROTOCOL`.
+/// `search_key` must be a valid registration key when `search_type` is `BY_REGISTER_NOTIFY`.
+/// `buffer_size` must be a valid pointer to a `usize`.
+/// `handle_buffer` must be valid for writes of the number of handles indicated by `buffer_size`.
+///  All pointers are null checked, but validity of the referenced memory is the caller's responsibility.
+unsafe extern "efiapi" fn locate_handle(
     search_type: efi::LocateSearchType,
     protocol: *mut efi::Guid,
     search_key: *mut c_void,
