@@ -391,7 +391,14 @@ unsafe extern "efiapi" fn locate_handle(
     }
 }
 
-pub extern "efiapi" fn handle_protocol(
+/// Retrieves a protocol interface from a handle.
+///
+/// # Safety
+///
+/// `protocol` must be a valid pointer to an `efi::Guid`. `interface` must be a valid pointer to
+/// receive the protocol interface pointer. Both are null checked by the underlying `open_protocol`
+/// implementation, but validity of the referenced memory is the caller's responsibility.
+pub unsafe extern "efiapi" fn handle_protocol(
     handle: efi::Handle,
     protocol: *mut efi::Guid,
     interface: *mut *mut c_void,
@@ -847,7 +854,10 @@ pub fn core_locate_device_path(
     for handle in handles {
         let mut temp_device_path: *mut r_efi::protocols::device_path::Protocol = core::ptr::null_mut();
         let temp_device_path_ptr: *mut *mut c_void = &mut temp_device_path as *mut _ as *mut *mut c_void;
-        let status = handle_protocol(handle, device_path_protocol_guid, temp_device_path_ptr);
+        // SAFETY: `handle` comes from `locate_handles` and is valid. `device_path_protocol_guid`
+        // points to a valid static GUID. `temp_device_path_ptr` is derived from a local variable
+        // and is valid for writes.
+        let status = unsafe { handle_protocol(handle, device_path_protocol_guid, temp_device_path_ptr) };
         if status != efi::Status::SUCCESS {
             continue;
         }
