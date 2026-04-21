@@ -403,17 +403,30 @@ pub unsafe extern "efiapi" fn handle_protocol(
     protocol: *mut efi::Guid,
     interface: *mut *mut c_void,
 ) -> efi::Status {
-    open_protocol(
-        handle,
-        protocol,
-        interface,
-        DXE_CORE_HANDLE,
-        core::ptr::null_mut(),
-        efi::OPEN_PROTOCOL_BY_HANDLE_PROTOCOL,
-    )
+    // SAFETY: `protocol` and `interface` are forwarded from the caller per this function's safety
+    // contract. `DXE_CORE_HANDLE` is a valid static handle. A null controller handle and
+    // `BY_HANDLE_PROTOCOL` attributes are safe constant values.
+    unsafe {
+        open_protocol(
+            handle,
+            protocol,
+            interface,
+            DXE_CORE_HANDLE,
+            core::ptr::null_mut(),
+            efi::OPEN_PROTOCOL_BY_HANDLE_PROTOCOL,
+        )
+    }
 }
 
-extern "efiapi" fn open_protocol(
+/// Opens a protocol interface on a handle with usage tracking.
+///
+/// # Safety
+///
+/// `protocol` must be a valid pointer to an `efi::Guid`. `interface` must be a valid pointer to
+/// receive the protocol interface pointer (may be null only when `attributes` is
+/// `OPEN_PROTOCOL_TEST_PROTOCOL`). Both are null checked, but validity of the referenced memory
+/// is the caller's responsibility.
+unsafe extern "efiapi" fn open_protocol(
     handle: efi::Handle,
     protocol: *mut efi::Guid,
     interface: *mut *mut c_void,

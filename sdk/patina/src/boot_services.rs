@@ -1558,6 +1558,10 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// # Safety
+    ///
+    /// The caller must cast the returned pointer to the correct protocol interface type
+    /// corresponding to `protocol`. `agent_handle` must be a valid handle or null.
     unsafe fn open_protocol_unchecked(
         &self,
         handle: efi::Handle,
@@ -1569,15 +1573,22 @@ impl BootServices for StandardBootServices {
         let mut interface = ptr::null_mut();
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let open_protocol = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), open_protocol) };
-        match open_protocol(
-            handle,
-            protocol as *const _ as *mut _,
-            ptr::addr_of_mut!(interface),
-            agent_handle,
-            controller_handle,
-            attribute,
-        ) {
-            s if s.is_error() => Err(s),
+        // SAFETY: `protocol` is a valid reference cast to a pointer. `interface` is a local
+        // variable whose address is valid for writes. `handle`, `agent_handle`, and
+        // `controller_handle` validity is the caller's responsibility as documented by the
+        // `unsafe` on this function.
+        let status = unsafe {
+            open_protocol(
+                handle,
+                protocol as *const _ as *mut _,
+                ptr::addr_of_mut!(interface),
+                agent_handle,
+                controller_handle,
+                attribute,
+            )
+        };
+        match status {
+            status if status.is_error() => Err(status),
             _ => Ok(interface),
         }
     }
