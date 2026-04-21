@@ -1534,6 +1534,11 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// # Safety
+    ///
+    /// `device_path` must point to a valid `*mut DevicePath` pointer in writable memory.
+    /// On entry the pointer must be a valid device path; on return it is updated to the
+    /// remaining (unmatched) portion of the path.
     unsafe fn locate_device_path(
         &self,
         protocol: &efi::Guid,
@@ -1542,8 +1547,13 @@ impl BootServices for StandardBootServices {
         let mut device = ptr::null_mut();
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let locate_device_path = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), locate_device_path) };
-        match locate_device_path(protocol as *const _ as *mut _, device_path, ptr::addr_of_mut!(device)) {
-            s if s.is_error() => Err(s),
+        // SAFETY: `protocol` is a valid reference cast to a pointer. `device_path` validity is
+        // the caller's responsibility as documented by the `unsafe` on this function. `device` is
+        // a local variable whose address is valid for writes.
+        let status =
+            unsafe { locate_device_path(protocol as *const _ as *mut _, device_path, ptr::addr_of_mut!(device)) };
+        match status {
+            status if status.is_error() => Err(status),
             _ => Ok(device),
         }
     }
