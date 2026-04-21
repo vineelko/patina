@@ -637,11 +637,18 @@ impl ImageData {
     }
 
     /// Returns a tuple of image meta-data: `(image_as_vec, from_fv, device_handle, authentication_status)`
-    fn locate_image_metadata_by_buffer(
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure `file_path` points to a valid device path or is null.
+    unsafe fn locate_image_metadata_by_buffer(
         image: &[u8],
         file_path: *mut efi::protocols::device_path::Protocol,
     ) -> (Vec<u8>, bool, *mut c_void, u32) {
-        if let Ok((_, device_handle)) = core_locate_device_path(efi::protocols::device_path::PROTOCOL_GUID, file_path) {
+        if let Ok((_, device_handle)) =
+            // SAFETY: file_path validity is guaranteed by the caller per this function's safety contract.
+            unsafe { core_locate_device_path(efi::protocols::device_path::PROTOCOL_GUID, file_path) }
+        {
             (image.to_vec(), false, device_handle, 0)
         } else {
             (image.to_vec(), false, protocol_db::INVALID_HANDLE, 0)
@@ -651,7 +658,12 @@ impl ImageData {
     /// Returns the image metadata by its file path using simple file system or load file protocols.
     ///
     /// Returns a tuple of (image buffer, from_fv, device handle, authentication status).
-    fn locate_image_metadata_by_file_path(
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure `file_path` points to a valid device path or is null (null is checked
+    /// and returns `InvalidParameter`).
+    unsafe fn locate_image_metadata_by_file_path(
         boot_policy: bool,
         file_path: *mut efi::protocols::device_path::Protocol,
     ) -> Result<(Vec<u8>, bool, *mut c_void, u32), EfiError> {
@@ -659,24 +671,30 @@ impl ImageData {
             Err(EfiError::InvalidParameter)?;
         }
 
-        if let Ok((buffer, device_handle)) = get_file_buffer_from_fw(file_path) {
+        // SAFETY: file_path is non-null (checked above) and valid per this function's safety contract.
+        let result = unsafe { get_file_buffer_from_fw(file_path) };
+        if let Ok((buffer, device_handle)) = result {
             return Ok((buffer, true, device_handle, 0));
         }
 
-        if let Ok((buffer, device_handle)) = get_file_buffer_from_sfs(file_path) {
+        // SAFETY: file_path is non-null (checked above) and valid per this function's safety contract.
+        let result = unsafe { get_file_buffer_from_sfs(file_path) };
+        if let Ok((buffer, device_handle)) = result {
             return Ok((buffer, false, device_handle, 0));
         }
 
-        if !boot_policy
-            && let Ok((buffer, device_handle)) =
-                get_file_buffer_from_load_protocol(efi::protocols::load_file2::PROTOCOL_GUID, false, file_path)
-        {
+        // SAFETY: file_path is non-null (checked above) and valid per this function's safety contract.
+        let result =
+            unsafe { get_file_buffer_from_load_protocol(efi::protocols::load_file2::PROTOCOL_GUID, false, file_path) };
+        if !boot_policy && let Ok((buffer, device_handle)) = result {
             return Ok((buffer, false, device_handle, 0));
         }
 
-        if let Ok((buffer, device_handle)) =
+        // SAFETY: file_path is non-null (checked above) and valid per this function's safety contract.
+        let result = unsafe {
             get_file_buffer_from_load_protocol(efi::protocols::load_file::PROTOCOL_GUID, boot_policy, file_path)
-        {
+        };
+        if let Ok((buffer, device_handle)) = result {
             return Ok((buffer, false, device_handle, 0));
         }
 
@@ -725,9 +743,13 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
 
         ImageData::validate_parent(parent_image_handle)?;
 
-        let (image_to_load, from_fv, device_handle, auth_status) = match image {
-            Some(buffer) => ImageData::locate_image_metadata_by_buffer(buffer, file_path),
-            None => ImageData::locate_image_metadata_by_file_path(boot_policy, file_path)?,
+        // SAFETY: file_path was validated above (not-null when image is None) and originates from
+        // the caller's device path, which is required to be valid by the load_image contract.
+        let (image_to_load, from_fv, device_handle, auth_status) = unsafe {
+            match image {
+                Some(buffer) => ImageData::locate_image_metadata_by_buffer(buffer, file_path),
+                None => ImageData::locate_image_metadata_by_file_path(boot_policy, file_path)?,
+            }
         };
 
         // authenticate the image
@@ -1372,12 +1394,18 @@ fn get_file_guid_from_device_path(path: *mut efi::protocols::device_path::Protoc
     Ok(Guid::from_bytes(file_path_node.data().try_into().map_err(|_| EfiError::BadBufferSize)?))
 }
 
-fn get_file_buffer_from_fw(
+/// Reads an image from a firmware volume located via the given device path.
+///
+/// # Safety
+///
+/// Caller must ensure `file_path` points to a valid device path.
+unsafe fn get_file_buffer_from_fw(
     file_path: *mut efi::protocols::device_path::Protocol,
 ) -> Result<(Vec<u8>, efi::Handle), EfiError> {
     // Locate the handles to a device on the file_path that supports the firmware volume protocol
+    // SAFETY: file_path validity is guaranteed by the caller per this function's safety contract.
     let (remaining_file_path, handle) =
-        core_locate_device_path(pi::protocols::firmware_volume::PROTOCOL_GUID.into_inner(), file_path)?;
+        unsafe { core_locate_device_path(pi::protocols::firmware_volume::PROTOCOL_GUID.into_inner(), file_path) }?;
 
     // For FwVol File system there is only a single file name that is a GUID.
     let fv_name_guid = get_file_guid_from_device_path(remaining_file_path)?;
@@ -1416,11 +1444,17 @@ fn get_file_buffer_from_fw(
     Ok((section_slice.to_vec(), handle))
 }
 
-fn get_file_buffer_from_sfs(
+/// Reads an image from a simple file system located via the given device path.
+///
+/// # Safety
+///
+/// Caller must ensure `file_path` points to a valid device path.
+unsafe fn get_file_buffer_from_sfs(
     file_path: *mut efi::protocols::device_path::Protocol,
 ) -> Result<(Vec<u8>, efi::Handle), EfiError> {
+    // SAFETY: file_path validity is guaranteed by the caller per this function's safety contract.
     let (remaining_file_path, handle) =
-        core_locate_device_path(efi::protocols::simple_file_system::PROTOCOL_GUID, file_path)?;
+        unsafe { core_locate_device_path(efi::protocols::simple_file_system::PROTOCOL_GUID, file_path) }?;
 
     let mut file = SimpleFile::open_volume(handle)?;
 
@@ -1453,7 +1487,12 @@ fn get_file_buffer_from_sfs(
     Ok((file.read()?, handle))
 }
 
-fn get_file_buffer_from_load_protocol(
+/// Reads an image via a load file protocol located on the given device path.
+///
+/// # Safety
+///
+/// Caller must ensure `file_path` points to a valid device path.
+unsafe fn get_file_buffer_from_load_protocol(
     protocol: efi::Guid,
     boot_policy: bool,
     file_path: *mut efi::protocols::device_path::Protocol,
@@ -1467,7 +1506,8 @@ fn get_file_buffer_from_load_protocol(
         Err(EfiError::InvalidParameter)?;
     }
 
-    let (remaining_file_path, handle) = core_locate_device_path(protocol, file_path)?;
+    // SAFETY: file_path validity is guaranteed by the caller per this function's safety contract.
+    let (remaining_file_path, handle) = unsafe { core_locate_device_path(protocol, file_path) }?;
 
     let load_file = PROTOCOL_DB.get_interface_for_handle(handle, protocol)?;
     // SAFETY: load_file is obtained from the protocol database and is a valid load_file protocol pointer.
@@ -2365,7 +2405,8 @@ mod tests {
     fn locate_image_metadata_by_file_path_should_fail_if_no_file_support() {
         with_locked_state(|| {
             assert_eq!(
-                ImageData::locate_image_metadata_by_file_path(true, core::ptr::null_mut()),
+                // SAFETY: Testing null pointer handling - function checks for null and returns InvalidParameter.
+                unsafe { ImageData::locate_image_metadata_by_file_path(true, core::ptr::null_mut()) },
                 Err(EfiError::InvalidParameter)
             );
 
@@ -2400,7 +2441,11 @@ mod tests {
             ];
             let device_path_ptr = device_path_bytes.as_mut_ptr() as *mut efi::protocols::device_path::Protocol;
 
-            assert_eq!(ImageData::locate_image_metadata_by_file_path(true, device_path_ptr), Err(EfiError::NotFound));
+            assert_eq!(
+                // SAFETY: device_path_ptr points to a valid device path constructed above.
+                unsafe { ImageData::locate_image_metadata_by_file_path(true, device_path_ptr) },
+                Err(EfiError::NotFound)
+            );
         });
     }
 
@@ -2605,7 +2650,8 @@ mod tests {
             test_file.read_to_end(&mut image).expect("failed to read test file");
 
             assert_eq!(
-                ImageData::locate_image_metadata_by_file_path(true, device_path_ptr),
+                // SAFETY: device_path_ptr points to a valid device path constructed above.
+                unsafe { ImageData::locate_image_metadata_by_file_path(true, device_path_ptr) },
                 Ok((image, false, handle, 0))
             );
         });
@@ -2668,7 +2714,8 @@ mod tests {
             test_file.read_to_end(&mut image).expect("failed to read test file");
 
             assert_eq!(
-                ImageData::locate_image_metadata_by_file_path(true, device_path_ptr),
+                // SAFETY: device_path_ptr points to a valid device path constructed above.
+                unsafe { ImageData::locate_image_metadata_by_file_path(true, device_path_ptr) },
                 Ok((image, false, handle, 0))
             );
         });
