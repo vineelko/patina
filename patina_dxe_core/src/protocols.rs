@@ -884,7 +884,15 @@ pub fn core_locate_device_path(
     Ok((best_remaining_path as *mut r_efi::protocols::device_path::Protocol, best_device))
 }
 
-extern "efiapi" fn locate_device_path(
+/// Locates a handle for a device on a device path that supports a specified protocol.
+///
+/// # Safety
+///
+/// `protocol` must be a valid pointer to an `efi::Guid`. `device_path` must be a valid pointer to
+/// a `*mut Protocol` pointer that references a valid UEFI device path. `device` must be a valid
+/// pointer to receive the located handle. All pointers are null checked, but validity of the
+/// referenced memory is the caller's responsibility.
+unsafe extern "efiapi" fn locate_device_path(
     protocol: *mut efi::Guid,
     device_path: *mut *mut r_efi::protocols::device_path::Protocol,
     device: *mut efi::Handle,
