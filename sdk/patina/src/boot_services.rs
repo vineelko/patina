@@ -1474,22 +1474,34 @@ impl BootServices for StandardBootServices {
 
         // Expect locate_handle to return BUFFER_TOO_SMALL along with the proper buffer_size
         let mut buffer_size = 0;
-        match locate_handle(search_type.into(), protocol, search_key, ptr::addr_of_mut!(buffer_size), ptr::null_mut()) {
-            s if s == efi::Status::BUFFER_TOO_SMALL => (),
-            s if s.is_error() => return Err(s),
+        // SAFETY: `protocol` and `search_key` are derived from `search_type` above.
+        // `buffer_size` is a local variable whose address is valid. A null handle buffer is
+        // valid for a size-query call that is expected to return BUFFER_TOO_SMALL.
+        let status = unsafe {
+            locate_handle(search_type.into(), protocol, search_key, ptr::addr_of_mut!(buffer_size), ptr::null_mut())
+        };
+        match status {
+            status if status == efi::Status::BUFFER_TOO_SMALL => (),
+            status if status.is_error() => return Err(status),
             _ => (),
         }
 
         let buffer = self.allocate_pool(EfiMemoryType::BootServicesData, buffer_size)?;
 
-        match locate_handle(
-            search_type.into(),
-            protocol,
-            search_key,
-            ptr::addr_of_mut!(buffer_size),
-            buffer as *mut efi::Handle,
-        ) {
-            s if s.is_error() => Err(s),
+        // SAFETY: `protocol` and `search_key` are unchanged from the size query above.
+        // `buffer_size` is a local variable whose address is valid. `buffer` was allocated
+        // via `allocate_pool` with sufficient size to hold the handles.
+        let status = unsafe {
+            locate_handle(
+                search_type.into(),
+                protocol,
+                search_key,
+                ptr::addr_of_mut!(buffer_size),
+                buffer as *mut efi::Handle,
+            )
+        };
+        match status {
+            status if status.is_error() => Err(status),
             // SAFETY: buffer was allocated with allocate_pool to hold buffer_size bytes.
             // The number of handles is buffer_size divided by the size of each handle.
             _ => Ok(unsafe {
