@@ -1593,6 +1593,12 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// Not marked `unsafe` because `protocol` is a Rust reference and is therefore guaranteed
+    /// to be valid. All other parameters are opaque handles validated internally by the
+    /// implementation.
+    // This below lint is triggered by the fact that efi::Handle aliases to *mut
+    // c_void, but it is an opaque handle used as a database key.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn close_protocol(
         &self,
         handle: efi::Handle,
@@ -1602,8 +1608,12 @@ impl BootServices for StandardBootServices {
     ) -> Result<(), efi::Status> {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let close_protocol = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), close_protocol) };
-        match close_protocol(handle, protocol as *const _ as *mut _, agent_handle, controller_handle) {
-            s if s.is_error() => Err(s),
+        // SAFETY: `protocol` is a valid Rust reference cast to a pointer. `handle`,
+        // `agent_handle`, and `controller_handle` are opaque handles validated internally
+        // by the implementation; invalid handles result in an error status, not UB.
+        let status = unsafe { close_protocol(handle, protocol as *const _ as *mut _, agent_handle, controller_handle) };
+        match status {
+            status if status.is_error() => Err(status),
             _ => Ok(()),
         }
     }

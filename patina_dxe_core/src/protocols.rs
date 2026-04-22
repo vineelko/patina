@@ -508,7 +508,13 @@ unsafe extern "efiapi" fn open_protocol(
     efi::Status::SUCCESS
 }
 
-extern "efiapi" fn close_protocol(
+/// Closes a protocol on a handle that was previously opened.
+///
+/// # Safety
+///
+/// `protocol` must be a valid pointer to an `efi::Guid`. It is null checked, but validity of the
+/// referenced memory is the caller's responsibility.
+unsafe extern "efiapi" fn close_protocol(
     handle: efi::Handle,
     protocol: *mut efi::Guid,
     agent_handle: efi::Handle,
