@@ -1618,6 +1618,12 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// Not marked `unsafe` because `protocol` is a Rust reference and is therefore guaranteed
+    /// to be valid. `handle` is an opaque handle validated internally by the implementation;
+    /// an invalid handle results in an error status, not undefined behavior.
+    /// This is triggered by the fact that efi::Handle aliases to *mut c_void, but
+    /// it is an opaque handle used as a database key.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn open_protocol_information(
         &self,
         handle: efi::Handle,
@@ -1630,13 +1636,21 @@ impl BootServices for StandardBootServices {
         let mut entry_count = 0;
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let open_protocol_information = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), open_protocol_information) };
-        match open_protocol_information(
-            handle,
-            protocol as *const _ as *mut _,
-            ptr::addr_of_mut!(entry_buffer),
-            ptr::addr_of_mut!(entry_count),
-        ) {
-            s if s.is_error() => Err(s),
+        // SAFETY: `protocol` is a valid Rust reference cast to a pointer. `entry_buffer` and
+        // `entry_count` are local variables whose addresses are valid for writes. `handle` is
+        // validated internally by the implementation; an invalid handle results in an error status,
+        // not UB. The unsafe block is required because r-efi declares open_protocol_information as
+        // an unsafe extern "efiapi" function pointer.
+        let status = unsafe {
+            open_protocol_information(
+                handle,
+                protocol as *const _ as *mut _,
+                ptr::addr_of_mut!(entry_buffer),
+                ptr::addr_of_mut!(entry_count),
+            )
+        };
+        match status {
+            status if status.is_error() => Err(status),
             // SAFETY: The firmware allocates entry_buffer and sets entry_count.
             // from_raw_parts_mut creates a slice with the proper length as specified by the firmware.
             _ => Ok(unsafe { BootServicesBox::from_raw_parts_mut(entry_buffer, entry_count, self) }),

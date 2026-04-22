@@ -548,7 +548,15 @@ unsafe extern "efiapi" fn close_protocol(
     }
 }
 
-extern "efiapi" fn open_protocol_information(
+/// Retrieves the list of agents that currently have a protocol interface opened.
+///
+/// # Safety
+///
+/// `protocol` must be a valid pointer to an `efi::Guid`. `entry_buffer` must be a valid pointer
+/// to receive an allocated array of `OpenProtocolInformationEntry`. `entry_count` must be a valid
+/// pointer to receive the number of entries. All pointers are null checked, but validity of the
+/// referenced memory is the caller's responsibility.
+unsafe extern "efiapi" fn open_protocol_information(
     handle: efi::Handle,
     protocol: *mut efi::Guid,
     entry_buffer: *mut *mut efi::OpenProtocolInformationEntry,
