@@ -1762,6 +1762,9 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// Not marked `unsafe` because all pointer arguments to the underlying call are derived
+    /// from local variables or safe Rust types (`HandleSearchType`). The output buffer and count
+    /// are allocated by the firmware and wrapped in a `BootServicesBox` before being returned.
     fn locate_handle_buffer(
         &self,
         search_type: HandleSearchType,
@@ -1781,14 +1784,20 @@ impl BootServices for StandardBootServices {
         };
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let locate_handle_buffer = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), locate_handle_buffer) };
-        match locate_handle_buffer(
-            search_type.into(),
-            protocol,
-            search_key,
-            ptr::addr_of_mut!(buffer_count),
-            ptr::addr_of_mut!(buffer),
-        ) {
-            s if s.is_error() => Err(s),
+        // SAFETY: `protocol` and `search_key` are derived from the safe `HandleSearchType` enum.
+        // `buffer_count` and `buffer` are local variables whose addresses are valid for writes.
+        // The firmware populates them on success.
+        let status = unsafe {
+            locate_handle_buffer(
+                search_type.into(),
+                protocol,
+                search_key,
+                ptr::addr_of_mut!(buffer_count),
+                ptr::addr_of_mut!(buffer),
+            )
+        };
+        match status {
+            status if status.is_error() => Err(status),
             // SAFETY: The firmware allocates buffer and sets buffer_count.
             // from_raw_parts_mut creates a slice with the proper length as specified.
             _ => Ok(unsafe {
