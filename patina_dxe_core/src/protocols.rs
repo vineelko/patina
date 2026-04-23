@@ -763,7 +763,14 @@ unsafe extern "efiapi" fn protocols_per_handle(
     }
 }
 
-extern "efiapi" fn locate_handle_buffer(
+/// # Safety
+///
+/// `protocol` must be a valid pointer to an `efi::Guid` when `search_type` is `BY_PROTOCOL`.
+/// `search_key` must be a valid registration key when `search_type` is `BY_REGISTER_NOTIFY`.
+/// `no_handles` must be a valid pointer to receive the handle count. `buffer` must be a valid
+/// pointer to receive the allocated handle array. Both are null checked, but validity of the
+/// referenced memory is the caller's responsibility.
+unsafe extern "efiapi" fn locate_handle_buffer(
     search_type: efi::LocateSearchType,
     protocol: *mut efi::Guid,
     search_key: *mut c_void,
@@ -774,8 +781,8 @@ extern "efiapi" fn locate_handle_buffer(
         return efi::Status::INVALID_PARAMETER;
     }
 
-    //EDK2 C reference code unconditionally sets no_handles and buffer to default values regardless of success or failure
-    //of the function, and some callers expect this behavior (and don't check return status before using no_handles).
+    // EDK2 C reference code unconditionally sets no_handles and buffer to default values regardless of success or failure
+    // of the function, and some callers expect this behavior (and don't check return status before using no_handles).
     // SAFETY: Caller must ensure that no_handles and buffer are valid pointers. They are null-checked above.
     unsafe {
         no_handles.write_unaligned(0);
@@ -811,7 +818,7 @@ extern "efiapi" fn locate_handle_buffer(
     if handles.is_empty() {
         efi::Status::NOT_FOUND
     } else {
-        //caller is supposed to free the handle buffer using free pool, so we need to allocate it using allocate pool.
+        // caller is supposed to free the handle buffer using free pool, so we need to allocate it using allocate pool.
         let buffer_size = handles.len() * size_of::<efi::Handle>();
         match core_allocate_pool(efi::BOOT_SERVICES_DATA, buffer_size) {
             Err(err) => err.into(),
