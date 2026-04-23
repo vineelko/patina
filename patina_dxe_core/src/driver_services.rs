@@ -315,7 +315,7 @@ fn core_connect_single_controller(
 /// valid for the duration of its execution. For example, if a driver were be unloaded in a timer callback after
 /// returning true from Supported() before Start() is called, then the driver binding instance would be uninstalled or
 /// invalid and Start() would be an invalid function pointer when invoked. In general, the spec implicitly assumes
-/// that driver binding instances that are valid at the start of he call to ConnectController() must remain valid for
+/// that driver binding instances that are valid at the start of the call to ConnectController() must remain valid for
 /// the duration of the ConnectController() call. If this is not true, then behavior is undefined. This function is
 /// marked unsafe for this reason.
 ///
@@ -347,7 +347,34 @@ pub unsafe fn core_connect_controller(
     return_status
 }
 
-extern "efiapi" fn connect_controller(
+/// Raw UEFI `ConnectController()` entry point installed into the boot services
+/// table.
+///
+///  NOTE: This routine cannot hold the protocol db lock while executing
+///  DriverBinding->Supported()/Start() since they need to access protocol db
+///  services. That means this routine can't guarantee that driver bindings
+///  remain valid for the duration of its execution. For example, if a driver
+///  were be unloaded in a timer callback after returning true from Supported()
+///  before Start() is called, then the driver binding instance would be
+///  uninstalled or invalid and Start() would be an invalid function pointer
+///  when invoked. In general, the spec implicitly assumes that driver binding
+///  instances that are valid at the start of the call to ConnectController()
+///  must remain valid for the duration of the ConnectController() call. If this
+///  is not true, then behavior is undefined. This function is marked unsafe for
+///  this reason.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+/// - If `driver_image_handle` is non-null, it must point to a valid,
+///   null-terminated list of image handles.
+/// - If `remaining_device_path` is non-null, it must point to a valid device
+///   path structure.
+/// - The other parameters are either native Rust types or opaque UEFI handles
+///   wrapped inside Rust types. Passing an invalid value does not by itself
+///   cause undefined behavior; the firmware is expected to reject it by
+///   returning an error status.
+unsafe extern "efiapi" fn connect_controller(
     handle: efi::Handle,
     driver_image_handle: *mut efi::Handle,
     remaining_device_path: *mut efi::protocols::device_path::Protocol,
@@ -1393,12 +1420,16 @@ mod tests {
 
             // Test 1: Call with single driver handle
             let mut driver_handles = vec![driver_handle1, core::ptr::null_mut()];
-            let status = connect_controller(
-                controller_handle,
-                driver_handles.as_mut_ptr(),
-                core::ptr::null_mut(), // No remaining device path
-                efi::Boolean::FALSE,
-            );
+            // SAFETY: controller_handle is a valid handle installed above. driver_handles is a
+            // null-terminated array of valid image handles. Remaining device path is null.
+            let status = unsafe {
+                connect_controller(
+                    controller_handle,
+                    driver_handles.as_mut_ptr(),
+                    core::ptr::null_mut(), // No remaining device path
+                    efi::Boolean::FALSE,
+                )
+            };
 
             assert_eq!(status, efi::Status::SUCCESS);
             assert_eq!(SUPPORTED_CALL_COUNT.load(Ordering::SeqCst), 1);
@@ -1408,12 +1439,16 @@ mod tests {
             SUPPORTED_CALL_COUNT.store(0, Ordering::SeqCst);
             START_CALL_COUNT.store(0, Ordering::SeqCst);
 
-            let status = connect_controller(
-                controller_handle,
-                core::ptr::null_mut(), // Null driver handle array
-                core::ptr::null_mut(), // No remaining device path
-                efi::Boolean::FALSE,
-            );
+            // SAFETY: controller_handle is a valid handle installed above. Both driver image
+            // handle and remaining device path are null, which are valid inputs.
+            let status = unsafe {
+                connect_controller(
+                    controller_handle,
+                    core::ptr::null_mut(), // Null driver handle array
+                    core::ptr::null_mut(), // No remaining device path
+                    efi::Boolean::FALSE,
+                )
+            };
 
             assert_eq!(status, efi::Status::SUCCESS);
             // At least one support call should have happened
