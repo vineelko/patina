@@ -1806,6 +1806,11 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// # Safety
+    ///
+    /// `registration` must be null or a valid pointer obtained from a prior call to
+    /// `register_protocol_notify`. The caller must cast the returned pointer to the correct
+    /// protocol interface type corresponding to `protocol`.
     unsafe fn locate_protocol_unchecked(
         &self,
         protocol: &'static efi::Guid,
@@ -1814,8 +1819,13 @@ impl BootServices for StandardBootServices {
         let mut interface = ptr::null_mut();
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let locate_protocol = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), locate_protocol) };
-        match locate_protocol(protocol as *const _ as *mut _, registration, ptr::addr_of_mut!(interface)) {
-            s if s.is_error() => Err(s),
+        // SAFETY: `protocol` is a valid Rust reference cast to a pointer. `registration` validity
+        // is the caller's responsibility as documented by the `unsafe` on this function.
+        // `interface` is a local variable whose address is valid for writes.
+        let status =
+            unsafe { locate_protocol(protocol as *const _ as *mut _, registration, ptr::addr_of_mut!(interface)) };
+        match status {
+            status if status.is_error() => Err(status),
             _ => Ok(interface),
         }
     }

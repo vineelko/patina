@@ -833,7 +833,15 @@ unsafe extern "efiapi" fn locate_handle_buffer(
     }
 }
 
-extern "efiapi" fn locate_protocol(
+/// Locates the first protocol instance matching a protocol GUID.
+///
+/// # Safety
+///
+/// `protocol` must be a valid pointer to an `efi::Guid`. `interface` must be a valid pointer to
+/// receive the protocol interface pointer. `registration` must be null or a valid registration key
+/// from a prior call to `register_protocol_notify`. All pointers are null checked, but validity
+/// of the referenced memory is the caller's responsibility.
+unsafe extern "efiapi" fn locate_protocol(
     protocol: *mut efi::Guid,
     registration: *mut c_void,
     interface: *mut *mut c_void,
