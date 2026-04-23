@@ -1657,6 +1657,15 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - If `remaining_device_path` is non-null, it must point to a valid
+    ///   device path structure.
+    /// - The other parameters are either native Rust types or opaque UEFI handles
+    ///   wrapped inside Rust types. Passing an invalid value does not by itself
+    ///   cause undefined behavior; the firmware is expected to reject it by
+    ///   returning an error status.
     unsafe fn connect_controller(
         &self,
         controller_handle: efi::Handle,
@@ -1672,8 +1681,12 @@ impl BootServices for StandardBootServices {
         };
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let connect_controller = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), connect_controller) };
-        match connect_controller(controller_handle, driver_image_handles, remaining_device_path, recursive.into()) {
-            s if s.is_error() => Err(s),
+        // SAFETY: The caller must ensure the function's safety contract.
+        let status = unsafe {
+            connect_controller(controller_handle, driver_image_handles, remaining_device_path, recursive.into())
+        };
+        match status {
+            status if status.is_error() => Err(status),
             _ => Ok(()),
         }
     }
