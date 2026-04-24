@@ -230,7 +230,7 @@ fn core_connect_single_controller(
     driver_bindings.retain(|x| !driver_candidates.contains(x));
     driver_candidates.append(&mut driver_bindings);
 
-    //loop until no more drivers can be started on handle.
+    // loop until no more drivers can be started on handle.
     let mut one_started = false;
     loop {
         let mut started_drivers = Vec::new();
@@ -246,8 +246,12 @@ fn core_connect_single_controller(
                 create_performance_measurement,
             );
 
-            //driver claims support; attempt to start it.
-            match (driver_binding.supported)(driver_binding_interface, controller_handle, device_path) {
+            // Driver claims support; attempt to start it.
+            // SAFETY: driver_binding_interface is a valid pointer to a driver binding protocol instance
+            // as ensured by the construction of driver_candidates above.
+            let status =
+                unsafe { (driver_binding.supported)(driver_binding_interface, controller_handle, device_path) };
+            match status {
                 efi::Status::SUCCESS => {
                     perf_driver_binding_support_end(
                         driver_binding.driver_binding_handle,
@@ -263,9 +267,11 @@ fn core_connect_single_controller(
                         create_performance_measurement,
                     );
 
-                    if (driver_binding.start)(driver_binding_interface, controller_handle, device_path)
-                        == efi::Status::SUCCESS
-                    {
+                    // SAFETY: driver_binding_interface is a valid pointer to a driver binding protocol instance
+                    // as ensured by the construction of driver_candidates above.
+                    let status =
+                        unsafe { (driver_binding.start)(driver_binding_interface, controller_handle, device_path) };
+                    if status == efi::Status::SUCCESS {
                         one_started = true;
                     }
 
@@ -519,21 +525,21 @@ pub unsafe fn core_disconnect_controller(
         let total_children = child_handles.len();
         let mut is_only_child = false;
         if let Some(handle) = child_handle {
-            //if the child was specified, but was the only child, then the driver should be disconnected.
-            //if the child was specified, but other children were present, then the driver should not be disconnected.
+            // if the child was specified, but was the only child, then the driver should be disconnected.
+            // if the child was specified, but other children were present, then the driver should not be disconnected.
             child_handles.retain(|x| x == &handle);
             is_only_child = total_children == child_handles.len();
         }
 
-        //resolve the handle to the driver_binding.
-        //N.B. Corner case: a driver could install a driver-binding instance; then be asked to manage a controller (and
-        //thus, become an agent_handle in the open protocol information), and then something uninstalls the driver binding
-        //from the agent_handle. This would mean that the agent_handle now no longer supports the driver binding but is
-        //marked in the protocol database as managing the controller. This code just returns INVALID_PARAMETER in this case
-        //(which effectively makes the controller "un-disconnect-able" since all subsequent disconnects will also fail for
-        //the same reason). This matches the reference C implementation. As an enhancement, the core could track driver
-        //bindings that are actively managing controllers and return an ACCESS_DENIED status if something attempts to
-        //uninstall a binding that is in use.
+        // resolve the handle to the driver_binding.
+        // N.B. Corner case: a driver could install a driver-binding instance; then be asked to manage a controller (and
+        // thus, become an agent_handle in the open protocol information), and then something uninstalls the driver binding
+        // from the agent_handle. This would mean that the agent_handle now no longer supports the driver binding but is
+        // marked in the protocol database as managing the controller. This code just returns INVALID_PARAMETER in this case
+        // (which effectively makes the controller "un-disconnect-able" since all subsequent disconnects will also fail for
+        // the same reason). This matches the reference C implementation. As an enhancement, the core could track driver
+        // bindings that are actively managing controllers and return an ACCESS_DENIED status if something attempts to
+        // uninstall a binding that is in use.
         let driver_binding_interface = PROTOCOL_DB
             .get_interface_for_handle(driver_handle, efi::protocols::driver_binding::PROTOCOL_GUID)
             .or(Err(EfiError::InvalidParameter))?;
@@ -544,16 +550,23 @@ pub unsafe fn core_disconnect_controller(
 
         let mut status = efi::Status::SUCCESS;
         if !child_handles.is_empty() {
-            //disconnect the child controller(s).
-            status = (driver_binding.stop)(
-                driver_binding_interface,
-                controller_handle,
-                child_handles.len(),
-                child_handles.as_mut_ptr(),
-            );
+            // Disconnect the child controller(s).
+            // SAFETY: driver_binding_interface is a valid pointer to a driver binding protocol instance
+            // as ensured by the construction of driver_candidates above.
+            status = unsafe {
+                (driver_binding.stop)(
+                    driver_binding_interface,
+                    controller_handle,
+                    child_handles.len(),
+                    child_handles.as_mut_ptr(),
+                )
+            };
         }
         if status == efi::Status::SUCCESS && (child_handle.is_none() || is_only_child) {
-            status = (driver_binding.stop)(driver_binding_interface, controller_handle, 0, core::ptr::null_mut());
+            // SAFETY: driver_binding_interface is a valid pointer to a driver binding protocol instance
+            // as ensured by the construction of driver_candidates above.
+            status =
+                unsafe { (driver_binding.stop)(driver_binding_interface, controller_handle, 0, core::ptr::null_mut()) };
         }
         if status == efi::Status::SUCCESS {
             one_or_more_drivers_disconnected = true;
