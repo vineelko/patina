@@ -88,7 +88,10 @@ fn get_family_override_bindings() -> Vec<*mut efi::protocols::driver_binding::Pr
                         .as_mut()
                         .expect("bad protocol ptr")
                 };
-                let version = (driver_override_protocol.get_version)(driver_override_protocol);
+
+                // SAFETY: get_version is an EFI function pointer that is expected to be safe to call with a valid
+                // protocol pointer. We have already verified that driver_override_protocol is a valid pointer above.
+                let version = unsafe { (driver_override_protocol.get_version)(driver_override_protocol) };
                 driver_override_map.insert(version, handle);
             }
             Err(_) => continue,
