@@ -315,6 +315,10 @@ pub trait RuntimeServices {
 }
 
 impl RuntimeServices for StandardRuntimeServices {
+    /// # Safety
+    ///
+    /// `name` must be null-terminated. Passing a non-null-terminated name results in
+    /// undefined behavior at the FFI boundary.
     unsafe fn set_variable_unchecked(
         &self,
         name: &mut [u16],
@@ -338,13 +342,17 @@ impl RuntimeServices for StandardRuntimeServices {
             return Err(efi::Status::NOT_FOUND);
         }
 
-        let status = set_variable(
-            name.as_mut_ptr(),
-            namespace as *const _ as *mut _,
-            attributes,
-            data.len(),
-            data.as_ptr() as *mut c_void,
-        );
+        // SAFETY: It is the caller's responsibility to ensure that the name is
+        // always null-terminated.
+        let status = unsafe {
+            set_variable(
+                name.as_mut_ptr(),
+                namespace as *const _ as *mut _,
+                attributes,
+                data.len(),
+                data.as_ptr() as *mut c_void,
+            )
+        };
 
         if status.is_error() { Err(status) } else { Ok(()) }
     }
