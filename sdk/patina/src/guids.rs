@@ -19,6 +19,17 @@
 pub const CACHE_ATTRIBUTE_CHANGE_EVENT_GROUP: crate::BinaryGuid =
     crate::BinaryGuid::from_string("B8E477C7-26A9-4B9A-A7C9-5F8F1F3D9C7B");
 
+/// Rust equivalent to `gEfiCallerIdGuid` from AutoGen.c in edk2.
+///
+/// The edk2 build system will populate the `FILE_GUID` environment variable with the module INF GUID.
+/// A zero-GUID is generated as a backup to support test case usage.
+///
+/// This should only be used by Rust code using the Patina SDK in code built in the edk2 build system.
+pub const CALLER_ID: crate::BinaryGuid = crate::BinaryGuid::from_string(match option_env!("FILE_GUID") {
+    Some(guid_str) => guid_str,
+    None => "00000000-0000-0000-0000-000000000000",
+});
+
 /// DXE Core Module GUID
 ///
 /// The FFS file GUID for the DXE Core module. Interfaces that depend upon a module GUID such as the Memory Allocation
