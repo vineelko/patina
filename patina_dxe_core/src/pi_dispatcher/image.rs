@@ -1463,13 +1463,16 @@ fn get_file_buffer_from_load_protocol(
 
     //determine buffer size.
     let mut buffer_size = 0;
-    let status = (load_file.load_file)(
-        load_file,
-        remaining_file_path,
-        boot_policy.into(),
-        core::ptr::addr_of_mut!(buffer_size),
-        core::ptr::null_mut(),
-    );
+    // SAFETY: load_file is a valid pointer to a load_file protocol instance obtained from the protocol database above.
+    let status = unsafe {
+        (load_file.load_file)(
+            load_file,
+            remaining_file_path,
+            boot_policy.into(),
+            core::ptr::addr_of_mut!(buffer_size),
+            core::ptr::null_mut(),
+        )
+    };
 
     match status {
         efi::Status::BUFFER_TOO_SMALL => (),                 // expected
@@ -1478,13 +1481,16 @@ fn get_file_buffer_from_load_protocol(
     }
 
     let mut file_buffer = vec![0u8; buffer_size];
-    let status = (load_file.load_file)(
-        load_file,
-        remaining_file_path,
-        boot_policy.into(),
-        core::ptr::addr_of_mut!(buffer_size),
-        file_buffer.as_mut_ptr() as *mut c_void,
-    );
+    // SAFETY: load_file is a valid pointer to a load_file protocol instance obtained from the protocol database above.
+    let status = unsafe {
+        (load_file.load_file)(
+            load_file,
+            remaining_file_path,
+            boot_policy.into(),
+            core::ptr::addr_of_mut!(buffer_size),
+            file_buffer.as_mut_ptr() as *mut c_void,
+        )
+    };
 
     EfiError::status_to_result(status).map(|_| (file_buffer, handle))
 }
