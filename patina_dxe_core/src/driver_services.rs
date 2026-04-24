@@ -56,11 +56,15 @@ fn get_platform_driver_override_bindings(
     let mut driver_overrides = Vec::new();
     let mut driver_image_handle: efi::Handle = core::ptr::null_mut();
     loop {
-        let status = (driver_override_protocol.get_driver)(
-            driver_override_protocol,
-            controller_handle,
-            core::ptr::addr_of_mut!(driver_image_handle),
-        );
+        // SAFETY: get_driver is an EFI function pointer that is expected to be safe to call with a valid
+        // protocol pointer. We have already verified that driver_override_protocol is a valid pointer above.
+        let status = unsafe {
+            (driver_override_protocol.get_driver)(
+                driver_override_protocol,
+                controller_handle,
+                core::ptr::addr_of_mut!(driver_image_handle),
+            )
+        };
         if status != efi::Status::SUCCESS {
             break;
         }
@@ -120,10 +124,14 @@ fn get_bus_specific_override_bindings(
     let mut bus_overrides = Vec::new();
     let mut driver_image_handle: efi::Handle = core::ptr::null_mut();
     loop {
-        let status = (bus_specific_override_protocol.get_driver)(
-            bus_specific_override_protocol,
-            core::ptr::addr_of_mut!(driver_image_handle),
-        );
+        // SAFETY: get_driver is an EFI function pointer that is expected to be safe to call with a valid
+        // protocol pointer. We have already verified that bus_specific_override_protocol is a valid pointer above.
+        let status = unsafe {
+            (bus_specific_override_protocol.get_driver)(
+                bus_specific_override_protocol,
+                core::ptr::addr_of_mut!(driver_image_handle),
+            )
+        };
         if status != efi::Status::SUCCESS {
             break;
         }
