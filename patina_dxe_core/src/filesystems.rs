@@ -54,7 +54,9 @@ impl SimpleFile<'_> {
         };
 
         let mut file_system_ptr = core::ptr::null_mut();
-        let status = (sfs.open_volume)(sfs, core::ptr::addr_of_mut!(file_system_ptr));
+        // SAFETY: sfs is a valid pointer to a simple file system protocol instance
+        // obtained from the protocol database above.
+        let status = unsafe { (sfs.open_volume)(sfs, core::ptr::addr_of_mut!(file_system_ptr)) };
         EfiError::status_to_result(status)?;
 
         // SAFETY: file_system_ptr is filled by the open_volume call above on success.
