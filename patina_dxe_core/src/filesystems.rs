@@ -22,13 +22,18 @@ impl SimpleFile<'_> {
     /// Opens the given filename with appropriate mode/attributes and returns a new instance of SimpleFile for it.
     pub fn open(&mut self, filename: Vec<u16>, mode: u64, attributes: u64) -> Result<Self, EfiError> {
         let mut file_ptr = core::ptr::null_mut();
-        let status = (self.file.open)(
-            self.file,
-            core::ptr::addr_of_mut!(file_ptr),
-            filename.as_ptr() as *mut u16,
-            mode,
-            attributes,
-        );
+        // SAFETY: self.file is a valid pointer to a file protocol instance
+        // obtained from the protocol database during the construction of this
+        // SimpleFile instance.
+        let status = unsafe {
+            (self.file.open)(
+                self.file,
+                core::ptr::addr_of_mut!(file_ptr),
+                filename.as_ptr() as *mut u16,
+                mode,
+                attributes,
+            )
+        };
 
         EfiError::status_to_result(status)?;
 
@@ -61,12 +66,17 @@ impl SimpleFile<'_> {
     // returns a byte buffer containing the file info for this SimpleFile instance.
     fn get_info(&mut self) -> Result<Vec<u8>, EfiError> {
         let mut info_size = 0;
-        let status = (self.file.get_info)(
-            self.file,
-            &efi::protocols::file::INFO_ID as *const efi::Guid as *mut efi::Guid,
-            core::ptr::addr_of_mut!(info_size),
-            core::ptr::null_mut(),
-        );
+        // SAFETY: self.file is a valid pointer to a file protocol instance
+        // obtained from the protocol database during the construction of this
+        // SimpleFile instance.
+        let status = unsafe {
+            (self.file.get_info)(
+                self.file,
+                &efi::protocols::file::INFO_ID as *const efi::Guid as *mut efi::Guid,
+                core::ptr::addr_of_mut!(info_size),
+                core::ptr::null_mut(),
+            )
+        };
         match status {
             efi::Status::BUFFER_TOO_SMALL => (),                 // expected
             efi::Status::SUCCESS => Err(EfiError::DeviceError)?, // unexpected success.
@@ -74,12 +84,17 @@ impl SimpleFile<'_> {
         }
 
         let mut file_info_buffer = vec![0u8; info_size];
-        let status = (self.file.get_info)(
-            self.file,
-            &efi::protocols::file::INFO_ID as *const efi::Guid as *mut efi::Guid,
-            core::ptr::addr_of_mut!(info_size),
-            file_info_buffer.as_mut_ptr() as *mut c_void,
-        );
+        // SAFETY: self.file is a valid pointer to a file protocol instance
+        // obtained from the protocol database during the construction of this
+        // SimpleFile instance.
+        let status = unsafe {
+            (self.file.get_info)(
+                self.file,
+                &efi::protocols::file::INFO_ID as *const efi::Guid as *mut efi::Guid,
+                core::ptr::addr_of_mut!(info_size),
+                file_info_buffer.as_mut_ptr() as *mut c_void,
+            )
+        };
 
         EfiError::status_to_result(status).map(|_| file_info_buffer)
     }
@@ -117,12 +132,18 @@ impl SimpleFile<'_> {
 
         let mut file_size = self.get_size()? as usize;
         let mut file_buffer = vec![0u8; file_size];
-
-        let status = (self.file.set_position)(self.file, 0);
+        // SAFETY: self.file is a valid pointer to a file protocol instance
+        // obtained from the protocol database during the construction of this
+        // SimpleFile instance.
+        let status = unsafe { (self.file.set_position)(self.file, 0) };
         EfiError::status_to_result(status)?;
 
-        let status =
-            (self.file.read)(self.file, core::ptr::addr_of_mut!(file_size), file_buffer.as_mut_ptr() as *mut c_void);
+        // SAFETY: self.file is a valid pointer to a file protocol instance
+        // obtained from the protocol database during the construction of this
+        // SimpleFile instance.
+        let status = unsafe {
+            (self.file.read)(self.file, core::ptr::addr_of_mut!(file_size), file_buffer.as_mut_ptr() as *mut c_void)
+        };
 
         EfiError::status_to_result(status)?;
 
