@@ -479,12 +479,17 @@ impl RuntimeServices for StandardRuntimeServices {
             maximum_variable_size: 0,
         };
 
-        let status = query_variable_info(
-            attributes,
-            ptr::addr_of_mut!(var_info.maximum_variable_storage_size),
-            ptr::addr_of_mut!(var_info.remaining_variable_storage_size),
-            ptr::addr_of_mut!(var_info.maximum_variable_size),
-        );
+        // SAFETY: `attributes` is a safe value type. The three output pointers are derived from
+        // fields of the local `var_info` struct via `addr_of_mut!`, so they are guaranteed to be
+        // valid and writable.
+        let status = unsafe {
+            query_variable_info(
+                attributes,
+                ptr::addr_of_mut!(var_info.maximum_variable_storage_size),
+                ptr::addr_of_mut!(var_info.remaining_variable_storage_size),
+                ptr::addr_of_mut!(var_info.maximum_variable_size),
+            )
+        };
 
         if status.is_error() { Err(status) } else { Ok(var_info) }
     }
