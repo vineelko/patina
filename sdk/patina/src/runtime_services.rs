@@ -302,8 +302,8 @@ pub trait RuntimeServices {
     ///
     /// # Safety
     ///
-    /// Ensure name isn't empty. It can be an empty string,
-    /// but there must be some data.
+    /// Ensure name slice isn't empty(length == 0). It can be an empty
+    /// string(null terminated slice, length == 1), but there must be some data.
     ///
     unsafe fn get_next_variable_name_unchecked(
         &self,
@@ -396,6 +396,10 @@ impl RuntimeServices for StandardRuntimeServices {
         GetVariableStatus::Success { data_size, attributes }
     }
 
+    /// # Safety
+    ///
+    /// The null terminator is required by the UEFI firmware; passing a non-null-terminated name
+    /// results in undefined behavior at the FFI boundary.
     unsafe fn get_next_variable_name_unchecked(
         &self,
         prev_name: &[u16],
@@ -424,8 +428,12 @@ impl RuntimeServices for StandardRuntimeServices {
         // the appropriate size that the buffer should be resized to for the second call.
         let mut first_try: bool = true;
         loop {
-            let status =
-                get_next_variable_name(ptr::addr_of_mut!(next_name_size), next_name.as_mut_ptr(), next_namespace);
+            // SAFETY: It is the caller's responsibility to ensure that the prev_name is always
+            // null-terminated. Which inturn ensures that next_name is null-terminated on the call
+            // to get_next_variable_name. Otherwise will lead to undefined behavior.
+            let status = unsafe {
+                get_next_variable_name(ptr::addr_of_mut!(next_name_size), next_name.as_mut_ptr(), next_namespace)
+            };
 
             if status == efi::Status::BUFFER_TOO_SMALL && first_try {
                 first_try = false;
