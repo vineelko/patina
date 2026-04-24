@@ -523,7 +523,9 @@ mod tests {
             init_misc_boot_services_support(st);
 
             // Test case 1: Normal stall duration - should return NOT_READY (no metronome available in test)
-            let status = (st.boot_services().get().stall)(10000);
+            // SAFETY: The unsafe block is required because r-efi declares stall as an
+            // unsafe extern "efiapi" function pointer. The Patina implementation is fully safe.
+            let status = unsafe { (st.boot_services().get().stall)(10000) };
             if status == efi::Status::NOT_READY {
                 log::debug!("Stall function correctly returned NOT_READY (no metronome protocol)");
             } else {
@@ -531,7 +533,9 @@ mod tests {
             }
 
             // Test case 2: Zero microseconds stall - should return NOT_READY
-            let status = (st.boot_services().get().stall)(0);
+            // SAFETY: The unsafe block is required because r-efi declares stall as an
+            // unsafe extern "efiapi" function pointer. The Patina implementation is fully safe.
+            let status = unsafe { (st.boot_services().get().stall)(0) };
             if status == efi::Status::NOT_READY {
                 log::debug!("Zero stall correctly returned NOT_READY");
             } else {
@@ -539,7 +543,9 @@ mod tests {
             }
 
             // Test case 3: Maximum stall duration - should return NOT_READY
-            let status = (st.boot_services().get().stall)(usize::MAX);
+            // SAFETY: The unsafe block is required because r-efi declares stall as an
+            // unsafe extern "efiapi" function pointer. The Patina implementation is fully safe.
+            let status = unsafe { (st.boot_services().get().stall)(usize::MAX) };
             if status == efi::Status::NOT_READY {
                 log::debug!("Maximum stall correctly returned NOT_READY");
             } else {
@@ -569,7 +575,9 @@ mod tests {
             }
 
             // Test case 4: Normal stall duration - should return SUCCESS (metronome protocol available)
-            let status = (st.boot_services().get().stall)(10000);
+            // SAFETY: The unsafe block is required because r-efi declares stall as an
+            // unsafe extern "efiapi" function pointer. The Patina implementation is fully safe.
+            let status = unsafe { (st.boot_services().get().stall)(10000) };
             if status == efi::Status::SUCCESS {
                 log::debug!("Stall function correctly returned SUCCESS (metronome protocol available)");
                 assert!(WAIT_FOR_TICK_CALLED.is_completed(), "wait_for_tick was not called during stall.");
