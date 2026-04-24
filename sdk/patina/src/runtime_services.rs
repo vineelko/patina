@@ -349,6 +349,10 @@ impl RuntimeServices for StandardRuntimeServices {
         if status.is_error() { Err(status) } else { Ok(()) }
     }
 
+    /// # Safety
+    ///
+    /// `name` must be null-terminated. Passing a non-null-terminated name results in
+    /// undefined behavior at the FFI boundary.
     unsafe fn get_variable_unchecked(
         &self,
         name: &mut [u16],
@@ -368,16 +372,20 @@ impl RuntimeServices for StandardRuntimeServices {
         };
         let mut attributes: u32 = 0;
 
-        let status = get_variable(
-            name.as_mut_ptr(),
-            namespace as *const _ as *mut _,
-            ptr::addr_of_mut!(attributes),
-            ptr::addr_of_mut!(data_size),
-            match data {
-                Some(d) => d.as_ptr() as *mut c_void,
-                None => ptr::null_mut(),
-            },
-        );
+        // SAFETY: It is the caller's responsibility to ensure that the name is
+        // always null-terminated.
+        let status = unsafe {
+            get_variable(
+                name.as_mut_ptr(),
+                namespace as *const _ as *mut _,
+                ptr::addr_of_mut!(attributes),
+                ptr::addr_of_mut!(data_size),
+                match data {
+                    Some(d) => d.as_ptr() as *mut c_void,
+                    None => ptr::null_mut(),
+                },
+            )
+        };
 
         if status == efi::Status::BUFFER_TOO_SMALL {
             return GetVariableStatus::BufferTooSmall { data_size, attributes };
