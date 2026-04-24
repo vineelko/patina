@@ -1214,13 +1214,17 @@ impl BootServices for StandardBootServices {
     fn raise_tpl(&self, new_tpl: Tpl) -> Tpl {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let raise_tpl = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), raise_tpl) };
-        raise_tpl(new_tpl.into()).into()
+        // SAFETY: The underlying EFI call is safe to call with any TPL value.
+        // The function will return the previous TPL value, which is safe to
+        // convert into the Rust Tpl type.
+        unsafe { raise_tpl(new_tpl.into()).into() }
     }
 
     fn restore_tpl(&self, old_tpl: Tpl) {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let restore_tpl = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), restore_tpl) };
-        restore_tpl(old_tpl.into())
+        // SAFETY: The underlying EFI call is safe to call with any TPL value.
+        unsafe { restore_tpl(old_tpl.into()) }
     }
 
     fn allocate_pages(
