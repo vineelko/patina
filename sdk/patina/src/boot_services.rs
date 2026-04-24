@@ -1997,8 +1997,9 @@ impl BootServices for StandardBootServices {
 
         // SAFETY: The unsafe block is required because r-efi declares set_watchdog_timer as an
         // unsafe extern "efiapi" function pointer. The Patina implementation is fully safe.
-        match unsafe { set_watchdog_timer(timeout, 0, 0, ptr::null_mut()) } {
-            s if s.is_error() => Err(s),
+        let status = unsafe { set_watchdog_timer(timeout, 0, 0, ptr::null_mut()) };
+        match status {
+            status if status.is_error() => Err(status),
             _ => Ok(()),
         }
     }
@@ -2006,8 +2007,10 @@ impl BootServices for StandardBootServices {
     fn stall(&self, microseconds: usize) -> Result<(), efi::Status> {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let stall = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), stall) };
-        match stall(microseconds) {
-            s if s.is_error() => Err(s),
+        // SAFETY: The underlying EFI call is safe to call with any microsecond value.
+        let status = unsafe { stall(microseconds) };
+        match status {
+            status if status.is_error() => Err(status),
             _ => Ok(()),
         }
     }
