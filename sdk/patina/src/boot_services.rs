@@ -877,9 +877,17 @@ pub trait BootServices {
 
     /// Terminates a loaded EFI image and returns control to boot services.
     ///
+    /// `image_handle` is validated by the firmware; if not found,
+    /// an error is returned.
+    ///
     /// [UEFI Spec Documentation: 7.4.5. EFI_BOOT_SERVICES.Exit()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-exit)
     ///
-    fn exit<'a>(
+    /// # Safety
+    ///
+    /// If `image_handle` is valid and if `exit_data` is `Some`, the contained
+    /// buffer is passed to the firmware as a raw pointer and size. The caller
+    /// must ensure the buffer remains valid until the firmware consumes it.
+    unsafe fn exit<'a>(
         &'a self,
         image_handle: efi::Handle,
         exit_status: efi::Status,
@@ -1667,7 +1675,18 @@ impl BootServices for StandardBootServices {
         }
     }
 
-    fn exit<'a>(
+    /// Terminates a started image and returns control to the caller of
+    /// `start_image`.
+    ///
+    /// `image_handle` is validated against the private image data map; if not
+    /// found, `INVALID_PARAMETER` is returned.
+    ///
+    /// # Safety
+    ///
+    /// If `image_handle` is valid and if `exit_data` is `Some`, the contained
+    /// buffer is passed to the firmware as a raw pointer and size. The caller
+    /// must ensure the buffer remains valid until the firmware consumes it.
+    unsafe fn exit<'a>(
         &'a self,
         image_handle: efi::Handle,
         exit_status: efi::Status,
@@ -1677,8 +1696,12 @@ impl BootServices for StandardBootServices {
         let exit_data_size = exit_data.as_ref().map_or(0, |data| data.len());
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let exit = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), exit) };
-        match exit(image_handle, exit_status, exit_data_size, exit_data_ptr) {
-            s if s.is_error() => Err(s),
+        // SAFETY: `image_handle` is validated by the firmware. When `image_handle` is valid and
+        // `exit_data` is `Some`, the caller must ensure the contained buffer remains valid until
+        // the firmware consumes it.
+        let status = unsafe { exit(image_handle, exit_status, exit_data_size, exit_data_ptr) };
+        match status {
+            status if status.is_error() => Err(status),
             _ => Ok(()),
         }
     }
@@ -3274,7 +3297,8 @@ mod tests {
     #[should_panic = "Boot services function exit is not initialized."]
     fn test_exit_not_init() {
         let boot_services = boot_services!();
-        _ = boot_services.exit(ptr::null_mut(), efi::Status::SUCCESS, None);
+        // SAFETY: Test code - all pointers are null/None; expected to panic before any dereference.
+        _ = unsafe { boot_services.exit(ptr::null_mut(), efi::Status::SUCCESS, None) };
     }
 
     #[test]
@@ -3294,7 +3318,8 @@ mod tests {
             efi::Status::SUCCESS
         }
 
-        boot_services.exit(1_usize as _, efi::Status::SUCCESS, None).unwrap();
+        // SAFETY: Test code - exit_data is None so no buffer validity is required.
+        unsafe { boot_services.exit(1_usize as _, efi::Status::SUCCESS, None) }.unwrap();
     }
 
     #[test]
