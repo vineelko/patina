@@ -277,7 +277,12 @@ impl<P: PlatformInfo> PiDispatcher<P> {
             if driver.image_handle.is_none() {
                 log::info!("Loading file: {:?}", guid_fmt!(driver.file_name));
                 let data = driver.pe32.try_content_as_slice()?;
-                match self.load_image(false, DXE_CORE_HANDLE, driver.device_path, Some(data)) {
+
+                // SAFETY: The device path is constructed from the FV and file
+                // information and should be valid as long as the underlying FV
+                // and file data is valid.
+                let status = unsafe { self.load_image(false, DXE_CORE_HANDLE, driver.device_path, Some(data)) };
+                match status {
                     Ok(handle) => {
                         driver.image_handle = Some(handle);
                         driver.security_status = efi::Status::SUCCESS;
