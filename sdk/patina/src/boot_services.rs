@@ -1730,6 +1730,13 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// Not marked `unsafe` because `handle` is an opaque handle validated internally by the
+    /// implementation; an invalid handle results in an error status, not undefined behavior.
+    /// The output pointers are derived from local variables.
+    ///
+    /// This is triggered by the fact that efi::Event aliases to *mut c_void, but
+    /// it is an opaque handle used as a database key.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn protocols_per_handle(
         &self,
         handle: efi::Handle,
@@ -1738,9 +1745,15 @@ impl BootServices for StandardBootServices {
         let mut protocol_buffer_count = 0;
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let protocols_per_handle = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), protocols_per_handle) };
-        match protocols_per_handle(handle, ptr::addr_of_mut!(protocol_buffer), ptr::addr_of_mut!(protocol_buffer_count))
-        {
-            s if s.is_error() => Err(s),
+
+        // SAFETY: `handle` is validated internally by the implementation. `protocol_buffer` and
+        // `protocol_buffer_count` are local variables whose addresses are valid for writes.
+        let status = unsafe {
+            protocols_per_handle(handle, ptr::addr_of_mut!(protocol_buffer), ptr::addr_of_mut!(protocol_buffer_count))
+        };
+
+        match status {
+            status if status.is_error() => Err(status),
             // SAFETY: The firmware allocates protocol_buffer and sets protocol_buffer_count.
             // from_raw_parts_mut creates a slice with the proper length as specified.
             _ => Ok(unsafe {
