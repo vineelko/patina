@@ -310,7 +310,7 @@ pub(crate) mod tests {
         extern "efiapi" fn noop_create_event(
             _type: u32,
             _tpl: r_efi::efi::Tpl,
-            _notify_function: Option<extern "efiapi" fn(r_efi::efi::Event, *mut core::ffi::c_void)>,
+            _notify_function: Option<unsafe extern "efiapi" fn(r_efi::efi::Event, *mut core::ffi::c_void)>,
             _notify_context: *mut core::ffi::c_void,
             _event: *mut r_efi::efi::Event,
         ) -> r_efi::efi::Status {
@@ -320,7 +320,7 @@ pub(crate) mod tests {
         extern "efiapi" fn noop_create_event_ex(
             _type: u32,
             _tpl: r_efi::efi::Tpl,
-            _notify_function: Option<extern "efiapi" fn(r_efi::efi::Event, *mut core::ffi::c_void)>,
+            _notify_function: Option<unsafe extern "efiapi" fn(r_efi::efi::Event, *mut core::ffi::c_void)>,
             _notify_context: *const core::ffi::c_void,
             _guid: *const r_efi::efi::Guid,
             _event: *mut r_efi::efi::Event,
@@ -351,7 +351,7 @@ pub(crate) mod tests {
         extern "efiapi" fn noop_create_event(
             _type: u32,
             _tpl: r_efi::efi::Tpl,
-            _notify_function: Option<extern "efiapi" fn(r_efi::efi::Event, *mut core::ffi::c_void)>,
+            _notify_function: Option<unsafe extern "efiapi" fn(r_efi::efi::Event, *mut core::ffi::c_void)>,
             _notify_context: *mut core::ffi::c_void,
             _event: *mut r_efi::efi::Event,
         ) -> r_efi::efi::Status {
@@ -361,7 +361,7 @@ pub(crate) mod tests {
         extern "efiapi" fn noop_create_event_ex(
             _type: u32,
             _tpl: r_efi::efi::Tpl,
-            _notify_function: Option<extern "efiapi" fn(r_efi::efi::Event, *mut core::ffi::c_void)>,
+            _notify_function: Option<unsafe extern "efiapi" fn(r_efi::efi::Event, *mut core::ffi::c_void)>,
             _notify_context: *const core::ffi::c_void,
             _guid: *const r_efi::efi::Guid,
             _event: *mut r_efi::efi::Event,
