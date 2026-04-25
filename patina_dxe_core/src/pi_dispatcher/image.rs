@@ -901,11 +901,12 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
                 // code.
                 status = unsafe { entry_point(image_handle, system_table) };
 
-                // SAFETY: any variables with "Drop" routines that need to run
-                // need to be explicitly dropped before calling exit(). Since exit()
-                // effectively "longjmp"s back to StartImage(), rust automatic
-                // drops will not be triggered.
-                self.exit(image_handle, status, 0, core::ptr::null_mut());
+                // SAFETY: any variables with "Drop" routines that need to run need to be explicitly
+                // dropped before calling exit(). Since exit() effectively "longjmp"s back to
+                // StartImage(), Rust automatic drops will not be triggered. `image_handle` was
+                // obtained from the outer `start_image` scope and is the handle of the currently
+                // running image which will be valid. `exit_data_size` is 0 and `exit_data` is null.
+                unsafe { self.exit(image_handle, status, 0, core::ptr::null_mut()) };
             } else {
                 status = efi::Status::NOT_FOUND;
             }
@@ -1089,7 +1090,20 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
         }
     }
 
-    fn exit(
+    /// Terminates a started image and returns control to the caller of
+    /// `start_image`.
+    ///
+    /// `image_handle` is validated against the private image data map; if not
+    /// found, `INVALID_PARAMETER` is returned.
+    ///
+    /// # Safety
+    ///
+    /// If `image_handle` is valid and if `exit_data_size` is non-zero and
+    /// `exit_data` is non-null, the caller must ensure that `exit_data` points
+    /// to a valid buffer of at least `exit_data_size` bytes. This pointer is
+    /// stored and later returned to the caller of `start_image` to retrieve the
+    /// exit data.
+    unsafe fn exit(
         &self,
         image_handle: efi::Handle,
         status: efi::Status,
@@ -1148,21 +1162,35 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
         efi::Status::ACCESS_DENIED
     }
 
-    // Terminates a loaded EFI image and returns control to boot services.
-    // See EFI_BOOT_SERVICES::Exit() API definition in UEFI spec for usage details.
-    // * image_handle - the handle of the currently running image.
-    // * exit_status - the exit status for the image.
-    // * exit_data_size - the size of the exit_data buffer, if exit_data is not
-    //                    null.
-    // * exit_data - optional buffer of data provided by the caller.
+    /// Terminates a loaded EFI image and returns control to boot services. See
+    /// the EFI_BOOT_SERVICES::Exit() API definition in the UEFI spec for usage
+    /// details.
+    ///
+    /// `image_handle` is validated against the private image data map; if not
+    /// found, `INVALID_PARAMETER` is returned.
+    ///
+    /// * image_handle - the handle of the currently running image.
+    /// * exit_status - the exit status for the image.
+    /// * exit_data_size - the size of the exit_data buffer, if exit_data is notnull.
+    /// * exit_data - optional buffer of data provided by the caller.
+    ///
+    /// # Safety
+    ///
+    /// If `image_handle` is valid and if `exit_data_size` is non-zero and
+    /// `exit_data` is non-null, the caller must ensure that `exit_data` points
+    /// to a valid buffer of at least `exit_data_size` bytes. This pointer is
+    /// stored and later returned to the caller of `start_image` to retrieve the
+    /// exit data.
     #[coverage(off)]
-    pub(super) extern "efiapi" fn exit_efiapi(
+    pub(super) unsafe extern "efiapi" fn exit_efiapi(
         image_handle: efi::Handle,
         status: efi::Status,
         exit_data_size: usize,
         exit_data: *mut efi::Char16,
     ) -> efi::Status {
-        Self::instance().exit(image_handle, status, exit_data_size, exit_data)
+        // SAFETY: The caller of exit_efiapi is responsible for ensuring that exit_data
+        // (if non-null with non-zero size) points to a valid buffer.
+        unsafe { Self::instance().exit(image_handle, status, exit_data_size, exit_data) }
     }
 
     pub(super) extern "efiapi" fn runtime_image_protection_fixup_ebs(event: efi::Event, _context: *mut c_void) {
