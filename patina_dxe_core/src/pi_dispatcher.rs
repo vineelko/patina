@@ -300,7 +300,9 @@ impl<P: PlatformInfo> PiDispatcher<P> {
                         dispatch_attempted = true;
                         // Note: ignore error result of core_start_image here - an image returning an error code is expected in some
                         // cases, and a debug output for that is already implemented in core_start_image.
-                        let _status = self.start_image(image_handle);
+                        // SAFETY: image_handle was obtained from a successful load_image call above
+                        // and the loaded image's memory and entry point remain valid.
+                        let _status = unsafe { self.start_image(image_handle) };
                     }
                     efi::Status::SECURITY_VIOLATION => {
                         log::info!(

@@ -856,7 +856,21 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
         status
     }
 
-    pub fn start_image(&'static self, image_handle: efi::Handle) -> Result<(), efi::Status> {
+    /// Starts execution of a previously loaded image.
+    ///
+    /// The `image_handle` is validated against the protocol database and the
+    /// private image data map; an error is returned if the handle is unknown or
+    /// the image has already been started. However, a valid handle must still
+    /// refer to a properly loaded image whose entry point is executable code.
+    /// It is the caller's responsibility to first load such an image via
+    /// [`Self::load_image`] before calling this function.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `image_handle` was obtained from a prior
+    /// successful call to [`Self::load_image`] and that the loaded image's
+    /// memory and entry point remain valid.
+    pub unsafe fn start_image(&'static self, image_handle: efi::Handle) -> Result<(), efi::Status> {
         PROTOCOL_DB.validate_handle(image_handle)?;
 
         if let Some(private_data) = self.image_data.lock().private_image_data.get_mut(&image_handle) {
@@ -947,20 +961,29 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
         }
     }
 
-    // Transfers control to the entry point of an image that was loaded by
-    // load_image. See EFI_BOOT_SERVICES::StartImage() API definition in UEFI spec
-    // for usage details.
-    // * image_handle - handle of the image to be started.
-    // * exit_data_size - pointer to receive the size, in bytes, of exit_data.
-    //                    if exit_data is null, this is parameter is ignored.
-    // * exit_data - pointer to receive a data buffer with exit data, if any.
+    /// Transfers control to the entry point of an image that was loaded by
+    /// load_image. See the EFI_BOOT_SERVICES::StartImage() API definition in
+    /// the UEFI spec for usage details.
+    ///
+    /// # Safety
+    ///
+    /// If `exit_data_size` and `exit_data` are non-null, they must point to
+    /// valid writable memory. The caller owns the returned exit data buffer.
+    ///
+    /// * image_handle - handle of the image to be started.
+    /// * exit_data_size - pointer to receive the size, in bytes, of exit_data.
+    ///   if exit_data is null, this is parameter is ignored.
+    /// * exit_data - pointer to receive a data buffer with exit data, if any.
     #[coverage(off)]
-    pub(super) extern "efiapi" fn start_image_efiapi(
+    pub(super) unsafe extern "efiapi" fn start_image_efiapi(
         image_handle: efi::Handle,
         exit_data_size: *mut usize,
         exit_data: *mut *mut efi::Char16,
     ) -> efi::Status {
-        let status = Self::instance().start_image(image_handle);
+        // SAFETY: image_handle is provided by the caller and is passed through to start_image,
+        // which validates it against the protocol database and private image data map. The caller
+        // must ensure that image_handle refers to valid loaded image executable memory.
+        let status = unsafe { Self::instance().start_image(image_handle) };
 
         // retrieve any exit data that was provided by the entry point.
         if !exit_data_size.is_null() && !exit_data.is_null() {
@@ -2194,7 +2217,9 @@ mod tests {
             image_data.entry_point = test_entry_point;
             drop(private_data);
 
-            PI_DISPATCHER.start_image(image_handle).unwrap();
+            // SAFETY: image_handle was obtained from a successful load_image call above and the
+            // entry point has been overridden to point to valid executable test code.
+            unsafe { PI_DISPATCHER.start_image(image_handle) }.unwrap();
             assert!(ENTRY_POINT_RAN.load(core::sync::atomic::Ordering::Relaxed));
 
             let mut private_data = PI_DISPATCHER.image_data.lock();
@@ -2246,11 +2271,16 @@ mod tests {
 
             let mut exit_data_size = 0;
             let mut exit_data: *mut u16 = core::ptr::null_mut();
-            let status = PiDispatcher::<MockPlatformInfo>::start_image_efiapi(
-                image_handle,
-                core::ptr::addr_of_mut!(exit_data_size),
-                core::ptr::addr_of_mut!(exit_data),
-            );
+            // SAFETY: image_handle was obtained from a successful load_image call above and the
+            // entry point has been overridden to point to valid executable test code.
+            // exit_data_size and exit_data are valid local pointers.
+            let status = unsafe {
+                PiDispatcher::<MockPlatformInfo>::start_image_efiapi(
+                    image_handle,
+                    core::ptr::addr_of_mut!(exit_data_size),
+                    core::ptr::addr_of_mut!(exit_data),
+                )
+            };
             assert_eq!(status, efi::Status::UNSUPPORTED);
             assert!(ENTRY_POINT_RAN.load(core::sync::atomic::Ordering::Relaxed));
 
