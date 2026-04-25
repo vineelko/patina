@@ -812,32 +812,45 @@ pub trait BootServices {
     ///
     /// This uses [`Self::load_image`] behind the scene. This function assume that the request is not originating from the boot manager.
     ///
-    fn load_image_from_source(
+    /// # Safety
+    ///
+    /// If `device_path` is non-null, it must point to a valid UEFI device path in readable memory.
+    unsafe fn load_image_from_source(
         &self,
         parent_image_handle: efi::Handle,
         device_path: *mut efi::protocols::device_path::Protocol,
         source_buffer: &[u8],
     ) -> Result<efi::Handle, efi::Status> {
-        self.load_image(false, parent_image_handle, device_path, Some(source_buffer))
+        // SAFETY: The caller guarantees `device_path` is null or valid.
+        unsafe { self.load_image(false, parent_image_handle, device_path, Some(source_buffer)) }
     }
 
     /// Load an EFI image from a file.
     ///
     /// This uses [`Self::load_image`] behind the scene. This function assume that the request is not originating from the boot manager.
     ///
-    fn load_image_from_file(
+    /// # Safety
+    ///
+    /// `file_device_path` must point to a valid UEFI device path in readable memory.
+    unsafe fn load_image_from_file(
         &self,
         parent_image_handle: efi::Handle,
         file_device_path: NonNull<efi::protocols::device_path::Protocol>,
     ) -> Result<efi::Handle, efi::Status> {
-        self.load_image(false, parent_image_handle, file_device_path.as_ptr(), None)
+        // SAFETY: `file_device_path` is a `NonNull`, so `as_ptr()` yields a valid, non-null device
+        // path pointer as required by `load_image`.
+        unsafe { self.load_image(false, parent_image_handle, file_device_path.as_ptr(), None) }
     }
 
     /// Loads an EFI image into memory.
     ///
     /// [UEFI Spec Documentation: 7.4.1. EFI_BOOT_SERVICES.LoadImage()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-loadimage)
     ///
-    fn load_image<'a>(
+    /// # Safety
+    ///
+    /// If `device_path` is non-null, it must point to a valid UEFI device path in readable memory.
+    /// If `source_buffer` is provided, its contents must be a valid PE/COFF image.
+    unsafe fn load_image<'a>(
         &self,
         boot_policy: bool,
         parent_image_handle: efi::Handle,
@@ -1573,7 +1586,11 @@ impl BootServices for StandardBootServices {
         }
     }
 
-    fn load_image(
+    /// # Safety
+    ///
+    /// If `device_path` is non-null, it must point to a valid UEFI device path in readable memory.
+    /// If `source_buffer` is provided, its contents must be a valid PE/COFF image.
+    unsafe fn load_image(
         &self,
         boot_policy: bool,
         parent_image_handle: efi::Handle,
@@ -1586,14 +1603,22 @@ impl BootServices for StandardBootServices {
         let mut image_handle = MaybeUninit::uninit();
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let load_image = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), load_image) };
-        match load_image(
-            boot_policy.into(),
-            parent_image_handle,
-            device_path,
-            source_buffer_ptr,
-            source_buffer_size,
-            image_handle.as_mut_ptr(),
-        ) {
+        // SAFETY: The caller guarantees that `device_path` is null or points to a valid device path.
+        // `source_buffer_ptr` and `source_buffer_size` are derived from the `Option<&[u8]>` slice
+        // which guarantees validity when `Some`. `image_handle` is an out-parameter written by the
+        // firmware on success and consumed via `assume_init` only after a success check.
+        let status = unsafe {
+            load_image(
+                boot_policy.into(),
+                parent_image_handle,
+                device_path,
+                source_buffer_ptr,
+                source_buffer_size,
+                image_handle.as_mut_ptr(),
+            )
+        };
+
+        match status {
             s if s.is_error() => Err(s),
             // SAFETY: If the call succeeded, image_handle has been initialized.
             _ => Ok(unsafe { image_handle.assume_init() }),
@@ -3098,7 +3123,8 @@ mod tests {
     #[should_panic = "Boot services function load_image is not initialized."]
     fn test_load_image_not_init() {
         let boot_services = boot_services!();
-        _ = boot_services.load_image(false, ptr::null_mut(), ptr::null_mut(), None);
+        // SAFETY: Test code - all pointers are null/None; expected to panic before any dereference.
+        _ = unsafe { boot_services.load_image(false, ptr::null_mut(), ptr::null_mut(), None) };
     }
 
     #[test]
@@ -3127,14 +3153,17 @@ mod tests {
             efi::Status::SUCCESS
         }
 
-        let image_handle = boot_services
-            .load_image(
-                true,
-                std::ptr::dangling_mut::<c_void>(),
-                2_usize as *mut device_path::Protocol,
-                Some(&[1_u8, 2, 3, 4, 5]),
-            )
-            .unwrap();
+        // SAFETY: Test code - device_path is a fabricated non-null address; image is loaded from the provided buffer.
+        let image_handle = unsafe {
+            boot_services
+                .load_image(
+                    true,
+                    std::ptr::dangling_mut::<c_void>(),
+                    2_usize as *mut device_path::Protocol,
+                    Some(&[1_u8, 2, 3, 4, 5]),
+                )
+                .unwrap()
+        };
 
         assert_eq!(3, image_handle as usize);
     }
@@ -3161,7 +3190,8 @@ mod tests {
             efi::Status::SUCCESS
         }
 
-        _ = boot_services.load_image_from_source(1_usize as _, 2_usize as _, &[1_u8, 2, 3, 4, 5])
+        // SAFETY: Test code - device_path is a fabricated non-null address; image is loaded from the provided buffer.
+        _ = unsafe { boot_services.load_image_from_source(1_usize as _, 2_usize as _, &[1_u8, 2, 3, 4, 5]) }
     }
 
     #[test]
@@ -3184,7 +3214,8 @@ mod tests {
             efi::Status::SUCCESS
         }
 
-        _ = boot_services.load_image_from_file(1_usize as _, NonNull::new(2_usize as _).unwrap());
+        // SAFETY: Test code - file_device_path is a fabricated non-null address backed by a mock.
+        _ = unsafe { boot_services.load_image_from_file(1_usize as _, NonNull::new(2_usize as _).unwrap()) };
     }
 
     #[test]
