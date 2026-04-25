@@ -854,6 +854,11 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
         status
     }
 
+    /// Starts execution of a previously loaded image.
+    ///
+    /// The `image_handle` is validated against the protocol database and the
+    /// private image data map; an error is returned if the handle is unknown or
+    /// the image has already been started.
     pub fn start_image(&'static self, image_handle: efi::Handle) -> Result<(), efi::Status> {
         PROTOCOL_DB.validate_handle(image_handle)?;
 
@@ -945,15 +950,22 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
         }
     }
 
-    // Transfers control to the entry point of an image that was loaded by
-    // load_image. See EFI_BOOT_SERVICES::StartImage() API definition in UEFI spec
-    // for usage details.
-    // * image_handle - handle of the image to be started.
-    // * exit_data_size - pointer to receive the size, in bytes, of exit_data.
-    //                    if exit_data is null, this is parameter is ignored.
-    // * exit_data - pointer to receive a data buffer with exit data, if any.
+    /// Transfers control to the entry point of an image that was loaded by
+    /// load_image. See the EFI_BOOT_SERVICES::StartImage() API definition in
+    /// the UEFI spec for usage details.
+    ///
+    /// * image_handle - handle of the image to be started.
+    /// * exit_data_size - pointer to receive the size, in bytes, of exit_data.
+    ///   if exit_data is null, this is parameter is ignored.
+    /// * exit_data - pointer to receive a data buffer with exit data, if any.
+    ///
+    /// # Safety
+    ///
+    /// If `exit_data_size` and `exit_data` are non-null, they must point to
+    /// valid writable memory. The caller owns the returned exit data buffer.
+    ///
     #[coverage(off)]
-    pub(super) extern "efiapi" fn start_image_efiapi(
+    pub(super) unsafe extern "efiapi" fn start_image_efiapi(
         image_handle: efi::Handle,
         exit_data_size: *mut usize,
         exit_data: *mut *mut efi::Char16,
@@ -2250,11 +2262,16 @@ mod tests {
 
             let mut exit_data_size = 0;
             let mut exit_data: *mut u16 = core::ptr::null_mut();
-            let status = PiDispatcher::<MockPlatformInfo>::start_image_efiapi(
-                image_handle,
-                core::ptr::addr_of_mut!(exit_data_size),
-                core::ptr::addr_of_mut!(exit_data),
-            );
+            // SAFETY: image_handle was obtained from a successful load_image call above and the
+            // entry point has been overridden to point to valid executable test code.
+            // exit_data_size and exit_data are valid local pointers.
+            let status = unsafe {
+                PiDispatcher::<MockPlatformInfo>::start_image_efiapi(
+                    image_handle,
+                    core::ptr::addr_of_mut!(exit_data_size),
+                    core::ptr::addr_of_mut!(exit_data),
+                )
+            };
             assert_eq!(status, efi::Status::UNSUPPORTED);
             assert!(ENTRY_POINT_RAN.load(core::sync::atomic::Ordering::Relaxed));
 

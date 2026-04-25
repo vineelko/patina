@@ -1625,6 +1625,9 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    // This is triggered by the fact that efi::Handle aliases to *mut c_void, but
+    // it is an opaque handle used as a database key.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn start_image(
         &self,
         image_handle: efi::Handle,
@@ -1633,18 +1636,23 @@ impl BootServices for StandardBootServices {
         let mut exit_data = MaybeUninit::uninit();
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let start_image = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), start_image) };
-        match start_image(image_handle, exit_data_size.as_mut_ptr(), exit_data.as_mut_ptr()) {
-            s if s.is_error() => {
-                // SAFETY: If exit_data pointer is not null, it points to valid memory.
-                // exit_data_size contains the size of the allocated data. from_raw_parts_mut creates a proper slice.
-                let data = (!exit_data.as_ptr().is_null()).then(|| unsafe {
-                    BootServicesBox::from_raw_parts_mut(
-                        exit_data.as_mut_ptr() as *mut u8,
-                        exit_data_size.assume_init(),
-                        self,
-                    )
+        // SAFETY: The caller guarantees that `image_handle` refers to a valid loaded image.
+        // `exit_data_size` and `exit_data` are out-parameters written by the firmware; they are
+        // only consumed via `assume_init` after a null/success check.
+        let status = unsafe { start_image(image_handle, exit_data_size.as_mut_ptr(), exit_data.as_mut_ptr()) };
+        match status {
+            status if status.is_error() => {
+                // SAFETY: The firmware writes to `exit_data` and `exit_data_size` before returning
+                // an error status, so the `MaybeUninit` slots are initialized at this point.
+                let exit_data_ptr = unsafe { exit_data.assume_init() };
+                let exit_data_len = unsafe { exit_data_size.assume_init() };
+                let data = (!exit_data_ptr.is_null() && exit_data_len > 0).then(|| {
+                    // SAFETY: The firmware allocated `exit_data_ptr` as a pool buffer of
+                    // `exit_data_len` bytes. `BootServicesBox` takes ownership and will free it via
+                    // `free_pool` on drop.
+                    unsafe { BootServicesBox::from_raw_parts_mut(exit_data_ptr as *mut u8, exit_data_len, self) }
                 });
-                Err((s, data))
+                Err((status, data))
             }
             _ => Ok(()),
         }
