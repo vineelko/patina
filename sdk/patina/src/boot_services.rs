@@ -180,8 +180,8 @@ pub trait BootServices {
                 event_type,
                 notify_tpl,
                 mem::transmute::<
-                    Option<extern "efiapi" fn(*mut c_void, T)>,
-                    Option<extern "efiapi" fn(*mut c_void, *mut <T as c_ptr::CPtr<'_>>::Type)>,
+                    Option<unsafe extern "efiapi" fn(*mut c_void, T)>,
+                    Option<unsafe extern "efiapi" fn(*mut c_void, *mut <T as c_ptr::CPtr<'_>>::Type)>,
                 >(notify_function),
                 notify_context.into_ptr() as *mut T::Type,
             )
@@ -228,8 +228,8 @@ pub trait BootServices {
                 event_type,
                 notify_tpl,
                 mem::transmute::<
-                    Option<extern "efiapi" fn(*mut c_void, T)>,
-                    Option<extern "efiapi" fn(*mut c_void, *mut <T as c_ptr::CPtr<'_>>::Type)>,
+                    Option<unsafe extern "efiapi" fn(*mut c_void, T)>,
+                    Option<unsafe extern "efiapi" fn(*mut c_void, *mut <T as c_ptr::CPtr<'_>>::Type)>,
                 >(notify_function),
                 notify_context.into_ptr() as *mut <T as CPtr>::Type,
                 event_group,
@@ -2188,13 +2188,16 @@ mod tests {
             assert_eq!(efi::TPL_APPLICATION, notify_tpl);
             // Safety: Test code - transmute from Option<EventNotify> function pointer to raw pointer for comparison.
             assert_eq!(notify_callback as *const fn(), unsafe {
-                mem::transmute::<Option<extern "efiapi" fn(*mut c_void, *mut c_void)>, *const fn()>(notify_function)
+                mem::transmute::<Option<unsafe extern "efiapi" fn(*mut c_void, *mut c_void)>, *const fn()>(
+                    notify_function,
+                )
             });
             assert_ne!(ptr::null_mut(), notify_context);
             assert_ne!(ptr::null_mut(), event);
 
             if let Some(notify_function) = notify_function {
-                notify_function(ptr::null_mut(), notify_context);
+                // SAFETY: Test code - invoking the notify callback to verify it was registered correctly.
+                unsafe { notify_function(ptr::null_mut(), notify_context) };
             }
             efi::Status::SUCCESS
         }
@@ -2263,14 +2266,17 @@ mod tests {
             assert_eq!(efi::TPL_APPLICATION, notify_tpl);
             // Safety: Test code - transmute from Option<EventNotify> function pointer to raw pointer for comparison.
             assert_eq!(notify_callback as *const fn(), unsafe {
-                mem::transmute::<Option<extern "efiapi" fn(*mut c_void, *mut c_void)>, *const fn()>(notify_function)
+                mem::transmute::<Option<unsafe extern "efiapi" fn(*mut c_void, *mut c_void)>, *const fn()>(
+                    notify_function,
+                )
             });
             assert_ne!(ptr::null(), notify_context);
             assert_eq!(ptr::addr_of!(GUID), event_group);
             assert_ne!(ptr::null_mut(), event);
 
             if let Some(notify_function) = notify_function {
-                notify_function(ptr::null_mut(), notify_context as *mut _);
+                // SAFETY: Test code - invoking the notify callback to verify it was registered correctly.
+                unsafe { notify_function(ptr::null_mut(), notify_context as *mut _) };
             }
             efi::Status::SUCCESS
         }

@@ -12,7 +12,7 @@ use core::ops;
 use r_efi::efi;
 
 /// Function signature for event notify function.
-pub type EventNotifyCallback<T> = extern "efiapi" fn(efi::Event, T);
+pub type EventNotifyCallback<T> = unsafe extern "efiapi" fn(efi::Event, T);
 
 /// The type of time that is specified in TriggerTime. See the timer delay types in “Related Definitions.”
 #[derive(Debug, Clone, Copy)]

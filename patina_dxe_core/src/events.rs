@@ -326,14 +326,10 @@ pub extern "efiapi" fn restore_tpl(new_tpl: efi::Tpl) {
                 let _ = EVENT_DB.clear_signal(event.event);
             }
 
-            //Caution: this is calling function pointer supplied by code outside DXE Rust.
-            //The notify_function is not "unsafe" per the signature, even though it's
-            //supplied by code outside the core module. If it were marked 'unsafe'
-            //then other Rust modules executing under DXE Rust would need to mark all event
-            //callbacks as "unsafe", and the r_efi definition for EventNotify would need to
-            //change.
             if let Some(notify_function) = event.notify_function {
-                (notify_function)(event.event, notify_context);
+                // SAFETY: Marking the call as unsafe as per r-efi definition because the function
+                // pointer could point to arbitrary code outside the control of DXE Rust.
+                unsafe { notify_function(event.event, notify_context) };
             }
         }
     }
