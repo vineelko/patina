@@ -712,7 +712,12 @@ unsafe extern "C" fn uninstall_multiple_protocol_interfaces(handle: efi::Handle,
     efi::Status::SUCCESS
 }
 
-extern "efiapi" fn protocols_per_handle(
+/// # Safety
+///
+/// `protocol_buffer` must be a valid pointer to receive an allocated array of GUID pointers.
+/// `protocol_buffer_count` must be a valid pointer to receive the number of entries. Both are
+/// null checked, but validity of the referenced memory is the caller's responsibility.
+unsafe extern "efiapi" fn protocols_per_handle(
     handle: efi::Handle,
     protocol_buffer: *mut *mut *mut efi::Guid,
     protocol_buffer_count: *mut usize,
