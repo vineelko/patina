@@ -860,11 +860,15 @@ pub trait BootServices {
 
     /// Transfers control to a loaded image’s entry point.
     ///
+    /// [UEFI Spec Documentation: 7.4.2. EFI_BOOT_SERVICES.StartImage()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-startimage)
     ///
-    ///  [UEFI Spec Documentation: 7.4.2. EFI_BOOT_SERVICES.StartImage()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-startimage)
+    /// # Safety
     ///
+    /// The caller must ensure that `image_handle` was obtained from a prior
+    /// successful call to [`Self::load_image`] and that the loaded image's
+    /// memory and entry point remain valid.
     #[allow(clippy::type_complexity)]
-    fn start_image<'a>(
+    unsafe fn start_image<'a>(
         &'a self,
         image_handle: efi::Handle,
     ) -> Result<(), (efi::Status, Option<BootServicesBox<'a, [u8], Self>>)>;
@@ -1625,7 +1629,12 @@ impl BootServices for StandardBootServices {
         }
     }
 
-    fn start_image(
+    /// # Safety
+    ///
+    /// The caller must ensure that `image_handle` was obtained from a prior
+    /// successful call to [`Self::load_image`] and that the loaded image's
+    /// memory and entry point remain valid.
+    unsafe fn start_image(
         &self,
         image_handle: efi::Handle,
     ) -> Result<(), (efi::Status, Option<BootServicesBox<'_, [u8], Self>>)> {
@@ -1633,8 +1642,12 @@ impl BootServices for StandardBootServices {
         let mut exit_data = MaybeUninit::uninit();
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let start_image = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), start_image) };
-        match start_image(image_handle, exit_data_size.as_mut_ptr(), exit_data.as_mut_ptr()) {
-            s if s.is_error() => {
+        // SAFETY: The caller guarantees that `image_handle` refers to a valid loaded image.
+        // `exit_data_size` and `exit_data` are out-parameters written by the firmware; they are
+        // only consumed via `assume_init` after a null/success check.
+        let status = unsafe { start_image(image_handle, exit_data_size.as_mut_ptr(), exit_data.as_mut_ptr()) };
+        match status {
+            status if status.is_error() => {
                 // SAFETY: If exit_data pointer is not null, it points to valid memory.
                 // exit_data_size contains the size of the allocated data. from_raw_parts_mut creates a proper slice.
                 let data = (!exit_data.as_ptr().is_null()).then(|| unsafe {
@@ -1644,7 +1657,7 @@ impl BootServices for StandardBootServices {
                         self,
                     )
                 });
-                Err((s, data))
+                Err((status, data))
             }
             _ => Ok(()),
         }
@@ -3222,7 +3235,8 @@ mod tests {
     #[should_panic = "Boot services function start_image is not initialized."]
     fn test_start_image_not_init() {
         let boot_services = boot_services!();
-        _ = boot_services.start_image(ptr::null_mut());
+        // SAFETY: Test code - all pointers are null; expected to panic before any dereference.
+        _ = unsafe { boot_services.start_image(ptr::null_mut()) };
     }
 
     #[test]
@@ -3240,7 +3254,8 @@ mod tests {
             efi::Status::SUCCESS
         }
 
-        boot_services.start_image(1_usize as _).unwrap();
+        // SAFETY: Test code - image_handle is a fabricated non-null address backed by a mock.
+        unsafe { boot_services.start_image(1_usize as _) }.unwrap();
     }
 
     #[test]
