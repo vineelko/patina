@@ -89,6 +89,10 @@ unsafe extern "efiapi" fn install_protocol_interface(
     efi::Status::SUCCESS
 }
 
+/// Uninstalls a protocol interface on a handle.
+///
+/// This function is safe because `interface` is an opaque pointer used for
+/// comparision but never dereferenced. All other parameters are value types.
 pub fn core_uninstall_protocol_interface(
     handle: efi::Handle,
     protocol: efi::Guid,
@@ -179,7 +183,14 @@ pub fn core_uninstall_protocol_interface(
     PROTOCOL_DB.uninstall_protocol_interface(handle, protocol, interface)
 }
 
-extern "efiapi" fn uninstall_protocol_interface(
+/// Uninstalls a protocol interface from a handle.
+///
+/// # Safety
+///
+/// `protocol` must be a valid pointer to an `efi::Guid`. It is null checked, but validity of the
+/// referenced memory is the caller's responsibility. NOTE: `interface` is not dereferenced in this
+/// function, so its validity is not required for safety.
+unsafe extern "efiapi" fn uninstall_protocol_interface(
     handle: efi::Handle,
     protocol: *mut efi::Guid,
     interface: *mut c_void,
@@ -237,7 +248,9 @@ unsafe extern "efiapi" fn reinstall_protocol_interface(
     }
 
     // Call uninstall to close all agents that are currently consuming old_interface.
-    match uninstall_protocol_interface(handle, protocol, old_interface) {
+    // SAFETY: `protocol` is checked for null above. `handle` and `old_interface` are passed
+    // through from the caller per the function-level safety contract.
+    match unsafe { uninstall_protocol_interface(handle, protocol, old_interface) } {
         efi::Status::SUCCESS => (),
         err => {
             let result = uninstall_dummy_interface(handle);
@@ -590,7 +603,9 @@ unsafe extern "C" fn install_multiple_protocol_interfaces(handle: *mut efi::Hand
                 for (protocol, interface) in interfaces_to_uninstall_on_error {
                     // SAFETY: handle is validated for null above.
                     let handle_value = unsafe { *handle };
-                    let _ = uninstall_protocol_interface(handle_value, protocol, interface);
+                    // SAFETY: `protocol` was null-checked when building interfaces_to_install.
+                    // Best-effort rollback; errors are ignored.
+                    let _ = unsafe { uninstall_protocol_interface(handle_value, protocol, interface) };
                 }
                 return err;
             }
@@ -619,7 +634,9 @@ unsafe extern "C" fn uninstall_multiple_protocol_interfaces(handle: efi::Handle,
 
     let mut interfaces_to_reinstall_on_error = Vec::new();
     for (protocol, interface) in interfaces_to_uninstall {
-        match uninstall_protocol_interface(handle, protocol, interface) {
+        // SAFETY: `protocol` was null-checked when building interfaces_to_uninstall.
+        // `handle` is validated for null above. `interface` is passed through from the caller.
+        match unsafe { uninstall_protocol_interface(handle, protocol, interface) } {
             efi::Status::SUCCESS => interfaces_to_reinstall_on_error.push((protocol, interface)),
             _err => {
                 //on error, attempt to re-install all the previously uninstall interfaces. best-effort, errors are ignored.
