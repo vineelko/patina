@@ -308,6 +308,11 @@ impl EventDb {
         EventDb { events: BTreeMap::new(), next_event_id: 1, pending_notifies: BTreeSet::new(), notify_tags: 0 }
     }
 
+    /// Creates a new event and inserts it into the event database.
+    ///
+    /// This is a safe, pure Rust implementation that does not dereference any
+    /// user provided pointer inputs. The `notify_function`, `notify_context`,
+    /// and `event_group` values are stored as-is without being dereferenced.
     fn create_event(
         &mut self,
         event_type: u32,
@@ -346,6 +351,12 @@ impl EventDb {
         Ok(id as efi::Event)
     }
 
+    /// Closes (removes) an event from the event database.
+    ///
+    /// This function is safe to call with event value coming from arbitrary
+    /// sources. It checks whether the given event ID is present in the database
+    /// (or runtime event table) and returns `Err(EfiError::InvalidParameter)`
+    /// if it is not found. No unsafe operations are performed.
     fn close_event(&mut self, event: efi::Event) -> Result<(), EfiError> {
         let id = event as usize;
         if (id & Self::RT_EVENT) != 0 {
@@ -372,6 +383,12 @@ impl EventDb {
         }
     }
 
+    /// Signals an event in the event database.
+    ///
+    /// This function is safe to call with event value coming from arbitrary
+    /// sources. It checks whether the given event ID is present in the database
+    /// and returns `Err(EfiError::InvalidParameter)` if it is not found.
+    /// No unsafe operations are performed.
     fn signal_event(&mut self, event: efi::Event) -> Result<(), EfiError> {
         let id = event as usize;
         let current_event = self.events.get_mut(&id).ok_or(EfiError::InvalidParameter)?;
@@ -451,6 +468,12 @@ impl EventDb {
         }
     }
 
+    /// Sets a timer on an event in the event database.
+    ///
+    /// This function is safe to call with event value coming from arbitrary
+    /// sources. It checks whether the given event ID is present in the database
+    /// and returns `Err(EfiError::InvalidParameter)` if it is not found.
+    /// No unsafe operations are performed.
     fn set_timer(
         &mut self,
         event: efi::Event,
