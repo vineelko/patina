@@ -790,7 +790,10 @@ pub fn core_free_pages(memory: efi::PhysicalAddress, pages: usize) -> Result<(),
     res
 }
 
-extern "efiapi" fn copy_mem(destination: *mut c_void, source: *mut c_void, length: usize) {
+/// # Safety
+///
+/// The caller must ensure that `destination` and `source` are valid pointers for `length` bytes
+unsafe extern "efiapi" fn copy_mem(destination: *mut c_void, source: *mut c_void, length: usize) {
     if length == 0 {
         return;
     }
@@ -804,7 +807,11 @@ extern "efiapi" fn copy_mem(destination: *mut c_void, source: *mut c_void, lengt
     unsafe { core::ptr::copy(source as *mut u8, destination as *mut u8, length) }
 }
 
-extern "efiapi" fn set_mem(buffer: *mut c_void, size: usize, value: u8) {
+/// # Safety
+///
+/// The caller must ensure that `buffer` is a valid pointer to a contiguous region of at least
+/// `size` bytes.
+unsafe extern "efiapi" fn set_mem(buffer: *mut c_void, size: usize, value: u8) {
     if size == 0 {
         return;
     }
@@ -2448,34 +2455,37 @@ mod tests {
     fn copy_mem_should_copy_mem() {
         let mut dest = vec![0xa5u8; 0x10];
         let mut src = vec![0x5au8; 0x10];
-        copy_mem(dest.as_mut_ptr() as *mut c_void, src.as_mut_ptr() as *mut c_void, 0x10);
+        // SAFETY: The passed in values are safe because they are constructed in this test case.
+        unsafe { copy_mem(dest.as_mut_ptr() as *mut c_void, src.as_mut_ptr() as *mut c_void, 0x10) };
         assert_eq!(dest, src);
     }
 
     #[test]
     fn copy_mem_zero_length_is_noop_even_with_null() {
-        // A zero-length copy is a valid no-op
-        copy_mem(core::ptr::null_mut(), core::ptr::null_mut(), 0);
+        // SAFETY: A zero-length copy is a valid no-op, even with null pointers.
+        unsafe { copy_mem(core::ptr::null_mut(), core::ptr::null_mut(), 0) };
     }
 
     #[test]
     fn set_mem_should_set_mem() {
         let mut dest = vec![0xa5u8; 0x10];
-        set_mem(dest.as_mut_ptr() as *mut c_void, 0x10, 0x00);
+        // SAFETY: The passed in values are safe because they are constructed in this test case.
+        unsafe { set_mem(dest.as_mut_ptr() as *mut c_void, 0x10, 0x00) };
         assert_eq!(dest, vec![0x00u8; 0x10]);
     }
 
     #[test]
     fn set_mem_fills_bytes() {
         let mut buf: [u8; 8] = [0; 8];
-        set_mem(buf.as_mut_ptr() as *mut c_void, buf.len(), 0xAB);
+        // SAFETY: The buffer is valid for writes of its length.
+        unsafe { set_mem(buf.as_mut_ptr() as *mut c_void, buf.len(), 0xAB) };
         assert_eq!(buf, [0xAB; 8]);
     }
 
     #[test]
     fn set_mem_zero_size_is_noop_even_with_null() {
-        // A zero-size fill is a valid no-op
-        set_mem(core::ptr::null_mut(), 0, 0xFF);
+        // SAFETY: A zero-size fill is a valid no-op, even with a null pointer.
+        unsafe { set_mem(core::ptr::null_mut(), 0, 0xFF) };
     }
 
     #[test]
@@ -2484,7 +2494,8 @@ mod tests {
         let src: [u8; 4] = [1, 2, 3, 4];
         // When given a null destination with a non-zero length, the function either
         // asserts (if debug_assertions are enabled) or returns without dereferencing either pointer.
-        copy_mem(core::ptr::null_mut(), src.as_ptr() as *mut c_void, src.len());
+        // SAFETY: The function returns early on null pointers when debug_assertions are disabled.
+        unsafe { copy_mem(core::ptr::null_mut(), src.as_ptr() as *mut c_void, src.len()) };
     }
 
     #[test]
@@ -2493,7 +2504,8 @@ mod tests {
         let mut dst: [u8; 4] = [0xAA; 4];
         // When given a null source with a non-zero length, the function either
         // asserts (if debug_assertions are enabled) or returns without dereferencing either pointer.
-        copy_mem(dst.as_mut_ptr() as *mut c_void, core::ptr::null_mut(), dst.len());
+        // SAFETY: The function returns early on null pointers when debug_assertions are disabled.
+        unsafe { copy_mem(dst.as_mut_ptr() as *mut c_void, core::ptr::null_mut(), dst.len()) };
         assert_eq!(dst, [0xAA; 4]);
     }
 
@@ -2501,7 +2513,8 @@ mod tests {
     #[cfg(not(debug_assertions))]
     fn set_mem_null_buffer_returns_without_writing() {
         // A null buffer with a non-zero size returns without dereferencing.
-        set_mem(core::ptr::null_mut(), 4, 0xFF);
+        // SAFETY: The function returns early on null pointers when debug_assertions are disabled.
+        unsafe { set_mem(core::ptr::null_mut(), 4, 0xFF) };
     }
 
     #[test]
