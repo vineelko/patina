@@ -8,15 +8,13 @@
 //!
 //! SPDX-License-Identifier: Apache-2.0
 //!
-
-use crate::{component::protocol::create_performance_measurement_efiapi, config, mm};
+use crate::{component::protocol::create_performance_measurement_efiapi, mm};
 use alloc::{boxed::Box, string::String, vec::Vec};
 use patina::{
     boot_services::{BootServices, StandardBootServices, event::EventType, tpl::Tpl},
     component::{
         component,
         hob::Hob,
-        params::Config,
         service::{Service, perf_timer::ArchTimerFunctionality},
     },
     error::EfiError,
@@ -39,30 +37,100 @@ use patina::{
 use patina_mm::component::communicator::MmCommunication;
 use r_efi::system::EVENT_GROUP_READY_TO_BOOT;
 
-pub use mu_rust_helpers::function;
+use mu_rust_helpers::function;
 
 use patina::guids::EVENT_GROUP_END_OF_DXE;
 
 /// Context parameter for the Ready-to-Boot event callback that fetches MM performance records.
 type MmPerformanceEventContext<B, F> = Box<(B, &'static TplMutex<F, B>, Service<dyn MmCommunication>)>;
 
+use patina::component::hob::FromHob;
+
+/// The configuration for the Patina Performance component.
+#[derive(Debug, Clone, Copy, FromHob, zerocopy_derive::FromBytes)]
+#[hob = "fd87f2d8-112d-4640-9c00-d37d2a1fb75d"]
+#[repr(C, packed)]
+struct PerformanceConfig {
+    /// Indicates whether the Patina Performance component is enabled.
+    pub enable_component: u8,
+    /// Bitmask of enabled measurements (see [`patina::performance::Measurement`]).
+    pub enabled_measurements: u32,
+}
+
+impl PerformanceConfig {
+    /// Constant value indicating that the Patina Performance component is enabled.
+    pub const ENABLED: u8 = 1;
+    /// Constant value indicating that the Patina Performance component is disabled.
+    pub const DISABLED: u8 = 0;
+    /// Constant value indicating that no performance measurements are enabled.
+    pub const NO_MEASUREMENTS: u32 = 0;
+}
+
+impl Default for PerformanceConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PerformanceConfig {
+    /// Creates a new `PerformanceConfig` with the specified settings.
+    pub const fn new() -> Self {
+        Self { enable_component: Self::DISABLED, enabled_measurements: Self::NO_MEASUREMENTS }
+    }
+}
+
 /// Performance Component.
-pub struct Performance;
+///
+/// This component provides performance measurement capabilities in the UEFI boot environment. Even when instantiated,
+/// the component is off by default. Using [Self::with_measurements] can enable specific performance measurements,
+/// however a performance config HOB **will override** any settings made during instantiation of this component. This
+/// includes enabling or disabling the component as well as the specific measurements to be collected.
+///
+/// ## Example Usage
+///
+/// ```rust
+/// use patina_performance::component::*;
+///
+/// // Performance measurements are disabled by default, but can be overridden by a performance config HOB.
+/// let component = Performance::new();
+///
+/// // Performance measurements are enabled by default (with `DriverBindingStart` and `LoadImage` measurements),
+/// // but can be overridden by a performance config HOB.
+/// let enabled_component = Performance::new().with_measurements(Measurement::DriverBindingStart | Measurement::LoadImage);
+/// ```
+#[derive(Default)]
+pub struct Performance {
+    config: PerformanceConfig,
+}
 
 #[component]
 impl Performance {
+    /// Creates a new instance of the Performance component that is off by default.
+    pub const fn new() -> Self {
+        Self { config: PerformanceConfig::new() }
+    }
+
+    /// Enables performance measuring with the specified measurements.
+    pub const fn with_measurements(mut self, measurements: u32) -> Self {
+        self.config.enable_component = PerformanceConfig::ENABLED;
+        self.config.enabled_measurements = measurements;
+        self
+    }
+
     /// Entry point of [`Performance`]
     #[coverage(off)] // This is tested via the generic version, see _entry_point.
-    pub fn entry_point(
+    fn entry_point(
         self,
-        config: Config<config::PerfConfig>,
+        hob: Option<Hob<PerformanceConfig>>,
         boot_services: StandardBootServices,
         runtime_services: StandardRuntimeServices,
         records_buffers_hobs: Option<Hob<HobPerformanceData>>,
         timer: Service<dyn ArchTimerFunctionality>,
         mm_comm_service: Option<Service<dyn MmCommunication>>,
     ) -> Result<(), EfiError> {
-        if !config.enable_component {
+        let config = self.get_config(hob);
+
+        if config.enable_component == PerformanceConfig::DISABLED {
             log::warn!("Patina Performance Component is not enabled, skipping entry point.");
             return Ok(());
         }
@@ -81,12 +149,11 @@ impl Performance {
             return Err(EfiError::Aborted);
         };
 
-        self._entry_point(boot_services, runtime_services, records_buffers_hobs, mm_comm_service, fbpt, timer)
+        Self::_entry_point(boot_services, runtime_services, records_buffers_hobs, mm_comm_service, fbpt, timer)
     }
 
     /// Entry point that have generic parameter.
     fn _entry_point<B, R, P, F>(
-        self,
         boot_services: B,
         runtime_services: R,
         records_buffers_hobs: Option<P>,
@@ -179,6 +246,17 @@ impl Performance {
         perf_cross_module_begin("DXE", &dxe_core_guid, create_performance_measurement);
 
         Ok(())
+    }
+
+    /// Retrieves the performance configuration, with priority given to the HOB configuration if available.
+    fn get_config(&self, hob: Option<Hob<PerformanceConfig>>) -> PerformanceConfig {
+        match hob {
+            Some(hob) => {
+                log::info!("patina_performance: HOB configuration found, overriding component configuration.");
+                *hob
+            }
+            None => self.config,
+        }
     }
 }
 
@@ -437,6 +515,7 @@ mod tests {
         boot_services::{MockBootServices, c_ptr::CPtr},
         component::service::{IntoService, Service},
         performance::{
+            Measurement,
             record::{PerformanceRecordBuffer, hob::MockHobPerformanceDataExtractor},
             table::MockFirmwareBasicBootPerfTable,
         },
@@ -575,7 +654,7 @@ mod tests {
         // Leak the fbpt to create a 'static reference for testing.
         let fbpt = Box::leak(Box::new(fbpt));
 
-        let _ = Performance._entry_point(
+        let _ = Performance::_entry_point(
             boot_services,
             runtime_services,
             Some(hob_perf_data_extractor),
@@ -639,7 +718,7 @@ mod tests {
 
         let mm_service: Service<dyn MmCommunication> = Service::mock(Box::new(FakeComm));
         let timer: Service<dyn ArchTimerFunctionality> = Service::mock(Box::new(MockTimer {}));
-        let _ = Performance._entry_point(
+        let _ = Performance::_entry_point(
             entry_point_mock,
             runtime_services,
             Option::<MockHobPerformanceDataExtractor>::None,
@@ -895,5 +974,43 @@ mod tests {
 
         assert!(error_occurred, "Expected error for invalid length");
         assert!(iterations <= 5, "Should terminate quickly without infinite loop");
+    }
+
+    #[test]
+    fn test_performance_component_configuration_with_no_hob_override() {
+        let component = Performance::new();
+        let config = component.get_config(None);
+        assert_eq!(config.enable_component, PerformanceConfig::DISABLED);
+        let measurements = config.enabled_measurements;
+        assert_eq!(measurements, 0);
+
+        let component = Performance::new().with_measurements(Measurement::DriverBindingStart | Measurement::LoadImage);
+        let config = component.get_config(None);
+        let measurements = config.enabled_measurements;
+        assert_eq!(config.enable_component, PerformanceConfig::ENABLED);
+        assert_eq!(measurements, 0b1010u32);
+    }
+
+    #[test]
+    fn test_performance_configuration_with_hob_override() {
+        let test_config =
+            PerformanceConfig { enable_component: PerformanceConfig::ENABLED, enabled_measurements: 0b1010u32 };
+
+        let hob = Hob::mock(vec![test_config]);
+
+        let component = Performance::new();
+        let config = component.get_config(Some(hob));
+        assert_eq!(config.enable_component, PerformanceConfig::ENABLED);
+        let measurements = config.enabled_measurements;
+        assert_eq!(measurements, 0b1010u32);
+
+        let hob = Hob::mock(vec![test_config]);
+
+        let component =
+            Performance::new().with_measurements(Measurement::DriverBindingStart | Measurement::DriverBindingStop);
+        let config = component.get_config(Some(hob));
+        assert_eq!(config.enable_component, PerformanceConfig::ENABLED);
+        let measurements = config.enabled_measurements;
+        assert_eq!(measurements, 0b1010u32);
     }
 }
