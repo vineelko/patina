@@ -987,6 +987,11 @@ macro_rules! efi_boot_services_fn {
 }
 
 impl BootServices for StandardBootServices {
+    /// # Safety
+    ///
+    /// If `notify_context` is non-null, the caller must ensure it is properly aligned,
+    /// dereferenceable as type `T`, and remains a valid pointer for the entire lifetime of the
+    /// created event.
     unsafe fn create_event_unchecked<T: Sized + 'static>(
         &self,
         event_type: EventType,
@@ -1006,25 +1011,34 @@ impl BootServices for StandardBootServices {
         // verified (via CRC) before use with an error returned on mismatch. Present use cases for external modification
         // of boot services don't merit such complexity at this time.
         let create_event = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), create_event) };
-        let status = create_event(
-            event_type.into(),
-            notify_tpl.into(),
-            // Safety: Transmuting function pointer types with matching ABIs and compatible signatures.
-            // Both are extern "efiapi" callbacks taking a context pointer - the generic parameter T
-            // is erased to c_void for the UEFI FFI interface.
-            unsafe {
+
+        // SAFETY: `notify_context` validity is the caller's responsibility as documented by the `unsafe` on this
+        // function. `event` is a local `MaybeUninit` whose address is valid for writes.
+        let status = unsafe {
+            create_event(
+                event_type.into(),
+                notify_tpl.into(),
+                // Safety: Transmuting function pointer types with matching ABIs and compatible signatures. Both are
+                // extern "efiapi" callbacks taking a context pointer - the generic parameter T is erased to c_void for
+                // the UEFI FFI interface. Using unsafe blocks within an unsafe block triggers a warning; therefore,
+                // it is not used here.
                 mem::transmute::<
-                    Option<extern "efiapi" fn(*mut c_void, *mut T)>,
-                    Option<extern "efiapi" fn(*mut c_void, *mut c_void)>,
-                >(notify_function)
-            },
-            notify_context as *mut c_void,
-            event.as_mut_ptr(),
-        );
+                    Option<unsafe extern "efiapi" fn(*mut c_void, *mut T)>,
+                    Option<unsafe extern "efiapi" fn(*mut c_void, *mut c_void)>,
+                >(notify_function),
+                notify_context as *mut c_void,
+                event.as_mut_ptr(),
+            )
+        };
         // SAFETY: If the UEFI call succeeded, event has been initialized by the firmware.
         if status.is_error() { Err(status) } else { Ok(unsafe { event.assume_init() }) }
     }
 
+    /// # Safety
+    ///
+    /// Same constraints as [`Self::create_event_unchecked`] apply. if `notify_context` is
+    /// non-null, it must be properly aligned, dereferenceable as type `T`, and must remain a
+    /// valid pointer for the entire lifetime of the created event.
     unsafe fn create_event_ex_unchecked<T: Sized + 'static>(
         &self,
         event_type: EventType,
@@ -1036,65 +1050,109 @@ impl BootServices for StandardBootServices {
         let mut event = MaybeUninit::zeroed();
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let create_event_ex = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), create_event_ex) };
-        let status = create_event_ex(
-            event_type.into(),
-            notify_tpl.into(),
-            // Safety: Transmuting function pointer types with matching ABIs and compatible signatures.
-            // Both are extern "efiapi" callbacks - the generic parameter T is erased to c_void for FFI.
-            unsafe {
+
+        // SAFETY: `notify_context` validity is the caller's responsibility as documented by the
+        // `unsafe` on this function. `event_group` is a valid static reference cast to a pointer.
+        // `event` is a local `MaybeUninit` whose address is valid for writes.
+        let status = unsafe {
+            create_event_ex(
+                event_type.into(),
+                notify_tpl.into(),
+                // Safety: Transmuting function pointer types with matching ABIs and compatible signatures. Both are
+                // extern "efiapi" callbacks - the generic parameter T is erased to c_void for FFI.
                 mem::transmute::<
-                    Option<extern "efiapi" fn(*mut c_void, *mut T)>,
-                    Option<extern "efiapi" fn(*mut c_void, *mut c_void)>,
-                >(notify_function)
-            },
-            notify_context as *mut c_void,
-            event_group as *const _,
-            event.as_mut_ptr(),
-        );
+                    Option<unsafe extern "efiapi" fn(*mut c_void, *mut T)>,
+                    Option<unsafe extern "efiapi" fn(*mut c_void, *mut c_void)>,
+                >(notify_function),
+                notify_context as *mut c_void,
+                event_group as *const _,
+                event.as_mut_ptr(),
+            )
+        };
         // SAFETY: If the call succeeded, it is considered initialized.
         if status.is_error() { Err(status) } else { Ok(unsafe { event.assume_init() }) }
     }
 
+    // This is triggered by the fact that efi::Event aliases to *mut c_void, but
+    // it is an opaque handle used as a database key.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn close_event(&self, event: efi::Event) -> Result<(), efi::Status> {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let close_event = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), close_event) };
-        match close_event(event) {
+        // SAFETY: This function is safe to call with an unverified `event`
+        // parameter. The underlying implementation looks up the event by ID in
+        // the database and returns a failure status if it is not found. The
+        // call requires an unsafe block because r-efi defines close_event as
+        // accepting an unsafe extern "efiapi" function pointer.
+        match unsafe { close_event(event) } {
             s if s.is_error() => Err(s),
             _ => Ok(()),
         }
     }
 
+    // This is triggered by the fact that efi::Event aliases to *mut c_void, but
+    // it is an opaque handle used as a database key.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn signal_event(&self, event: efi::Event) -> Result<(), efi::Status> {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let signal_event = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), signal_event) };
-        match signal_event(event) {
+        // SAFETY: This function is safe to call with an unverified `event`
+        // parameter. The underlying implementation looks up the event by ID in
+        // the database and returns a failure status if it is not found. The
+        // call requires an unsafe block because r-efi defines signal_event as
+        // accepting an unsafe extern "efiapi" function pointer.
+        match unsafe { signal_event(event) } {
             s if s.is_error() => Err(s),
             _ => Ok(()),
         }
     }
 
+    // This is triggered by the fact that efi::Event aliases to *mut c_void, but
+    // it is an opaque handle used as a database key.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn wait_for_event(&self, events: &mut [efi::Event]) -> Result<usize, efi::Status> {
         let mut index = MaybeUninit::zeroed();
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let wait_for_event = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), wait_for_event) };
-        let status = wait_for_event(events.len(), events.as_mut_ptr(), index.as_mut_ptr());
+        // SAFETY: This function is safe to call with an unverified `event`
+        // parameter. The underlying implementation looks up the event by ID in
+        // the database and returns a failure status if it is not found. The
+        // call requires an unsafe block because r-efi defines wait_for_event as
+        // accepting an unsafe extern "efiapi" function pointer.
+        let status = unsafe { wait_for_event(events.len(), events.as_mut_ptr(), index.as_mut_ptr()) };
         // SAFETY: If the call succeeded, index has been initialized with the event index.
         if status.is_error() { Err(status) } else { Ok(unsafe { index.assume_init() }) }
     }
 
+    // This is triggered by the fact that efi::Event aliases to *mut c_void, but
+    // it is an opaque handle used as a database key.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn check_event(&self, event: efi::Event) -> Result<(), efi::Status> {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let check_event = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), check_event) };
-        match check_event(event) {
+        // SAFETY: This function is safe to call with an unverified `event`
+        // parameter. The underlying implementation looks up the event by ID in
+        // the database and returns a failure status if it is not found. The
+        // call requires an unsafe block because r-efi defines check_event as
+        // accepting an unsafe extern "efiapi" function pointer.
+        match unsafe { check_event(event) } {
             s if s.is_error() => Err(s),
             _ => Ok(()),
         }
     }
 
+    // This is triggered by the fact that efi::Event aliases to *mut c_void, but
+    // it is an opaque handle used as a database key.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn set_timer(&self, event: efi::Event, timer_type: EventTimerType, trigger_time: u64) -> Result<(), efi::Status> {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let set_timer = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), set_timer) };
-        match set_timer(event, timer_type.into(), trigger_time) {
+        // SAFETY: This function is safe to call with an unverified `event`
+        // parameter. The underlying implementation looks up the event by ID in
+        // the database and returns a failure status if it is not found. The
+        // call requires an unsafe block because r-efi defines set_timer as
+        // accepting an unsafe extern "efiapi" function pointer.
+        match unsafe { set_timer(event, timer_type.into(), trigger_time) } {
             s if s.is_error() => Err(s),
             _ => Ok(()),
         }

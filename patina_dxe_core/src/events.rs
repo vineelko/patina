@@ -29,7 +29,11 @@ pub static EVENT_DB: SpinLockedEventDb = SpinLockedEventDb::new();
 static CURRENT_TPL: AtomicUsize = AtomicUsize::new(efi::TPL_APPLICATION);
 static SYSTEM_TIME: AtomicU64 = AtomicU64::new(0);
 
-extern "efiapi" fn create_event(
+/// # Safety
+///
+/// Caller must ensure that `event` points to valid writable memory. Only a null
+/// check is performed here; no other validation of the pointer is done.
+unsafe extern "efiapi" fn create_event(
     event_type: u32,
     notify_tpl: efi::Tpl,
     notify_function: Option<efi::EventNotify>,
@@ -60,7 +64,11 @@ extern "efiapi" fn create_event(
     }
 }
 
-extern "efiapi" fn create_event_ex(
+/// # Safety
+///
+/// Caller must ensure that `event` points to valid writable memory. Only a null
+/// check is performed here; no other validation of the pointer is done.
+unsafe extern "efiapi" fn create_event_ex(
     event_type: u32,
     notify_tpl: efi::Tpl,
     notify_function: Option<efi::EventNotify>,
@@ -94,6 +102,12 @@ extern "efiapi" fn create_event_ex(
     }
 }
 
+/// Closes an event from the event database.
+///
+/// This function is safe to call with an unverified `event` parameter. The
+/// underlying implementation looks up the event by ID in the database and
+/// returns a failure status if it is not found. No incoming pointers are
+/// dereferenced, so this is not marked `unsafe`.
 pub extern "efiapi" fn close_event(event: efi::Event) -> efi::Status {
     match EVENT_DB.close_event(event) {
         Ok(()) => efi::Status::SUCCESS,
@@ -101,17 +115,31 @@ pub extern "efiapi" fn close_event(event: efi::Event) -> efi::Status {
     }
 }
 
+/// Signals an event in the event database.
+///
+/// This function is safe to call with an unverified `event` parameter. The
+/// underlying implementation looks up the event by ID in the database and
+/// returns a failure status if it is not found. No incoming pointers are
+/// dereferenced, so this is not marked `unsafe`.
 pub extern "efiapi" fn signal_event(event: efi::Event) -> efi::Status {
-    //Note: The C-reference implementation of SignalEvent gets an immediate dispatch of
-    //pending events as a side effect of the locking implementation calling raise/restore
-    //TPL. This will occur when the event lock is dropped at the end of signal_event().
+    // Note: The C-reference implementation of SignalEvent gets an immediate dispatch of
+    // pending events as a side effect of the locking implementation calling raise/restore
+    // TPL. This will occur when the event lock is dropped at the end of signal_event().
     match EVENT_DB.signal_event(event) {
         Ok(()) => efi::Status::SUCCESS,
         Err(err) => err.into(),
     }
 }
 
-extern "efiapi" fn wait_for_event(
+/// # Safety
+///
+/// Caller must ensure that `event_array` points to a valid array of at least
+/// `number_of_events` `efi::Event` entries. `number_of_events` must not exceed
+/// the actual length of the array; otherwise out-of-bounds reads will occur. If
+/// `out_index` is non-null, it must point to valid writable memory. Only a null
+/// check is performed on `event_array`; no other validation of either pointer
+/// is done.
+unsafe extern "efiapi" fn wait_for_event(
     number_of_events: usize,
     event_array: *mut efi::Event,
     out_index: *mut usize,
@@ -156,6 +184,12 @@ extern "efiapi" fn wait_for_event(
     }
 }
 
+/// Checks whether an event is in the signaled state.
+///
+/// This function is safe to call with an unverified `event` parameter. The
+/// underlying implementation looks up the event by ID in the database and
+/// returns a failure status if it is not found. No incoming pointers are
+/// dereferenced, so this is not marked `unsafe`.
 pub extern "efiapi" fn check_event(event: efi::Event) -> efi::Status {
     let event_type = match EVENT_DB.get_event_type(event) {
         Ok(event_type) => event_type,
@@ -196,6 +230,12 @@ pub extern "efiapi" fn check_event(event: efi::Event) -> efi::Status {
     efi::Status::NOT_READY
 }
 
+/// Sets a timer on an event in the event database.
+///
+/// This function is safe to call with an unverified `event` parameter. The
+/// underlying implementation looks up the event by ID in the database and
+/// returns a failure status if it is not found. No incoming pointers are
+/// dereferenced, so this is not marked `unsafe`.
 pub extern "efiapi" fn set_timer(event: efi::Event, timer_type: efi::TimerDelay, trigger_time: u64) -> efi::Status {
     let timer_type = match TimerDelay::try_from(timer_type) {
         Err(err) => return err,
@@ -214,6 +254,12 @@ pub extern "efiapi" fn set_timer(event: efi::Event, timer_type: efi::TimerDelay,
     }
 }
 
+/// Raises the task priority level (TPL) to the specified value.
+///
+/// This function is safe to call with any `new_tpl` value. It validates that
+/// the requested TPL does not exceed `TPL_HIGH_LEVEL` and is not lower than the
+/// current TPL, panicking on violation. No incoming parameters are dereferenced,
+/// so this is not marked `unsafe`.
 pub extern "efiapi" fn raise_tpl(new_tpl: efi::Tpl) -> efi::Tpl {
     if new_tpl > efi::TPL_HIGH_LEVEL {
         panic!("Invalid attempt to raise TPL above TPL_HIGH_LEVEL: {new_tpl:#x?}");
@@ -231,6 +277,12 @@ pub extern "efiapi" fn raise_tpl(new_tpl: efi::Tpl) -> efi::Tpl {
     prev_tpl
 }
 
+/// Restores the task priority level (TPL) to the specified value.
+///
+/// This function is safe to call with any `new_tpl` value. It validates that
+/// the requested TPL is not higher than the current TPL, panicking on violation.
+/// Pending event notifications at higher TPLs are dispatched before returning.
+/// No incoming parameters are dereferenced, so this is not marked `unsafe`.
 pub extern "efiapi" fn restore_tpl(new_tpl: efi::Tpl) {
     let prev_tpl = CURRENT_TPL.fetch_min(new_tpl, Ordering::SeqCst);
 
@@ -394,7 +446,8 @@ mod tests {
     #[test]
     fn test_create_event_null_event_pointer() {
         with_locked_state(|| {
-            let result = create_event(0, efi::TPL_APPLICATION, None, ptr::null_mut(), ptr::null_mut());
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe { create_event(0, efi::TPL_APPLICATION, None, ptr::null_mut(), ptr::null_mut()) };
 
             assert_eq!(result, efi::Status::INVALID_PARAMETER);
         });
@@ -404,7 +457,8 @@ mod tests {
     fn test_create_event_success() {
         with_locked_state(|| {
             let mut event: efi::Event = ptr::null_mut();
-            let result = create_event(0, efi::TPL_APPLICATION, None, ptr::null_mut(), &mut event);
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe { create_event(0, efi::TPL_APPLICATION, None, ptr::null_mut(), &mut event) };
 
             assert_eq!(result, efi::Status::SUCCESS);
         });
@@ -415,7 +469,8 @@ mod tests {
         with_locked_state(|| {
             let mut event: efi::Event = ptr::null_mut();
             let context = Box::into_raw(Box::new(42)) as *mut c_void;
-            let result = create_event(0, efi::TPL_APPLICATION, None, context, &mut event);
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe { create_event(0, efi::TPL_APPLICATION, None, context, &mut event) };
 
             assert_eq!(result, efi::Status::SUCCESS);
         });
@@ -426,7 +481,10 @@ mod tests {
         with_locked_state(|| {
             let mut event: efi::Event = ptr::null_mut();
             let notify_fn: Option<efi::EventNotify> = Some(test_notify);
-            let result = create_event(efi::EVT_NOTIFY_WAIT, efi::TPL_CALLBACK, notify_fn, ptr::null_mut(), &mut event);
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe {
+                create_event(efi::EVT_NOTIFY_WAIT, efi::TPL_CALLBACK, notify_fn, ptr::null_mut(), &mut event)
+            };
 
             assert_eq!(result, efi::Status::SUCCESS);
         });
@@ -439,13 +497,16 @@ mod tests {
 
             let notify_fn: Option<efi::EventNotify> = Some(test_notify);
 
-            let result = create_event(
-                efi::EVT_SIGNAL_VIRTUAL_ADDRESS_CHANGE,
-                efi::TPL_CALLBACK,
-                notify_fn,
-                ptr::null_mut(),
-                &mut event,
-            );
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe {
+                create_event(
+                    efi::EVT_SIGNAL_VIRTUAL_ADDRESS_CHANGE,
+                    efi::TPL_CALLBACK,
+                    notify_fn,
+                    ptr::null_mut(),
+                    &mut event,
+                )
+            };
 
             assert_eq!(result, efi::Status::SUCCESS);
         });
@@ -458,13 +519,16 @@ mod tests {
 
             let notify_fn: Option<efi::EventNotify> = Some(test_notify);
 
-            let result = create_event(
-                efi::EVT_SIGNAL_EXIT_BOOT_SERVICES,
-                efi::TPL_CALLBACK,
-                notify_fn,
-                ptr::null_mut(),
-                &mut event,
-            );
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe {
+                create_event(
+                    efi::EVT_SIGNAL_EXIT_BOOT_SERVICES,
+                    efi::TPL_CALLBACK,
+                    notify_fn,
+                    ptr::null_mut(),
+                    &mut event,
+                )
+            };
 
             assert_eq!(result, efi::Status::SUCCESS);
         });
@@ -473,7 +537,9 @@ mod tests {
     #[test]
     fn test_create_event_ex_null_event() {
         with_locked_state(|| {
-            let result = create_event_ex(0, efi::TPL_APPLICATION, None, ptr::null(), ptr::null(), ptr::null_mut());
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result =
+                unsafe { create_event_ex(0, efi::TPL_APPLICATION, None, ptr::null(), ptr::null(), ptr::null_mut()) };
 
             assert_eq!(result, efi::Status::INVALID_PARAMETER);
         });
@@ -485,14 +551,17 @@ mod tests {
             let mut event: efi::Event = ptr::null_mut();
             let event_guid: efi::Guid = patina::BinaryGuid::from_string("87A2E5D9-C34F-4B21-8E57-1AF93C82D76B").into();
             let notify_fn: Option<efi::EventNotify> = Some(test_notify);
-            let result = create_event_ex(
-                efi::EVT_NOTIFY_SIGNAL,
-                efi::TPL_CALLBACK,
-                notify_fn,
-                ptr::null(),
-                &event_guid,
-                &mut event,
-            );
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe {
+                create_event_ex(
+                    efi::EVT_NOTIFY_SIGNAL,
+                    efi::TPL_CALLBACK,
+                    notify_fn,
+                    ptr::null(),
+                    &event_guid,
+                    &mut event,
+                )
+            };
 
             assert_eq!(result, efi::Status::SUCCESS);
         });
@@ -503,14 +572,17 @@ mod tests {
         with_locked_state(|| {
             let mut event: efi::Event = ptr::null_mut();
             // EVT_SIGNAL_EXIT_BOOT_SERVICES should fail with create_event_ex
-            let result = create_event_ex(
-                efi::EVT_SIGNAL_EXIT_BOOT_SERVICES,
-                efi::TPL_CALLBACK,
-                Some(test_notify),
-                ptr::null(),
-                ptr::null(),
-                &mut event,
-            );
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe {
+                create_event_ex(
+                    efi::EVT_SIGNAL_EXIT_BOOT_SERVICES,
+                    efi::TPL_CALLBACK,
+                    Some(test_notify),
+                    ptr::null(),
+                    ptr::null(),
+                    &mut event,
+                )
+            };
 
             assert_eq!(result, efi::Status::INVALID_PARAMETER);
         });
@@ -521,14 +593,17 @@ mod tests {
         with_locked_state(|| {
             let mut event: efi::Event = ptr::null_mut();
             // EVT_SIGNAL_VIRTUAL_ADDRESS_CHANGE should fail with create_event_ex
-            let result = create_event_ex(
-                efi::EVT_SIGNAL_VIRTUAL_ADDRESS_CHANGE,
-                efi::TPL_CALLBACK,
-                Some(test_notify),
-                ptr::null(),
-                ptr::null(),
-                &mut event,
-            );
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe {
+                create_event_ex(
+                    efi::EVT_SIGNAL_VIRTUAL_ADDRESS_CHANGE,
+                    efi::TPL_CALLBACK,
+                    Some(test_notify),
+                    ptr::null(),
+                    ptr::null(),
+                    &mut event,
+                )
+            };
 
             assert_eq!(result, efi::Status::INVALID_PARAMETER);
         });
@@ -539,13 +614,16 @@ mod tests {
         with_locked_state(|| {
             let mut event: efi::Event = ptr::null_mut();
             let notify_fn: Option<efi::EventNotify> = Some(test_notify);
-            let _ = create_event(
-                efi::EVT_TIMER | efi::EVT_NOTIFY_SIGNAL,
-                efi::TPL_NOTIFY,
-                notify_fn,
-                ptr::null_mut(),
-                &mut event,
-            );
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let _ = unsafe {
+                create_event(
+                    efi::EVT_TIMER | efi::EVT_NOTIFY_SIGNAL,
+                    efi::TPL_NOTIFY,
+                    notify_fn,
+                    ptr::null_mut(),
+                    &mut event,
+                )
+            };
 
             let result = EVENT_DB.close_event(event);
 
@@ -559,13 +637,16 @@ mod tests {
         with_locked_state(|| {
             let mut event: efi::Event = ptr::null_mut();
             let notify_fn: Option<efi::EventNotify> = Some(test_notify);
-            let _ = create_event(
-                efi::EVT_TIMER | efi::EVT_NOTIFY_SIGNAL,
-                efi::TPL_NOTIFY,
-                notify_fn,
-                ptr::null_mut(),
-                &mut event,
-            );
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let _ = unsafe {
+                create_event(
+                    efi::EVT_TIMER | efi::EVT_NOTIFY_SIGNAL,
+                    efi::TPL_NOTIFY,
+                    notify_fn,
+                    ptr::null_mut(),
+                    &mut event,
+                )
+            };
             let result = signal_event(event);
 
             assert_eq!(result, efi::Status::SUCCESS);
@@ -578,14 +659,18 @@ mod tests {
         with_locked_state(|| {
             CURRENT_TPL.store(efi::TPL_APPLICATION, Ordering::SeqCst);
             let mut event: efi::Event = ptr::null_mut();
-            create_event(efi::EVT_NOTIFY_WAIT, efi::TPL_NOTIFY, Some(test_notify), ptr::null_mut(), &mut event);
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            unsafe {
+                create_event(efi::EVT_NOTIFY_WAIT, efi::TPL_NOTIFY, Some(test_notify), ptr::null_mut(), &mut event)
+            };
             signal_event(event);
 
             let events: [efi::Event; 1] = [event];
             let mut index: usize = 0;
 
             let mut test_wait = || {
-                let status = wait_for_event(1, events.as_ptr() as *mut efi::Event, &mut index as *mut usize);
+                // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+                let status = unsafe { wait_for_event(1, events.as_ptr() as *mut efi::Event, &mut index as *mut usize) };
                 assert_eq!(status, efi::Status::SUCCESS);
                 assert_eq!(index, 0);
             };
@@ -602,13 +687,16 @@ mod tests {
             let mut event: efi::Event = ptr::null_mut();
             let notify_fn: Option<efi::EventNotify> = Some(test_notify);
 
-            let result = create_event(
-                efi::EVT_TIMER | efi::EVT_NOTIFY_SIGNAL,
-                efi::TPL_NOTIFY,
-                notify_fn,
-                ptr::null_mut(),
-                &mut event,
-            );
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe {
+                create_event(
+                    efi::EVT_TIMER | efi::EVT_NOTIFY_SIGNAL,
+                    efi::TPL_NOTIFY,
+                    notify_fn,
+                    ptr::null_mut(),
+                    &mut event,
+                )
+            };
             assert_eq!(result, efi::Status::SUCCESS);
 
             let initial_time = 1000u64;
@@ -635,13 +723,16 @@ mod tests {
             let notify_fn: Option<efi::EventNotify> = Some(test_notify);
 
             // Create timer event
-            let result = create_event(
-                efi::EVT_TIMER | efi::EVT_NOTIFY_SIGNAL,
-                efi::TPL_NOTIFY,
-                notify_fn,
-                ptr::null_mut(),
-                &mut event,
-            );
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe {
+                create_event(
+                    efi::EVT_TIMER | efi::EVT_NOTIFY_SIGNAL,
+                    efi::TPL_NOTIFY,
+                    notify_fn,
+                    ptr::null_mut(),
+                    &mut event,
+                )
+            };
             assert_eq!(result, efi::Status::SUCCESS);
 
             // Set timer with an invalid timer type
@@ -661,13 +752,16 @@ mod tests {
             let mut event: efi::Event = ptr::null_mut();
             let notify_fn: Option<efi::EventNotify> = Some(test_notify);
 
-            let result = create_event(
-                efi::EVT_TIMER | efi::EVT_NOTIFY_SIGNAL,
-                efi::TPL_NOTIFY,
-                notify_fn,
-                ptr::null_mut(),
-                &mut event,
-            );
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe {
+                create_event(
+                    efi::EVT_TIMER | efi::EVT_NOTIFY_SIGNAL,
+                    efi::TPL_NOTIFY,
+                    notify_fn,
+                    ptr::null_mut(),
+                    &mut event,
+                )
+            };
             assert_eq!(result, efi::Status::SUCCESS);
 
             // Set a timer
@@ -689,13 +783,16 @@ mod tests {
             let mut event: efi::Event = ptr::null_mut();
             let notify_fn: Option<efi::EventNotify> = Some(test_notify);
 
-            let result = create_event(
-                efi::EVT_TIMER | efi::EVT_NOTIFY_SIGNAL,
-                efi::TPL_NOTIFY,
-                notify_fn,
-                ptr::null_mut(),
-                &mut event,
-            );
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe {
+                create_event(
+                    efi::EVT_TIMER | efi::EVT_NOTIFY_SIGNAL,
+                    efi::TPL_NOTIFY,
+                    notify_fn,
+                    ptr::null_mut(),
+                    &mut event,
+                )
+            };
             assert_eq!(result, efi::Status::SUCCESS);
 
             // Set periodic timer
@@ -717,13 +814,16 @@ mod tests {
 
             let mut event: efi::Event = ptr::null_mut();
             // Create notification signal event
-            let result = create_event(
-                efi::EVT_NOTIFY_SIGNAL,
-                efi::TPL_CALLBACK,
-                Some(tracking_notify),
-                ptr::null_mut(),
-                &mut event,
-            );
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe {
+                create_event(
+                    efi::EVT_NOTIFY_SIGNAL,
+                    efi::TPL_CALLBACK,
+                    Some(tracking_notify),
+                    ptr::null_mut(),
+                    &mut event,
+                )
+            };
             assert_eq!(result, efi::Status::SUCCESS);
 
             // Signal the event
@@ -755,23 +855,29 @@ mod tests {
 
             let mut event: efi::Event = ptr::null_mut();
             // Create notification signal event
-            let result = create_event(
-                efi::EVT_NOTIFY_SIGNAL,
-                efi::TPL_CALLBACK,
-                Some(tracking_notify),
-                ptr::null_mut(),
-                &mut event,
-            );
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe {
+                create_event(
+                    efi::EVT_NOTIFY_SIGNAL,
+                    efi::TPL_CALLBACK,
+                    Some(tracking_notify),
+                    ptr::null_mut(),
+                    &mut event,
+                )
+            };
             assert_eq!(result, efi::Status::SUCCESS);
 
             let mut event2: efi::Event = ptr::null_mut();
-            let result = create_event(
-                efi::EVT_NOTIFY_SIGNAL,
-                efi::TPL_NOTIFY,
-                Some(test_tpl_switching_notify),
-                ptr::null_mut(),
-                &mut event2,
-            );
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe {
+                create_event(
+                    efi::EVT_NOTIFY_SIGNAL,
+                    efi::TPL_NOTIFY,
+                    Some(test_tpl_switching_notify),
+                    ptr::null_mut(),
+                    &mut event2,
+                )
+            };
             assert_eq!(result, efi::Status::SUCCESS);
 
             //raise TPL to callback than event
@@ -808,11 +914,13 @@ mod tests {
             let events: [efi::Event; 1] = [ptr::null_mut()];
 
             // Test null event array
-            let status = wait_for_event(1, ptr::null_mut(), &mut index as *mut usize);
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let status = unsafe { wait_for_event(1, ptr::null_mut(), &mut index as *mut usize) };
             assert_eq!(status, efi::Status::INVALID_PARAMETER);
 
             // Test zero events
-            let status = wait_for_event(0, events.as_ptr() as *mut efi::Event, &mut index as *mut usize);
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let status = unsafe { wait_for_event(0, events.as_ptr() as *mut efi::Event, &mut index as *mut usize) };
             assert_eq!(status, efi::Status::INVALID_PARAMETER);
         });
     }
@@ -826,7 +934,8 @@ mod tests {
             // Set TPL to something other than APPLICATION
             CURRENT_TPL.store(efi::TPL_NOTIFY, Ordering::SeqCst);
 
-            let status = wait_for_event(1, events.as_ptr() as *mut efi::Event, &mut index as *mut usize);
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let status = unsafe { wait_for_event(1, events.as_ptr() as *mut efi::Event, &mut index as *mut usize) };
             assert_eq!(status, efi::Status::UNSUPPORTED);
 
             CURRENT_TPL.store(efi::TPL_APPLICATION, Ordering::SeqCst);
@@ -848,8 +957,10 @@ mod tests {
         with_locked_state(|| {
             let mut event: efi::Event = ptr::null_mut();
             // Create a notification signal event
-            let result =
-                create_event(efi::EVT_NOTIFY_SIGNAL, efi::TPL_NOTIFY, Some(test_notify), ptr::null_mut(), &mut event);
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe {
+                create_event(efi::EVT_NOTIFY_SIGNAL, efi::TPL_NOTIFY, Some(test_notify), ptr::null_mut(), &mut event)
+            };
             assert_eq!(result, efi::Status::SUCCESS);
 
             // Check event should fail for notify signal events
@@ -866,8 +977,10 @@ mod tests {
         with_locked_state(|| {
             let mut event: efi::Event = ptr::null_mut();
             // Create a wait event
-            let result =
-                create_event(efi::EVT_NOTIFY_WAIT, efi::TPL_NOTIFY, Some(test_notify), ptr::null_mut(), &mut event);
+            // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
+            let result = unsafe {
+                create_event(efi::EVT_NOTIFY_WAIT, efi::TPL_NOTIFY, Some(test_notify), ptr::null_mut(), &mut event)
+            };
             assert_eq!(result, efi::Status::SUCCESS);
 
             // Signal the event
