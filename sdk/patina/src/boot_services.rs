@@ -1786,13 +1786,17 @@ impl BootServices for StandardBootServices {
     unsafe fn copy_mem_unchecked(&self, dest: *mut c_void, src: *const c_void, length: usize) {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let copy_mem = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), copy_mem) };
-        copy_mem(dest, src as *mut _, length);
+        // SAFETY: caller must ensure that the source and destination are valid for length bytes.
+        unsafe { copy_mem(dest, src as *mut _, length) };
     }
 
     fn set_mem(&self, buffer: &mut [u8], value: u8) {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let set_mem = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), set_mem) };
-        set_mem(buffer.as_mut_ptr() as *mut c_void, buffer.len(), value);
+        // SAFETY: The parameters are safe because `buffer` is a mutable slice
+        // with an associated length, so the pointer and size are guaranteed
+        // valid and cannot cause undefined behavior.
+        unsafe { set_mem(buffer.as_mut_ptr() as *mut c_void, buffer.len(), value) };
     }
 
     fn get_next_monotonic_count(&self) -> Result<u64, efi::Status> {
