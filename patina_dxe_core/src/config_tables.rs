@@ -23,7 +23,15 @@ use crate::{
     systemtables::{EfiSystemTable, SYSTEM_TABLE},
 };
 
-extern "efiapi" fn install_configuration_table(table_guid: *mut efi::Guid, table: *mut c_void) -> efi::Status {
+/// Installs a configuration table entry identified by `table_guid` into the system table.
+///
+/// # Safety
+///
+/// The caller is responsible for ensuring that `table_guid` points to valid, readable memory
+/// containing an `efi::Guid` and that `table` (if non-null) points to valid memory that remains
+/// valid for the lifetime of the configuration table entry. `table_guid` is null-checked, but
+/// validity of the referenced memory is the caller's responsibility.
+unsafe extern "efiapi" fn install_configuration_table(table_guid: *mut efi::Guid, table: *mut c_void) -> efi::Status {
     if table_guid.is_null() {
         return efi::Status::INVALID_PARAMETER;
     }
@@ -43,8 +51,10 @@ extern "efiapi" fn install_configuration_table(table_guid: *mut efi::Guid, table
     }
 }
 
-/// Install a configuration table in the system table, replacing any existing table with the same GUID.
-/// If a table is replaced or deleted, a pointer to the old table is returned.
+/// Install a configuration table in the system table, replacing any existing table with the same
+/// GUID. If a table is replaced or deleted, a pointer to the old table is returned. This function
+/// is not marked as unsafe because the `vendor_table` parameter is not dereferenced inside the
+/// function.
 pub fn core_install_configuration_table(
     vendor_guid: efi::Guid,
     vendor_table: *mut c_void,
@@ -184,7 +194,11 @@ mod tests {
 
             assert!(get_configuration_table(&guid).is_none());
 
-            assert_eq!(install_configuration_table(&guid as *const _ as *mut _, table), efi::Status::SUCCESS);
+            assert_eq!(
+                // SAFETY: The passed in values are safe because they are constructed in this test case.
+                unsafe { install_configuration_table(&guid as *const _ as *mut _, table) },
+                efi::Status::SUCCESS
+            );
             assert_eq!(get_configuration_table(&guid).unwrap().as_ptr(), table);
         });
     }
@@ -195,7 +209,11 @@ mod tests {
             let guid: efi::Guid = guid::Guid::from_string("78926ab0-af16-49e4-8e05-115aafbca1df").to_efi_guid();
             let table = 0x12345678u32 as *mut c_void;
 
-            assert_eq!(install_configuration_table(&guid as *const _ as *mut _, table), efi::Status::SUCCESS);
+            assert_eq!(
+                // SAFETY: The passed in values are safe because they are constructed in this test case.
+                unsafe { install_configuration_table(&guid as *const _ as *mut _, table) },
+                efi::Status::SUCCESS
+            );
 
             assert_eq!(get_configuration_table(&guid).unwrap().as_ptr(), table);
 
