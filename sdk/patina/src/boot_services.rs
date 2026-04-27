@@ -1677,11 +1677,19 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// This is triggered by the fact that efi::Event aliases to *mut c_void, but
+    /// it is an opaque handle used as a database key.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn unload_image(&self, image_handle: efi::Handle) -> Result<(), efi::Status> {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let unload_image = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), unload_image) };
-        match unload_image(image_handle) {
-            s if s.is_error() => Err(s),
+        // SAFETY: The unsafe block is required because r-efi declares
+        // unload_image as an unsafe extern "efiapi" function pointer. The
+        // Patina implementation is fully safe: `image_handle` is validated
+        // internally and an invalid handle results in an error status rather
+        // than undefined behavior.
+        match unsafe { unload_image(image_handle) } {
+            status if status.is_error() => Err(status),
             _ => Ok(()),
         }
     }
