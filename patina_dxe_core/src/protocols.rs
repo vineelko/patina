@@ -126,13 +126,12 @@ pub fn core_uninstall_protocol_interface(
         for usage in usages {
             if (usage.attributes & efi::OPEN_PROTOCOL_BY_DRIVER) != 0 {
                 debug_assert!(usage.agent_handle.is_some());
-                // SAFETY: Handles are validated by the protocol database, and controller disconnect is required
-                // for cleanup.
-                unsafe {
-                    usage_close_status = core_disconnect_controller(handle, usage.agent_handle, None);
-                    if usage_close_status.is_ok() {
-                        item_found = true;
-                    }
+                // SAFETY: handles are validated inside core_disconnect_controller. The implicit UEFI
+                // spec assumption that driver bindings remain valid for the duration of the call
+                // cannot be verified here; see core_disconnect_controller's safety documentation.
+                usage_close_status = unsafe { core_disconnect_controller(handle, usage.agent_handle, None) };
+                if usage_close_status.is_ok() {
+                    item_found = true;
                 }
                 break;
             }
@@ -462,13 +461,13 @@ unsafe extern "efiapi" fn open_protocol(
             (x.attributes & efi::OPEN_PROTOCOL_BY_DRIVER) != 0
                 && (x.attributes & efi::OPEN_PROTOCOL_EXCLUSIVE) == 0
                 && x.agent_handle != agent_handle
-        }) {
-            // SAFETY: handles are validated above.
-            unsafe {
-                if core_disconnect_controller(handle, usage.agent_handle, None).is_err() {
-                    return efi::Status::ACCESS_DENIED;
-                }
-            }
+        }) && {
+            // SAFETY: handles are validated inside core_disconnect_controller. The implicit UEFI
+            // spec assumption that driver bindings remain valid for the duration of the call
+            // cannot be verified here; see core_disconnect_controller's safety documentation.
+            unsafe { core_disconnect_controller(handle, usage.agent_handle, None) }.is_err()
+        } {
+            return efi::Status::ACCESS_DENIED;
         }
     }
 

@@ -698,6 +698,8 @@ pub trait BootServices {
     ///
     /// When calling this method, you have to make sure that *driver_image_handle*'s last entry is null per UEFI specification.
     ///
+    /// This function assumes that all driver bindings managing the controller remain valid for the duration of this call.
+    ///
     /// [UEFI Spec Documentation: 7.3.12. EFI_BOOT_SERVICES.ConnectController()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-connectcontroller)
     unsafe fn connect_controller(
         &self,
@@ -709,8 +711,12 @@ pub trait BootServices {
 
     /// Disconnects one or more drivers from a controller.
     ///
+    /// # Safety
+    ///
+    /// This function assumes that all driver bindings managing the controller remain valid for the duration of this call.
+    ///
     /// [UEFI Spec Documentation: 7.3.13. EFI_BOOT_SERVICES.DisconnectController()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-disconnectcontroller)
-    fn disconnect_controller(
+    unsafe fn disconnect_controller(
         &self,
         controller_handle: efi::Handle,
         driver_image_handle: Option<efi::Handle>,
@@ -1691,7 +1697,14 @@ impl BootServices for StandardBootServices {
         }
     }
 
-    fn disconnect_controller(
+    /// # Safety
+    ///
+    /// - The parameters are either native Rust types or opaque UEFI handles
+    ///   wrapped inside Rust types. Passing an invalid value does not by itself
+    ///   cause undefined behavior; the firmware is expected to reject it by
+    ///   returning an error status. The function is marked `unsafe` due to the
+    ///   underlying contract of core_disconnect_controller() implementation.
+    unsafe fn disconnect_controller(
         &self,
         controller_handle: efi::Handle,
         driver_image_handle: Option<efi::Handle>,
@@ -1699,12 +1712,20 @@ impl BootServices for StandardBootServices {
     ) -> Result<(), efi::Status> {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let disconnect_controller = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), disconnect_controller) };
-        match disconnect_controller(
-            controller_handle,
-            driver_image_handle.unwrap_or_default(),
-            child_handle.unwrap_or_default(),
-        ) {
-            s if s.is_error() => Err(s),
+
+        // SAFETY: `controller_handle` is an opaque handle validated internally by the
+        // implementation. `driver_image_handle` and `child_handle` are unwrapped to raw
+        // pointers (null if `None`), which the firmware accepts per the UEFI spec.
+        let status = unsafe {
+            disconnect_controller(
+                controller_handle,
+                driver_image_handle.unwrap_or_default(),
+                child_handle.unwrap_or_default(),
+            )
+        };
+
+        match status {
+            status if status.is_error() => Err(status),
             _ => Ok(()),
         }
     }
@@ -3256,7 +3277,8 @@ mod tests {
     #[should_panic = "Boot services function disconnect_controller is not initialized."]
     fn test_disconnect_controller_not_init() {
         let boot_services = boot_services!();
-        _ = boot_services.disconnect_controller(ptr::null_mut(), None, None);
+        // SAFETY: Test code - calling uninitialized disconnect_controller to verify panic behavior.
+        _ = unsafe { boot_services.disconnect_controller(ptr::null_mut(), None, None) };
     }
 
     #[test]
@@ -3273,7 +3295,8 @@ mod tests {
             assert_eq!(ptr::null_mut(), child_handle);
             efi::Status::SUCCESS
         }
-        boot_services.disconnect_controller(1_usize as _, None, None).unwrap();
+        // SAFETY: Test code - calling disconnect_controller with valid test parameters.
+        unsafe { boot_services.disconnect_controller(1_usize as _, None, None) }.unwrap();
     }
 
     #[test]
@@ -3290,7 +3313,8 @@ mod tests {
             assert_eq!(3, child_handle as usize);
             efi::Status::SUCCESS
         }
-        boot_services.disconnect_controller(1_usize as _, Some(2_usize as _), Some(3_usize as _)).unwrap();
+        // SAFETY: Test code - calling disconnect_controller with specific driver and child handles.
+        unsafe { boot_services.disconnect_controller(1_usize as _, Some(2_usize as _), Some(3_usize as _)) }.unwrap();
     }
 
     #[test]

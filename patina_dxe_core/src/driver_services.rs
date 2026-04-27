@@ -365,7 +365,9 @@ pub unsafe fn core_connect_controller(
 ///
 /// # Safety
 ///
-/// The caller must ensure that:
+/// The driver bindings that may be invoked to connect the controller must
+/// remain valid for the duration of the call. The caller must also ensure
+/// that:
 /// - If `driver_image_handle` is non-null, it must point to a valid,
 ///   null-terminated list of image handles.
 /// - If `remaining_device_path` is non-null, it must point to a valid device
@@ -417,14 +419,13 @@ unsafe extern "efiapi" fn connect_controller(
 /// 7.3.13. Refer to the UEFI spec description for details on input parameters, behavior, and error return codes.
 ///
 /// # Safety
-/// This routine cannot hold the protocol db lock while executing DriverBinding->Supported()/Start() since
-/// they need to access protocol db services. That means this routine can't guarantee that driver bindings remain
-/// valid for the duration of its execution. For example, if a driver were be unloaded in a timer callback after
-/// returning true from Supported() before Start() is called, then the driver binding instance would be uninstalled or
-/// invalid and Start() would be an invalid function pointer when invoked. In general, the spec implicitly assumes
-/// that driver binding instances that are valid at the start of he call to ConnectController() must remain valid for
-/// the duration of the ConnectController() call. If this is not true, then behavior is undefined. This function is
-/// marked unsafe for this reason.
+/// This routine cannot hold the protocol db lock while executing DriverBinding->Stop() since it needs to access
+/// protocol db services. That means this routine can't guarantee that driver bindings remain valid for the duration
+/// of its execution. For example, if a driver were to be unloaded in a timer callback while Stop() is being called
+/// on another driver, the driver binding instance could become invalid and Stop() would be an invalid function
+/// pointer when invoked. In general, the spec implicitly assumes that driver binding instances that are valid at the
+/// start of the call to DisconnectController() must remain valid for the duration of the DisconnectController()
+/// call. If this is not true, then behavior is undefined. This function is marked unsafe for this reason.
 ///
 /// ## Example
 ///
@@ -559,7 +560,28 @@ pub unsafe fn core_disconnect_controller(
     if one_or_more_drivers_disconnected || no_drivers { Ok(()) } else { Err(EfiError::NotFound) }
 }
 
-extern "efiapi" fn disconnect_controller(
+/// Raw UEFI `DisconnectController()` entry point installed into the boot
+/// services table.
+///
+/// This routine cannot hold the protocol db lock while executing
+/// DriverBinding->Stop() since it needs to access protocol db services. That
+/// means this routine can't guarantee that driver bindings remain valid for the
+/// duration of its execution. For example, if a driver were to be unloaded in a
+/// timer callback while Stop() is being called on another driver, the driver
+/// binding instance could become invalid and Stop() would be an invalid
+/// function pointer when invoked. In general, the spec implicitly assumes that
+/// driver binding instances that are valid at the start of the call to
+/// DisconnectController() must remain valid for the duration of the
+/// DisconnectController() call. If this is not true, then behavior is
+/// undefined. This function is marked unsafe for this reason.
+///
+/// # Safety
+///
+/// The driver bindings managing the controller must remain valid for the
+/// duration of the call. The handle parameters are validated internally and
+/// passing invalid handles does not by itself cause undefined behavior; the
+/// firmware will reject them by returning an error status.
+unsafe extern "efiapi" fn disconnect_controller(
     controller_handle: efi::Handle,
     driver_image_handle: efi::Handle,
     child_handle: efi::Handle,
@@ -570,16 +592,14 @@ extern "efiapi" fn disconnect_controller(
 
     let driver_image_handle = NonNull::new(driver_image_handle).map(|x| x.as_ptr());
     let child_handle = NonNull::new(child_handle).map(|x| x.as_ptr());
-    // SAFETY: Caller must ensure controller_handle is valid for the duration of the call.
-    // driver_image_handle and child_handle are both created above using NonNull which should
-    // guarantee they are non-null pointers. controller_handle is validated above. We do not
-    // remove any of these handles during this call, though it is possible for a different
-    // entity at another TPL to do so.
-    unsafe {
-        match core_disconnect_controller(controller_handle, driver_image_handle, child_handle) {
-            Err(err) => err.into(),
-            _ => efi::Status::SUCCESS,
-        }
+    // SAFETY: handles are validated inside core_disconnect_controller. The
+    // remaining safety requirement that driver bindings managing the controller
+    // remain valid for the duration of the call is an implicit UEFI spec
+    // assumption that this code cannot verify; see core_disconnect_controller's
+    // safety documentation.
+    match unsafe { core_disconnect_controller(controller_handle, driver_image_handle, child_handle) } {
+        Err(err) => err.into(),
+        _ => efi::Status::SUCCESS,
     }
 }
 
@@ -1518,12 +1538,10 @@ mod tests {
                     .unwrap();
 
                 // Test disconnect without specifying driver or child
-                // SAFETY: controller_handle is required to be valid. It was set via an .unwrap() call
-                // from an .install_protocol_interface() call. This call would panic if an error was returned.
-                unsafe {
-                    let result = core_disconnect_controller(controller_handle, None, None);
-                    assert!(result.is_ok(), "Should successfully disconnect all drivers");
-                }
+                // SAFETY: no concurrent driver unload can occur in this single-threaded test,
+                // so driver bindings remain valid for the duration of the call.
+                let result = unsafe { core_disconnect_controller(controller_handle, None, None) };
+                assert!(result.is_ok(), "Should successfully disconnect all drivers");
             }
         });
     }
@@ -1626,12 +1644,10 @@ mod tests {
             LAST_CHILD_COUNT.store(999, Ordering::SeqCst); // Set to invalid value to detect changes
 
             // Test disconnect - should call stop function
-            // SAFETY: controller_handle is required to be valid. It was set via an .unwrap() call
-            // from an .install_protocol_interface() call. This call would panic if an error was returned.
-            unsafe {
-                let result = core_disconnect_controller(controller_handle, None, None);
-                assert!(result.is_ok(), "disconnect should succeed");
-            }
+            // SAFETY: no concurrent driver unload can occur in this single-threaded test,
+            // so driver bindings remain valid for the duration of the call.
+            let result = unsafe { core_disconnect_controller(controller_handle, None, None) };
+            assert!(result.is_ok(), "disconnect should succeed");
 
             // Verify stop was called at least once
             let call_count = STOP_CALL_COUNT.load(Ordering::SeqCst);
@@ -1747,13 +1763,10 @@ mod tests {
             // Test disconnect with specific child handle (which is the ONLY child)
             // This should trigger: is_only_child = total_children == child_handles.len() = true
             // Because: total_children = 1, child_handles.retain() keeps 1 child, so 1 == 1
-            // SAFETY: Both controller_handle and child_handle are required to be valid. Both were set
-            // via an .unwrap() call from an .install_protocol_interface() call. These calls would panic
-            // if an error was returned.
-            unsafe {
-                let result = core_disconnect_controller(controller_handle, None, Some(child_handle));
-                assert!(result.is_ok(), "disconnect should succeed");
-            }
+            // SAFETY: no concurrent driver unload can occur in this single-threaded test,
+            // so driver bindings remain valid for the duration of the call.
+            let result = unsafe { core_disconnect_controller(controller_handle, None, Some(child_handle)) };
+            assert!(result.is_ok(), "disconnect should succeed");
 
             // When child was specified and it was the only child, driver should be fully disconnected
             // This means stop should be called twice: once for children, once for driver
@@ -1783,26 +1796,24 @@ mod tests {
             let invalid_driver_handle = 0x9999 as efi::Handle;
 
             // Test disconnect with invalid driver handle
-            // SAFETY: Both controller_handle and invalid_driver_handle are required to be valid.
-            // controller_handle is set via an .unwrap() call from an .install_protocol_interface()
-            // call. This call would panic if an error was returned. invalid_driver_handle is
-            // statically set to 0x9999 which guarantees it is non-null.
-            unsafe {
-                let result = core_disconnect_controller(
+            // SAFETY: no concurrent driver unload occurs in this single-threaded test; the
+            // invalid handle is rejected by core_disconnect_controller's internal validation.
+            let result = unsafe {
+                core_disconnect_controller(
                     controller_handle,
                     Some(invalid_driver_handle), // Invalid driver handle
                     None,
-                );
+                )
+            };
 
-                // Should fail with InvalidParameter due to driver handle validation
-                assert!(result.is_err(), "Should fail with invalid driver handle");
-                if let Err(error) = result {
-                    assert_eq!(
-                        error,
-                        EfiError::InvalidParameter,
-                        "Should return InvalidParameter for invalid driver handle"
-                    );
-                }
+            // Should fail with InvalidParameter due to driver handle validation
+            assert!(result.is_err(), "Should fail with invalid driver handle");
+            if let Err(error) = result {
+                assert_eq!(
+                    error,
+                    EfiError::InvalidParameter,
+                    "Should return InvalidParameter for invalid driver handle"
+                );
             }
         });
     }
@@ -1823,26 +1834,24 @@ mod tests {
             let invalid_child_handle = 0x8888 as efi::Handle;
 
             // Test disconnect with invalid child handle
-            // SAFETY: Both controller_handle and invalid_child_handle are required to be valid.
-            // controller_handle is set via an .unwrap() call from an .install_protocol_interface()
-            // call. This call would panic if an error was returned. invalid_child_handle is
-            // statically set to 0x8888 which guarantees it is non-null.
-            unsafe {
-                let result = core_disconnect_controller(
+            // SAFETY: no concurrent driver unload occurs in this single-threaded test; the
+            // invalid handle is rejected by core_disconnect_controller's internal validation.
+            let result = unsafe {
+                core_disconnect_controller(
                     controller_handle,
                     None,
                     Some(invalid_child_handle), // Invalid child handle
-                );
+                )
+            };
 
-                // Should fail with InvalidParameter due to child handle validation
-                assert!(result.is_err(), "Should fail with invalid child handle");
-                if let Err(error) = result {
-                    assert_eq!(
-                        error,
-                        EfiError::InvalidParameter,
-                        "Should return InvalidParameter for invalid child handle"
-                    );
-                }
+            // Should fail with InvalidParameter due to child handle validation
+            assert!(result.is_err(), "Should fail with invalid child handle");
+            if let Err(error) = result {
+                assert_eq!(
+                    error,
+                    EfiError::InvalidParameter,
+                    "Should return InvalidParameter for invalid child handle"
+                );
             }
         });
     }
@@ -1860,17 +1869,23 @@ mod tests {
                 .unwrap();
 
             // Test the extern "efiapi" function with null handles (should succeed for empty controller)
-            let status = disconnect_controller(
-                controller_handle,
-                core::ptr::null_mut(), // No specific driver
-                core::ptr::null_mut(), // No child handle
-            );
+            // SAFETY: no concurrent driver unload can occur in this single-threaded test,
+            // so driver bindings remain valid for the duration of the call.
+            let status = unsafe {
+                disconnect_controller(
+                    controller_handle,
+                    core::ptr::null_mut(), // No specific driver
+                    core::ptr::null_mut(), // No child handle
+                )
+            };
 
             assert_eq!(status, efi::Status::SUCCESS, "disconnect_controller should succeed with null handles");
 
             // Test with invalid controller handle
             let invalid_handle = 0x9999 as efi::Handle;
-            let status = disconnect_controller(invalid_handle, core::ptr::null_mut(), core::ptr::null_mut());
+            // SAFETY: no concurrent driver unload occurs in this single-threaded test; the
+            // invalid handle is rejected by the function's internal validation.
+            let status = unsafe { disconnect_controller(invalid_handle, core::ptr::null_mut(), core::ptr::null_mut()) };
 
             // Should return error status for invalid handle
             assert_ne!(status, efi::Status::SUCCESS, "disconnect_controller should fail with invalid handle");
