@@ -1380,6 +1380,11 @@ impl BootServices for StandardBootServices {
         }
     }
 
+    /// # Safety
+    ///
+    /// `interface` must be a valid pointer and be of the type expected by the
+    /// protocol. `handle` must refer to a handle on which `protocol` was
+    /// previously installed with `interface`.
     unsafe fn uninstall_protocol_interface_unchecked(
         &self,
         handle: efi::Handle,
@@ -1389,8 +1394,13 @@ impl BootServices for StandardBootServices {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let uninstall_protocol_interface =
             unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), uninstall_protocol_interface) };
-        match uninstall_protocol_interface(handle, protocol as *const _ as *mut _, interface) {
-            s if s.is_error() => Err(s),
+
+        // SAFETY: `protocol` is a valid reference cast to a pointer. `interface` is not
+        // dereferenced by the implementation. `handle` validity is the caller's responsibility
+        // as documented by the `unsafe` on this function.
+        let status = unsafe { uninstall_protocol_interface(handle, protocol as *const _ as *mut _, interface) };
+        match status {
+            status if status.is_error() => Err(status),
             _ => Ok(()),
         }
     }
