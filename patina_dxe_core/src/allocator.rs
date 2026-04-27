@@ -790,12 +790,20 @@ pub fn core_free_pages(memory: efi::PhysicalAddress, pages: usize) -> Result<(),
     res
 }
 
-extern "efiapi" fn copy_mem(destination: *mut c_void, source: *mut c_void, length: usize) {
+/// # Safety
+///
+/// The caller must ensure that `destination` and `source` are valid pointers for `length` bytes
+/// and that the regions they point to do not violate Rust's aliasing rules for `core::ptr::copy`.
+unsafe extern "efiapi" fn copy_mem(destination: *mut c_void, source: *mut c_void, length: usize) {
     // SAFETY: caller must ensure that the source and destination are valid for length bytes.
     unsafe { core::ptr::copy(source as *mut u8, destination as *mut u8, length) }
 }
 
-extern "efiapi" fn set_mem(buffer: *mut c_void, size: usize, value: u8) {
+/// # Safety
+///
+/// The caller must ensure that `buffer` is a valid pointer to a contiguous region of at least
+/// `size` bytes.
+unsafe extern "efiapi" fn set_mem(buffer: *mut c_void, size: usize, value: u8) {
     // SAFETY: caller must ensure that the buffer is valid for size bytes.
     unsafe {
         let dst_buffer = from_raw_parts_mut(buffer as *mut u8, size);
@@ -1830,14 +1838,16 @@ mod tests {
     fn copy_mem_should_copy_mem() {
         let mut dest = vec![0xa5u8; 0x10];
         let mut src = vec![0x5au8; 0x10];
-        copy_mem(dest.as_mut_ptr() as *mut c_void, src.as_mut_ptr() as *mut c_void, 0x10);
+        // SAFETY: The passed in values are safe because they are constructed in this test case.
+        unsafe { copy_mem(dest.as_mut_ptr() as *mut c_void, src.as_mut_ptr() as *mut c_void, 0x10) };
         assert_eq!(dest, src);
     }
 
     #[test]
     fn set_mem_should_set_mem() {
         let mut dest = vec![0xa5u8; 0x10];
-        set_mem(dest.as_mut_ptr() as *mut c_void, 0x10, 0x00);
+        // SAFETY: The passed in values are safe because they are constructed in this test case.
+        unsafe { set_mem(dest.as_mut_ptr() as *mut c_void, 0x10, 0x00) };
         assert_eq!(dest, vec![0x00u8; 0x10]);
     }
 
