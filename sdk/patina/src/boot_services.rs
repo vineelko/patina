@@ -1821,8 +1821,10 @@ impl BootServices for StandardBootServices {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let install_configuration_table =
             unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), install_configuration_table) };
-        match install_configuration_table(guid as *const _ as *mut _, table) {
-            s if s.is_error() => Err(s),
+        // SAFETY: The caller already passed the guid input as a valid Rust reference, table itself
+        // is not dereferenced.
+        match unsafe { install_configuration_table(guid as *const _ as *mut _, table) } {
+            status if status.is_error() => Err(status),
             _ => Ok(()),
         }
     }
@@ -1834,7 +1836,7 @@ impl BootServices for StandardBootServices {
         // SAFETY: The caller is responsible for ensuring that `data` points to valid, readable
         // memory of at least `data_size` bytes.
         match unsafe { calculate_crc32(data as *mut _, data_size, crc32.as_mut_ptr()) } {
-            s if s.is_error() => Err(s),
+            status if status.is_error() => Err(status),
             // SAFETY: If the call succeeded, crc32 has been initialized.
             _ => Ok(unsafe { crc32.assume_init() }),
         }
