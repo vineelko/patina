@@ -1002,6 +1002,15 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
         }
     }
 
+    /// Unloads a previously loaded image.
+    ///
+    /// # Safety Considerations
+    ///
+    /// This function is not marked `unsafe` because `image_handle` is safe to
+    /// accept from unverified sources. It is validated against the protocol
+    /// database via [`PROTOCOL_DB.validate_handle`] and looked up in the
+    /// private image data map; if the handle is not found, an error status is
+    /// returned rather than causing undefined behavior.
     pub fn unload_image(&self, image_handle: efi::Handle, force_unload: bool) -> Result<(), efi::Status> {
         PROTOCOL_DB.validate_handle(image_handle)?;
         let private_data = self.image_data.lock();
@@ -1083,6 +1092,15 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
     }
 
     #[coverage(off)]
+    /// Unloads a previously loaded image.
+    ///
+    /// # Safety Considerations
+    ///
+    /// This function is not marked `unsafe` because `image_handle` is safe to
+    /// accept from unverified sources. It is validated against the protocol
+    /// database via [`PROTOCOL_DB.validate_handle`] and looked up in the
+    /// private image data map; if the handle is not found, an error status is
+    /// returned rather than causing undefined behavior.
     pub(super) extern "efiapi" fn unload_image_efiapi(image_handle: efi::Handle) -> efi::Status {
         match Self::instance().unload_image(image_handle, false) {
             Ok(()) => efi::Status::SUCCESS,
