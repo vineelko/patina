@@ -417,14 +417,13 @@ unsafe extern "efiapi" fn connect_controller(
 /// 7.3.13. Refer to the UEFI spec description for details on input parameters, behavior, and error return codes.
 ///
 /// # Safety
-/// This routine cannot hold the protocol db lock while executing DriverBinding->Supported()/Start() since
-/// they need to access protocol db services. That means this routine can't guarantee that driver bindings remain
-/// valid for the duration of its execution. For example, if a driver were be unloaded in a timer callback after
-/// returning true from Supported() before Start() is called, then the driver binding instance would be uninstalled or
-/// invalid and Start() would be an invalid function pointer when invoked. In general, the spec implicitly assumes
-/// that driver binding instances that are valid at the start of he call to ConnectController() must remain valid for
-/// the duration of the ConnectController() call. If this is not true, then behavior is undefined. This function is
-/// marked unsafe for this reason.
+/// This routine cannot hold the protocol db lock while executing DriverBinding->Stop() since it needs to access
+/// protocol db services. That means this routine can't guarantee that driver bindings remain valid for the duration
+/// of its execution. For example, if a driver were to be unloaded in a timer callback while Stop() is being called
+/// on another driver, the driver binding instance could become invalid and Stop() would be an invalid function
+/// pointer when invoked. In general, the spec implicitly assumes that driver binding instances that are valid at the
+/// start of the call to DisconnectController() must remain valid for the duration of the DisconnectController()
+/// call. If this is not true, then behavior is undefined. This function is marked unsafe for this reason.
 ///
 /// ## Example
 ///
@@ -559,7 +558,24 @@ pub unsafe fn core_disconnect_controller(
     if one_or_more_drivers_disconnected || no_drivers { Ok(()) } else { Err(EfiError::NotFound) }
 }
 
-extern "efiapi" fn disconnect_controller(
+/// # Safety
+///
+/// This routine cannot hold the protocol db lock while executing
+/// DriverBinding->Stop() since it needs to access protocol db services. That
+/// means this routine can't guarantee that driver bindings remain valid for the
+/// duration of its execution. For example, if a driver were to be unloaded in a
+/// timer callback while Stop() is being called on another driver, the driver
+/// binding instance could become invalid and Stop() would be an invalid
+/// function pointer when invoked. In general, the spec implicitly assumes that
+/// driver binding instances that are valid at the start of the call to
+/// DisconnectController() must remain valid for the duration of the
+/// DisconnectController() call. If this is not true, then behavior is
+/// undefined. This function is marked unsafe for this reason.
+///
+/// - All parameters are opaque UEFI handles wrapped inside Rust types.
+///   Passing an invalid value does not by itself cause undefined behavior;
+///   the firmware is expected to reject it by returning an error status.
+unsafe extern "efiapi" fn disconnect_controller(
     controller_handle: efi::Handle,
     driver_image_handle: efi::Handle,
     child_handle: efi::Handle,
@@ -1860,17 +1876,22 @@ mod tests {
                 .unwrap();
 
             // Test the extern "efiapi" function with null handles (should succeed for empty controller)
-            let status = disconnect_controller(
-                controller_handle,
-                core::ptr::null_mut(), // No specific driver
-                core::ptr::null_mut(), // No child handle
-            );
+            // SAFETY: Test code - controller_handle was obtained from install_protocol_interface above.
+            // Null driver/child handles are valid per UEFI spec (disconnect all).
+            let status = unsafe {
+                disconnect_controller(
+                    controller_handle,
+                    core::ptr::null_mut(), // No specific driver
+                    core::ptr::null_mut(), // No child handle
+                )
+            };
 
             assert_eq!(status, efi::Status::SUCCESS, "disconnect_controller should succeed with null handles");
 
             // Test with invalid controller handle
             let invalid_handle = 0x9999 as efi::Handle;
-            let status = disconnect_controller(invalid_handle, core::ptr::null_mut(), core::ptr::null_mut());
+            // SAFETY: Test code - intentionally passing invalid handle to verify error handling.
+            let status = unsafe { disconnect_controller(invalid_handle, core::ptr::null_mut(), core::ptr::null_mut()) };
 
             // Should return error status for invalid handle
             assert_ne!(status, efi::Status::SUCCESS, "disconnect_controller should fail with invalid handle");
