@@ -5,6 +5,7 @@
     " SPDX-License-Identifier: Apache-2.0\n",
 )]
 #![cfg_attr(not(test), no_std)]
+#![deny(missing_docs)]
 #![allow(unexpected_cfgs)]
 #![feature(coverage_attribute)]
 
