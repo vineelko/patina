@@ -1831,7 +1831,9 @@ impl BootServices for StandardBootServices {
         let mut crc32 = MaybeUninit::uninit();
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let calculate_crc32 = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), calculate_crc32) };
-        match calculate_crc32(data as *mut _, data_size, crc32.as_mut_ptr()) {
+        // SAFETY: The caller is responsible for ensuring that `data` points to valid, readable
+        // memory of at least `data_size` bytes.
+        match unsafe { calculate_crc32(data as *mut _, data_size, crc32.as_mut_ptr()) } {
             s if s.is_error() => Err(s),
             // SAFETY: If the call succeeded, crc32 has been initialized.
             _ => Ok(unsafe { crc32.assume_init() }),
