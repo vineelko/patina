@@ -62,7 +62,15 @@ static WATCHDOG_ARCH_PTR: ArchProtocolPtr<protocols::watchdog::Protocol> = ArchP
 // { 0x5f1d7e16, 0x784a, 0x4da2, { 0xb0, 0x84, 0xf8, 0x12, 0xf2, 0x3a, 0x8d, 0xce }}
 pub const PRE_EBS_GUID: patina::BinaryGuid = patina::BinaryGuid::from_string("5F1D7E16-784A-4DA2-B084-F812F23A8DCE");
 // TODO [END]: LOCAL (TEMP) GUID DEFINITIONS (MOVE LATER)
-extern "efiapi" fn calculate_crc32(data: *mut c_void, data_size: usize, crc_32: *mut u32) -> efi::Status {
+
+/// Calculates the CRC32 of the given data buffer.
+///
+/// # Safety
+///
+/// The caller is responsible for ensuring that `data` points to valid, readable memory of at least
+/// `data_size` bytes and that `crc_32` points to valid, writable memory. Both pointers are
+/// null-checked, but validity of the referenced memory is the caller's responsibility.
+unsafe extern "efiapi" fn calculate_crc32(data: *mut c_void, data_size: usize, crc_32: *mut u32) -> efi::Status {
     if data.is_null() || data_size == 0 || crc_32.is_null() {
         return efi::Status::INVALID_PARAMETER;
     }
@@ -359,11 +367,14 @@ mod tests {
             let mut data_crc: u32 = 0;
 
             // Test case 1: Valid parameters - successful CRC32 calculation
-            let status = (st.boot_services().get().calculate_crc32)(
-                BUFFER.as_ptr() as *mut c_void,
-                BUFFER.len(),
-                &mut data_crc as *mut u32,
-            );
+            // SAFETY: The passed in values are safe because they are constructed in this test case.
+            let status = unsafe {
+                (st.boot_services().get().calculate_crc32)(
+                    BUFFER.as_ptr() as *mut c_void,
+                    BUFFER.len(),
+                    &mut data_crc as *mut u32,
+                )
+            };
             // Verify the function succeeded and CRC32 was calculated correctly for zero buffer
             if status == efi::Status::SUCCESS {
                 let expected_crc = crc32fast::hash(&BUFFER);
@@ -377,11 +388,10 @@ mod tests {
             }
 
             // Test case 2: Zero data size - should return INVALID_PARAMETER
-            let status = (st.boot_services().get().calculate_crc32)(
-                BUFFER.as_ptr() as *mut c_void,
-                0,
-                &mut data_crc as *mut u32,
-            );
+            // SAFETY: The passed in values are safe because they are constructed in this test case.
+            let status = unsafe {
+                (st.boot_services().get().calculate_crc32)(BUFFER.as_ptr() as *mut c_void, 0, &mut data_crc as *mut u32)
+            };
             if status == efi::Status::INVALID_PARAMETER {
                 log::debug!("Zero data size correctly returned INVALID_PARAMETER");
             } else {
@@ -389,11 +399,14 @@ mod tests {
             }
 
             // Test case 3: Null data pointer - should return INVALID_PARAMETER
-            let status = (st.boot_services().get().calculate_crc32)(
-                core::ptr::null_mut(),
-                BUFFER.len(),
-                &mut data_crc as *mut u32,
-            );
+            // SAFETY: The passed in values are safe because they are constructed in this test case.
+            let status = unsafe {
+                (st.boot_services().get().calculate_crc32)(
+                    core::ptr::null_mut(),
+                    BUFFER.len(),
+                    &mut data_crc as *mut u32,
+                )
+            };
             if status == efi::Status::INVALID_PARAMETER {
                 log::debug!("Null data pointer correctly returned INVALID_PARAMETER");
             } else {
@@ -401,11 +414,14 @@ mod tests {
             }
 
             // Test case 4: Null output pointer - should return INVALID_PARAMETER
-            let status = (st.boot_services().get().calculate_crc32)(
-                BUFFER.as_ptr() as *mut c_void,
-                BUFFER.len(),
-                core::ptr::null_mut(),
-            );
+            // SAFETY: The passed in values are safe because they are constructed in this test case.
+            let status = unsafe {
+                (st.boot_services().get().calculate_crc32)(
+                    BUFFER.as_ptr() as *mut c_void,
+                    BUFFER.len(),
+                    core::ptr::null_mut(),
+                )
+            };
             if status == efi::Status::INVALID_PARAMETER {
                 log::debug!("Null output pointer correctly returned INVALID_PARAMETER");
             } else {
