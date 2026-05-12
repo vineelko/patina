@@ -40,6 +40,7 @@ words:
   - anstyle
   - antras
   - armasm
+  - athlon
   - autocfg
   - bitvec
   - bootx
@@ -48,14 +49,19 @@ words:
   - bumpalo
   - cbindgen
   - cdecl
+  - cdram
   - cdrom
+  - celeron
   - clangpdb
   - cntfrq
   - cntpct
+  - corem
   - corosensei
   - coverity
   - cpuid
+  - csodimm
   - ctypes
+  - cudimm
   - cuviper
   - deassertion
   - depex
@@ -66,16 +72,24 @@ words:
   - dnested
   - docsrs
   - dtolnay
+  - duron
   - dword
   - dxefv
   - dxeipl
   - edkii
+  - edram
+  - edsff
+  - eeprom
+  - efficeon
   - efiapi
   - eficall
   - efierror
   - eflags
   - epage
+  - eprom
+  - expressx
   - fastrlp
+  - feprom
   - fnent
   - funty
   - fvmain
@@ -85,8 +99,8 @@ words:
   - genfw
   - getrsp
   - getsp
-  - gigantor
   - gicr
+  - gigantor
   - gnullvm
   - gohman
   - granularities
@@ -112,6 +126,10 @@ words:
   - libyaml
   - linkme
   - longjmp
+  - loong
+  - loongson
+  - lpddr
+  - lrdimm
   - lrpair
   - lzmatest
   - mdbook
@@ -119,6 +137,7 @@ words:
   - mmiport
   - mmram
   - mpidr
+  - mrdimm
   - msdia
   - mtrrs
   - nestedfv
@@ -136,6 +155,7 @@ words:
   - openvmm
   - opinfo
   - oprom
+  - opteron
   - ordinalize
   - oslar
   - oslsr
@@ -155,20 +175,27 @@ words:
   - pywin
   - qword
   - rdmsr
+  - rdram
   - rdtsc
   - reentrancy
   - regsvr
   - relia
   - reloc
+  - riscv
   - rlibs
   - rposition
   - ruint
   - rustification
   - rwlock
+  - sgram
   - smbus
   - smcport
   - smiport
   - smram
+  - socketm
+  - socketr
+  - sodimm
+  - srimm
   - swmmis
   - syscall
   - syscalls
@@ -177,6 +204,7 @@ words:
   - tiano
   - tianocore
   - tolnay
+  - turion
   - typenum
   - typer
   - uefiext
@@ -188,17 +216,19 @@ words:
   - uncrustify
   - unmaps
   - unrecovered
-  - unregisters
   - unreg
+  - unregisters
   - unspec
   - unsynchronized
   - variadics
   - vcvarsamd
   - vcvarsarm
+  - vlvesa
   - vtable
   - wakeup
   - wasip
   - wbinvd
+  - weitek
   - windbg
   - withf
   - writelncrlf

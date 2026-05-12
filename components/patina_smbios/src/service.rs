@@ -355,7 +355,10 @@ mod tests {
     use alloc::string::String;
     use std::format;
 
-    use crate::smbios_record::{SmbiosRecordStructure, Type0PlatformFirmwareInformation, Type127EndOfTable};
+    use crate::{
+        smbios_record::{SmbiosRecordStructure, Type0PlatformFirmwareInformation, Type127EndOfTable},
+        smbios_types,
+    };
     use mockall::predicate::*;
     use patina::{
         boot_services::{MockBootServices, tpl::Tpl},
@@ -693,14 +696,18 @@ mod tests {
             bios_starting_address_segment: 0xE800,
             firmware_release_date: 3,
             firmware_rom_size: 0xFF,
-            characteristics: 0x08,
-            characteristics_ext1: 0x03,
-            characteristics_ext2: 0x03,
+            characteristics: smbios_types::BiosCharacteristics::new().with_pci_supported(true),
+            characteristics_ext1: smbios_types::BiosCharacteristicsExt1::new()
+                .with_acpi_supported(true)
+                .with_usb_legacy_supported(true),
+            characteristics_ext2: smbios_types::BiosCharacteristicsExt2::new()
+                .with_bios_boot_specification_supported(true)
+                .with_fn_network_service_boot_supported(true),
             system_bios_major_release: 1,
             system_bios_minor_release: 0,
             embedded_controller_major_release: 0xFF,
             embedded_controller_minor_release: 0xFF,
-            extended_bios_rom_size: 0,
+            extended_bios_rom_size: smbios_types::ExtendedBiosRomSize::new(),
             string_pool: vec![String::from("Vendor"), String::from("1.0"), String::from("2025")],
         };
 
@@ -806,14 +813,18 @@ mod tests {
             bios_starting_address_segment: 0xE800,
             firmware_release_date: 3,
             firmware_rom_size: 0xFF,
-            characteristics: 0x08,
-            characteristics_ext1: 0x03,
-            characteristics_ext2: 0x03,
+            characteristics: smbios_types::BiosCharacteristics::new().with_pci_supported(true),
+            characteristics_ext1: smbios_types::BiosCharacteristicsExt1::new()
+                .with_acpi_supported(true)
+                .with_usb_legacy_supported(true),
+            characteristics_ext2: smbios_types::BiosCharacteristicsExt2::new()
+                .with_bios_boot_specification_supported(true)
+                .with_fn_network_service_boot_supported(true),
             system_bios_major_release: 1,
             system_bios_minor_release: 0,
             embedded_controller_major_release: 0xFF,
             embedded_controller_minor_release: 0xFF,
-            extended_bios_rom_size: 0,
+            extended_bios_rom_size: smbios_types::ExtendedBiosRomSize::new(),
             string_pool: vec![String::from("Vendor"), String::from("1.0"), String::from("01/01/2025")],
         };
 
@@ -839,14 +850,18 @@ mod tests {
             bios_starting_address_segment: 0xE800,
             firmware_release_date: 3,
             firmware_rom_size: 0xFF,
-            characteristics: 0x08,
-            characteristics_ext1: 0x03,
-            characteristics_ext2: 0x03,
+            characteristics: smbios_types::BiosCharacteristics::new().with_pci_supported(true),
+            characteristics_ext1: smbios_types::BiosCharacteristicsExt1::new()
+                .with_acpi_supported(true)
+                .with_usb_legacy_supported(true),
+            characteristics_ext2: smbios_types::BiosCharacteristicsExt2::new()
+                .with_bios_boot_specification_supported(true)
+                .with_fn_network_service_boot_supported(true),
             system_bios_major_release: 1,
             system_bios_minor_release: 0,
             embedded_controller_major_release: 0xFF,
             embedded_controller_minor_release: 0xFF,
-            extended_bios_rom_size: 0,
+            extended_bios_rom_size: smbios_types::ExtendedBiosRomSize::new(),
             string_pool: vec![String::from("Vendor"), String::from("1.0"), String::from("01/01/2025")],
         };
 
@@ -870,14 +885,18 @@ mod tests {
             bios_starting_address_segment: 0xE800,
             firmware_release_date: 3,
             firmware_rom_size: 0xFF,
-            characteristics: 0x08,
-            characteristics_ext1: 0x03,
-            characteristics_ext2: 0x03,
+            characteristics: smbios_types::BiosCharacteristics::new().with_pci_supported(true),
+            characteristics_ext1: smbios_types::BiosCharacteristicsExt1::new()
+                .with_acpi_supported(true)
+                .with_usb_legacy_supported(true),
+            characteristics_ext2: smbios_types::BiosCharacteristicsExt2::new()
+                .with_bios_boot_specification_supported(true)
+                .with_fn_network_service_boot_supported(true),
             system_bios_major_release: 1,
             system_bios_minor_release: 0,
             embedded_controller_major_release: 0xFF,
             embedded_controller_minor_release: 0xFF,
-            extended_bios_rom_size: 0,
+            extended_bios_rom_size: smbios_types::ExtendedBiosRomSize::new(),
             string_pool: vec![String::from("Vendor"), String::from("1.0"), String::from("01/01/2025")],
         };
 
@@ -951,14 +970,18 @@ mod tests {
             bios_starting_address_segment: 0xE800,
             firmware_release_date: 3,
             firmware_rom_size: 0xFF,
-            characteristics: 0x08,
-            characteristics_ext1: 0x03,
-            characteristics_ext2: 0x03,
+            characteristics: smbios_types::BiosCharacteristics::new().with_pci_supported(true),
+            characteristics_ext1: smbios_types::BiosCharacteristicsExt1::new()
+                .with_acpi_supported(true)
+                .with_usb_legacy_supported(true),
+            characteristics_ext2: smbios_types::BiosCharacteristicsExt2::new()
+                .with_bios_boot_specification_supported(true)
+                .with_fn_network_service_boot_supported(true),
             system_bios_major_release: 1,
             system_bios_minor_release: 0,
             embedded_controller_major_release: 0xFF,
             embedded_controller_minor_release: 0xFF,
-            extended_bios_rom_size: 0,
+            extended_bios_rom_size: smbios_types::ExtendedBiosRomSize::new(),
             string_pool: vec![String::from("Vendor"), String::from("1.0"), String::from("01/01/2025")],
         };
 
