@@ -690,29 +690,30 @@ unsafe extern "efiapi" fn allocate_pages(
     memory: *mut efi::PhysicalAddress,
 ) -> efi::Status {
     // SAFETY: The caller is responsible for ensuring `memory` is valid.
-    match unsafe { core_allocate_pages(allocation_type, memory_type, pages, memory, None) } {
-        Ok(_) => efi::Status::SUCCESS,
+    if memory.is_null() {
+        return efi::Status::INVALID_PARAMETER;
+    }
+
+    // SAFETY: caller must ensure that "memory" is a valid pointer. It is null-checked above.
+    let address = unsafe { memory.read_unaligned() };
+    match core_allocate_pages(allocation_type, memory_type, pages, address, None) {
+        Ok(address) => {
+            // SAFETY: caller must ensure that "memory" is a valid pointer. It is null-checked above.
+            unsafe { memory.write_unaligned(address) }
+            efi::Status::SUCCESS
+        }
         Err(status) => status.into(),
     }
 }
 
 /// Allocates pages of the specified type and returns the address through the `memory` pointer.
-///
-/// # Safety
-///
-/// The caller is responsible for ensuring that `memory` points to valid writable memory. The
-/// pointer is null-checked, but validity of the referenced memory is the caller's responsibility.
-pub unsafe fn core_allocate_pages(
+pub fn core_allocate_pages(
     allocation_type: efi::AllocateType,
     memory_type: efi::MemoryType,
     pages: usize,
-    memory: *mut efi::PhysicalAddress,
+    memory: efi::PhysicalAddress,
     alignment: Option<usize>,
-) -> Result<(), EfiError> {
-    if memory.is_null() {
-        return Err(EfiError::InvalidParameter);
-    }
-
+) -> Result<efi::PhysicalAddress, EfiError> {
     // It is not valid to attempt to allocate these memory types
     if matches!(memory_type, efi::CONVENTIONAL_MEMORY | efi::PERSISTENT_MEMORY | efi::UNACCEPTED_MEMORY_TYPE) {
         return Err(EfiError::InvalidParameter);
@@ -726,25 +727,15 @@ pub unsafe fn core_allocate_pages(
             let result = match allocation_type {
                 efi::ALLOCATE_ANY_PAGES => allocator.allocate_pages(DEFAULT_ALLOCATION_STRATEGY, pages, alignment),
                 efi::ALLOCATE_MAX_ADDRESS => {
-                    // SAFETY: caller must ensure that "memory" is a valid pointer. It is null-checked above.
-                    let address = unsafe { memory.read_unaligned() };
-                    allocator.allocate_pages(AllocationStrategy::TopDown(Some(address as usize)), pages, alignment)
+                    allocator.allocate_pages(AllocationStrategy::TopDown(Some(memory as usize)), pages, alignment)
                 }
                 efi::ALLOCATE_ADDRESS => {
-                    // SAFETY: caller must ensure that "memory" is a valid pointer. It is null-checked above.
-                    let address = unsafe { memory.read_unaligned() };
-                    allocator.allocate_pages(AllocationStrategy::Address(address as usize), pages, alignment)
+                    allocator.allocate_pages(AllocationStrategy::Address(memory as usize), pages, alignment)
                 }
                 _ => Err(EfiError::InvalidParameter),
             };
 
-            if let Ok(ptr) = result {
-                // SAFETY: caller must ensure that "memory" is a valid pointer. It is null-checked above.
-                unsafe { memory.write_unaligned(ptr.expose_provenance().get() as u64) }
-                Ok(())
-            } else {
-                result.map(|_| ())
-            }
+            result.map(|ptr| ptr.expose_provenance().get() as efi::PhysicalAddress)
         }
         Err(err) => Err(err),
     };
@@ -1010,7 +1001,7 @@ fn process_hob_allocations(hob_list: &HobList) {
                     continue;
                 }
 
-                let mut address = desc.memory_base_address;
+                let address = desc.memory_base_address;
                 match GCD.get_existent_memory_descriptor_for_address(address) {
                     // we found the region in the GCD, so we can allocate it
                     Ok(gcd_desc) => {
@@ -1029,18 +1020,13 @@ fn process_hob_allocations(hob_list: &HobList) {
                         let alloc_res = match gcd_desc.memory_type {
                             // if this is system memory, we use core_allocate_pages to allocate it
                             // so that we can track the allocation in the allocator
-
-                            // SAFETY: `address` is a local variable derived from the HOB and is
-                            // expected to point to a valid memory location.
-                            GcdMemoryType::SystemMemory => unsafe {
-                                core_allocate_pages(
-                                    efi::ALLOCATE_ADDRESS,
-                                    desc.memory_type,
-                                    uefi_size_to_pages!(desc.memory_length as usize),
-                                    &mut address as *mut efi::PhysicalAddress,
-                                    None,
-                                )
-                            },
+                            GcdMemoryType::SystemMemory => core_allocate_pages(
+                                efi::ALLOCATE_ADDRESS,
+                                desc.memory_type,
+                                uefi_size_to_pages!(desc.memory_length as usize),
+                                address as efi::PhysicalAddress,
+                                None,
+                            ),
                             GcdMemoryType::NonExistent | GcdMemoryType::Unaccepted => {
                                 // we can't allocate memory in a non-existent or unaccepted memory type
                                 log::error!(
@@ -1060,7 +1046,7 @@ fn process_hob_allocations(hob_list: &HobList) {
                                     protocol_db::DXE_CORE_HANDLE,
                                     None,
                                 )
-                                .map(|_| ()),
+                                .map(|address| address as efi::PhysicalAddress),
                         };
 
                         if let Err(err) = alloc_res {
@@ -1153,19 +1139,11 @@ fn process_hob_allocations(hob_list: &HobList) {
     // before we allocate page 0, as it may not live in system memory, in which case we cannot allocate it.
     match GCD.get_existent_memory_descriptor_for_address(0) {
         Ok(desc) if desc.memory_type == GcdMemoryType::SystemMemory => {
-            let mut address: efi::PhysicalAddress = 0;
+            let address: efi::PhysicalAddress = 0;
 
             // SAFETY: `address` is a local variable set to 0 for null pointer detection and this is
             // valid expected usage.
-            let status = unsafe {
-                core_allocate_pages(
-                    efi::ALLOCATE_ADDRESS,
-                    efi::BOOT_SERVICES_DATA,
-                    1,
-                    &mut address as *mut efi::PhysicalAddress,
-                    None,
-                )
-            };
+            let status = core_allocate_pages(efi::ALLOCATE_ADDRESS, efi::BOOT_SERVICES_DATA, 1, address, None);
 
             if status.is_err() {
                 // if we failed, we should just continue, we will still unmap page 0, but it will be possible to

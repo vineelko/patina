@@ -194,10 +194,11 @@ fn core_reload(image: &[u8], out: &mut dyn core::fmt::Write) {
 
     // Step 1: allocate the image memory.
     let image_size = pe_info.size_of_image as usize;
-    let alloc = match CoreMemoryManager.allocate_pages(
-        uefi_size_to_pages!(image_size),
-        AllocationOptions::new().with_strategy(ARCH_ALLOCATION_STRATEGY),
-    ) {
+    // SAFETY: ARCH_ALLOCATION_STRATEGY is a compile-time constant that is either
+    // PageAllocationStrategy::MaxAddress(0xFFFF_FFFF) or PageAllocationStrategy::Any;
+    // neither requires dereferencing a caller provided address.
+    let options = unsafe { AllocationOptions::new().with_strategy(ARCH_ALLOCATION_STRATEGY) };
+    let alloc = match CoreMemoryManager.allocate_pages(uefi_size_to_pages!(image_size), options) {
         Ok(pages) => pages,
         Err(err) => {
             let _ = writeln!(out, "Failed to allocate load buffer: {:?}", err);

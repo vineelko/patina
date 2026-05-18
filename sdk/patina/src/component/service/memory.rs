@@ -110,6 +110,7 @@ pub trait MemoryManager {
     ///     // to free it.
     ///     let alloc = memory_manager.allocate_pages(1, AllocationOptions::new())?;
     ///     let ptr = alloc.into_raw_ptr::<u8>().unwrap();
+    ///     // SAFETY: ptr was just obtained from allocate_pages, so it is a valid page-aligned address.
     ///     unsafe { memory_manager.free_pages(ptr as usize, 1)? };
     ///
     ///     Ok(())
@@ -326,14 +327,24 @@ impl AllocationOptions {
 
     /// Specifies the allocation strategy to use for the allocation. See [`PageAllocationStrategy`]
     /// for more details.
+    ///
+    /// # Safety
+    ///
+    /// When using [`PageAllocationStrategy::Address`], the caller must ensure that the provided
+    /// address is a valid physical address that is available for the requested
+    /// allocation type and number of pages. Passing an invalid or in use address results in
+    /// undefined behavior when the allocation is subsequently used.
+    ///
+    /// When using [`PageAllocationStrategy::MaxAddress`], the caller must ensure the provided
+    /// upper bound address is a sensible constraint for the target system.
     #[inline(always)]
-    pub const fn with_strategy(mut self, allocation_strategy: PageAllocationStrategy) -> Self {
+    pub const unsafe fn with_strategy(mut self, allocation_strategy: PageAllocationStrategy) -> Self {
         self.allocation_strategy = allocation_strategy;
         self
     }
 
     /// Specifies the alignment to use for the allocation. This must be a power
-    /// of two and greater then the page size.
+    /// of two and greater than the page size.
     ///
     /// Alignment will be ignored if the allocation strategy is [`PageAllocationStrategy::Address`].
     #[inline(always)]
@@ -1190,10 +1201,14 @@ mod tests {
 
     #[test]
     fn test_allocation_options_config_sticks() {
-        let options = AllocationOptions::default()
-            .with_alignment(0x200)
-            .with_memory_type(EfiMemoryType::PalCode)
-            .with_strategy(PageAllocationStrategy::Address(0x1000_0000_0000_0004));
+        // SAFETY: Test code - the address is never passed to allocate_pages; this only verifies
+        // that the strategy value is stored correctly in AllocationOptions.
+        let options = unsafe {
+            AllocationOptions::default()
+                .with_alignment(0x200)
+                .with_memory_type(EfiMemoryType::PalCode)
+                .with_strategy(PageAllocationStrategy::Address(0x1000_0000_0000_0004))
+        };
 
         assert_eq!(options.alignment(), 0x200);
         assert_eq!(options.memory_type(), EfiMemoryType::PalCode);

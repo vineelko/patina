@@ -298,13 +298,7 @@ pub trait BootServices {
     /// Allocates memory pages from the system.
     ///
     /// [UEFI Spec Documentation: 7.2.1. EFI_BOOT_SERVICES.AllocatePages()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-allocatepages)
-    ///
-    /// # Safety
-    ///
-    /// When using [`AllocType::Address`] or [`AllocType::MaxAddress`], the address must refer to
-    /// valid physical memory. It will be dereferenced by the underlying allocator during
-    /// allocation, so passing an invalid address causes undefined behavior.
-    unsafe fn allocate_pages(
+    fn allocate_pages(
         &self,
         alloc_type: AllocType,
         memory_type: EfiMemoryType,
@@ -1233,12 +1227,7 @@ impl BootServices for StandardBootServices {
         unsafe { restore_tpl(old_tpl.into()) }
     }
 
-    /// # Safety
-    ///
-    /// When using [`AllocType::Address`] or [`AllocType::MaxAddress`], the address must refer to
-    /// valid physical memory. It will be dereferenced by the underlying allocator during
-    /// allocation, so passing an invalid address causes undefined behavior.
-    unsafe fn allocate_pages(
+    fn allocate_pages(
         &self,
         alloc_type: AllocType,
         memory_type: EfiMemoryType,
@@ -2521,10 +2510,8 @@ mod tests {
     #[should_panic = "Boot services function allocate_pages is not initialized."]
     fn test_allocate_pages_not_init() {
         let boot_services = boot_services!();
-        // SAFETY: `AllocType::AnyPage` does not supply a specific address, so the allocator
-        // chooses one; no caller-provided address is dereferenced. The call is expected to panic
-        // before reaching the FFI layer because `allocate_pages` is not initialized.
-        let _ = unsafe { boot_services.allocate_pages(AllocType::AnyPage, EfiMemoryType::ACPIMemoryNVS, 0) };
+        // The call is expected to panic before reaching the FFI layer because `allocate_pages` is not initialized.
+        let _ = boot_services.allocate_pages(AllocType::AnyPage, EfiMemoryType::ACPIMemoryNVS, 0);
     }
 
     #[test]
@@ -2550,9 +2537,7 @@ mod tests {
             efi::Status::SUCCESS
         }
 
-        // SAFETY: `AllocType::AnyPage` does not supply a specific address; the allocator
-        // chooses one, so no caller-provided address is dereferenced.
-        let status = unsafe { boot_services.allocate_pages(AllocType::AnyPage, EfiMemoryType::MemoryMappedIO, 4) };
+        let status = boot_services.allocate_pages(AllocType::AnyPage, EfiMemoryType::MemoryMappedIO, 4);
 
         assert!(matches!(status, Ok(17)));
     }
@@ -2578,9 +2563,7 @@ mod tests {
             efi::Status::SUCCESS
         }
 
-        // SAFETY: The address 17 is a test value accepted by the mock; the mock validates the
-        // parameter rather than dereferencing it as real physical memory.
-        let status = unsafe { boot_services.allocate_pages(AllocType::Address(17), EfiMemoryType::MemoryMappedIO, 4) };
+        let status = boot_services.allocate_pages(AllocType::Address(17), EfiMemoryType::MemoryMappedIO, 4);
         assert!(matches!(status, Ok(17)));
     }
 

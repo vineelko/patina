@@ -498,11 +498,14 @@ impl AcpiTable {
         };
 
         // Allocate memory in appropriate ACPI region, up to page granularity.
+        // SAFETY: allocation_strategy is either PageAllocationStrategy::MaxAddress(SIZE_4GB - 1) for
+        // FACS tables (which must reside in the lower 32-bit address space) or
+        // PageAllocationStrategy::Any for all others. Neither requires dereferencing a
+        // caller-provided address.
+        let alloc_options =
+            unsafe { AllocationOptions::new().with_memory_type(allocator_type).with_strategy(allocation_strategy) };
         let table_page_alloc = mm
-            .allocate_pages(
-                uefi_size_to_pages!(table_length),
-                AllocationOptions::new().with_memory_type(allocator_type).with_strategy(allocation_strategy),
-            )
+            .allocate_pages(uefi_size_to_pages!(table_length), alloc_options)
             .map_err(|_e| AcpiError::AllocationFailed)?;
 
         // Get the raw pointer to the allocated memory for copying.

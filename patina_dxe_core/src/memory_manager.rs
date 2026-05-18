@@ -60,14 +60,8 @@ impl MemoryManager for CoreMemoryManager {
             }
         };
 
-        // SAFETY: The caller must ensure that the allocation options and the
-        // address in it is correct.
-        let result = unsafe {
-            core_allocate_pages(alloc_type, options.memory_type().into(), page_count, &mut address, Some(alignment))
-        };
-
-        match result {
-            Ok(_) => {
+        match core_allocate_pages(alloc_type, options.memory_type().into(), page_count, address, Some(alignment)) {
+            Ok(address) => {
                 // SAFETY: address/page_count come from a successful core_allocate_pages call.
                 let allocation = unsafe {
                     PageAllocation::new(address as usize, page_count, &CoreMemoryManager)
@@ -104,6 +98,12 @@ impl MemoryManager for CoreMemoryManager {
         Ok(allocator as &dyn core::alloc::Allocator)
     }
 
+    /// # Safety
+    ///
+    /// Changing tha attributes of a page of memory can result in undefined behavior
+    /// if the attributes are not correct for the memory usage. The caller is responsible
+    /// for understanding the use of the memory and verifying that all current and
+    /// future accesses of the memory align to the attributes configured.
     unsafe fn set_page_attributes(
         &self,
         address: usize,
@@ -235,7 +235,9 @@ fn memory_manager_allocations_test(mm: Service<dyn MemoryManager>) -> patina_tes
     // SAFETY: address was returned by allocate_pages for this manager.
     let result = unsafe { mm.free_pages(address, 1) };
     u_assert!(result.is_ok(), "Failed to free page.");
-    let result = mm.allocate_pages(1, AllocationOptions::new().with_strategy(PageAllocationStrategy::Address(address)));
+    // SAFETY: address was previously allocated and freed by this manager, making it a valid target address.
+    let options = unsafe { AllocationOptions::new().with_strategy(PageAllocationStrategy::Address(address)) };
+    let result = mm.allocate_pages(1, options);
     u_assert!(result.is_ok(), "Failed to allocate page by address");
     u_assert_eq!(result.unwrap().into_raw_ptr::<u8>().unwrap() as usize, address, "Failed to allocate correct address");
 
@@ -253,8 +255,10 @@ fn memory_manager_allocations_test(mm: Service<dyn MemoryManager>) -> patina_tes
 
     // Allocate with a max address limit.
     let max_address = 0x100_8000_0000;
-    let result =
-        mm.allocate_pages(1, AllocationOptions::new().with_strategy(PageAllocationStrategy::MaxAddress(max_address)));
+    // SAFETY: PageAllocationStrategy::MaxAddress constrains the upper bound only; the allocator
+    // chooses the actual address, so no caller-provided address is dereferenced.
+    let options = unsafe { AllocationOptions::new().with_strategy(PageAllocationStrategy::MaxAddress(max_address)) };
+    let result = mm.allocate_pages(1, options);
     u_assert!(result.is_ok(), "Failed to allocate with max address limit.");
     let allocation = result.unwrap();
     let address = allocation.into_raw_ptr::<u8>().unwrap() as usize;
