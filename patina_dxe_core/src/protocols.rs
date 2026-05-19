@@ -10,15 +10,13 @@ use core::{ffi::c_void, mem::size_of};
 
 use alloc::{slice, vec, vec::Vec};
 use mu_rust_helpers::guid::guid_fmt;
-use patina::{
-    device_path::walker::{is_device_path_end, remaining_device_path},
-    error::EfiError,
-};
+use patina::{device_path::walker::remaining_device_path, error::EfiError};
 use r_efi::efi;
 use tpl_mutex::TplMutex;
 
 use crate::{
     allocator::core_allocate_pool,
+    device_path_ptr::DevicePathPtr,
     driver_services::{core_connect_controller, core_disconnect_controller},
     events::{EVENT_DB, signal_event},
     protocol_db::{DXE_CORE_HANDLE, SpinLockedProtocolDb},
@@ -627,15 +625,13 @@ unsafe extern "C" fn install_multiple_protocol_interfaces(handle: *mut efi::Hand
         if unsafe { *protocol } == efi::protocols::device_path::PROTOCOL_GUID
             // SAFETY: `interface` is provided by the caller as a device path pointer per the
             // function-level safety contract.
-            && let Ok((remaining_path, handle)) = unsafe { core_locate_device_path(
+            && let Some(dp) = unsafe { DevicePathPtr::from_raw(interface as *mut efi::protocols::device_path::Protocol) }
+            && let Ok((remaining_path, handle)) = core_locate_device_path(
                 efi::protocols::device_path::PROTOCOL_GUID,
-                interface as *const efi::protocols::device_path::Protocol,
-            ) }
+                dp,
+            )
             && PROTOCOL_DB.validate_handle(handle).is_ok()
-            && {
-                // SAFETY: remaining_path is returned from core_locate_device_path and is a valid device path pointer.
-                unsafe { is_device_path_end(remaining_path) }
-            }
+            && remaining_path.is_end()
         {
             return efi::Status::ALREADY_STARTED;
         }
@@ -882,23 +878,15 @@ unsafe extern "efiapi" fn locate_protocol(
 }
 
 /// Locates the best matching handle for a device path that supports a specified protocol.
-///
-/// # Safety
-///
-/// `device_path` must point to a valid UEFI device path in readable memory. It is null checked,
-/// but validity of the referenced device path structure is the caller's responsibility.
-pub unsafe fn core_locate_device_path(
+pub fn core_locate_device_path(
     protocol: efi::Guid,
-    device_path: *const r_efi::protocols::device_path::Protocol,
-) -> Result<(*mut r_efi::protocols::device_path::Protocol, efi::Handle), EfiError> {
-    if device_path.is_null() {
-        return Err(EfiError::InvalidParameter);
-    }
+    device_path: DevicePathPtr,
+) -> Result<(DevicePathPtr, efi::Handle), EfiError> {
     let device_path_protocol_guid = &r_efi::protocols::device_path::PROTOCOL_GUID as *const _ as *mut efi::Guid;
 
     let mut best_device: efi::Handle = core::ptr::null_mut();
     let mut best_match: isize = -1;
-    let mut best_remaining_path: *const r_efi::protocols::device_path::Protocol = core::ptr::null_mut();
+    let mut best_remaining_path: DevicePathPtr = device_path; // placeholder; only used when best_match >= 0
 
     let handles = PROTOCOL_DB.locate_handles(Some(protocol))?;
 
@@ -912,11 +900,14 @@ pub unsafe fn core_locate_device_path(
         if status != efi::Status::SUCCESS {
             continue;
         }
+        if temp_device_path.is_null() {
+            continue;
+        }
 
-        let (remaining_path, matching_nodes) = match
-            // SAFETY: temp_device_path and device_path are validated before use and are device path pointers.
-            unsafe { remaining_device_path(temp_device_path, device_path) }
-        {
+        // SAFETY: temp_device_path is non-null and was returned by handle_protocol for the device
+        // path protocol, so it points to a valid, well-formed device path structure.
+        let temp_dp = unsafe { DevicePathPtr::new(temp_device_path) };
+        let (remaining_path, matching_nodes) = match remaining_device_path(temp_dp, device_path) {
             Some((remaining_path, matching_nodes)) => (remaining_path, matching_nodes as isize),
             None => continue,
         };
@@ -932,7 +923,7 @@ pub unsafe fn core_locate_device_path(
         return Err(EfiError::NotFound);
     }
 
-    Ok((best_remaining_path as *mut r_efi::protocols::device_path::Protocol, best_device))
+    Ok((best_remaining_path, best_device))
 }
 
 /// Locates a handle for a device on a device path that supports a specified protocol.
@@ -966,18 +957,18 @@ unsafe extern "efiapi" fn locate_device_path(
     };
     // SAFETY: `current_device_path` was read from the caller-provided `device_path` pointer
     // (null-checked above) and verified non-null.
-    let (best_remaining_path, best_device) =
-        match unsafe { core_locate_device_path(protocol_guid, current_device_path) } {
-            Err(err) => return err.into(),
-            Ok((path, device)) => (path, device),
-        };
+    let dp = unsafe { DevicePathPtr::new(current_device_path) };
+    let (best_remaining_path, best_device) = match core_locate_device_path(protocol_guid, dp) {
+        Err(err) => return err.into(),
+        Ok((path, device)) => (path, device),
+    };
     if device.is_null() {
         return efi::Status::INVALID_PARAMETER;
     }
     // SAFETY: Caller must ensure that device_path and device are valid pointers. They are null-checked above.
     unsafe {
         device.write_unaligned(best_device);
-        device_path.write_unaligned(best_remaining_path);
+        device_path.write_unaligned(best_remaining_path.as_ptr());
     }
 
     efi::Status::SUCCESS

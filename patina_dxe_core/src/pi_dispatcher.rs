@@ -14,6 +14,8 @@ mod fv;
 mod image;
 mod section_decompress;
 
+pub(crate) use crate::device_path_ptr::DevicePathPtr;
+
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
@@ -276,7 +278,8 @@ impl<P: PlatformInfo> PiDispatcher<P> {
                 // SAFETY: The device path is constructed from the FV and file
                 // information and should be valid as long as the underlying FV
                 // and file data is valid.
-                let status = unsafe { self.load_image(false, DXE_CORE_HANDLE, driver.device_path, Some(data)) };
+                let device_path = unsafe { DevicePathPtr::from_raw(driver.device_path) };
+                let status = self.load_image(false, DXE_CORE_HANDLE, device_path, Some(data));
                 match status {
                     Ok(handle) => {
                         driver.image_handle = Some(handle);
@@ -716,11 +719,17 @@ impl DispatcherContext {
                             let filename_device_path =
                                 boxed_device_path.as_ptr() as *const efi::protocols::device_path::Protocol;
 
-                            let full_path_bytes =
-                                concat_device_path_to_boxed_slice(fv_device_path, filename_device_path);
-                            let full_device_path_for_file = full_path_bytes
-                                .map(|full_path| Box::into_raw(full_path) as *mut efi::protocols::device_path::Protocol)
-                                .unwrap_or(fv_device_path);
+                            let full_device_path_for_file =
+                                // SAFETY: fv_device_path may be null (not all handles have a device path).
+                                if let Some(fv_dp) = unsafe { DevicePathPtr::from_raw(fv_device_path) } {
+                                    // SAFETY: filename_nodes_buf is a local non-empty allocation and is always non-null.
+                                    let filename_dp = unsafe { DevicePathPtr::new(filename_device_path as *mut _) };
+                                    concat_device_path_to_boxed_slice(fv_dp, filename_dp)
+                                        .map(|full_path| Box::into_raw(full_path) as *mut efi::protocols::device_path::Protocol)
+                                        .unwrap_or(fv_device_path)
+                                } else {
+                                    fv_device_path
+                                };
 
                             self.pending_drivers.push(PendingDriver {
                                 file_name,
@@ -810,7 +819,10 @@ mod tests {
     use std::{fs::File, io::Read, vec};
 
     use log::{Level, LevelFilter, Metadata, Record};
-    use patina::{device_path::walker::DevicePathWalker, pi};
+    use patina::{
+        device_path::{ptr::DevicePathPtr, walker::DevicePathWalker},
+        pi,
+    };
     use patina_ffs_extractors::NullSectionExtractor;
     use uuid::uuid;
 
@@ -1304,27 +1316,22 @@ mod tests {
                 assert_eq!(authentication_status, 0);
 
                 // SAFETY: `file` is a valid device path pointer provided by the dispatcher for this callback.
-                unsafe {
-                    let mut node_walker = DevicePathWalker::new(file);
-                    //outer FV of NESTEDFV.Fv does not have an extended header so expect MMAP device path.
-                    let fv_node = node_walker.next().unwrap();
-                    assert_eq!(fv_node.header().r#type, efi::protocols::device_path::TYPE_HARDWARE);
-                    assert_eq!(fv_node.header().sub_type, efi::protocols::device_path::Hardware::SUBTYPE_MMAP);
+                let mut node_walker = DevicePathWalker::new(unsafe { DevicePathPtr::new(file) });
+                //outer FV of NESTEDFV.Fv does not have an extended header so expect MMAP device path.
+                let fv_node = node_walker.next().unwrap();
+                assert_eq!(fv_node.header().r#type, efi::protocols::device_path::TYPE_HARDWARE);
+                assert_eq!(fv_node.header().sub_type, efi::protocols::device_path::Hardware::SUBTYPE_MMAP);
 
-                    //Internal nested FV file name is 2DFBCBC7-14D6-4C70-A9C5-AD0AD03F4D75
-                    let file_node = node_walker.next().unwrap();
-                    assert_eq!(file_node.header().r#type, efi::protocols::device_path::TYPE_MEDIA);
-                    assert_eq!(
-                        file_node.header().sub_type,
-                        efi::protocols::device_path::Media::SUBTYPE_PIWG_FIRMWARE_FILE
-                    );
-                    assert_eq!(file_node.data(), uuid!("2DFBCBC7-14D6-4C70-A9C5-AD0AD03F4D75").to_bytes_le());
+                //Internal nested FV file name is 2DFBCBC7-14D6-4C70-A9C5-AD0AD03F4D75
+                let file_node = node_walker.next().unwrap();
+                assert_eq!(file_node.header().r#type, efi::protocols::device_path::TYPE_MEDIA);
+                assert_eq!(file_node.header().sub_type, efi::protocols::device_path::Media::SUBTYPE_PIWG_FIRMWARE_FILE);
+                assert_eq!(file_node.data(), uuid!("2DFBCBC7-14D6-4C70-A9C5-AD0AD03F4D75").to_bytes_le());
 
-                    //device path end node
-                    let end_node = node_walker.next().unwrap();
-                    assert_eq!(end_node.header().r#type, efi::protocols::device_path::TYPE_END);
-                    assert_eq!(end_node.header().sub_type, efi::protocols::device_path::End::SUBTYPE_ENTIRE);
-                }
+                //device path end node
+                let end_node = node_walker.next().unwrap();
+                assert_eq!(end_node.header().r#type, efi::protocols::device_path::TYPE_END);
+                assert_eq!(end_node.header().sub_type, efi::protocols::device_path::End::SUBTYPE_ENTIRE);
 
                 SECURITY_CALL_EXECUTED.store(true, core::sync::atomic::Ordering::SeqCst);
 

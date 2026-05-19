@@ -12,6 +12,7 @@ use alloc::{boxed::Box, collections::BTreeMap};
 use patina::{
     device_path::{
         fv_types::{FvMemMapDevicePath, FvPiWgDevicePath},
+        ptr::DevicePathPtr,
         walker::concat_device_path_to_boxed_slice,
     },
     pi::{
@@ -881,8 +882,10 @@ pub fn device_path_bytes_for_fv_file(fv_handle: efi::Handle, file_name: efi::Gui
     let fv_device_path = PROTOCOL_DB.get_interface_for_handle(fv_handle, efi::protocols::device_path::PROTOCOL_GUID)?;
     let file_node = &FvPiWgDevicePath::new_file(file_name);
     concat_device_path_to_boxed_slice(
-        fv_device_path as *mut _ as *const efi::protocols::device_path::Protocol,
-        file_node as *const _ as *const efi::protocols::device_path::Protocol,
+        // SAFETY: fv_device_path comes from the protocol database and is a valid, non-null pointer.
+        unsafe { DevicePathPtr::new(fv_device_path as *mut _) },
+        // SAFETY: file_node is a reference to a local stack value, valid for this call.
+        unsafe { DevicePathPtr::new(file_node as *const _ as *mut _) },
     )
 }
 

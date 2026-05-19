@@ -76,6 +76,7 @@ mod cpu;
 #[cfg(feature = "debugger_reload")]
 mod debugger_reload;
 mod decompress;
+mod device_path_ptr;
 mod driver_services;
 mod dxe_dispatch_service;
 mod dxe_services;

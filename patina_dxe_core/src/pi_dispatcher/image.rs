@@ -18,7 +18,10 @@ use core::{
 use patina::{
     base::{DEFAULT_CACHE_ATTR, UEFI_PAGE_SIZE, align_up},
     component::service::memory::{AllocationOptions, MemoryManager, PageFree},
-    device_path::walker::{DevicePathWalker, copy_device_path_to_boxed_slice, device_path_node_count},
+    device_path::{
+        ptr::DevicePathPtr,
+        walker::{DevicePathWalker, copy_device_path_to_boxed_slice, device_path_node_count},
+    },
     efi_types::EfiMemoryType,
     error::EfiError,
     guids, log_debug_assert,
@@ -330,7 +333,7 @@ impl PrivateImageData {
         core_install_protocol_interface(
             Some(handle),
             efi::protocols::loaded_image_device_path::PROTOCOL_GUID,
-            self.get_file_path(),
+            self.get_file_path() as *mut c_void,
         )?;
 
         if let Some(hii_section) = &self.hii_resource_section {
@@ -375,7 +378,7 @@ impl PrivateImageData {
         if let Err(err) = core_uninstall_protocol_interface(
             handle,
             efi::protocols::loaded_image_device_path::PROTOCOL_GUID,
-            self.get_file_path(),
+            self.get_file_path() as *mut c_void,
         ) && !matches!(err, EfiError::NotFound | EfiError::InvalidParameter)
         {
             log::warn!("Failed to uninstall loaded image device path protocol for handle {handle:?}: {err:?}");
@@ -418,8 +421,8 @@ impl PrivateImageData {
         if let Ok(device_path) = PROTOCOL_DB
             .get_interface_for_handle(self.image_info.device_handle, efi::protocols::device_path::PROTOCOL_GUID)
         {
-            let (_, device_path_size) =
-                device_path_node_count(device_path as *mut efi::protocols::device_path::Protocol)?;
+            // SAFETY: device_path is obtained from the protocol database and is a valid, non-null device path pointer.
+            let (_, device_path_size) = device_path_node_count(unsafe { DevicePathPtr::new(device_path as *mut _) })?;
 
             // Adjust the split index to exclude the END node of the device path, so the true file path does not start with END.
             let split_idx =
@@ -434,18 +437,22 @@ impl PrivateImageData {
 
         // The `file_path` field in the loaded image protocol is really just the filename (more specifically the remaining portion
         // of the device path in relation to the parent's device path)
-        self.image_info.file_path =
-            Box::into_raw(copy_device_path_to_boxed_slice(fp)?) as *mut efi::protocols::device_path::Protocol;
+        // SAFETY: `fp` points into the well-formed device path provided by the caller via `file_path`.
+        self.image_info.file_path = Box::into_raw(copy_device_path_to_boxed_slice(unsafe { DevicePathPtr::new(fp) })?)
+            as *mut efi::protocols::device_path::Protocol;
 
         // The `image_device_path` field is the `loaded_image_device_path` protocol, which is the full device path.
-        self.image_device_path = Some(copy_device_path_to_boxed_slice(file_path.as_ptr())?);
+        // SAFETY: `file_path` is a valid non-null device path pointer per this function's contract.
+        self.image_device_path =
+            Some(copy_device_path_to_boxed_slice(unsafe { DevicePathPtr::new(file_path.as_ptr()) })?);
 
         Ok(())
     }
 
-    /// Returns the pointer to the full device path for this image, or null if none is set.
-    fn get_file_path(&self) -> *mut c_void {
-        self.image_device_path.as_ref().map_or(core::ptr::null_mut(), |dp| dp.as_ptr() as *mut c_void)
+    /// Returns a raw pointer to the full device path for this image (the loaded_image_device_path protocol interface),
+    /// or null if no device path has been set.
+    fn get_file_path(&self) -> *const efi::protocols::device_path::Protocol {
+        self.image_device_path.as_ref().map_or(null_mut(), |p| p.as_ptr() as *const _)
     }
 
     /// Attempts to activate compatability mode for this image, if allowed by the platform.
@@ -645,9 +652,9 @@ impl ImageData {
         image: &[u8],
         file_path: *mut efi::protocols::device_path::Protocol,
     ) -> (Vec<u8>, bool, *mut c_void, u32) {
-        if let Ok((_, device_handle)) =
-            // SAFETY: file_path validity is guaranteed by the caller per this function's safety contract.
-            unsafe { core_locate_device_path(efi::protocols::device_path::PROTOCOL_GUID, file_path) }
+        // SAFETY: file_path is provided by the caller and may be null; from_raw handles the null case.
+        if let Some(dp) = unsafe { super::DevicePathPtr::from_raw(file_path) }
+            && let Ok((_, device_handle)) = core_locate_device_path(efi::protocols::device_path::PROTOCOL_GUID, dp)
         {
             (image.to_vec(), false, device_handle, 0)
         } else {
@@ -721,39 +728,37 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
     /// Returns Ok(efi::Handle) if the image was loaded successfully.
     /// returns Err(ImageStatus) if there was an error loading the issue. The enum value determines if the image was loaded
     ///   with security violations, or not at all. See [ImageStatus] for details.
-    ///
-    /// # Safety
-    ///
-    /// If `file_path` is non-null, it must point to a valid UEFI device path
-    /// structure in readable memory, as it will be dereferenced to locate and
-    /// authenticate the image.
-    pub unsafe fn load_image(
+    pub fn load_image(
         &self,
         boot_policy: bool,
         parent_image_handle: efi::Handle,
-        file_path: *mut efi::protocols::device_path::Protocol,
+        file_path: Option<super::DevicePathPtr>,
         image: Option<&[u8]>,
     ) -> Result<efi::Handle, ImageStatus> {
         perf_load_image_begin(core::ptr::null_mut(), create_performance_measurement);
 
-        if image.is_none() && file_path.is_null() {
+        if image.is_none() && file_path.is_none() {
             log::error!("failed to load image: image is none or device path is null.");
             return Err(EfiError::InvalidParameter.into());
         }
 
         ImageData::validate_parent(parent_image_handle)?;
 
-        // SAFETY: file_path was validated above (not-null when image is None) and originates from
-        // the caller's device path, which is required to be valid by the load_image contract.
+        // Extract the raw pointer once; the DevicePathPtr contract guarantees it is valid
+        // when present, so the unsafe internal helpers below may use it freely.
+        let raw_file_path = file_path.as_ref().map(|p| p.as_ptr()).unwrap_or(core::ptr::null_mut());
+
+        // SAFETY: raw_file_path is either null (when image is Some) or derived from a
+        // DevicePathPtr whose constructor guarantees validity.
         let (image_to_load, from_fv, device_handle, auth_status) = unsafe {
             match image {
-                Some(buffer) => ImageData::locate_image_metadata_by_buffer(buffer, file_path),
-                None => ImageData::locate_image_metadata_by_file_path(boot_policy, file_path)?,
+                Some(buffer) => ImageData::locate_image_metadata_by_buffer(buffer, raw_file_path),
+                None => ImageData::locate_image_metadata_by_file_path(boot_policy, raw_file_path)?,
             }
         };
 
         // authenticate the image
-        let security_status = authenticate_image(file_path, &image_to_load, boot_policy, from_fv, auth_status);
+        let security_status = authenticate_image(raw_file_path, &image_to_load, boot_policy, from_fv, auth_status);
 
         // If a security violation occurs, we still load the image, but will ultimately return a ImageStatus::SecurityViolation
         if let Err(err) = security_status
@@ -775,8 +780,11 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
 
         let mut private_info = core_load_pe_image(&image_to_load, image_info)?;
 
-        if let Some(fp) = NonNull::new(file_path) {
-            private_info.set_file_path(fp)?;
+        if let Some(fp) = file_path {
+            // SAFETY: fp.as_ptr() is guaranteed valid by the DevicePathPtr contract.
+            if let Some(nn) = NonNull::new(fp.as_ptr()) {
+                private_info.set_file_path(nn)?;
+            }
         }
 
         let handle = private_info.install().map_err(|_| EfiError::LoadError)?;
@@ -860,10 +868,11 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
             Some(unsafe { from_raw_parts(source_buffer as *const u8, source_size) })
         };
 
-        // SAFETY: Caller must ensure that device_path (if non-null) points to a
-        // valid device path structure.
-        let result =
-            unsafe { Self::instance().load_image(boot_policy.into(), parent_image_handle, device_path, image) };
+        // SAFETY: device_path comes from the ABI caller who must ensure that a non-null
+        // pointer refers to a valid, well-formed UEFI device path structure.
+        let file_path = unsafe { super::DevicePathPtr::from_raw(device_path) };
+
+        let result = Self::instance().load_image(boot_policy.into(), parent_image_handle, file_path, image);
         let (handle, status) = match result {
             Ok(handle) => (handle, efi::Status::SUCCESS),
             Err(ImageStatus::AccessDenied) => (null_mut(), efi::Status::ACCESS_DENIED),
@@ -1380,9 +1389,8 @@ fn core_load_pe_image(
     Ok(private_info)
 }
 
-fn get_file_guid_from_device_path(path: *mut efi::protocols::device_path::Protocol) -> Result<Guid, EfiError> {
-    // SAFETY: path is validated by the caller and must point to a valid device path structure.
-    let mut walker = unsafe { DevicePathWalker::new(path) };
+fn get_file_guid_from_device_path(path: DevicePathPtr) -> Result<Guid, EfiError> {
+    let mut walker = DevicePathWalker::new(path);
     let file_path_node = walker.next().ok_or(EfiError::InvalidParameter)?;
     if file_path_node.header().r#type != efi::protocols::device_path::TYPE_MEDIA
         || file_path_node.header().sub_type != efi::protocols::device_path::Media::SUBTYPE_PIWG_FIRMWARE_FILE
@@ -1401,9 +1409,10 @@ unsafe fn get_file_buffer_from_fw(
     file_path: *mut efi::protocols::device_path::Protocol,
 ) -> Result<(Vec<u8>, efi::Handle), EfiError> {
     // Locate the handles to a device on the file_path that supports the firmware volume protocol
-    // SAFETY: file_path validity is guaranteed by the caller per this function's safety contract.
+    // SAFETY: file_path is valid per this function's safety contract.
+    let dp = unsafe { super::DevicePathPtr::new(file_path) };
     let (remaining_file_path, handle) =
-        unsafe { core_locate_device_path(pi::protocols::firmware_volume::PROTOCOL_GUID.into_inner(), file_path) }?;
+        core_locate_device_path(pi::protocols::firmware_volume::PROTOCOL_GUID.into_inner(), dp)?;
 
     // For FwVol File system there is only a single file name that is a GUID.
     let fv_name_guid = get_file_guid_from_device_path(remaining_file_path)?;
@@ -1450,14 +1459,14 @@ unsafe fn get_file_buffer_from_fw(
 unsafe fn get_file_buffer_from_sfs(
     file_path: *mut efi::protocols::device_path::Protocol,
 ) -> Result<(Vec<u8>, efi::Handle), EfiError> {
-    // SAFETY: file_path validity is guaranteed by the caller per this function's safety contract.
-    let (remaining_file_path, handle) =
-        unsafe { core_locate_device_path(efi::protocols::simple_file_system::PROTOCOL_GUID, file_path) }?;
+    // SAFETY: file_path is valid per this function's safety contract.
+    let dp = unsafe { super::DevicePathPtr::new(file_path) };
+    let (remaining_file_path, handle) = core_locate_device_path(efi::protocols::simple_file_system::PROTOCOL_GUID, dp)?;
 
     let mut file = SimpleFile::open_volume(handle)?;
 
-    // SAFETY: remaining_file_path is returned by core_locate_device_path and is a valid device path.
-    for node in unsafe { DevicePathWalker::new(remaining_file_path) } {
+    // remaining_file_path is already a DevicePathPtr returned by core_locate_device_path.
+    for node in DevicePathWalker::new(remaining_file_path) {
         match node.header().r#type {
             efi::protocols::device_path::TYPE_MEDIA
                 if node.header().sub_type == efi::protocols::device_path::Media::SUBTYPE_FILE_PATH => {} //proceed on valid path node
@@ -1504,8 +1513,9 @@ unsafe fn get_file_buffer_from_load_protocol(
         Err(EfiError::InvalidParameter)?;
     }
 
-    // SAFETY: file_path validity is guaranteed by the caller per this function's safety contract.
-    let (remaining_file_path, handle) = unsafe { core_locate_device_path(protocol, file_path) }?;
+    // SAFETY: file_path is valid per this function's safety contract.
+    let dp = unsafe { super::DevicePathPtr::new(file_path) };
+    let (remaining_file_path, handle) = core_locate_device_path(protocol, dp)?;
 
     let load_file = PROTOCOL_DB.get_interface_for_handle(handle, protocol)?;
     // SAFETY: load_file is obtained from the protocol database and is a valid load_file protocol pointer.
@@ -1518,7 +1528,7 @@ unsafe fn get_file_buffer_from_load_protocol(
     let status = unsafe {
         (load_file.load_file)(
             load_file,
-            remaining_file_path,
+            remaining_file_path.as_ptr(),
             boot_policy.into(),
             core::ptr::addr_of_mut!(buffer_size),
             core::ptr::null_mut(),
@@ -1536,7 +1546,7 @@ unsafe fn get_file_buffer_from_load_protocol(
     let status = unsafe {
         (load_file.load_file)(
             load_file,
-            remaining_file_path,
+            remaining_file_path.as_ptr(),
             boot_policy.into(),
             core::ptr::addr_of_mut!(buffer_size),
             file_buffer.as_mut_ptr() as *mut c_void,
@@ -1740,9 +1750,7 @@ mod tests {
                 PiDispatcher::<MockPlatformInfo>::new(patina_ffs_extractors::NullSectionExtractor);
             PI_DISPATCHER.init(&create_dxe_core_hob(), SYSTEM_TABLE.lock().as_mut().unwrap());
 
-            // SAFETY: Test code - file_path is null and no image buffer is provided; load_image will return an error.
-            let result =
-                unsafe { PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, core::ptr::null_mut(), None) };
+            let result = PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, None);
 
             assert!(matches!(result, Err(ImageStatus::LoadError(EfiError::InvalidParameter))));
         });
@@ -1759,16 +1767,12 @@ mod tests {
                 PiDispatcher::<MockPlatformInfo>::new(patina_ffs_extractors::NullSectionExtractor);
             PI_DISPATCHER.init(&create_dxe_core_hob(), SYSTEM_TABLE.lock().as_mut().unwrap());
 
-            // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let image_handle = unsafe {
-                PI_DISPATCHER
-                    .load_image(false, protocol_db::DXE_CORE_HANDLE, core::ptr::null_mut(), Some(image.as_slice()))
-                    .unwrap()
-            };
+            let image_handle =
+                PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(image.as_slice())).unwrap();
 
             let private_data = PI_DISPATCHER.image_data.lock();
             let image_data = private_data.private_image_data.get(&image_handle).unwrap();
-            let image_buf_len = image_data.image_buffer.as_ref().len() as usize;
+            let image_buf_len = image_data.image_buffer.as_ref().len();
             assert_eq!(image_buf_len, image_data.image_info.image_size as usize);
             assert_eq!(image_data.image_info.image_data_type, efi::BOOT_SERVICES_DATA);
             assert_eq!(image_data.image_info.image_code_type, efi::BOOT_SERVICES_CODE);
@@ -1789,15 +1793,7 @@ mod tests {
                 PiDispatcher::<MockPlatformInfo>::new(patina_ffs_extractors::NullSectionExtractor);
             PI_DISPATCHER.init(&create_dxe_core_hob(), SYSTEM_TABLE.lock().as_mut().unwrap());
 
-            // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let status = unsafe {
-                PI_DISPATCHER.load_image(
-                    false,
-                    protocol_db::DXE_CORE_HANDLE,
-                    core::ptr::null_mut(),
-                    Some(image.as_slice()),
-                )
-            };
+            let status = PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(image.as_slice()));
             assert!(status.is_ok());
         });
     }
@@ -1813,15 +1809,7 @@ mod tests {
                 PiDispatcher::<MockPlatformInfo>::new(patina_ffs_extractors::NullSectionExtractor);
             PI_DISPATCHER.init(&create_dxe_core_hob(), SYSTEM_TABLE.lock().as_mut().unwrap());
 
-            // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let status = unsafe {
-                PI_DISPATCHER.load_image(
-                    false,
-                    protocol_db::DXE_CORE_HANDLE,
-                    core::ptr::null_mut(),
-                    Some(image.as_slice()),
-                )
-            };
+            let status = PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(image.as_slice()));
 
             assert!(status.is_ok());
         });
@@ -1839,15 +1827,7 @@ mod tests {
                 PiDispatcher::<MockPlatformInfo>::new(patina_ffs_extractors::NullSectionExtractor);
             PI_DISPATCHER.init(&create_dxe_core_hob(), SYSTEM_TABLE.lock().as_mut().unwrap());
 
-            // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let result = unsafe {
-                PI_DISPATCHER.load_image(
-                    false,
-                    protocol_db::DXE_CORE_HANDLE,
-                    core::ptr::null_mut(),
-                    Some(image.as_slice()),
-                )
-            };
+            let result = PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(image.as_slice()));
 
             assert!(matches!(result, Err(ImageStatus::LoadError(EfiError::Unsupported))));
         });
@@ -1871,15 +1851,7 @@ mod tests {
                 PiDispatcher::<MockPlatformInfo>::new(patina_ffs_extractors::NullSectionExtractor);
             PI_DISPATCHER.init(&create_dxe_core_hob(), SYSTEM_TABLE.lock().as_mut().unwrap());
 
-            // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let result = unsafe {
-                PI_DISPATCHER.load_image(
-                    false,
-                    protocol_db::DXE_CORE_HANDLE,
-                    core::ptr::null_mut(),
-                    Some(image.as_slice()),
-                )
-            };
+            let result = PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(image.as_slice()));
 
             assert!(matches!(result, Err(ImageStatus::LoadError(EfiError::Unsupported))));
         });
@@ -1896,15 +1868,7 @@ mod tests {
             static PI_DISPATCHER: PiDispatcher<MockPlatformInfo> =
                 PiDispatcher::<MockPlatformInfo>::new(patina_ffs_extractors::NullSectionExtractor);
             PI_DISPATCHER.init(&create_dxe_core_hob(), SYSTEM_TABLE.lock().as_mut().unwrap());
-            // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let status = unsafe {
-                PI_DISPATCHER.load_image(
-                    false,
-                    protocol_db::DXE_CORE_HANDLE,
-                    core::ptr::null_mut(),
-                    Some(image.as_slice()),
-                )
-            };
+            let status = PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(image.as_slice()));
             assert!(matches!(status, Err(ImageStatus::LoadError(EfiError::LoadError))));
         });
     }
@@ -1921,15 +1885,7 @@ mod tests {
                 PiDispatcher::<MockPlatformInfo>::new(patina_ffs_extractors::NullSectionExtractor);
             PI_DISPATCHER.init(&create_dxe_core_hob(), SYSTEM_TABLE.lock().as_mut().unwrap());
 
-            // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let status = unsafe {
-                PI_DISPATCHER.load_image(
-                    false,
-                    protocol_db::DXE_CORE_HANDLE,
-                    core::ptr::null_mut(),
-                    Some(image.as_slice()),
-                )
-            };
+            let status = PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(image.as_slice()));
             assert!(matches!(status, Err(ImageStatus::LoadError(EfiError::LoadError))));
         });
     }
@@ -1946,15 +1902,7 @@ mod tests {
                 PiDispatcher::<MockPlatformInfo>::new(patina_ffs_extractors::NullSectionExtractor);
             PI_DISPATCHER.init(&create_dxe_core_hob(), SYSTEM_TABLE.lock().as_mut().unwrap());
 
-            // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let status = unsafe {
-                PI_DISPATCHER.load_image(
-                    false,
-                    protocol_db::DXE_CORE_HANDLE,
-                    core::ptr::null_mut(),
-                    Some(image.as_slice()),
-                )
-            };
+            let status = PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(image.as_slice()));
             assert!(matches!(status, Err(ImageStatus::LoadError(EfiError::LoadError))));
         });
     }
@@ -1971,10 +1919,7 @@ mod tests {
                 PiDispatcher::<MockPlatformInfo>::new(patina_ffs_extractors::NullSectionExtractor);
 
             PI_DISPATCHER.init(&create_dxe_core_hob(), SYSTEM_TABLE.lock().as_mut().unwrap());
-            // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let status = unsafe {
-                PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, core::ptr::null_mut(), Some(&image))
-            };
+            let status = PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(&image));
             assert!(matches!(status, Err(ImageStatus::LoadError(EfiError::LoadError))));
         });
     }
@@ -2016,11 +1961,8 @@ mod tests {
                 .unwrap();
 
             // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let image_handle = unsafe {
-                PI_DISPATCHER
-                    .load_image(false, protocol_db::DXE_CORE_HANDLE, core::ptr::null_mut(), Some(&image))
-                    .unwrap()
-            };
+            let image_handle =
+                PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(&image)).unwrap();
 
             assert!(SECURITY_CALL_EXECUTED.load(core::sync::atomic::Ordering::SeqCst));
 
@@ -2099,11 +2041,8 @@ mod tests {
                 .unwrap();
 
             // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let image_handle = unsafe {
-                PI_DISPATCHER
-                    .load_image(false, protocol_db::DXE_CORE_HANDLE, core::ptr::null_mut(), Some(&image))
-                    .unwrap()
-            };
+            let image_handle =
+                PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(&image)).unwrap();
 
             assert!(SECURITY2_CALL_EXECUTED.load(core::sync::atomic::Ordering::SeqCst));
 
@@ -2156,10 +2095,7 @@ mod tests {
             assert_eq!(PROTOCOL_DB.locate_handles(Some(efi::protocols::loaded_image::PROTOCOL_GUID)).unwrap().len(), 1);
             assert_eq!(PI_DISPATCHER.image_data.lock().private_image_data.len(), 1);
             // In this result, we expect to get SECURITY_VIOLATION, but the image_handle is successfully populated.
-            // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let status = unsafe {
-                PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, core::ptr::null_mut(), Some(&image))
-            };
+            let status = PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(&image));
 
             let image_handle = match status {
                 Err(ImageStatus::SecurityViolation(h)) => h,
@@ -2210,10 +2146,7 @@ mod tests {
             // The handle / private data count should be 1, which is the dxe core image.
             assert_eq!(PROTOCOL_DB.locate_handles(Some(efi::protocols::loaded_image::PROTOCOL_GUID)).unwrap().len(), 1);
             assert_eq!(PI_DISPATCHER.image_data.lock().private_image_data.len(), 1);
-            // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let status = unsafe {
-                PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, core::ptr::null_mut(), Some(&image))
-            };
+            let status = PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(&image));
             assert!(matches!(status, Err(ImageStatus::AccessDenied)));
 
             // There should still be only 1 handle
@@ -2259,10 +2192,7 @@ mod tests {
             assert_eq!(PROTOCOL_DB.locate_handles(Some(efi::protocols::loaded_image::PROTOCOL_GUID)).unwrap().len(), 1);
             assert_eq!(PI_DISPATCHER.image_data.lock().private_image_data.len(), 1);
 
-            // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let status = unsafe {
-                PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, core::ptr::null_mut(), Some(&image))
-            };
+            let status = PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(&image));
             assert!(matches!(status, Err(ImageStatus::LoadError(EfiError::InvalidParameter))));
 
             // There should still be only 1 handle
@@ -2283,11 +2213,8 @@ mod tests {
             PI_DISPATCHER.init(&create_dxe_core_hob(), SYSTEM_TABLE.lock().as_mut().unwrap());
 
             // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let image_handle = unsafe {
-                PI_DISPATCHER
-                    .load_image(false, protocol_db::DXE_CORE_HANDLE, core::ptr::null_mut(), Some(&image))
-                    .unwrap()
-            };
+            let image_handle =
+                PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(&image)).unwrap();
 
             // Getting the image loaded into a buffer that is executable would require OS-specific interactions. This means that
             // all the memory backing our test GCD instance is likely to be marked "NX" - which makes it hard for start_image to
@@ -2332,11 +2259,8 @@ mod tests {
             CORE.override_instance();
 
             // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let image_handle = unsafe {
-                CORE.pi_dispatcher
-                    .load_image(false, protocol_db::DXE_CORE_HANDLE, core::ptr::null_mut(), Some(&image))
-                    .unwrap()
-            };
+            let image_handle =
+                CORE.pi_dispatcher.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(&image)).unwrap();
 
             // Getting the image loaded into a buffer that is executable would require OS-specific interactions. This means that
             // all the memory backing our test GCD instance is likely to be marked "NX" - which makes it hard for start_image to
@@ -2392,11 +2316,8 @@ mod tests {
             PI_DISPATCHER.init(&create_dxe_core_hob(), SYSTEM_TABLE.lock().as_mut().unwrap());
 
             // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let image_handle = unsafe {
-                PI_DISPATCHER
-                    .load_image(false, protocol_db::DXE_CORE_HANDLE, core::ptr::null_mut(), Some(&image))
-                    .unwrap()
-            };
+            let image_handle =
+                PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(&image)).unwrap();
 
             PI_DISPATCHER.unload_image(image_handle, false).unwrap();
 
@@ -2746,12 +2667,8 @@ mod tests {
             PI_DISPATCHER.init(&create_dxe_core_hob(), SYSTEM_TABLE.lock().as_mut().unwrap());
 
             // Test 1: Full load_image flow
-            // SAFETY: Test code - file_path is null; image is loaded from the provided buffer.
-            let image_handle = unsafe {
-                PI_DISPATCHER
-                    .load_image(false, protocol_db::DXE_CORE_HANDLE, core::ptr::null_mut(), Some(&image))
-                    .unwrap()
-            };
+            let image_handle =
+                PI_DISPATCHER.load_image(false, protocol_db::DXE_CORE_HANDLE, None, Some(&image)).unwrap();
 
             // Verify the image was loaded successfully with correct properties
             let private_data = PI_DISPATCHER.image_data.lock();
@@ -3408,14 +3325,17 @@ mod tests {
             assert!(!private_info.image_info.file_path.is_null());
 
             // Validate the file path was set correctly
-            let (_, len) = device_path_node_count(private_info.image_info.file_path).unwrap();
+            // SAFETY: file_path is a valid non-null device path pointer set by set_file_path.
+            let (_, len) =
+                device_path_node_count(unsafe { DevicePathPtr::new(private_info.image_info.file_path) }).unwrap();
             // SAFETY: file_path points to a valid device path buffer of length `len` per device_path_node_count.
             let bytes = unsafe { core::slice::from_raw_parts(private_info.image_info.file_path as *const u8, len) };
             assert_eq!(bytes, child_device_path.as_ref());
 
             // validate the entire device path is correct
             let (_, len) =
-                device_path_node_count(private_info.get_file_path() as *mut efi::protocols::device_path::Protocol)
+                // SAFETY: get_file_path returns a valid non-null device path pointer.
+                device_path_node_count(unsafe { DevicePathPtr::new(private_info.get_file_path() as *mut _) })
                     .unwrap();
             // SAFETY: get_file_path returns a valid device path pointer with length `len` per device_path_node_count.
             let bytes = unsafe { core::slice::from_raw_parts(private_info.get_file_path() as *const u8, len) };
@@ -3473,7 +3393,9 @@ mod tests {
             assert!(!private_info.image_info.file_path.is_null());
 
             // Validate the file path was set correctly
-            let (_, len) = device_path_node_count(private_info.image_info.file_path).unwrap();
+            // SAFETY: file_path is a valid non-null device path pointer set by set_file_path.
+            let (_, len) =
+                device_path_node_count(unsafe { DevicePathPtr::new(private_info.image_info.file_path) }).unwrap();
             // SAFETY: file_path points to a valid device path buffer of length `len` per device_path_node_count.
             let bytes = unsafe { core::slice::from_raw_parts(private_info.image_info.file_path as *const u8, len) };
 
@@ -3482,7 +3404,8 @@ mod tests {
 
             // validate the entire device path is correct
             let (_, len) =
-                device_path_node_count(private_info.get_file_path() as *mut efi::protocols::device_path::Protocol)
+                // SAFETY: get_file_path returns a valid non-null device path pointer.
+                device_path_node_count(unsafe { DevicePathPtr::new(private_info.get_file_path() as *mut _) })
                     .unwrap();
             // SAFETY: get_file_path returns a valid device path pointer with length `len` per device_path_node_count.
             let bytes = unsafe { core::slice::from_raw_parts(private_info.get_file_path() as *const u8, len) };

@@ -12,7 +12,10 @@ use alloc::{
 };
 use core::ptr::NonNull;
 use patina::{
-    device_path::walker::{concat_device_path_to_boxed_slice, copy_device_path_to_boxed_slice},
+    device_path::{
+        ptr::DevicePathPtr,
+        walker::{concat_device_path_to_boxed_slice, copy_device_path_to_boxed_slice},
+    },
     error::EfiError,
     performance::{
         logging::{
@@ -170,14 +173,18 @@ fn authenticate_connect(
             PROTOCOL_DB.locate_protocol(patina::pi::protocols::security2::PROTOCOL_GUID.into_inner())
         {
             let file_path = {
+                // SAFETY: device_path is obtained from the protocol database and is a valid, non-null pointer.
+                let device_dp = unsafe { DevicePathPtr::new(device_path) };
                 if !recursive {
                     if let Some(remaining_path) = remaining_device_path {
-                        concat_device_path_to_boxed_slice(device_path, remaining_path)
+                        // SAFETY: remaining_path is non-null (checked by the caller via Option).
+                        let remaining_dp = unsafe { DevicePathPtr::new(remaining_path) };
+                        concat_device_path_to_boxed_slice(device_dp, remaining_dp)
                     } else {
-                        copy_device_path_to_boxed_slice(device_path)
+                        copy_device_path_to_boxed_slice(device_dp)
                     }
                 } else {
-                    copy_device_path_to_boxed_slice(device_path)
+                    copy_device_path_to_boxed_slice(device_dp)
                 }
             };
 

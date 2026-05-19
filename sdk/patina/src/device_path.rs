@@ -25,5 +25,7 @@ pub mod parse_node;
 /// Module for UEFI Device Path Utilities, providing various utilities for interacting with and parsing UEFI device paths.
 #[cfg(feature = "unstable-device-path")]
 pub mod paths;
+/// A validated, non-null UEFI device path pointer newtype.
+pub mod ptr;
 /// Module for walking UEFI device paths, providing utilities for traversing and analyzing device path structures.
 pub mod walker;
