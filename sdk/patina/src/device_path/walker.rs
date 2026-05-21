@@ -9,8 +9,12 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 use alloc::{boxed::Box, format, string::String, vec, vec::Vec};
-use core::{mem::size_of_val, ptr::slice_from_raw_parts, slice::from_raw_parts};
-use r_efi::protocols::device_path::{End, Hardware, Media};
+use core::{
+    mem::size_of_val,
+    ptr::{NonNull, slice_from_raw_parts},
+    slice::from_raw_parts,
+};
+use r_efi::protocols::device_path::{End, Hardware, Media, Protocol};
 
 use r_efi::efi;
 
@@ -117,8 +121,9 @@ pub fn device_path_as_slice(
 ///
 /// ## Safety
 ///
-/// a and b inputs must be a valid pointers to well-formed device paths.
-/// b memory must remain valid memory for the lifetime of the returned device path.
+/// `a` and `b` must reference well-formed UEFI device paths (i.e. terminated by an End node and
+/// with valid node lengths). The memory backing `b` must remain valid for the lifetime of the
+/// returned pointer.
 ///
 ///
 /// ## Examples
@@ -146,7 +151,9 @@ pub fn device_path_as_slice(
 ///   0x4,  //length[0]
 ///   0x00, //length[1]
 /// ];
-/// let device_path_a = device_path_a_bytes.as_ptr() as *const efi::protocols::device_path::Protocol;
+/// let device_path_a = unsafe {
+///   core::ptr::NonNull::new_unchecked(device_path_a_bytes.as_ptr() as *mut efi::protocols::device_path::Protocol)
+/// };
 /// let device_path_b_bytes = [
 ///   efi::protocols::device_path::TYPE_HARDWARE,
 ///   efi::protocols::device_path::Hardware::SUBTYPE_PCI,
@@ -171,7 +178,9 @@ pub fn device_path_as_slice(
 ///   0x4,  //length[0]
 ///   0x00, //length[1]
 /// ];
-/// let device_path_b = device_path_b_bytes.as_ptr() as *const efi::protocols::device_path::Protocol;
+/// let device_path_b = unsafe {
+///   core::ptr::NonNull::new_unchecked(device_path_b_bytes.as_ptr() as *mut efi::protocols::device_path::Protocol)
+/// };
 /// let device_path_c_bytes = [
 ///   efi::protocols::device_path::TYPE_HARDWARE,
 ///   efi::protocols::device_path::Hardware::SUBTYPE_PCI,
@@ -184,44 +193,45 @@ pub fn device_path_as_slice(
 ///   0x4,  //length[0]
 ///   0x00, //length[1]
 /// ];
-/// let device_path_c = device_path_c_bytes.as_ptr() as *const efi::protocols::device_path::Protocol;
+/// let device_path_c = unsafe {
+///   core::ptr::NonNull::new_unchecked(device_path_c_bytes.as_ptr() as *mut efi::protocols::device_path::Protocol)
+/// };
 /// // a is a prefix of b.
-/// let result = unsafe {remaining_device_path(device_path_a, device_path_b)};
+/// let result = unsafe { remaining_device_path(device_path_a, device_path_b) };
 /// assert!(result.is_some());
-/// let result = result.unwrap();
+/// let (remaining, matching_nodes) = result.unwrap();
 /// // the remaining device path of b after going past the prefix in a should start at the size of a in bytes minus the size of the end node.
-/// let a_path_length = device_path_node_count(device_path_a).unwrap();
+/// let a_path_length = device_path_node_count(device_path_a.as_ptr()).unwrap();
 /// let offset = a_path_length.1 - size_of::<efi::protocols::device_path::End>();
 /// let offset = offset.try_into().unwrap();
 /// let expected_ptr =
-///   unsafe { device_path_b_bytes.as_ptr().byte_offset(offset) } as *const efi::protocols::device_path::Protocol;
-/// assert_eq!(result, (expected_ptr, a_path_length.0 - 1));
+///   unsafe { device_path_b_bytes.as_ptr().byte_offset(offset) } as *mut efi::protocols::device_path::Protocol;
+/// assert_eq!(remaining.as_ptr(), expected_ptr);
+/// assert_eq!(matching_nodes, a_path_length.0 - 1);
 ///
 /// //b is equal to b.
-/// let result = unsafe {remaining_device_path(device_path_b, device_path_b)};
+/// let result = unsafe { remaining_device_path(device_path_b, device_path_b) };
 /// assert!(result.is_some());
-/// let result = result.unwrap();
-/// let b_path_length = device_path_node_count(device_path_b).unwrap();
+/// let (remaining, matching_nodes) = result.unwrap();
+/// let b_path_length = device_path_node_count(device_path_b.as_ptr()).unwrap();
 /// let offset = b_path_length.1 - size_of::<efi::protocols::device_path::End>();
 /// let offset = offset.try_into().unwrap();
 /// let expected_ptr =
-///   unsafe { device_path_b_bytes.as_ptr().byte_offset(offset) } as *const efi::protocols::device_path::Protocol;
-/// assert_eq!(result, (expected_ptr, b_path_length.0 - 1));
+///   unsafe { device_path_b_bytes.as_ptr().byte_offset(offset) } as *mut efi::protocols::device_path::Protocol;
+/// assert_eq!(remaining.as_ptr(), expected_ptr);
+/// assert_eq!(matching_nodes, b_path_length.0 - 1);
 ///
 /// //a is not a prefix of c.
-/// let result = unsafe {remaining_device_path(device_path_a, device_path_c)};
+/// let result = unsafe { remaining_device_path(device_path_a, device_path_c) };
 /// assert!(result.is_none());
 ///
 /// //b is not a prefix of a.
-/// let result = unsafe {remaining_device_path(device_path_b, device_path_a)};
+/// let result = unsafe { remaining_device_path(device_path_b, device_path_a) };
 /// assert!(result.is_none());
 /// ```
-pub unsafe fn remaining_device_path(
-    a: *const efi::protocols::device_path::Protocol,
-    b: *const efi::protocols::device_path::Protocol,
-) -> Option<(*const efi::protocols::device_path::Protocol, usize)> {
-    let mut a_ptr = a;
-    let mut b_ptr = b;
+pub unsafe fn remaining_device_path(a: NonNull<Protocol>, b: NonNull<Protocol>) -> Option<(NonNull<Protocol>, usize)> {
+    let mut a_ptr = a.as_ptr() as *const efi::protocols::device_path::Protocol;
+    let mut b_ptr = b.as_ptr() as *const efi::protocols::device_path::Protocol;
     let mut node_count = 0;
     loop {
         // SAFETY: Caller must ensure pointers are valid device_paths
@@ -230,7 +240,9 @@ pub unsafe fn remaining_device_path(
         // SAFETY: a_node is a valid device path node structure obtained from valid device path pointer. The
         // caller is responsible for upholding the function safety contract.
         if unsafe { is_device_path_end(&a_node) } {
-            return Some((b_ptr, node_count));
+            // SAFETY: b_ptr is derived from `b` which is non-null and points to a node
+            // within the same well-formed device path, so it is non-null.
+            return Some((unsafe { NonNull::new_unchecked(b_ptr as *mut _) }, node_count));
         }
 
         node_count += 1;
@@ -501,7 +513,9 @@ mod tests {
             0x4,  //length[0]
             0x00, //length[1]
         ];
-        let device_path_a = device_path_a_bytes.as_ptr() as *const efi::protocols::device_path::Protocol;
+        let device_path_a =
+            // SAFETY: device_path_a_bytes is a non-null device path byte array for test code.
+            unsafe { NonNull::new_unchecked(device_path_a_bytes.as_ptr() as *mut efi::protocols::device_path::Protocol) };
         let device_path_b_bytes = [
             TYPE_HARDWARE,
             Hardware::SUBTYPE_PCI,
@@ -526,7 +540,9 @@ mod tests {
             0x4,  //length[0]
             0x00, //length[1]
         ];
-        let device_path_b = device_path_b_bytes.as_ptr() as *const efi::protocols::device_path::Protocol;
+        let device_path_b =
+            // SAFETY: device_path_b_bytes is a non-null device path byte array for test code.
+            unsafe { NonNull::new_unchecked(device_path_b_bytes.as_ptr() as *mut efi::protocols::device_path::Protocol) };
         let device_path_c_bytes = [
             TYPE_HARDWARE,
             Hardware::SUBTYPE_PCI,
@@ -539,34 +555,38 @@ mod tests {
             0x4,  //length[0]
             0x00, //length[1]
         ];
-        let device_path_c = device_path_c_bytes.as_ptr() as *const efi::protocols::device_path::Protocol;
+        let device_path_c =
+            // SAFETY: device_path_c_bytes is a non-null device path byte array for test code.
+            unsafe { NonNull::new_unchecked(device_path_c_bytes.as_ptr() as *mut efi::protocols::device_path::Protocol) };
 
         // a is a prefix of b.
         // SAFETY: device_path_a and device_path_b are valid device path pointers byte arrays for test code
         let result = unsafe { remaining_device_path(device_path_a, device_path_b) };
         assert!(result.is_some());
-        let result = result.unwrap();
+        let (remaining, matching_nodes) = result.unwrap();
         // the remaining device path of b after going past the prefix in a should start at the size of a in bytes minus the size of the end node.
-        let a_path_length = device_path_node_count(device_path_a).unwrap();
+        let a_path_length = device_path_node_count(device_path_a.as_ptr()).unwrap();
         let offset = a_path_length.1 - size_of::<efi::protocols::device_path::End>();
         let offset = offset.try_into().unwrap();
         // SAFETY: device_path_b_bytes is a valid byte array and the bounds were checked for offset
         let expected_ptr =
-            unsafe { device_path_b_bytes.as_ptr().byte_offset(offset) } as *const efi::protocols::device_path::Protocol;
-        assert_eq!(result, (expected_ptr, a_path_length.0 - 1));
+            unsafe { device_path_b_bytes.as_ptr().byte_offset(offset) } as *mut efi::protocols::device_path::Protocol;
+        assert_eq!(remaining.as_ptr(), expected_ptr);
+        assert_eq!(matching_nodes, a_path_length.0 - 1);
 
         //b is equal to b.
         // SAFETY: device_path_b is a valid device path pointer from a byte array for test code
         let result = unsafe { remaining_device_path(device_path_b, device_path_b) };
         assert!(result.is_some());
-        let result = result.unwrap();
-        let b_path_length = device_path_node_count(device_path_b).unwrap();
+        let (remaining, matching_nodes) = result.unwrap();
+        let b_path_length = device_path_node_count(device_path_b.as_ptr()).unwrap();
         let offset = b_path_length.1 - size_of::<efi::protocols::device_path::End>();
         let offset = offset.try_into().unwrap();
         // SAFETY: device_path_b_bytes is a valid byte array and the bounds were checked for offset
         let expected_ptr =
-            unsafe { device_path_b_bytes.as_ptr().byte_offset(offset) } as *const efi::protocols::device_path::Protocol;
-        assert_eq!(result, (expected_ptr, b_path_length.0 - 1));
+            unsafe { device_path_b_bytes.as_ptr().byte_offset(offset) } as *mut efi::protocols::device_path::Protocol;
+        assert_eq!(remaining.as_ptr(), expected_ptr);
+        assert_eq!(matching_nodes, b_path_length.0 - 1);
 
         //a is not a prefix of c.
         // SAFETY: device_path_a and device_path_c are valid device path pointers from byte arrays for test code

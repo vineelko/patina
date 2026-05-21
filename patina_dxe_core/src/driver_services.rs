@@ -23,7 +23,7 @@ use patina::{
     },
 };
 
-use r_efi::efi;
+use r_efi::{efi, protocols::device_path::Protocol};
 
 use crate::{protocols::PROTOCOL_DB, systemtables::EfiSystemTable};
 
@@ -159,7 +159,7 @@ fn get_all_driver_bindings() -> Vec<*mut efi::protocols::driver_binding::Protoco
 // authenticate a connect call through the security2 arch protocol
 fn authenticate_connect(
     controller_handle: efi::Handle,
-    remaining_device_path: Option<*mut efi::protocols::device_path::Protocol>,
+    remaining_device_path: Option<NonNull<Protocol>>,
     recursive: bool,
 ) -> Result<(), EfiError> {
     if let Ok(device_path) =
@@ -172,7 +172,7 @@ fn authenticate_connect(
             let file_path = {
                 if !recursive {
                     if let Some(remaining_path) = remaining_device_path {
-                        concat_device_path_to_boxed_slice(device_path, remaining_path)
+                        concat_device_path_to_boxed_slice(device_path, remaining_path.as_ptr())
                     } else {
                         copy_device_path_to_boxed_slice(device_path)
                     }
@@ -209,7 +209,7 @@ fn authenticate_connect(
 fn core_connect_single_controller(
     controller_handle: efi::Handle,
     driver_handles: Vec<efi::Handle>,
-    remaining_device_path: Option<*mut efi::protocols::device_path::Protocol>,
+    remaining_device_path: Option<NonNull<Protocol>>,
 ) -> Result<(), EfiError> {
     PROTOCOL_DB.validate_handle(controller_handle)?;
 
@@ -246,7 +246,7 @@ fn core_connect_single_controller(
             // SAFETY: driver_binding_interface is a clone of driver_candidates which is created above.
             // The pointer should be valid as long as driver_candidates is successfully allocated.
             let driver_binding = unsafe { &mut *(driver_binding_interface) };
-            let device_path = remaining_device_path.or(Some(core::ptr::null_mut())).expect("must be some");
+            let device_path = remaining_device_path.map_or(core::ptr::null_mut(), |p| p.as_ptr());
 
             perf_driver_binding_support_begin(
                 driver_binding.driver_binding_handle,
@@ -312,7 +312,7 @@ fn core_connect_single_controller(
     if let Some(device_path) = remaining_device_path
         && {
             // SAFETY: caller must ensure that the pointer contained in remaining_device_path is valid if it is Some(_).
-            unsafe { (device_path.read_unaligned()).r#type == efi::protocols::device_path::TYPE_END }
+            unsafe { (device_path.as_ptr().read_unaligned()).r#type == efi::protocols::device_path::TYPE_END }
         }
     {
         return Ok(());
@@ -345,7 +345,7 @@ fn core_connect_single_controller(
 pub unsafe fn core_connect_controller(
     handle: efi::Handle,
     driver_handles: Vec<efi::Handle>,
-    remaining_device_path: Option<*mut efi::protocols::device_path::Protocol>,
+    remaining_device_path: Option<NonNull<Protocol>>,
     recursive: bool,
 ) -> Result<(), EfiError> {
     authenticate_connect(handle, remaining_device_path, recursive)?;
@@ -419,7 +419,7 @@ unsafe extern "efiapi" fn connect_controller(
         handles
     };
     // remaining_device_path is passed in and may not have proper alignment.
-    let device_path = if remaining_device_path.is_null() { None } else { Some(remaining_device_path) };
+    let device_path = NonNull::new(remaining_device_path);
 
     // SAFETY: caller must ensure that device_path is a valid pointer to a device path structure if it is not null.
     unsafe {
@@ -1270,7 +1270,10 @@ mod tests {
             let end_path = create_end_device_path();
             let end_path_ptr = Box::into_raw(Box::new(end_path));
 
-            let result = core_connect_single_controller(controller_handle, vec![driver_handle1], Some(end_path_ptr));
+            // SAFETY: end_path_ptr was created from Box::into_raw of a valid END device path,
+            // so it is non-null.
+            let end_path_dpp = unsafe { NonNull::new_unchecked(end_path_ptr) };
+            let result = core_connect_single_controller(controller_handle, vec![driver_handle1], Some(end_path_dpp));
 
             // Should succeed because this is an END device path
             assert!(result.is_ok());
@@ -1411,7 +1414,7 @@ mod tests {
                 let result = core_connect_controller(
                     controller_handle,
                     vec![driver_handle],
-                    Some(end_path_ptr),
+                    Some(NonNull::new_unchecked(end_path_ptr)),
                     false, // non-recursive
                 );
 

@@ -278,10 +278,11 @@ impl<P: PlatformInfo> PiDispatcher<P> {
                 log::info!("Loading file: {:?}", guid_fmt!(driver.file_name));
                 let data = driver.pe32.try_content_as_slice()?;
 
-                // SAFETY: The device path is constructed from the FV and file
-                // information and should be valid as long as the underlying FV
-                // and file data is valid.
-                let status = unsafe { self.load_image(false, DXE_CORE_HANDLE, driver.device_path, Some(data)) };
+                // `driver.device_path` is constructed from FV and file information and is
+                // expected to be valid as long as the underlying FV and file data is valid; the
+                // validity obligation belongs to the dereferencing operation, not construction.
+                let file_path = core::ptr::NonNull::new(driver.device_path);
+                let status = self.load_image(false, DXE_CORE_HANDLE, file_path, Some(data));
                 match status {
                     Ok(handle) => {
                         driver.image_handle = Some(handle);
