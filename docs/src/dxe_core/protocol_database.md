@@ -516,10 +516,10 @@ function implements the
 API. Note that this function a) returns a list of GUIDs, but not the associated interface pointers, and b) creates a
 pool-allocated buffer to hold the result that the caller must free.
 
-The `locate_protocol` function is used in simple scenarios where only a single instance of a the protocol is expected to
-exist, it does not matter which of multiple instances of a protocol is returned, or the requirement is to return the
-next protocol that triggered a notification event for a given protocol. This function implements the
-[EFI_BOOT_SERVICES.LocateProtocol()](https://uefi.org/specs/UEFI/2.10_A/07_Services_Boot_Services.html#efi-boot-services-locateprotocol)
+The `locate_protocol` function is used in simple scenarios where only a single instance of a protocol is expected to
+exist. If multiple protocol instances exist, it does not matter which of multiple instances of a protocol is returned.
+It can be used with `register_protocol_notify` in conjunction with a `search_key` to return protocols associated with a
+notification. This function implements the [EFI_BOOT_SERVICES.LocateProtocol()](https://uefi.org/specs/UEFI/2.10_A/07_Services_Boot_Services.html#efi-boot-services-locateprotocol)
 API.
 
 ### Open Protocol Interface

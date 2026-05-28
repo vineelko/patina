@@ -187,7 +187,7 @@ definition but many of the services are still implemented in C so it is orange.
 - Page table management.
 - A pure Rust dispatch system in addition to support for [PI compatible FV/FFS dispatch](./dxe_core/dispatcher.md).
 - Parity with the C DXE Core in UEFI Self-Certification Test (SCT) results.
-- ~70% unit test coverage in the Patina DXE Core (with a goal of >80% coverage).
+- \>80% unit test coverage in the Patina DXE Core.
 - Support for [Enhanced Memory Protections](https://microsoft.github.io/mu/WhatAndWhy/enhancedmemoryprotection/).
 - Source-level debugging support.
 - Built-in Brotli and EFI decompression support.
@@ -303,12 +303,12 @@ For more details about mememory management in Patina see [Memory Management](./d
 
 #### Performance
 
-While Rust provides some drawbacks when compared to C (e.g.  
+While Rust provides some drawbacks when compared to C (e.g.
 [binary size](https://github.com/OpenDevicePartnership/patina-qemu/blob/main/Platforms/Docs/Common/patina_dxe_core_release_binary_size.md)),
-it is generally the most performant of the memory-safe languages and adds comparatively minimal overhead. It is a more  
+it is generally the most performant of the memory-safe languages and adds comparatively minimal overhead. It is a more
 feature-rich language; for example, exposing complex data structures like HashMaps, Vectors, iterators (compare to the
-simple linked lists used in C). Patina uses these abstractions to provide more robust implementations of core  
+simple linked lists used in C). Patina uses these abstractions to provide more robust implementations of core
 functionality and enables core CPU capabilities differently than standard C firmware; as such, simple wall clock timing
-is not a fully accurate performance comparison. However, as a baseline measurement, with Patina v16.0 running on Intel  
-x64 hardware, the Rust DXE core executes approximately 10% slower than the C core when timed across identical  
+is not a fully accurate performance comparison. However, as a baseline measurement, with Patina v16.0 running on Intel
+x64 hardware, the Rust DXE core executes approximately 10% slower than the C core when timed across identical
 checkpoints (with magnitude in tens of ms).

@@ -636,21 +636,37 @@ pub(crate) fn build_test_hob_list(mem_size: u64) -> *const c_void {
 /// ```powershell
 /// $env:RUST_LOG="debug"; cargo test -p patina_dxe_core allocator::usage_tests::uefi_memory_map -- --nocapture
 /// ```
+///
+/// When `RUST_LOG` is not set, an always-enabled silent logger is installed.This produces no
+/// output but causes `log::log_enabled!()` to return `true`, so the format and dispatch branch
+/// inside each `log::*!` macro still executes during tests and is counted by coverage instrumentation.
 pub(crate) fn init_test_logger() {
     use std::sync::OnceLock;
     static INIT: OnceLock<()> = OnceLock::new();
 
-    INIT.get_or_init(|| {
-        // Default to no logging unless RUST_LOG environment variable is set
-        let mut builder = env_logger::Builder::from_default_env();
+    /// Logger that reports every record as enabled but discards them. Used in tests so
+    /// `log::log_enabled!()` returns `true` without producing any output.
+    struct AlwaysEnabledSilentLogger;
 
-        // If RUST_LOG is not set, default to Off (no logging), otherwise errors
-        // are logged even without --nocapture
-        if std::env::var("RUST_LOG").is_err() {
-            builder.filter_level(log::LevelFilter::Off);
+    impl log::Log for AlwaysEnabledSilentLogger {
+        fn enabled(&self, _metadata: &log::Metadata<'_>) -> bool {
+            true
         }
+        fn log(&self, _record: &log::Record<'_>) {}
+        fn flush(&self) {}
+    }
 
-        builder.init();
+    static SILENT_LOGGER: AlwaysEnabledSilentLogger = AlwaysEnabledSilentLogger;
+
+    INIT.get_or_init(|| {
+        if std::env::var("RUST_LOG").is_ok() {
+            // User asked for output via RUST_LOG, use env_logger.
+            env_logger::Builder::from_default_env().init();
+        } else {
+            // Silent but always-enabled, so log lines are still covered by tests.
+            let _ = log::set_logger(&SILENT_LOGGER);
+            log::set_max_level(log::LevelFilter::Trace);
+        }
     });
 }
 

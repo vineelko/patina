@@ -363,6 +363,7 @@ mod tests {
         memory_log,
         writer::AdvancedLogWriter,
     };
+    use serial_test::serial;
 
     #[derive(IntoService)]
     #[service(dyn ArchTimerFunctionality)]
@@ -437,7 +438,10 @@ mod tests {
         (log_address, hob_buff as *const c_void)
     }
 
+    // This is serialized since it mutates the `test` module-level `TEST_LOGGER` static
+    // (and the `DBG_ADV_LOG_BUFFER` global).
     #[test]
+    #[serial(adv_logger_test)]
     fn component_test() {
         let (log_address, hob_list) = create_adv_logger_hob_list();
 

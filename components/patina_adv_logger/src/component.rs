@@ -61,12 +61,17 @@ where
         buffer: *const u8,
         num_bytes: usize,
     ) -> efi::Status {
-        // SAFETY: We have no choice but to trust the caller on the buffer size. convert
-        //         to a reference for internal safety.
+        if this.is_null() || buffer.is_null() {
+            return efi::Status::INVALID_PARAMETER;
+        }
+
+        // SAFETY: `buffer` is null-checked above. We have no choice but to trust the caller
+        //         on the buffer size. Convert to a slice for internal use.
         let data = unsafe { core::slice::from_raw_parts(buffer, num_bytes) };
         let error_level = error_level as u32;
 
-        // SAFETY: We must trust the C code was a responsible steward of this buffer.
+        // SAFETY: `this` is null-checked above. The protocol struct is installed by Patina with
+        //         `Box::leak`, so its alignment and validity are guaranteed.
         let internal = unsafe { &*(this as *const AdvancedLoggerProtocolInternal<S>) };
 
         internal.adv_logger.log_write(error_level, None, data);
@@ -101,5 +106,99 @@ where
                 Ok(())
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[coverage(off)]
+mod tests {
+    use super::*;
+    use crate::{
+        logger::{AdvancedLogger, TargetFilter},
+        writer::AdvancedLogWriter,
+    };
+    use patina::{
+        component::service::{IntoService, Service, perf_timer::ArchTimerFunctionality},
+        log::Format,
+        serial::uart::UartNull,
+    };
+    use serial_test::serial;
+
+    #[derive(IntoService)]
+    #[service(dyn ArchTimerFunctionality)]
+    struct MockTimer {}
+
+    impl ArchTimerFunctionality for MockTimer {
+        fn perf_frequency(&self) -> u64 {
+            100
+        }
+        fn cpu_count(&self) -> u64 {
+            200
+        }
+    }
+
+    static TEST_LOGGER: AdvancedLogger<UartNull> = AdvancedLogger::new(
+        Format::Standard,
+        &[TargetFilter { target: "", log_level: log::LevelFilter::Trace, hw_filter_override: None }],
+        log::LevelFilter::Trace,
+        UartNull {},
+    );
+
+    /// Initializes `TEST_LOGGER` with a newly allocated memory log and a mock timer.
+    fn init_test_logger() {
+        const LOG_LEN: usize = 0x2000;
+        let log_buff = Box::into_raw(Box::new([0_u8; LOG_LEN]));
+        let log_address = log_buff as *const u8 as efi::PhysicalAddress;
+        // SAFETY: This memory was just allocated, so it is valid for LOG_LEN bytes.
+        unsafe { AdvancedLogWriter::initialize_memory_log(log_address, LOG_LEN as u32) };
+        TEST_LOGGER.set_log_info_address(log_address);
+        TEST_LOGGER.init_timer(Service::mock(Box::new(MockTimer {})));
+    }
+
+    /// Builds a leaked `AdvancedLoggerProtocolInternal` structure and returns a `*const AdvancedLoggerProtocol`
+    /// that can be passed as `this` to `adv_log_write`.
+    fn leak_protocol_this() -> *const AdvancedLoggerProtocol {
+        let internal = Box::leak(Box::new(AdvancedLoggerProtocolInternal::<UartNull> {
+            protocol: AdvancedLoggerProtocol::new(
+                AdvancedLoggerComponent::<UartNull>::adv_log_write,
+                TEST_LOGGER.get_log_address().unwrap_or(0),
+            ),
+            adv_logger: &TEST_LOGGER,
+        }));
+        &raw const internal.protocol
+    }
+
+    #[test]
+    fn adv_log_write_null_this_returns_invalid_parameter() {
+        let data = b"hello";
+        let status =
+            AdvancedLoggerComponent::<UartNull>::adv_log_write(core::ptr::null(), 0, data.as_ptr(), data.len());
+        assert_eq!(status, efi::Status::INVALID_PARAMETER);
+    }
+
+    #[test]
+    fn adv_log_write_null_buffer_returns_invalid_parameter() {
+        // `this` is dangling but non-null. The function returns before dereferencing it
+        // because the buffer null check is tripped first.
+        let this = core::ptr::dangling::<AdvancedLoggerProtocol>();
+        // Non-zero length.
+        let status = AdvancedLoggerComponent::<UartNull>::adv_log_write(this, 0, core::ptr::null(), 4);
+        assert_eq!(status, efi::Status::INVALID_PARAMETER);
+        // Zero length still invalid because `slice::from_raw_parts` requires a non-null pointer
+        // even for zero-length slices.
+        let status = AdvancedLoggerComponent::<UartNull>::adv_log_write(this, 0, core::ptr::null(), 0);
+        assert_eq!(status, efi::Status::INVALID_PARAMETER);
+    }
+
+    // This is serialized since it mutates the `test` module-level `TEST_LOGGER` static.
+    #[test]
+    #[serial(adv_logger_test)]
+    fn adv_log_write_normal_path_succeeds() {
+        init_test_logger();
+        let this = leak_protocol_this();
+
+        let data = b"hello, advanced logger";
+        let status = AdvancedLoggerComponent::<UartNull>::adv_log_write(this, 0, data.as_ptr(), data.len());
+        assert_eq!(status, efi::Status::SUCCESS);
     }
 }

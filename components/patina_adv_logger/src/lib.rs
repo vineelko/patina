@@ -4,7 +4,7 @@
     " Copyright (c) Microsoft Corporation.\n\n",
     " SPDX-License-Identifier: Apache-2.0\n",
 )]
-#![cfg_attr(all(not(feature = "std"), not(doc)), no_std)]
+#![cfg_attr(all(not(feature = "std"), not(test), not(doc)), no_std)]
 #![deny(missing_docs)]
 #![feature(coverage_attribute)]
 

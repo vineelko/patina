@@ -226,7 +226,7 @@ specifying the minimum TPL level for which events should be returned. This funct
 
 Since events may be signaled asynchronously to pending event iteration , events may be added to the ordered sets of
 `pending event notify` objects while the iterator is in use; the iterator will continue to return `pending event notify`
-objects a the specified TPL even if they were added after the creation of the iterator object.
+objects at the specified TPL even if they were added after the creation of the iterator object.
 
 ```mermaid
 ---

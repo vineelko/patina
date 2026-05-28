@@ -30,6 +30,7 @@ clap = { workspace = true, features = ['derive'], optional = true }
 
 [dev-dependencies]
 patina_dxe_core = { path = "../../patina_dxe_core" }
+serial_test = { workspace = true }
 
 [features]
 alloc = []

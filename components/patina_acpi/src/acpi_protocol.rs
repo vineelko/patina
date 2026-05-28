@@ -80,7 +80,7 @@ impl AcpiTableProtocol {
 
         // The size of the allocated table buffer must be large enough to store the whole table.
         // SAFETY: `acpi_table_buffer` is checked non-null and large enough to read an AcpiTableHeader.
-        let table_header = unsafe { (*(acpi_table_buffer as *const AcpiTableHeader)).clone() };
+        let table_header = unsafe { core::ptr::read_unaligned(acpi_table_buffer as *const AcpiTableHeader) };
         let tbl_length = table_header.length as usize;
         if tbl_length != acpi_table_buffer_size {
             return efi::Status::INVALID_PARAMETER;
@@ -105,7 +105,7 @@ impl AcpiTableProtocol {
                 match install_result {
                     Ok(key) => {
                         // SAFETY: The caller must ensure the buffer passed in for the key is appropriately sized and non-null.
-                        unsafe { *table_key = key.0 };
+                        unsafe { table_key.write_unaligned(key.0) };
                         log::trace!(
                             "ACPI protocol: Successfully installed table with signature: 0x{:08X}, key: {}",
                             signature,
@@ -206,12 +206,12 @@ impl AcpiGetProtocol {
                 // SAFETY: table_info is valid and output pointers have been checked for null
                 // We only support ACPI versions >= 2.0
                 // SAFETY: We check that `version` is non-null above.
-                unsafe { *version = ACPI_VERSIONS_GTE_2 };
+                unsafe { version.write_unaligned(ACPI_VERSIONS_GTE_2) };
                 // SAFETY: We check that `table_key` is non-null above.
-                unsafe { *table_key = key_at_idx.0 };
+                unsafe { table_key.write_unaligned(key_at_idx.0) };
 
                 // SAFETY: We check that `table` is non-null above.
-                unsafe { *table = table_at_idx.as_mut_ptr() };
+                unsafe { table.write_unaligned(table_at_idx.as_mut_ptr()) };
                 log::trace!(
                     "ACPI protocol: Successfully retrieved table at index {} with key: {} and signature: 0x{:08X}",
                     index,

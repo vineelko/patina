@@ -32,6 +32,14 @@ cfg_if::cfg_if! {
         use uart_16550::MmioSerialPort;
         use uart_16550::SerialPort as IoSerialPort;
 
+        /// Returns the Current Privilege Level (CPL) from the CS selector.
+        fn current_privilege_level() -> u16 {
+            let cs: u16;
+            // SAFETY: Reading the CS register has no side effects.
+            unsafe { core::arch::asm!("mov {0:x}, cs", out(reg) cs, options(nostack, nomem)); }
+            cs & 0b11
+        }
+
         /// Runs `f` with CPU interrupts disabled, restoring the previous interrupt state afterward.
         fn without_interrupts<F, R>(f: F) -> R
         where
@@ -90,20 +98,32 @@ cfg_if::cfg_if! {
                     Uart16550::Io { base } => {
                         // SAFETY: The base address is provided during Uart16550 construction and is assumed to be valid for I/O port access.
                         let mut serial_port = unsafe { IoSerialPort::new(*base) };
-                        without_interrupts(|| {
+                        let mut send = || {
                             for b in buffer {
                                 serial_port.send(*b);
                             }
-                        });
+                        };
+                        if current_privilege_level() == 0 {
+                            // CPL is 0, so cli/sti are permitted.
+                            without_interrupts(send);
+                        } else {
+                            send();
+                        }
                     }
                     Uart16550::Mmio { base, reg_stride } => {
                         // SAFETY: The base address and stride are provided during Uart16550 construction and are assumed to be valid for MMIO access.
                         let mut serial_port = unsafe { MmioSerialPort::new_with_stride(*base, *reg_stride) };
-                        without_interrupts(|| {
+                        let mut send = || {
                             for b in buffer {
                                 serial_port.send(*b);
                             }
-                        });
+                        };
+                        if current_privilege_level() == 0 {
+                            // CPL is 0, so cli/sti are permitted.
+                            without_interrupts(send);
+                        } else {
+                            send();
+                        }
                     }
                 }
             }

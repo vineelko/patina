@@ -2,8 +2,8 @@
 
 [Introduction](introduction.md)
 [Patina Background](patina.md)
-[RFC Lifecycle](rfc_lifecycle.md)
-[Code Organization](dev/code_organization.md)
+[Patina in the UEFI Rust Ecosystem](background/patina_in_the_rust_ecosystem.md)
+[Training Videos](training_videos.md)
 
 # Background Information
 
@@ -14,14 +14,23 @@
 # Best Practices
 
 - [Abstractions](dev/principles/abstractions.md)
+- [Architecture Abstraction](dev/principles/architecture-abstraction.md)
+- [Code Organization](dev/code_organization.md)
 - [Code Reuse](dev/principles/reuse.md)
 - [Dependency Management](dev/principles/dependency-management.md)
 - [Error Handling](dev/principles/error-handling.md)
+- [FFI Authoring](dev/principles/ffi.md)
 - [Unsafe Guidance](dev/principles/unsafe.md)
-- [Architecture Abstraction](dev/principles/architecture-abstraction.md)
 
 # Developer Guides
 
+- [Code First Process](code_first/code_first_process.md)
+- [Code First Template](code_first/template.md)
+- [Creating a New Unstable Feature](dev/unstable_feature.md)
+- [Debugging](dev/debugging.md)
+  - [Core Reload](dev/debugging/core_reload.md)
+  - [Windbg Debugging Example](dev/debugging/windbg_example.md)
+  - [Windbg Debugging](dev/debugging/windbg_debugging.md)
 - [Documenting](dev/documenting.md)
   - [Quick Reference](dev/documenting/reference.md)
 - [Formatting](dev/formatting.md)
@@ -29,30 +38,28 @@
   - [Memory-Mapped I/O (MMIO)](dev/hardware_access/mmio.md)
 - [Other Resources](dev/other.md)
 - [Process for Unstable Features](dev/unstable.md)
+- [RFC Lifecycle](rfc_lifecycle.md)
 - [RFC Template](rfc/template.md)
+- [Rust and Toolchain Version Update Process](dev/rust_version_update_process.md)
 - [Testing](dev/testing.md)
-  - [Unit Testing](dev/testing/unit.md)
   - [Integration Testing](dev/testing/integration.md)
+  - [Mocking](dev/testing/mock.md)
   - [On-Platform Testing](dev/testing/platform.md)
   - [QEMU PR Validation](dev/testing/qemu_pr_validation.md)
-  - [Mocking](dev/testing/mock.md)
-- [Debugging](dev/debugging.md)
-  - [Windbg Debugging](dev/debugging/windbg_debugging.md)
-  - [Windbg Debugging Example](dev/debugging/windbg_example.md)
-  - [Core Reload](dev/debugging/core_reload.md)
+  - [Unit Testing](dev/testing/unit.md)
 - [Toolchain Configuration](dev/toolchain_configuration.md)
-
-# Patina DXE Core Platform Integration
-
-- [Patina DXE Core Requirements](integrate/patina_dxe_core_requirements.md)
-- [Patina DXE Core Requirements Checklist](integrate/patina_dxe_core_requirements_checklist.md)
-- [Setting up the Patina DXE Core](integrate/dxe_core.md)
 
 # Patina Component Model
 
-- [Getting Started with Components](component/getting_started.md)
 - [Component Crate Requirements](component/requirements.md)
 - [Component Interface](component/interface.md)
+- [Getting Started with Components](component/getting_started.md)
+
+# Patina DXE Core Platform Integration
+
+- [Patina DXE Core Requirements Checklist](integrate/patina_dxe_core_requirements_checklist.md)
+- [Patina DXE Core Requirements](integrate/patina_dxe_core_requirements.md)
+- [Setting up the Patina DXE Core](integrate/dxe_core.md)
 
 # Patina DXE Core Subsystems
 

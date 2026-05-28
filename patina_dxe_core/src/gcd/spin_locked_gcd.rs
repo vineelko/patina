@@ -19,7 +19,7 @@ use patina::{
         dxe_services::{self, GcdMemoryType, MemorySpaceDescriptor},
         hob::{self, EFiMemoryTypeInformation},
     },
-    uefi_pages_to_size, uefi_size_to_pages,
+    uefi_pages_to_size, uefi_size_to_pages, writelncrlf,
 };
 use patina_internal_collections::{Error as SliceError, Rbt, SliceKey, node_size};
 use r_efi::efi;
@@ -564,7 +564,7 @@ impl GCD {
         log::trace!(target: "allocations", "[{}]   Memory Type: {:?}", function!(), memory_type);
         log::trace!(target: "allocations", "[{}]   Alignment: {:#x}", function!(), alignment);
         log::trace!(target: "allocations", "[{}]   Image Handle: {:#x?}", function!(), image_handle);
-        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or(ptr::null_mut()));
+        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or_default());
 
         match allocate_type {
             AllocateType::BottomUp(max_address) => gcd.allocate_bottom_up(
@@ -702,7 +702,7 @@ impl GCD {
         log::trace!(target: "allocations", "[{}]   Length: {:#x}", function!(), len);
         log::trace!(target: "allocations", "[{}]   Align Shift: {:#x}", function!(), align_shift);
         log::trace!(target: "allocations", "[{}]   Image Handle: {:#x?}", function!(), image_handle);
-        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or(ptr::null_mut()));
+        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or_default());
 
         let memory_blocks = &mut self.memory_blocks;
         let alignment = 1 << align_shift;
@@ -788,7 +788,7 @@ impl GCD {
         log::trace!(target: "allocations", "[{}]   Length: {:#x}", function!(), len);
         log::trace!(target: "allocations", "[{}]   Align Shift: {:#x}", function!(), align_shift);
         log::trace!(target: "allocations", "[{}]   Image Handle: {:#x?}", function!(), image_handle);
-        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or(ptr::null_mut()));
+        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or_default());
 
         let memory_blocks = &mut self.memory_blocks;
 
@@ -860,7 +860,7 @@ impl GCD {
         log::trace!(target: "allocations", "[{}]   Memory Type: {:?}", function!(), memory_type);
         log::trace!(target: "allocations", "[{}]   Align Shift: {:#x}", function!(), align_shift);
         log::trace!(target: "allocations", "[{}]   Image Handle: {:#x?}", function!(), image_handle);
-        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or(ptr::null_mut()));
+        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or_default());
 
         // allocate_address allows allocating page 0. This is needed to let Patina DXE Core allocate it for null
         // pointer detection very early in the boot process. Any future allocate at address will fail because it is
@@ -1341,11 +1341,11 @@ impl GCD {
 
 impl Display for GCD {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        writeln!(
+        writelncrlf!(
             f,
             "GCDMemType Range                             Capabilities     Attributes       ImageHandle      DeviceHandle"
         )?;
-        writeln!(
+        writelncrlf!(
             f,
             "========== ================================= ================ ================ ================ ================"
         )?;
@@ -1358,7 +1358,7 @@ impl Display for GCD {
                 MemoryBlock::Allocated(descriptor) | MemoryBlock::Unallocated(descriptor) => {
                     let mem_type_str_idx =
                         usize::min(descriptor.memory_type as usize, Self::GCD_MEMORY_TYPE_NAMES.len() - 1);
-                    writeln!(
+                    writelncrlf!(
                         f,
                         "{}  {:016x?}-{:016x?} {:016x?} {:016x?} {:016x?} {:016x?}",
                         GCD::GCD_MEMORY_TYPE_NAMES[mem_type_str_idx],
@@ -1558,7 +1558,7 @@ impl IoGCD {
         log::trace!(target: "allocations", "[{}]   IO Type: {:?}", function!(), io_type);
         log::trace!(target: "allocations", "[{}]   Alignment: {:#x}", function!(), alignment);
         log::trace!(target: "allocations", "[{}]   Image Handle: {:#x?}", function!(), image_handle);
-        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or(ptr::null_mut()));
+        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or_default());
 
         match allocate_type {
             AllocateType::BottomUp(max_address) => self.allocate_bottom_up(
@@ -1600,7 +1600,7 @@ impl IoGCD {
         log::trace!(target: "allocations", "[{}]   Length: {:#x}", function!(), len);
         log::trace!(target: "allocations", "[{}]   Alignment: {:#x}", function!(), alignment);
         log::trace!(target: "allocations", "[{}]   Image Handle: {:#x?}", function!(), image_handle);
-        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or(ptr::null_mut()));
+        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or_default());
 
         if self.io_blocks.capacity() == 0 {
             self.init_io_blocks()?;
@@ -1662,7 +1662,7 @@ impl IoGCD {
         log::trace!(target: "allocations", "[{}]   Length: {:#x}", function!(), len);
         log::trace!(target: "allocations", "[{}]   Align Shift: {:#x}", function!(), align_shift);
         log::trace!(target: "allocations", "[{}]   Image Handle: {:#x?}", function!(), image_handle);
-        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or(ptr::null_mut()));
+        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or_default());
 
         if self.io_blocks.capacity() == 0 {
             self.init_io_blocks()?;
@@ -1731,7 +1731,7 @@ impl IoGCD {
         log::trace!(target: "allocations", "[{}]   IO Type: {:?}", function!(), io_type);
         log::trace!(target: "allocations", "[{}]   Alignment: {:#x}", function!(), alignment);
         log::trace!(target: "allocations", "[{}]   Image Handle: {:#x?}", function!(), image_handle);
-        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or(ptr::null_mut()));
+        log::trace!(target: "allocations", "[{}]   Device Handle: {:#x?}\n", function!(), device_handle.unwrap_or_default());
 
         if self.io_blocks.capacity() == 0 {
             self.init_io_blocks()?;
@@ -1913,8 +1913,8 @@ impl IoGCD {
 
 impl Display for IoGCD {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        writeln!(f, "GCDIoType  Range                            ")?;
-        writeln!(f, "========== =================================")?;
+        writelncrlf!(f, "GCDIoType  Range                            ")?;
+        writelncrlf!(f, "========== =================================")?;
 
         let blocks = &self.io_blocks;
         let mut current = blocks.first_idx();
@@ -1923,7 +1923,7 @@ impl Display for IoGCD {
             match ib {
                 IoBlock::Allocated(descriptor) | IoBlock::Unallocated(descriptor) => {
                     let io_type_str_idx = usize::min(descriptor.io_type as usize, Self::GCD_IO_TYPE_NAMES.len() - 1);
-                    writeln!(
+                    writelncrlf!(
                         f,
                         "{}  {:016x?}-{:016x?}{}",
                         IoGCD::GCD_IO_TYPE_NAMES[io_type_str_idx],
@@ -2985,14 +2985,14 @@ impl SpinLockedGcd {
 impl Display for SpinLockedGcd {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         if let Some(gcd) = self.memory.try_lock() {
-            writeln!(f, "\n{gcd}")?;
+            writelncrlf!(f, "\n{gcd}")?;
         } else {
-            writeln!(f, "Locked: {:?}", self.memory.try_lock())?;
+            writelncrlf!(f, "Locked: {:?}", self.memory.try_lock())?;
         }
         if let Some(gcd) = self.io.try_lock() {
-            writeln!(f, "\n{gcd}")?;
+            writelncrlf!(f, "\n{gcd}")?;
         } else {
-            writeln!(f, "Locked: {:?}", self.io.try_lock())?;
+            writelncrlf!(f, "Locked: {:?}", self.io.try_lock())?;
         }
         Ok(())
     }
@@ -3000,8 +3000,8 @@ impl Display for SpinLockedGcd {
 
 impl core::fmt::Debug for SpinLockedGcd {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        writeln!(f, "{:?}", self.memory.try_lock())?;
-        writeln!(f, "{:?}", self.io.try_lock())?;
+        writelncrlf!(f, "{:?}", self.memory.try_lock())?;
+        writelncrlf!(f, "{:?}", self.io.try_lock())?;
         Ok(())
     }
 }

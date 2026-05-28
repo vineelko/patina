@@ -25,7 +25,7 @@ Due to this, however, `Storage` is the bridge between `Component`s and the rest 
 initialization, `Storage` must also be updated to hold certain important pieces of data. As an example, once the boot
 services table has been fully initialized, it must also be registered with `Storage`, otherwise no component that
 wishes to use the boot services table will ever be executed. Another example is that `Storage` directly contains the
-[HobList] object, and allows for components to have am immutable reference to this. This particular part of the model
+`HobList` object, and allows for components to have am immutable reference to this. This particular part of the model
 is not complex, but it is important because when adding new `Param` types, `Storage` **must** be provided accesses to
 the underlying data, provided by the DXE Core.
 

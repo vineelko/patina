@@ -155,7 +155,12 @@ mod tests {
     }
 
     #[test]
+    #[serial(exception_handlers)]
     fn test_uefi_routine() {
+        // SAFETY: Reset before exercising the callback so that the post-invocation
+        // assertion proves the callback actually fired in this test.
+        unsafe { CALLBACK_INVOKED = false };
+
         let mut context = ExceptionContext(crate::interrupts::stub::ExceptionContextStub {});
         register_exception_handler(NUM_EXCEPTION_TYPES, HandlerType::UefiRoutine(test_callback))
             .expect_err("Allowed invalid exception number!");
@@ -166,7 +171,10 @@ mod tests {
             .expect_err("Allowed double register!");
         exception_handler(CALLBACK_EXCEPTION, &mut context);
         // SAFETY: This is a test only static mutable variable.
-        assert!(unsafe { CALLBACK_INVOKED });
+        unsafe {
+            assert!(CALLBACK_INVOKED);
+            CALLBACK_INVOKED = false;
+        }
         unregister_exception_handler(CALLBACK_EXCEPTION).expect("Failed to unregister handler!");
         unregister_exception_handler(CALLBACK_EXCEPTION).expect_err("Allowed double unregister!");
     }
