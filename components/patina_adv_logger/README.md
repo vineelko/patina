@@ -70,7 +70,7 @@ pub extern "efiapi" fn _start(physical_hob_list: *const c_void) -> ! {
    // SAFETY: The physical_hob_list pointer is assumed to be valid as it is provided to the entry_point from an
    // external caller.
    if let Err(e) = unsafe { LOGGER.init(physical_hob_list) } {
-      log::error!("Failed to find a the Advanced Logger HOB. Cannot write to the memory log.");
+      log::error!("Failed to find the Advanced Logger HOB. Cannot write to the memory log.");
    }
 
    # loop { }

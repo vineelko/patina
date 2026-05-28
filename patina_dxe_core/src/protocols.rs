@@ -72,7 +72,7 @@ extern "efiapi" fn install_protocol_interface(
     };
 
     // SAFETY: Caller must ensure that handle is a valid pointer. It is checked for null above.
-    unsafe { *handle = installed_handle };
+    unsafe { handle.write_unaligned(installed_handle) };
 
     efi::Status::SUCCESS
 }
@@ -267,7 +267,7 @@ extern "efiapi" fn register_protocol_notify(
         Err(err) => err.into(),
         Ok(new_registration) => {
             // SAFETY: Caller must ensure that registration is a valid pointer. It is checked for null above.
-            unsafe { *registration = new_registration };
+            unsafe { registration.write_unaligned(new_registration) };
             efi::Status::SUCCESS
         }
     }
@@ -537,7 +537,8 @@ unsafe extern "C" fn install_multiple_protocol_interfaces(handle: *mut efi::Hand
         // SAFETY: Variadic argument list is controlled by the caller and accessed in order.
         let interface: *mut c_void = unsafe { args.arg() };
         // SAFETY: protocol is checked for null above before dereferencing.
-        if unsafe { *protocol } == efi::protocols::device_path::PROTOCOL_GUID
+        //         The caller-supplied pointer may be unaligned.
+        if unsafe { protocol.read_unaligned() } == efi::protocols::device_path::PROTOCOL_GUID
             && let Ok((remaining_path, handle)) = core_locate_device_path(
                 efi::protocols::device_path::PROTOCOL_GUID,
                 interface as *const efi::protocols::device_path::Protocol,
@@ -562,7 +563,7 @@ unsafe extern "C" fn install_multiple_protocol_interfaces(handle: *mut efi::Hand
                 //on error, attempt to uninstall all the previously installed interfaces. best-effort, errors are ignored.
                 for (protocol, interface) in interfaces_to_uninstall_on_error {
                     // SAFETY: handle is validated for null above.
-                    let handle_value = unsafe { *handle };
+                    let handle_value = unsafe { handle.read_unaligned() };
                     let _ = uninstall_protocol_interface(handle_value, protocol, interface);
                 }
                 return err;
@@ -598,7 +599,7 @@ unsafe extern "C" fn uninstall_multiple_protocol_interfaces(handle: efi::Handle,
                 //on error, attempt to re-install all the previously uninstall interfaces. best-effort, errors are ignored.
                 for (protocol, interface) in interfaces_to_reinstall_on_error {
                     // SAFETY: protocol was checked for null when building interfaces_to_uninstall.
-                    let protocol = *(unsafe { protocol.as_mut().expect("previously null-checked pointer is null.") });
+                    let protocol = unsafe { protocol.read_unaligned() };
                     let _ = core_install_protocol_interface(Some(handle), protocol, interface);
                 }
                 return efi::Status::INVALID_PARAMETER;

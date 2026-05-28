@@ -31,6 +31,7 @@ minWordLength: 5
 caseSensitive: false
 allowCompoundWords: true
 words:
+  - aapcs
   - aarch
   - acpibase
   - addrs
@@ -180,8 +181,10 @@ words:
   - relia
   - reloc
   - riscv
+  - rlibs
   - rposition
   - ruint
+  - rustification
   - rwlock
   - sgram
   - smbus
@@ -216,6 +219,7 @@ words:
   - unregisters
   - unspec
   - unsynchronized
+  - variadics
   - vcvarsamd
   - vcvarsarm
   - vlvesa
@@ -226,6 +230,7 @@ words:
   - weitek
   - windbg
   - withf
+  - writelncrlf
   - wrmsr
   - xdata
   - xtask

@@ -7,14 +7,28 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
-use core::ptr;
+use core::{
+    ptr,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
-use patina_paging::{MemoryAttributes, PageTable};
+use patina_internal_cpu::paging::PatinaPageTable;
+use patina_paging::MemoryAttributes;
 
 use crate::arch::DebuggerArch;
 
 const PAGE_SIZE: u64 = 0x1000;
 const PAGE_MASK: u64 = !(PAGE_SIZE - 1);
+
+/// Controls whether the debugger will read/write uncached memory regions.
+/// By default (`false`), uncached regions are skipped to avoid side-effects
+/// on memory-mapped I/O. A monitor command can toggle this to `true`.
+static ALLOW_UNCACHED_ACCESS: AtomicBool = AtomicBool::new(false);
+
+/// Toggles uncached memory access and returns the new state.
+pub fn toggle_uncached_access() -> bool {
+    !ALLOW_UNCACHED_ACCESS.fetch_xor(true, Ordering::Relaxed)
+}
 
 /// Reads memory from the specified address into the buffer.
 ///
@@ -71,6 +85,7 @@ pub fn write_memory<Arch: DebuggerArch>(address: u64, buffer: &[u8]) -> Result<(
         // modify the page table to allow writing.
         let attributes = page_table
             .query_memory_region(page, PAGE_SIZE)
+            .map_err(|_| ())
             .expect("Unexpected failure on address that was already checked.");
 
         if attributes.contains(MemoryAttributes::ReadOnly) {
@@ -88,7 +103,6 @@ pub fn write_memory<Arch: DebuggerArch>(address: u64, buffer: &[u8]) -> Result<(
             // debugger should not allow the system to continue if it's state cannot be restored.
             page_table
                 .map_memory_region(page, PAGE_SIZE, attributes)
-                .map_err(|_| ())
                 .expect("Failed to restore page table attributes!");
         }
 
@@ -101,7 +115,7 @@ pub fn write_memory<Arch: DebuggerArch>(address: u64, buffer: &[u8]) -> Result<(
 /// Checks if the range is valid for access. This will check the page tables and
 /// attempt to read the memory at the address to ensure that it is accessible.
 fn check_range_access<Arch: DebuggerArch>(
-    page_table: &Arch::PageTable,
+    page_table: &impl PatinaPageTable,
     address: u64,
     length: usize,
 ) -> Result<usize, ()> {
@@ -118,17 +132,23 @@ fn check_range_access<Arch: DebuggerArch>(
 
 /// Checks that the range of memory is valid in the page tables. This ensures that
 /// reads to this region will not fault. On success returns the number of bytes valid
-/// to read from.
-fn check_paging_range<P: PageTable>(page_table: &P, start_address: u64, length: usize) -> Result<usize, ()> {
+/// to read from. If the region is uncached and uncached access is not allowed, it will
+/// be treated as invalid.
+fn check_paging_range<P: PatinaPageTable>(page_table: &P, start_address: u64, length: usize) -> Result<usize, ()> {
+    let allow_uncached = ALLOW_UNCACHED_ACCESS.load(Ordering::Relaxed);
+
     // This is done page-by-page because it is unknown if the memory region has
     // consistent attributes across the entire range.
     // The length takes us to the start of the next memory range, so we go until the end of the range, e.g
     // start_address + length - 1. This avoids overflow in the self map case
     let mut page = start_address & PAGE_MASK;
     while page <= start_address + (length - 1) as u64 {
-        let res = page_table.query_memory_region(page, PAGE_SIZE).map_err(|_| ());
+        let res = page_table.query_memory_region(page, PAGE_SIZE);
         let valid = match res {
-            Ok(attributes) => !attributes.contains(MemoryAttributes::ReadProtect),
+            Ok(attributes) => {
+                !attributes.contains(MemoryAttributes::ReadProtect)
+                    && (allow_uncached || !attributes.contains(MemoryAttributes::Uncached))
+            }
             Err(_) => false,
         };
 
@@ -161,16 +181,17 @@ mod tests {
     use crate::*;
     use gdbstub::target::ext::breakpoints;
     use mockall::{predicate::*, *};
+    use patina_internal_cpu::paging::CacheAttributeValue;
     use patina_paging::{MemoryAttributes, PtError};
 
     mock! {
         pub MemPageTable {}
 
-        impl PageTable for MemPageTable {
+        impl PatinaPageTable for MemPageTable {
             fn map_memory_region(&mut self, address: u64, size: u64, attributes: MemoryAttributes) -> Result<(), PtError>;
             fn unmap_memory_region(&mut self, address: u64, size: u64) -> Result<(), PtError>;
             fn install_page_table(&mut self) -> Result<(), PtError>;
-            fn query_memory_region(&self, address: u64, size: u64) -> Result<MemoryAttributes, PtError>;
+            fn query_memory_region(&self, address: u64, size: u64) -> Result<MemoryAttributes, (PtError, CacheAttributeValue)>;
             fn dump_page_tables(&self, address: u64, size: u64) -> Result<(), PtError>;
         }
     }
@@ -178,12 +199,13 @@ mod tests {
     mock! {
         pub MemDebuggerArch {}
 
+        // mockall doesn't support mocking associated types, so we have to use a concrete type for the page table.
+        #[allow(refining_impl_trait_internal)]
         impl DebuggerArch for MemDebuggerArch {
             const DEFAULT_EXCEPTION_TYPES: &'static [usize] = &[];
             const BREAKPOINT_INSTRUCTION: &'static [u8] = &[];
             const GDB_TARGET_XML: &'static str = "";
             const GDB_REGISTERS_XML: &'static str = "";
-            type PageTable = MockMemPageTable;
 
             fn breakpoint();
             fn process_entry(exception_type: u64, context: &mut ExceptionContext) -> ExceptionInfo;
@@ -214,7 +236,7 @@ mod tests {
         mock_page_table
             .expect_query_memory_region()
             .times(2)
-            .returning(|_, _| Err(patina_paging::PtError::InvalidMemoryRange));
+            .returning(|_, _| Err((PtError::InvalidMemoryRange, CacheAttributeValue::NotSupported)));
 
         let result = check_paging_range(&mock_page_table, 0, 0x1000);
         result.expect_err("Should have return a failure.");
@@ -235,10 +257,12 @@ mod tests {
     fn test_access_check_partially_valid_range() {
         let mut mock_page_table = MockMemPageTable::new();
         mock_page_table.expect_query_memory_region().times(2).returning(|_, _| Ok(MemoryAttributes::empty()));
-        mock_page_table
-            .expect_query_memory_region()
-            .times(1)
-            .returning(|_, _| Err(patina_paging::PtError::InvalidMemoryRange));
+        mock_page_table.expect_query_memory_region().times(1).returning(|_, _| {
+            Err((
+                patina_paging::PtError::InvalidMemoryRange,
+                patina_internal_cpu::paging::CacheAttributeValue::NotSupported,
+            ))
+        });
 
         let result = check_paging_range(&mock_page_table, 0x800, 0x3000);
         assert!(result.expect("Failed to check range access.") == 0x1800);
@@ -277,9 +301,12 @@ mod tests {
         let ctx = MockMemDebuggerArch::get_page_table_context();
         ctx.expect().returning(|| {
             let mut mock_page_table = MockMemPageTable::new();
-            mock_page_table
-                .expect_query_memory_region()
-                .returning(|_, _| Err(patina_paging::PtError::InvalidMemoryRange));
+            mock_page_table.expect_query_memory_region().returning(|_, _| {
+                Err((
+                    patina_paging::PtError::InvalidMemoryRange,
+                    patina_internal_cpu::paging::CacheAttributeValue::NotSupported,
+                ))
+            });
             Ok(mock_page_table)
         });
 
@@ -349,5 +376,49 @@ mod tests {
 
         // SAFETY: dest was allocated with this layout.
         unsafe { std::alloc::dealloc(dest, layout) };
+    }
+
+    #[test]
+    fn test_access_check_uncached_page_skipped_by_default() {
+        let _lock = PAGE_LOCK.lock().unwrap();
+        // Reset the toggle to the default (disabled).
+        ALLOW_UNCACHED_ACCESS.store(false, Ordering::Relaxed);
+
+        let mut mock_page_table = MockMemPageTable::new();
+        mock_page_table.expect_query_memory_region().once().returning(|_, _| Ok(MemoryAttributes::Uncached));
+
+        let result = check_paging_range(&mock_page_table, 0, 0x1000);
+        result.expect_err("Uncached page should be treated as invalid by default.");
+    }
+
+    #[test]
+    fn test_access_check_uncached_page_allowed_when_toggled() {
+        let _lock = PAGE_LOCK.lock().unwrap();
+        // Enable uncached access.
+        ALLOW_UNCACHED_ACCESS.store(true, Ordering::Relaxed);
+
+        let mut mock_page_table = MockMemPageTable::new();
+        mock_page_table.expect_query_memory_region().once().returning(|_, _| Ok(MemoryAttributes::Uncached));
+
+        let result = check_paging_range(&mock_page_table, 0, 0x1000);
+        assert_eq!(result.expect("Uncached page should be allowed when toggled."), 0x1000);
+
+        // Reset the toggle back to default.
+        ALLOW_UNCACHED_ACCESS.store(false, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn test_toggle_uncached_access() {
+        let _lock = PAGE_LOCK.lock().unwrap();
+        ALLOW_UNCACHED_ACCESS.store(false, Ordering::Relaxed);
+        assert!(!ALLOW_UNCACHED_ACCESS.load(Ordering::Relaxed));
+
+        let enabled = toggle_uncached_access();
+        assert!(enabled);
+        assert!(ALLOW_UNCACHED_ACCESS.load(Ordering::Relaxed));
+
+        let disabled = toggle_uncached_access();
+        assert!(!disabled);
+        assert!(!ALLOW_UNCACHED_ACCESS.load(Ordering::Relaxed));
     }
 }

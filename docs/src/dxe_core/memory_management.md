@@ -48,13 +48,13 @@ from the PI spec interact directly with the lower-layer GCD allocator.
 
 ### UefiAllocator - General Architecture and Performance
 
-The `UefiAllocator` impelements a general purpose [slab allocator](https://en.wikipedia.org/wiki/Slab_allocation) based
+The `UefiAllocator` implements a general purpose [slab allocator](https://en.wikipedia.org/wiki/Slab_allocation) based
 on the [Fixed-Size Block Allocator](https://os.phil-opp.com/allocator-designs/#fixed-size-block-allocator) that is
 presented as part of the [Writing an OS in Rust](https://os.phil-opp.com/) blog series.
 
 Each allocator tracks "free" blocks of fixed sizes that are used to satisfy allocation requests. These lists are backed
 up by a linked list allocator to satisfy allocations in the event that a fixed-sized block list doesn't exist (in the
-case of very large allcoations) or does not have a free block.
+case of very large allocations) or does not have a free block.
 
 This allows for a very efficient allocation procedure:
 

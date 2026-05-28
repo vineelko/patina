@@ -78,23 +78,28 @@ unsafe impl ProtocolInterface for EfiCpuArchProtocolImpl {
     const PROTOCOL_GUID: patina::BinaryGuid = PROTOCOL_GUID;
 }
 
-// Helper function to convert a raw mutable pointer to a mutable reference.
-fn get_impl_ref<'a>(this: *const Protocol) -> &'a EfiCpuArchProtocolImpl {
+// Helper to convert a raw protocol pointer to a reference. Returns `None` when the caller passes a
+// null pointer so the caller can determine the appropriate action to take.
+fn get_impl_ref<'a>(this: *const Protocol) -> Option<&'a EfiCpuArchProtocolImpl> {
     if this.is_null() {
-        panic!("Null pointer passed to get_impl_ref()");
+        return None;
     }
 
-    // SAFETY: this is non-null and points to an EfiCpuArchProtocolImpl instance.
-    unsafe { &*(this as *const EfiCpuArchProtocolImpl) }
+    // SAFETY: `this` is non-null and points to an EfiCpuArchProtocolImpl instance installed by
+    //         Patina via `Box::leak`, so it is properly aligned and valid for the protocol's
+    //         lifetime.
+    Some(unsafe { &*(this as *const EfiCpuArchProtocolImpl) })
 }
 
-fn get_impl_ref_mut<'a>(this: *mut Protocol) -> &'a mut EfiCpuArchProtocolImpl {
+fn get_impl_ref_mut<'a>(this: *mut Protocol) -> Option<&'a mut EfiCpuArchProtocolImpl> {
     if this.is_null() {
-        panic!("Null pointer passed to get_impl_ref_mut()");
+        return None;
     }
 
-    // SAFETY: this is non-null and points to an EfiCpuArchProtocolImpl instance.
-    unsafe { &mut *(this as *mut EfiCpuArchProtocolImpl) }
+    // SAFETY: `this` is non-null and points to an EfiCpuArchProtocolImpl instance installed by
+    //         Patina via `Box::leak`, so it is properly aligned and valid for the protocol's
+    //         lifetime.
+    Some(unsafe { &mut *(this as *mut EfiCpuArchProtocolImpl) })
 }
 
 // EfiCpuArchProtocolImpl function pointers implementations.
@@ -105,9 +110,11 @@ extern "efiapi" fn flush_data_cache(
     length: u64,
     flush_type: CpuFlushType,
 ) -> efi::Status {
-    let cpu = &get_impl_ref(this).cpu;
+    let Some(impl_ref) = get_impl_ref(this) else {
+        return efi::Status::INVALID_PARAMETER;
+    };
 
-    let result = cpu.flush_data_cache(start, length, flush_type);
+    let result = impl_ref.cpu.flush_data_cache(start, length, flush_type);
 
     result.map(|_| efi::Status::SUCCESS).unwrap_or_else(|err| err.into())
 }
@@ -140,9 +147,11 @@ extern "efiapi" fn get_interrupt_state(this: *const Protocol, state: *mut bool) 
 }
 
 extern "efiapi" fn init(this: *const Protocol, init_type: CpuInitType) -> efi::Status {
-    let cpu = &get_impl_ref(this).cpu;
+    let Some(impl_ref) = get_impl_ref(this) else {
+        return efi::Status::INVALID_PARAMETER;
+    };
 
-    let result = cpu.init(init_type);
+    let result = impl_ref.cpu.init(init_type);
 
     result.map(|_| efi::Status::SUCCESS).unwrap_or_else(|err| err.into())
 }
@@ -152,7 +161,10 @@ extern "efiapi" fn register_interrupt_handler(
     interrupt_type: isize,
     interrupt_handler: InterruptHandler,
 ) -> efi::Status {
-    let interrupt_manager = &get_impl_ref(this).interrupt_manager;
+    let Some(impl_ref) = get_impl_ref(this) else {
+        return efi::Status::INVALID_PARAMETER;
+    };
+    let interrupt_manager = &impl_ref.interrupt_manager;
 
     let const_fn_ptr = interrupt_handler as *const ();
     let result = if const_fn_ptr.is_null() {
@@ -177,9 +189,11 @@ extern "efiapi" fn get_timer_value(
     if timer_value.is_null() || timer_period.is_null() {
         return efi::Status::INVALID_PARAMETER;
     }
-    let cpu = &get_impl_ref(this).cpu;
+    let Some(impl_ref) = get_impl_ref(this) else {
+        return efi::Status::INVALID_PARAMETER;
+    };
 
-    let result = cpu.get_timer_value(timer_index);
+    let result = impl_ref.cpu.get_timer_value(timer_index);
 
     match result {
         Ok((value, period)) => {
@@ -313,6 +327,10 @@ mod tests {
 
             let status = flush_data_cache(&protocol.protocol, 0, 0, CpuFlushType::EfiCpuFlushTypeWriteBackInvalidate);
             assert_eq!(status, efi::Status::SUCCESS);
+
+            // Verify the case when `this` is null.
+            let status = flush_data_cache(core::ptr::null(), 0, 0, CpuFlushType::EfiCpuFlushTypeWriteBackInvalidate);
+            assert_eq!(status, efi::Status::INVALID_PARAMETER);
         });
     }
 
@@ -373,6 +391,10 @@ mod tests {
 
             let status = init(&protocol.protocol, CpuInitType::EfiCpuInit);
             assert_eq!(status, efi::Status::SUCCESS);
+
+            // Verify the case when `this` is null.
+            let status = init(core::ptr::null(), CpuInitType::EfiCpuInit);
+            assert_eq!(status, efi::Status::INVALID_PARAMETER);
         });
     }
 
@@ -396,6 +418,10 @@ mod tests {
 
             let status = register_interrupt_handler(&protocol.protocol, 0, mock_interrupt_handler);
             assert_eq!(status, efi::Status::SUCCESS);
+
+            // Verify the case when `this` is null.
+            let status = register_interrupt_handler(core::ptr::null(), 0, mock_interrupt_handler);
+            assert_eq!(status, efi::Status::INVALID_PARAMETER);
         });
     }
 
@@ -416,6 +442,16 @@ mod tests {
             let status =
                 get_timer_value(&protocol.protocol, 0, &mut timer_value as *mut _, &mut timer_period as *mut _);
             assert_eq!(status, efi::Status::SUCCESS);
+
+            // Verify the case when `this` is null.
+            let status = get_timer_value(core::ptr::null(), 0, &mut timer_value as *mut _, &mut timer_period as *mut _);
+            assert_eq!(status, efi::Status::INVALID_PARAMETER);
+
+            // Null out-parameters should also be rejected.
+            let status = get_timer_value(&protocol.protocol, 0, core::ptr::null_mut(), &mut timer_period as *mut _);
+            assert_eq!(status, efi::Status::INVALID_PARAMETER);
+            let status = get_timer_value(&protocol.protocol, 0, &mut timer_value as *mut _, core::ptr::null_mut());
+            assert_eq!(status, efi::Status::INVALID_PARAMETER);
         });
     }
 
@@ -492,6 +528,46 @@ mod tests {
             // Now the unregister should succeed
             let result = dxe_interrupt_manager.unregister_exception_handler(ExceptionType::from(0_usize));
             assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_get_impl_ref_null_returns_none() {
+        assert!(get_impl_ref(core::ptr::null()).is_none());
+    }
+
+    #[test]
+    fn test_get_impl_ref_returns_some_for_valid_pointer() {
+        with_locked_state(|| {
+            let mut cpu_init = MockEfiCpuInit::new();
+            cpu_init.expect_cache_writeback_granule().return_const(64_u32);
+            let cpu: Service<dyn Cpu> = Service::mock(Box::new(cpu_init));
+            let im: Service<dyn InterruptManager> = Service::mock(Box::new(MockInterruptManager::new()));
+            let protocol = EfiCpuArchProtocolImpl::new(cpu, im);
+
+            let this = &raw const protocol.protocol;
+            let impl_ref = get_impl_ref(this).expect("non-null pointer should yield Some");
+            assert_eq!(&raw const impl_ref.protocol, this);
+        });
+    }
+
+    #[test]
+    fn test_get_impl_ref_mut_null_returns_none() {
+        assert!(get_impl_ref_mut(core::ptr::null_mut()).is_none());
+    }
+
+    #[test]
+    fn test_get_impl_ref_mut_returns_some_for_valid_pointer() {
+        with_locked_state(|| {
+            let mut cpu_init = MockEfiCpuInit::new();
+            cpu_init.expect_cache_writeback_granule().return_const(64_u32);
+            let cpu: Service<dyn Cpu> = Service::mock(Box::new(cpu_init));
+            let im: Service<dyn InterruptManager> = Service::mock(Box::new(MockInterruptManager::new()));
+            let mut protocol = EfiCpuArchProtocolImpl::new(cpu, im);
+
+            let this = &raw mut protocol.protocol;
+            let impl_ref = get_impl_ref_mut(this).expect("non-null pointer should yield Some");
+            assert_eq!(&raw const impl_ref.protocol, this.cast_const());
         });
     }
 }

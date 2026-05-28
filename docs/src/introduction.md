@@ -24,6 +24,9 @@ If you have not read this book before, we suggest you start with **(1) [Patina B
 the project's goals and design philosophy. You can also watch an overview of
 [Patina presented at UEFI Plugfest 2025](#patina-overview-at-uefi-plugfest-2025).
 
+Patina is not the only way to write UEFI firmware in Rust and has unique goals compared to other projects. More details
+are in the [Patina in the UEFI Rust Ecosystem](background/patina_in_the_rust_ecosystem.md) section.
+
 ## Patina In Action
 
 If you want to see Patina being actively used and "in action", then check out these two repositories:
@@ -90,15 +93,16 @@ flowchart TD
 <!-- markdownlint-disable MD013 -->
 | Repository | Description |
 |------------|-------------|
-| [patina](https://github.com/OpenDevicePartnership/patina) | Core codebase for Patina containing Patina-only crates. |
-| [patina-readiness-tool](https://github.com/OpenDevicePartnership/patina-readiness-tool) | A DXE core replacement binary that reviews HOBs passed from PEI to DXE to validate your platform is ready to use the Patina DXE Core. |
-| [patina-fw-patcher](https://github.com/OpenDevicePartnership/patina-fw-patcher) | A developer tool to quickly patch a new patina-dxe-core binary into a platform's firmware |
-| [patina-paging](https://github.com/OpenDevicePartnership/patina-paging) | A paging solution we believe is generic enough to be useful outside of Patina. |
-| [patina-mtrr](https://github.com/OpenDevicePartnership/patina-mtrr) | A x86_64 MTRR solution we believe is generic enough to be useful outside of Patina. |
-| [patina-edk2](https://github.com/OpenDevicePartnership/patina-edk2) | A collection of definitions and helper utilities designed for EDK II-style C firmware projects that integrate Patina. |
-| [patina-dxe-core-qemu](https://github.com/OpenDevicePartnership/patina-dxe-core-qemu) | A reference implementation of patina-dxe-core for our two virtual QEMU platforms. |
-| [patina-qemu](https://github.com/OpenDevicePartnership/patina-qemu/) | Two reference virtual platforms (Q35, SBSA) |
+| [patina-components](https://github.com/OpenDevicePartnership/patina-components) | A repository where Patina components are developed and maintained. |
 | [patina-devops](https://github.com/OpenDevicePartnership/patina-devops) | A repository containing github workflows, actions, and notebooks used across our repositories. |
+| [patina-dxe-core-qemu](https://github.com/OpenDevicePartnership/patina-dxe-core-qemu) | A reference implementation of patina-dxe-core for our two virtual QEMU platforms. |
+| [patina-edk2](https://github.com/OpenDevicePartnership/patina-edk2) | A collection of definitions and helper utilities designed for EDK II-style C firmware projects that integrate Patina. |
+| [patina-fw-patcher](https://github.com/OpenDevicePartnership/patina-fw-patcher) | A developer tool to quickly patch a new patina-dxe-core binary into a platform's firmware |
+| [patina-mtrr](https://github.com/OpenDevicePartnership/patina-mtrr) | A x86_64 MTRR solution we believe is generic enough to be useful outside of Patina. |
+| [patina-paging](https://github.com/OpenDevicePartnership/patina-paging) | A paging solution we believe is generic enough to be useful outside of Patina. |
+| [patina-qemu](https://github.com/OpenDevicePartnership/patina-qemu/) | Two reference virtual platforms (Q35, SBSA) |
+| [patina-readiness-tool](https://github.com/OpenDevicePartnership/patina-readiness-tool) | A DXE core replacement binary that reviews HOBs passed from PEI to DXE to validate your platform is ready to use the Patina DXE Core. |
+| [patina](https://github.com/OpenDevicePartnership/patina) | Core codebase for Patina containing Patina-only crates. |
 <!-- markdownlint-enable MD013 -->
 
 ## Final Notes
@@ -115,8 +119,11 @@ start of the different sections mentioned above:
 1. [Patina Background](patina.md)
 2. [Platform Integration](integrate/patina_dxe_core_requirements.md)
 3. [Component Development](component/getting_started.md)
-4. [Contributing to Patina](todo!())
+4. [Contributing to Patina](https://github.com/OpenDevicePartnership/patina/blob/HEAD/CONTRIBUTING.md)
 5. [Developer Guides](dev/documenting.md)
+
+[Patina training videos](training_videos.md) are also available for certain topics. These demonstrate how to work with
+Patina in a hands-on way, where developers share their screen while walking through a specific task.
 
 ## Patina Overview at UEFI Plugfest 2025
 

@@ -8,7 +8,7 @@
 - `[Bar]`, `[bar](Bar)`, is supported for linking items (i.e. `[String](std::string::String)`)
 - Markdown is supported including sections (`#`), footnotes (`[^note]`), tables, tasks, punctuation
 - Keep documentation lines to 100 characters
-- Codeblock attributes (\`\`\`[attribute]) options: `should_panic`, `no_run`, `compile_fail`
+- Codeblock attributes (\`\`\`\[attribute\]) options: `should_panic`, `no_run`, `compile_fail`
 
 ## Templates
 

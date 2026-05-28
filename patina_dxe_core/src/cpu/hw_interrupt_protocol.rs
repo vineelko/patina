@@ -1,6 +1,5 @@
 use crate::tpl_mutex::TplMutex;
-use alloc::{boxed::Box, format, vec, vec::Vec};
-use core::ffi::c_void;
+use alloc::{boxed::Box, vec, vec::Vec};
 use patina_internal_cpu::interrupts::{
     ExceptionContext, InterruptHandler, InterruptManager, gic_manager::AArch64InterruptInitializer,
 };
@@ -21,7 +20,7 @@ use patina::{
 
 use super::GicBases;
 
-pub type HwInterruptHandler = extern "efiapi" fn(u64, &mut ExceptionContext);
+pub type HwInterruptHandler = Option<extern "efiapi" fn(u64, &mut ExceptionContext)>;
 
 #[repr(C)]
 #[non_exhaustive]
@@ -166,6 +165,7 @@ impl<'a> EfiHardwareInterruptProtocol<'a> {
     }
 }
 
+// SAFETY: The struct is repr(C) and the PROTOCOL_GUID correctly identifies the protocol.
 unsafe impl ProtocolInterface for EfiHardwareInterruptProtocol<'_> {
     const PROTOCOL_GUID: BinaryGuid = HARDWARE_INTERRUPT_PROTOCOL;
 }
@@ -284,7 +284,9 @@ impl<'a> EfiHardwareInterruptV2Protocol<'a> {
             hw_interrupt2_protocol.hw_interrupt_handler.aarch64_int.lock().get_interrupt_source_state(interrupt_source);
         match enable {
             Ok(enable) => {
-                unsafe { *state = enable }
+                // SAFETY: `state` is checked to be non-null above. Note that caller-supplied pointer
+                //         alignment is not guaranteed.
+                unsafe { state.write_unaligned(enable) }
                 efi::Status::SUCCESS
             }
             Err(err) => err.into(),
@@ -314,7 +316,7 @@ impl<'a> EfiHardwareInterruptV2Protocol<'a> {
         interrupt_source: u64,
         trigger_type: *mut HardwareInterrupt2TriggerType,
     ) -> efi::Status {
-        if this.is_null() {
+        if this.is_null() || trigger_type.is_null() {
             return efi::Status::INVALID_PARAMETER;
         }
 
@@ -323,7 +325,9 @@ impl<'a> EfiHardwareInterruptV2Protocol<'a> {
         let level = hw_interrupt2_protocol.hw_interrupt_handler.aarch64_int.lock().get_trigger_type(interrupt_source);
         match level {
             Ok(level) => {
-                unsafe { *trigger_type = level.into() }
+                // SAFETY: `trigger_type` is a caller-supplied out-pointer
+                //         its alignment is not guaranteed.
+                unsafe { trigger_type.write_unaligned(level.into()) }
                 efi::Status::SUCCESS
             }
             Err(err) => err.into(),
@@ -354,6 +358,7 @@ impl<'a> EfiHardwareInterruptV2Protocol<'a> {
     }
 }
 
+// SAFETY: The struct is repr(C) and the PROTOCOL_GUID correctly identifies the protocol.
 unsafe impl ProtocolInterface for EfiHardwareInterruptV2Protocol<'_> {
     const PROTOCOL_GUID: BinaryGuid = HARDWARE_INTERRUPT_PROTOCOL_V2;
 }
@@ -379,7 +384,7 @@ impl From<HardwareInterrupt2TriggerType> for Trigger {
 }
 
 struct HwInterruptProtocolHandler {
-    handlers: Vec<RwLock<Option<HwInterruptHandler>>>,
+    handlers: Vec<RwLock<HwInterruptHandler>>,
     aarch64_int: TplMutex<AArch64InterruptInitializer>,
 }
 
@@ -396,7 +401,7 @@ impl InterruptHandler for HwInterruptProtocolHandler {
 
         if raw_value >= self.handlers.len() as u32 {
             match raw_value {
-                1021 | 1022 | 1023 => {
+                1021..=1023 => {
                     // The special interrupt do not need to be acknowledged
                 }
                 _ => {
@@ -408,7 +413,7 @@ impl InterruptHandler for HwInterruptProtocolHandler {
 
         let rw_handler = self.handlers[raw_value as usize]
             .try_read()
-            .expect(&format!("Failed to read lock in exception handler for interrupt ID 0x{:x}", raw_value));
+            .unwrap_or_else(|| panic!("Failed to read lock in exception handler for interrupt ID 0x{:x}", raw_value));
 
         if let Some(handler) = *rw_handler {
             handler(raw_value as u64, context);
@@ -422,7 +427,7 @@ impl InterruptHandler for HwInterruptProtocolHandler {
 }
 
 impl HwInterruptProtocolHandler {
-    pub fn new(handlers: Vec<Option<HwInterruptHandler>>, aarch64_int: AArch64InterruptInitializer) -> Self {
+    pub fn new(handlers: Vec<HwInterruptHandler>, aarch64_int: AArch64InterruptInitializer) -> Self {
         Self {
             handlers: handlers.into_iter().map(RwLock::new).collect(),
             aarch64_int: TplMutex::new(efi::TPL_HIGH_LEVEL, aarch64_int, "AArch64 GIC Lock"),
@@ -435,35 +440,33 @@ impl HwInterruptProtocolHandler {
             return efi::Status::INVALID_PARAMETER;
         }
 
-        let m_handler = handler as *const c_void;
-
         if let Some(rw_handler) = self.handlers[interrupt_source].try_read() {
             // Use read access to test the state of the handler
-            if m_handler.is_null() && (*rw_handler).is_none() {
+            if handler.is_none() && (*rw_handler).is_none() {
                 return efi::Status::INVALID_PARAMETER;
             }
 
-            if !m_handler.is_null() && (*rw_handler).is_some() {
+            if handler.is_some() && (*rw_handler).is_some() {
                 return efi::Status::ALREADY_STARTED;
             }
         }
 
-        if m_handler.is_null() {
+        if handler.is_none() {
             // If the operation is to unregister the interrupt handler, we first disable the interrupt
             if let Err(err) = self.aarch64_int.lock().disable_interrupt_source(interrupt_source as u64) {
                 return err.into();
             }
 
             // Interrupt disabled, now remove the handler
-            if let Some(mut rw_handler) = self.handlers[interrupt_source as usize].try_write() {
+            if let Some(mut rw_handler) = self.handlers[interrupt_source].try_write() {
                 *rw_handler = None;
             } else {
                 return efi::Status::DEVICE_ERROR;
             }
         } else {
             // Register the interrupt handler
-            if let Some(mut rw_handler) = self.handlers[interrupt_source as usize].try_write() {
-                *rw_handler = Some(handler);
+            if let Some(mut rw_handler) = self.handlers[interrupt_source].try_write() {
+                *rw_handler = handler;
             } else {
                 return efi::Status::DEVICE_ERROR;
             }
