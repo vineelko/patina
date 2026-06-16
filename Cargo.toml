@@ -10,23 +10,23 @@ rust-version = "1.89"
 repository = "https://github.com/OpenDevicePartnership/patina"
 
 [workspace.dependencies]
-alloc-no-stdlib = { version = "~2.0" }
+alloc-no-stdlib = { version = "2.0" }
 arm-gic = { version = "0.7.2" }
 safe-mmio = { version = "0.2.5" }
 bitfield-struct = { version = "0.12" }
 brotli-decompressor = { version = "4.0.0", default-features = false }
 cfg-if = { version = "1" }
-clap = { version = '4.5.36' }
+clap = { version = "4.5.36" }
 compile-time = { version = "0.2" }
 crc32fast = { version = "1.4", default-features = false }
 fallible-streaming-iterator = { version = "0.1.9" }
-fixedbitset = { version = "^0.5", default-features = false }
+fixedbitset = { version = "0.5", default-features = false }
 gdbstub = { version = "0.7.3", default-features = false }
-goblin = { version = "~0.10.2", default-features = false }
+goblin = { version = "0.10.2", default-features = false }
 indoc = { version = "2.0" }
-lazy_static = { version = "^1" }
-linked_list_allocator = { version = "^0.10" }
-linkme = { version = "^0.3.29" }
+lazy_static = { version = "1" }
+linked_list_allocator = { version = "0.10" }
+linkme = { version = "0.3.29" }
 log = { version = "0.4", default-features = false }
 memoffset = {version = "0.9.1" }
 mu_rust_helpers = { version = "4.0.0" }
@@ -41,7 +41,7 @@ patina_internal_depex = { version = "22.0.1", path = "core/patina_internal_depex
 patina_lzma_rs = { version = "0.3.1", default-features = false }
 patina_macro = { version = "22.0.1", path = "sdk/patina_macro" }
 patina_mm = { version = "22.0.1", path = "components/patina_mm" }
-patina_mtrr = { version = "^1.1.6" }
+patina_mtrr = { version = "1.1.6" }
 patina_paging = { version = "11.0.2" }
 patina_performance = { version = "22.0.1", path = "components/patina_performance" }
 patina_smbios = { version = "22.0.1", path = "components/patina_smbios" }
@@ -51,17 +51,17 @@ proc-macro2 = { version = "1" }
 quote = { version = "1" }
 r-efi = { version = "6.0.0", default-features = false }
 scroll = { version = "0.13", default-features = false, features = ["derive"]}
-spin = { version = "^0.9" }
+spin = { version = "0.9" }
 syn = { version = "2" }
 time = { version = "0.3.47" }
-uart_16550 = { version = "^0.3.2" }
+uart_16550 = { version = "0.3.2" }
 corosensei = { version = "0.3.4", default-features = false }
 uuid = { version = "1.8", default-features = false }
 zerocopy = { version = "0.8" }
 zerocopy-derive = { version = "0.8" }
 
 # dev dependencies
-criterion = { version = "^0.5" }
+criterion = { version = "0.5" }
 env_logger = "0.11"
 mockall = { version = "0.13.0" }
 rand = { version = "0.10" }
