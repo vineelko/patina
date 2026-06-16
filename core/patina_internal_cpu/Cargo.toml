@@ -14,7 +14,6 @@ workspace = true
 features = ["doc", "std"]
 
 [dependencies]
-lazy_static = { workspace = true, features = ["spin_no_std"] }
 log = { workspace = true }
 r-efi = { workspace = true }
 patina = { workspace = true }

@@ -9,7 +9,6 @@
 #![cfg_attr(test, allow(dead_code))]
 #![cfg_attr(test, allow(unused_imports))]
 use core::ptr::{addr_of, addr_of_mut};
-use lazy_static::lazy_static;
 use patina::base::SIZE_4GB;
 
 struct GdtEntry {
@@ -156,41 +155,35 @@ fn tss_descriptor(base: u64, limit: u32) -> (u64, u64) {
     (low, high)
 }
 
-lazy_static! {
-    static ref GDT: [u64; GDT_ENTRY_COUNT] = {
-        // Initialize TSS with separate exception stack in IST1
-        // SAFETY: Single-threaded initialization guaranteed by lazy_static.
-        unsafe {
-            let ist_addr = addr_of!(SEPARATE_EXCEPTION_STACK) as u64 + STACK_SIZE as u64;
-            let ist_bytes = ist_addr.to_ne_bytes();
-            core::ptr::copy_nonoverlapping(
-                ist_bytes.as_ptr(),
-                addr_of_mut!(TSS).cast::<u8>().add(TSS_IST1_OFFSET),
-                8,
-            );
-        }
+static GDT: spin::LazyLock<[u64; GDT_ENTRY_COUNT]> = spin::LazyLock::new(|| {
+    // Initialize TSS with separate exception stack in IST1
+    // SAFETY: Single-threaded initialization guaranteed by LazyLock.
+    unsafe {
+        let ist_addr = addr_of!(SEPARATE_EXCEPTION_STACK) as u64 + STACK_SIZE as u64;
+        let ist_bytes = ist_addr.to_ne_bytes();
+        core::ptr::copy_nonoverlapping(ist_bytes.as_ptr(), addr_of_mut!(TSS).cast::<u8>().add(TSS_IST1_OFFSET), 8);
+    }
 
-        let tss_base = addr_of!(TSS) as u64;
-        let (tss_low, tss_high) = tss_descriptor(tss_base, (TSS_SIZE - 1) as u32);
+    let tss_base = addr_of!(TSS) as u64;
+    let (tss_low, tss_high) = tss_descriptor(tss_base, (TSS_SIZE - 1) as u32);
 
-        // We need valid 32-bit code segments for MpServices as they start in real mode, go through
-        // protected mode, then switch to long mode. They must come before the TSS entry as the
-        // MpDxe C code matches the TSS selector to the code selector, even though it is not.
-        [
-            NULL_SEL.into(),
-            LINEAR_SEL.into(),
-            LINEAR_CODE_SEL.into(),
-            SYS_DATA_SEL.into(),
-            SYS_CODE_SEL.into(),
-            SYS_CODE16_SEL.into(),
-            LINEAR_DATA64_SEL.into(),
-            LINEAR_CODE64_SEL.into(),
-            tss_low,
-            tss_high,
-            SPARE5_SEL.into(),
-        ]
-    };
-}
+    // We need valid 32-bit code segments for MpServices as they start in real mode, go through
+    // protected mode, then switch to long mode. They must come before the TSS entry as the
+    // MpDxe C code matches the TSS selector to the code selector, even though it is not.
+    [
+        NULL_SEL.into(),
+        LINEAR_SEL.into(),
+        LINEAR_CODE_SEL.into(),
+        SYS_DATA_SEL.into(),
+        SYS_CODE_SEL.into(),
+        SYS_CODE16_SEL.into(),
+        LINEAR_DATA64_SEL.into(),
+        LINEAR_CODE64_SEL.into(),
+        tss_low,
+        tss_high,
+        SPARE5_SEL.into(),
+    ]
+});
 
 #[repr(C, packed)]
 struct GdtPointer {
