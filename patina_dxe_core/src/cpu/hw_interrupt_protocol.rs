@@ -6,10 +6,7 @@ use patina_internal_cpu::interrupts::{
 use r_efi::efi;
 use spin::rwlock::RwLock;
 
-use arm_gic::{
-    Trigger,
-    gicv3::{GicCpuInterface, InterruptGroup},
-};
+use arm_gic::{InterruptGroup, Trigger, gicv3::GicCpuInterface};
 use patina::{
     BinaryGuid,
     boot_services::{BootServices, StandardBootServices},

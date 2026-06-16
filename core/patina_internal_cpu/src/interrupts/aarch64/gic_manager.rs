@@ -1,9 +1,6 @@
 use arm_gic::{
-    IntId, Trigger, UniqueMmioPointer,
-    gicv3::{
-        GicCpuInterface, GicDistributorContext, GicRedistributorContext, GicRedistributorIterator, GicV3,
-        InterruptGroup,
-    },
+    IntId, InterruptGroup, Trigger, UniqueMmioPointer,
+    gicv3::{GicCpuInterface, GicDistributorContext, GicRedistributorContext, GicRedistributorIterator, GicV3},
 };
 use core::ptr::NonNull;
 use patina::error::EfiError;
