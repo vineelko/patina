@@ -51,7 +51,7 @@ proc-macro2 = { version = "1" }
 quote = { version = "1" }
 r-efi = { version = "6.0.0", default-features = false }
 scroll = { version = "0.13", default-features = false, features = ["derive"]}
-spin = { version = "0.9" }
+spin = { version = "0.12" }
 syn = { version = "2" }
 time = { version = "0.3.49" }
 uart_16550 = { version = "0.3.2" }
