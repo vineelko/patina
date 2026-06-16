@@ -4,6 +4,8 @@
 - **Cadence:** Update at least once per quarter. Do not jump to a new stable release the day it ships.
 - **Toolchain are specified in:** `rust-toolchain.toml` (nightly channel) and the `rust-version` field in each crate's `Cargo.toml`.
 - **Nightly selection:** Use the "Branched from master" date for the target stable release from [releases.rs](https://releases.rs/).
+- **MSRV verification:** The `MSRV Check` workflow builds the workspace against the toolchain in the `[msrv]` table of
+  `rust-toolchain.toml`. Keep that table in sync with the `rust-version` field.
 - **Review:** Open the PR against `main`, add the `OpenDevicePartnership/patina-contributors` team, and leave it open for at least three full business days.
 ```
 
@@ -38,6 +40,24 @@ version change.
 A quick way to check if the minimum supported Rust version needs to change is to keep the changes made for the new
 release in your workspace and then revert the Rust toolchain to the previous version. If the project fails to build,
 then the minimum supported Rust version needs to be updated.
+
+### Automated MSRV Verification
+
+The minimum supported Rust version is also verified automatically by the `MSRV Check` workflow
+(`.github/workflows/msrv-check.yml`). This workflow builds and tests the workspace against the toolchain declared in the
+`[msrv]` table of `rust-toolchain.toml` (rather than the primary `[toolchain]` channel used for day-to-day development).
+
+The `[msrv]` table pins the nightly toolchain that corresponds to the `rust-version` declared in the crates' `Cargo.toml`
+files, using the "Branched from master" date for that stable release:
+
+```toml
+[msrv]
+channel = "nightly-2025-06-20"   # branched-from date for rust-version = "1.89"
+```
+
+The workflow runs on a daily schedule and on any pull request that modifies `rust-toolchain.toml`. This catches cases
+where a change unintentionally relies on functionality newer than the declared minimum. When you raise the minimum
+supported Rust version, update the `[msrv]` table's `channel` to the nightly that matches the new `rust-version`.
 
 ## Choosing a Nightly Version
 
