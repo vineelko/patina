@@ -58,7 +58,7 @@ pub struct BrotliSectionExtractor;
 
 impl BrotliSectionExtractor {
     /// Creates a new `BrotliSectionExtractor` instance.
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub const fn new() -> Self {
         Self {}
     }
@@ -117,7 +117,7 @@ impl SectionExtractor for BrotliSectionExtractor {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use crate::tests::create_brotli_section;
 

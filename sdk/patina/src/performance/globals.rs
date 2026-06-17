@@ -121,7 +121,7 @@ pub fn set_load_image_count(count: u32) {
 }
 
 /// Set performance component static state.
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn set_static_state(
     boot_services: StandardBootServices,
     timer: Service<dyn ArchTimerFunctionality>,
@@ -130,14 +130,14 @@ pub fn set_static_state(
 }
 
 /// Get performance component static state.
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn get_static_state()
 -> Option<(&'static StandardBootServices, &'static TplMutex<FBPT>, &'static Service<dyn ArchTimerFunctionality>)> {
     STATIC_STATE.inner()
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use crate as patina;
     use crate::component::service::IntoService;

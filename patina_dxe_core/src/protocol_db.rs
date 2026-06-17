@@ -883,7 +883,7 @@ unsafe impl Send for SpinLockedProtocolDb {}
 unsafe impl Sync for SpinLockedProtocolDb {}
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     extern crate std;
     use core::str::FromStr;

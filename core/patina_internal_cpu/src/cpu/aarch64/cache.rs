@@ -93,7 +93,7 @@ pub(crate) fn flush_data_cache_range(start: efi::PhysicalAddress, length: u64, o
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

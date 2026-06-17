@@ -167,7 +167,7 @@ pub fn remove_runtime_image(image_handle: efi::Handle) -> Result<(), EfiError> {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::test_support;

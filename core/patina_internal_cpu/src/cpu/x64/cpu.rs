@@ -92,7 +92,7 @@ impl EfiCpuX64 {
 
     /// Causes the CPU to enter a low power state until the next interrupt.
     // This routine only does bare-metal hardware access, so no coverage.
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn sleep() {
         #[cfg(not(test))]
         // SAFETY: The caller is expected to ensure that they want to halt the CPU until the next interrupt
@@ -105,7 +105,7 @@ impl EfiCpuX64 {
         // unimplemented!();
     }
 
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn initialize_fpu(&self) {
         #[cfg(not(test))]
         // SAFETY: This assembly writes only hard coded values to CR4 register, and MMX and FPU control words. No
@@ -173,7 +173,7 @@ impl Cpu for EfiCpuX64 {
         Ok((timer_value, self.timer_period))
     }
 
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn cache_writeback_granule(&self) -> u32 {
         CACHE_WRITEBACK_GRANULE
     }
@@ -186,7 +186,7 @@ impl Default for EfiCpuX64 {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
 
     use super::*;

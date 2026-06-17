@@ -540,7 +540,7 @@ pub fn get_section<'a>(target: &str, pe_info: &UefiPeInfo, image: &'a [u8]) -> e
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use crate::test_support;
 

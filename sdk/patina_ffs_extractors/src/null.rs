@@ -15,14 +15,14 @@ pub struct NullSectionExtractor;
 
 impl NullSectionExtractor {
     /// Creates a new `NullSectionExtractor` instance.
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub const fn new() -> Self {
         Self {}
     }
 }
 
 impl SectionExtractor for NullSectionExtractor {
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn extract(&self, _: &patina_ffs::section::Section) -> Result<Vec<u8>, FirmwareFileSystemError> {
         Err(FirmwareFileSystemError::Unsupported)
     }

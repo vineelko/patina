@@ -674,7 +674,7 @@ impl<D: SliceKey> SliceKey for Node<D> {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

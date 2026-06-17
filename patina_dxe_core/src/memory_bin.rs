@@ -47,7 +47,7 @@ const LOG_TARGET: &str = "memory_bin";
 /// Returns a human-readable name for a UEFI memory type.
 ///
 /// Returns a `&'static str` for all standard types. Returns `"Unknown"` for unrecognized values.
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(crate) fn memory_type_name(memory_type: efi::MemoryType) -> &'static str {
     match memory_type {
         efi::RESERVED_MEMORY_TYPE => "ReservedMemoryType",
@@ -115,7 +115,7 @@ struct MemoryBinStatistics {
 
 impl MemoryBinStatistics {
     /// Creates default statistics for a memory type with the given special/runtime flags.
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     const fn new(special: bool, runtime: bool) -> Self {
         Self {
             base_address: 0,
@@ -936,7 +936,7 @@ pub(crate) fn extract_memory_type_info_from_hob(hob_list: &HobList) -> Option<Ve
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use patina::base::{SIZE_64KB, UEFI_PAGE_SIZE};
@@ -964,7 +964,7 @@ mod tests {
     /// Initializes a `MemoryBinManager` from the given memory type info at the given base address.
     ///
     /// Uses `contiguous_alloc_size` to compute a range large enough for all bins.
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn init_bins(manager: &mut MemoryBinManager, base: u64, info: &[EFiMemoryTypeInformation]) {
         crate::test_support::init_test_logger();
         let range_size = MemoryBinManager::contiguous_alloc_size(info).unwrap() as u64;

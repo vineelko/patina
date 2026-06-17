@@ -849,7 +849,7 @@ impl_component_param_tuple!(T1, T2, T3, T4, T5);
 impl_component_param_tuple!(T1, T2, T3, T4, T5, T6);
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use core::sync::atomic::AtomicBool;
 

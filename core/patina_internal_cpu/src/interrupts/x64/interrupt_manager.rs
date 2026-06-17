@@ -59,7 +59,7 @@ impl InterruptsX64 {
 
 impl InterruptManager for InterruptsX64 {}
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 /// Default handler for double faults.
 extern "efiapi" fn double_fault_handler(_exception_type: isize, context: EfiSystemContext) {
     // SAFETY: We don't have any choice here, we are in an exception and have to do our best
@@ -84,7 +84,7 @@ extern "efiapi" fn double_fault_handler(_exception_type: isize, context: EfiSyst
     panic!("EXCEPTION: Double Fault");
 }
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 /// Default handler for GP faults.
 extern "efiapi" fn general_protection_fault_handler(_exception_type: isize, context: EfiSystemContext) {
     // SAFETY: We don't have any choice here, we are in an exception and have to do our best
@@ -118,7 +118,7 @@ extern "efiapi" fn general_protection_fault_handler(_exception_type: isize, cont
     panic!("EXCEPTION: GP FAULT");
 }
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 /// Default handler for page faults.
 extern "efiapi" fn page_fault_handler(_exception_type: isize, context: EfiSystemContext) {
     // SAFETY: We don't have any choice here, we are in an exception and have to do our best
@@ -169,7 +169,7 @@ extern "efiapi" fn page_fault_handler(_exception_type: isize, context: EfiSystem
     panic!("EXCEPTION: PAGE FAULT");
 }
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 // see Intel SDM Vol 3A section 7.15
 fn interpret_page_fault_exception_data(exception_data: u64) {
     log::error!("Error Code: {exception_data:#X?}");
@@ -202,7 +202,7 @@ fn interpret_page_fault_exception_data(exception_data: u64) {
     }
 }
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 // see Intel SDM Vol 3A section 7.15
 fn interpret_gp_fault_exception_data(exception_data: u64) {
     if exception_data != 0 {
@@ -213,7 +213,7 @@ fn interpret_gp_fault_exception_data(exception_data: u64) {
 }
 
 // There is no value in coverage for this function.
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 /// Dumps the page table entries for the given CR2. This uses the active page tables as they should be the same as the
 /// ones at the time of the fault.
 ///
@@ -238,7 +238,7 @@ fn dump_pte(cr2: u64) {
     }
 }
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod test {
     extern crate std;

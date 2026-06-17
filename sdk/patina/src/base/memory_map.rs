@@ -33,7 +33,7 @@ use r_efi::efi;
 /// let descriptors: Vec<efi::MemoryDescriptor> = vec![]; // Get from get_memory_map()
 /// memory_map::print_details(&descriptors);
 /// ```
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn print_details(descriptors: &[efi::MemoryDescriptor]) {
     log::info!(target: "memory_map_test", "\n");
     log::info!(target: "memory_map_test", "UEFI Memory Map ({} descriptors):", descriptors.len());

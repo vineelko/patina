@@ -30,7 +30,7 @@ impl EfiCpuAarch64 {
 
     /// Causes the CPU to enter a low power state until the next interrupt.
     // This routine only does bare-metal hardware access, so no coverage.
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn sleep() {
         #[cfg(not(test))]
         // SAFETY: The caller is expected to ensure that they want to wait for an interrupt
@@ -84,7 +84,7 @@ impl Cpu for EfiCpuAarch64 {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

@@ -240,7 +240,7 @@ impl VirtioMmio {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl VirtioMmioRegs {
     pub(super) fn new_fake(device_id: u32) -> Self {
         // SAFETY: This is a fake register set, the state will be initialized later.
@@ -259,7 +259,7 @@ impl VirtioMmioRegs {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

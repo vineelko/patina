@@ -445,7 +445,7 @@ impl<P: PlatformInfo> Core<P> {
         efi::Status::SUCCESS
     }
 
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     extern "efiapi" fn dispatch_efiapi() -> efi::Status {
         match Self::instance().pi_dispatcher.dispatcher() {
             Err(err) => err.into(),
@@ -484,7 +484,7 @@ impl<P: PlatformInfo> Core<P> {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::{MockCore, test_support};

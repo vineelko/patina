@@ -70,7 +70,7 @@ impl AcpiComponent {
 
     /// Initializes the ACPI system.
     /// Ignore coverage due to the use of `StandardBootServices`.
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn entry_point(
         self,
         storage: &mut Storage,

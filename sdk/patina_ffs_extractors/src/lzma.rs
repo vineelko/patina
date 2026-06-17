@@ -27,7 +27,7 @@ pub struct LzmaSectionExtractor;
 
 impl LzmaSectionExtractor {
     /// Creates a new `LzmaSectionExtractor` instance.
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub const fn new() -> Self {
         Self {}
     }
@@ -76,7 +76,7 @@ impl SectionExtractor for LzmaSectionExtractor {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use crate::tests::create_lzma_section;
 

@@ -90,17 +90,17 @@ impl EfiRuntimeServicesTable {
     // checksummed.
     fn default_runtime_services_table() -> efi::RuntimeServices {
         //private unimplemented stub functions used to initialize the table.
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn get_time_unimplemented(_: *mut efi::Time, _: *mut efi::TimeCapabilities) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn set_time_unimplemented(_: *mut efi::Time) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn get_wakeup_time_unimplemented(
             _: *mut efi::Boolean,
             _: *mut efi::Boolean,
@@ -109,12 +109,12 @@ impl EfiRuntimeServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn set_wakeup_time_unimplemented(_: efi::Boolean, _: *mut efi::Time) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn set_virtual_address_map_unimplemented(
             _: usize,
             _: usize,
@@ -124,12 +124,12 @@ impl EfiRuntimeServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn convert_pointer_unimplemented(_: usize, _: *mut *mut c_void) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn get_variable_unimplemented(
             _: *mut efi::Char16,
             _: *mut efi::Guid,
@@ -140,7 +140,7 @@ impl EfiRuntimeServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn get_next_variable_name_unimplemented(
             _: *mut usize,
             _: *mut efi::Char16,
@@ -149,7 +149,7 @@ impl EfiRuntimeServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn set_variable_unimplemented(
             _: *mut efi::Char16,
             _: *mut efi::Guid,
@@ -160,15 +160,15 @@ impl EfiRuntimeServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn get_next_high_mono_count_unimplemented(_: *mut u32) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn reset_system_unimplemented(_: efi::ResetType, _: efi::Status, _: usize, _: *mut c_void) {}
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn update_capsule_unimplemented(
             _: *mut *mut efi::CapsuleHeader,
             _: usize,
@@ -177,7 +177,7 @@ impl EfiRuntimeServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn query_capsule_capabilities_unimplemented(
             _: *mut *mut efi::CapsuleHeader,
             _: usize,
@@ -187,7 +187,7 @@ impl EfiRuntimeServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn query_variable_info_unimplemented(
             _: u32,
             _: *mut u64,
@@ -286,15 +286,15 @@ impl EfiBootServicesTable {
     // checksummed.
     fn default_boot_services_table() -> efi::BootServices {
         //private unimplemented stub functions used to initialize the table.
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn raise_tpl_unimplemented(_: efi::Tpl) -> efi::Tpl {
             efi::TPL_APPLICATION
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn restore_tpl_unimplemented(_: efi::Tpl) {}
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn allocate_pages_unimplemented(
             _: efi::AllocateType,
             _: efi::MemoryType,
@@ -304,12 +304,12 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn free_pages_unimplemented(_: efi::PhysicalAddress, _: usize) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn get_memory_map_unimplemented(
             _: *mut usize,
             _: *mut efi::MemoryDescriptor,
@@ -320,7 +320,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn allocate_pool_unimplemented(
             _: efi::MemoryType,
             _: usize,
@@ -329,12 +329,12 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn free_pool_unimplemented(_: *mut c_void) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn create_event_unimplemented(
             _: u32,
             _: efi::Tpl,
@@ -345,32 +345,32 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn set_timer_unimplemented(_: efi::Event, _: efi::TimerDelay, _: u64) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn wait_for_event_unimplemented(_: usize, _: *mut efi::Event, _: *mut usize) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn signal_event_unimplemented(_: efi::Event) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn close_event_unimplemented(_: efi::Event) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn check_event_unimplemented(_: efi::Event) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn install_protocol_interface_unimplemented(
             _: *mut efi::Handle,
             _: *mut efi::Guid,
@@ -380,7 +380,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn reinstall_protocol_interface_unimplemented(
             _: efi::Handle,
             _: *mut efi::Guid,
@@ -390,7 +390,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn uninstall_protocol_interface_unimplemented(
             _: efi::Handle,
             _: *mut efi::Guid,
@@ -399,7 +399,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn handle_protocol_unimplemented(
             _: efi::Handle,
             _: *mut efi::Guid,
@@ -408,7 +408,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn register_protocol_notify_unimplemented(
             _: *mut efi::Guid,
             _: efi::Event,
@@ -417,7 +417,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn locate_handle_unimplemented(
             _: efi::LocateSearchType,
             _: *mut efi::Guid,
@@ -428,7 +428,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn locate_device_path_unimplemented(
             _: *mut efi::Guid,
             _: *mut *mut efi::protocols::device_path::Protocol,
@@ -437,12 +437,12 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn install_configuration_table_unimplemented(_: *mut efi::Guid, _: *mut c_void) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn load_image_unimplemented(
             _: efi::Boolean,
             _: efi::Handle,
@@ -454,7 +454,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn start_image_unimplemented(
             _: efi::Handle,
             _: *mut usize,
@@ -463,7 +463,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn exit_unimplemented(
             _: efi::Handle,
             _: efi::Status,
@@ -473,27 +473,27 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn unload_image_unimplemented(_: efi::Handle) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn exit_boot_services_unimplemented(_: efi::Handle, _: usize) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn get_next_monotonic_count_unimplemented(_: *mut u64) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn stall_unimplemented(_: usize) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn set_watchdog_timer_unimplemented(
             _: usize,
             _: u64,
@@ -503,7 +503,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn connect_controller_unimplemented(
             _: efi::Handle,
             _: *mut efi::Handle,
@@ -513,7 +513,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn disconnect_controller_unimplemented(
             _: efi::Handle,
             _: efi::Handle,
@@ -522,7 +522,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn open_protocol_unimplemented(
             _: efi::Handle,
             _: *mut efi::Guid,
@@ -534,7 +534,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn close_protocol_unimplemented(
             _: efi::Handle,
             _: *mut efi::Guid,
@@ -544,7 +544,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn open_protocol_information_unimplemented(
             _: efi::Handle,
             _: *mut efi::Guid,
@@ -554,7 +554,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn protocols_per_handle_unimplemented(
             _: efi::Handle,
             _: *mut *mut *mut efi::Guid,
@@ -563,7 +563,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn locate_handle_buffer_unimplemented(
             _: efi::LocateSearchType,
             _: *mut efi::Guid,
@@ -574,7 +574,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn locate_protocol_unimplemented(
             _: *mut efi::Guid,
             _: *mut c_void,
@@ -583,7 +583,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn install_multiple_protocol_interfaces_unimplemented(
             _: *mut efi::Handle,
             _: *mut c_void,
@@ -592,7 +592,7 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn uninstall_multiple_protocol_interfaces_unimplemented(
             _: efi::Handle,
             _: *mut c_void,
@@ -601,18 +601,18 @@ impl EfiBootServicesTable {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn calculate_crc32_unimplemented(_: *mut c_void, _: usize, _: *mut u32) -> efi::Status {
             efi::Status::from_usize(EFI_NOT_AVAILABLE_YET)
         }
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn copy_mem_unimplemented(_: *mut c_void, _: *mut c_void, _: usize) {}
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn set_mem_unimplemented(_: *mut c_void, _: usize, _: u8) {}
 
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         extern "efiapi" fn create_event_ex_unimplemented(
             _: u32,
             _: efi::Tpl,
@@ -924,7 +924,7 @@ impl SystemTableChecksumInstaller {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::test_support;

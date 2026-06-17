@@ -143,7 +143,7 @@ fn apply_caching_attributes<M: Mtrr>(
 }
 
 /// Create an x86_64 paging instance under the general PatinaPageTable trait.
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn create_cpu_x64_paging<A: PageAllocator + 'static>(
     page_allocator: A,
 ) -> Result<impl PatinaPageTable, efi::Status> {
@@ -158,7 +158,7 @@ pub fn create_cpu_x64_paging<A: PageAllocator + 'static>(
 ///
 /// ## Safety
 /// The caller must ensure no other entity is concurrently modifying the page tables.
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub unsafe fn open_active_cpu_x64_paging<A: PageAllocator + 'static>(
     page_allocator: A,
 ) -> Result<impl PatinaPageTable, PtError> {
@@ -181,7 +181,7 @@ fn mtrr_err_to_efi_status(err: MtrrError) -> EfiError {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use mockall::mock;

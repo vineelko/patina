@@ -82,7 +82,7 @@ pub const ENTRY_POINT_STACK_SIZE: usize = 0x100000;
 const _: () = assert!(STACK_ALIGNMENT < UEFI_PAGE_SIZE);
 
 // dummy function used to initialize PrivateImageData.entry_point.
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 extern "efiapi" fn unimplemented_entry_point(
     _handle: efi::Handle,
     _system_table: *mut efi::SystemTable,
@@ -815,7 +815,7 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
     ///   structure in readable memory for the duration of the call.
     /// - `image_handle` is null-checked and returns `INVALID_PARAMETER` if null; if non-null,
     ///   it must point to writable memory suitable for storing an `efi::Handle`.
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(super) unsafe extern "efiapi" fn load_image_efiapi(
         boot_policy: efi::Boolean,
         parent_image_handle: efi::Handle,
@@ -965,7 +965,7 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
     /// If `exit_data_size` and `exit_data` are non-null, they must point to
     /// valid writable memory. The caller owns the returned exit data buffer.
     ///
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(super) unsafe extern "efiapi" fn start_image_efiapi(
         image_handle: efi::Handle,
         exit_data_size: *mut usize,
@@ -1091,7 +1091,7 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
         Ok(())
     }
 
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     /// Unloads a previously loaded image.
     ///
     /// # Safety Considerations
@@ -1199,7 +1199,7 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
     /// to a valid buffer of at least `exit_data_size` bytes. This pointer is
     /// stored and later returned to the caller of `start_image` to retrieve the
     /// exit data.
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(super) unsafe extern "efiapi" fn exit_efiapi(
         image_handle: efi::Handle,
         status: efi::Status,
@@ -1593,7 +1593,7 @@ impl Buffer {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     extern crate std;
     use super::*;

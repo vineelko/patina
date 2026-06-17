@@ -610,7 +610,7 @@ impl CommunicateBuffer {
     }
 }
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for CommunicateBuffer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writelncrlf!(f, "CommunicateBuffer(id: 0x{:X}. len: 0x{:X})", self.id(), self.len())?;
@@ -747,7 +747,7 @@ impl AcpiBase {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

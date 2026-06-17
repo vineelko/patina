@@ -203,7 +203,7 @@ impl UnwindCode {
     }
 
     /// Test function that parses all unwind codes.
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     #[cfg(all(target_os = "windows", target_arch = "x86_64", test))]
     pub(crate) fn _parse(bytes: &[u8], frame_register_offset: u32) -> StResult<Vec<UnwindCode>> {
         let byte_count = bytes.len();
@@ -257,7 +257,7 @@ impl UnwindCode {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

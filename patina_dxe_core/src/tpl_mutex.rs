@@ -137,7 +137,7 @@ impl<T: ?Sized> Drop for TplGuard<'_, T> {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
 
     use crate::{

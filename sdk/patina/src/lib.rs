@@ -17,7 +17,7 @@
 #![cfg_attr(all(not(feature = "std"), not(test), not(feature = "mockall")), no_std)]
 #![cfg_attr(any(test, feature = "alloc"), feature(allocator_api))]
 #![allow(static_mut_refs)]
-#![feature(coverage_attribute)]
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
 #[cfg(any(test, feature = "alloc"))]
 extern crate alloc;

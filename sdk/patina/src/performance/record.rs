@@ -623,7 +623,7 @@ pub fn record_type_name(record_type: u16) -> &'static str {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use core::{assert_eq, slice, unreachable};

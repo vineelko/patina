@@ -94,7 +94,7 @@ impl SmbiosProvider {
     }
 
     /// Initialize the SMBIOS provider and register it as a service
-    #[coverage(off)] // Component integration - tested via integration tests
+    #[cfg_attr(coverage_nightly, coverage(off))] // Component integration - tested via integration tests
     pub fn entry_point(self, storage: &mut Storage) -> Result<()> {
         let cfg = self.config;
 

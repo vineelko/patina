@@ -161,7 +161,7 @@ impl TestRecord {
         }
     }
 
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     /// An EFIAPI compatible event callback to disable a timer event at ReadyToBoot
     extern "efiapi" fn disable_timer(rtb_event: r_efi::efi::Event, context: *mut core::ffi::c_void) {
         // SAFETY: We set up the context pointer in `run_tests` to point to a valid tuple of (Event, StandardBootServices).
@@ -305,7 +305,7 @@ impl Display for Recorder {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     extern crate std;
 

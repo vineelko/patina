@@ -635,7 +635,7 @@ pub fn init_driver_services(st: &mut EfiSystemTable) {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::{protocol_db::DXE_CORE_HANDLE, test_support};

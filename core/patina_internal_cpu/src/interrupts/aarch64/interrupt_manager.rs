@@ -63,7 +63,7 @@ impl InterruptsAarch64 {
 
 impl InterruptManager for InterruptsAarch64 {}
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn enable_fiq() {
     cfg_if::cfg_if! {
         if #[cfg(not(test))]  {
@@ -74,7 +74,7 @@ fn enable_fiq() {
     }
 }
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn disable_fiq() {
     cfg_if::cfg_if! {
         if #[cfg(not(test))]  {
@@ -85,7 +85,7 @@ fn disable_fiq() {
     }
 }
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn get_fiq_state() -> Result<bool, EfiError> {
     cfg_if::cfg_if! {
         if #[cfg(not(test))]  {
@@ -97,7 +97,7 @@ fn get_fiq_state() -> Result<bool, EfiError> {
     }
 }
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn enable_async_abort() {
     cfg_if::cfg_if! {
         if #[cfg(not(test))]  {
@@ -108,7 +108,7 @@ fn enable_async_abort() {
     }
 }
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn initialize_exception() -> Result<(), EfiError> {
     // Set the stack pointer for EL0 to be used for synchronous exceptions
     #[cfg(not(test))]

@@ -639,7 +639,7 @@ const fn char_to_val(c: char) -> u8 {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use core::mem::{align_of, size_of};

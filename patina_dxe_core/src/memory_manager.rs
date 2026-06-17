@@ -91,7 +91,7 @@ impl MemoryManager for CoreMemoryManager {
 
     // Coverage is turned off since this is a simple wrapper function that would necessitate
     // complex mocking to test.
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn get_allocator(&self, memory_type: EfiMemoryType) -> Result<&'static dyn core::alloc::Allocator, MemoryError> {
         let allocator =
             crate::allocator::core_get_allocator(memory_type.into()).map_err(|_| MemoryError::UnsupportedMemoryType)?;
@@ -216,7 +216,7 @@ fn allow_allocations_for_type(memory_type: EfiMemoryType) -> Result<(), MemoryEr
 }
 
 #[patina_test]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[allow(clippy::indexing_slicing)]
 fn memory_manager_allocations_test(mm: Service<dyn MemoryManager>) -> patina_test::error::Result {
     // Allocate a page, and make sure it is accessible.

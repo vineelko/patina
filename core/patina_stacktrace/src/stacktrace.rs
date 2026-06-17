@@ -70,7 +70,7 @@ impl StackTrace {
     /// 6 0000005E2AEFFD10      00007FFB8FF95AEC       kernel32+12310
     /// 7 0000005E2AEFFD50      0000000000000000       ntdll+75AEC
     /// ```
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     #[inline(never)]
     pub unsafe fn dump_with(mut stack_frame: StackFrame) -> StResult<()> {
         let mut i = 0;
@@ -139,7 +139,7 @@ impl StackTrace {
     /// 6 0000005E2AEFFD10      00007FFB8FF95AEC       kernel32+12310
     /// 7 0000005E2AEFFD50      0000000000000000       ntdll+75AEC
     /// ```
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     #[inline(never)]
     pub unsafe fn dump() -> StResult<()> {
         let mut stack_frame = StackFrame::default();
@@ -239,7 +239,7 @@ impl StackTrace {
     /// UefiMain
     /// ~/repos/patina-qemu/MU_BASECORE/ShellPkg/Application/Shell/Shell.c:372
     /// ```
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     #[inline(never)]
     pub unsafe fn dump_with_fp_chain(_stack_frame: StackFrame) -> StResult<()> {
         cfg_if::cfg_if! {
@@ -303,7 +303,7 @@ impl StackTrace {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::StackFrame;
 

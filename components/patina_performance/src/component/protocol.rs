@@ -25,7 +25,7 @@ use patina::{
 };
 use r_efi::efi;
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 // EDK II Performance Measurement Protocol implementation.
 //
 /// Skip coverage as this function is tested via the generic version, (_create_performance_measurement).

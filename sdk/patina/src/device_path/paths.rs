@@ -379,7 +379,7 @@ impl Display for DevicePath {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use core::assert_eq;

@@ -19,7 +19,7 @@
 //!
 //! SPDX-License-Identifier: Apache-2.0
 //!
-#![feature(coverage_attribute)]
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(not(feature = "std"), no_std)]
 extern crate alloc;
 
@@ -49,7 +49,7 @@ pub use null::NullSectionExtractor;
 const DECOMPRESSION_MAX_MEMORY_LIMIT: u32 = patina::base::SIZE_512MB as u32;
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use alloc::{vec, vec::Vec};
     use patina::pi::fw_fs::{

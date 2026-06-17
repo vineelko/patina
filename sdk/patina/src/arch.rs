@@ -9,15 +9,15 @@
 
 cfg_if::cfg_if! {
     if #[cfg(test)] {
-        #[coverage(off)]
+        #[cfg_attr(coverage_nightly, coverage(off))]
         mod null;
         type Arch = null::NullArch;
     } else if #[cfg(target_arch = "aarch64")] {
-        #[coverage(off)] // Architecture code cannot be unit tested.
+        #[cfg_attr(coverage_nightly, coverage(off))] // Architecture code cannot be unit tested.
         pub mod aarch64;
         type Arch = aarch64::AArch64;
     } else if #[cfg(target_arch = "x86_64")] {
-        #[coverage(off)] // Architecture code cannot be unit tested.
+        #[cfg_attr(coverage_nightly, coverage(off))] // Architecture code cannot be unit tested.
         pub mod x64;
         type Arch = x64::X64;
     }

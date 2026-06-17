@@ -277,7 +277,7 @@ impl<const N: usize, const B: usize> VirtQueue<N, B> {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl<const N: usize, const B: usize> VirtQueue<N, B> {
     pub(super) fn test_drain_tx(&mut self) -> alloc::vec::Vec<alloc::vec::Vec<u8>> {
         use alloc::vec::Vec;

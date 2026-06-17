@@ -191,7 +191,7 @@ struct GdtPointer {
     base: u64,
 }
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn init() {
     let gdt_ptr = GDT.as_ptr() as usize;
     if gdt_ptr >= SIZE_4GB {
@@ -232,7 +232,7 @@ pub fn init() {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

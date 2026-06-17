@@ -510,7 +510,7 @@ fn get_module_guid_from_handle(
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

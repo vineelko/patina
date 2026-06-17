@@ -6,7 +6,7 @@
 )]
 #![cfg_attr(not(test), no_std)]
 #![deny(missing_docs)]
-#![feature(coverage_attribute)]
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
 extern crate alloc;
 

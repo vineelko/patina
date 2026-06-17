@@ -167,7 +167,7 @@
 //! More reference test cases live in `src\x64\tests\*.rs`.
 
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
-#![feature(coverage_attribute)]
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
 mod byte_reader;
 pub mod error;

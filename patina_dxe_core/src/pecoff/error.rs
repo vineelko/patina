@@ -39,7 +39,7 @@ impl From<goblin::error::Error> for Error {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

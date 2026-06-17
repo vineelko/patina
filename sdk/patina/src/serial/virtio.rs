@@ -155,7 +155,7 @@ impl<const N: usize, const B: usize> crate::serial::SerialIO for VirtioSerial<N,
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     #![allow(clippy::indexing_slicing)]
 

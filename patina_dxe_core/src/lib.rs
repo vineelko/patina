@@ -62,7 +62,7 @@
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 #![feature(c_variadic)]
 #![feature(allocator_api)]
-#![feature(coverage_attribute)]
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
 extern crate alloc;
 
@@ -104,10 +104,10 @@ use spin::Once;
 
 #[cfg(test)]
 #[macro_use]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub mod test_support;
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod core_patina_tests;
 
 use core::{
@@ -315,7 +315,7 @@ pub struct Core<P: PlatformInfo> {
     pi_dispatcher: PiDispatcher<P>,
 }
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl<P: PlatformInfo> Core<P> {
     /// Creates a new instance of the DXE Core in the NoAlloc phase.
     pub const fn new(section_extractor: P::Extractor) -> Self {
@@ -673,7 +673,7 @@ fn call_bds() -> ! {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use crate::test_support::with_global_lock;
 

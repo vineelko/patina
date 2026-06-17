@@ -435,7 +435,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
 }
 
 // FV / FVB EFIAPI compliant protocol method implementations.
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl<P: PlatformInfo> FvProtocolData<P> {
     /// EFIAPI compliant FVB protocol GetAttributes method.
     extern "efiapi" fn fvb_get_attributes_efiapi(
@@ -889,7 +889,7 @@ pub fn device_path_bytes_for_fv_file(fv_handle: efi::Handle, file_name: efi::Gui
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::{MockComponentInfo, MockCpuInfo, MockMemoryInfo, test_support};

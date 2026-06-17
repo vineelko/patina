@@ -501,7 +501,7 @@ pub(crate) fn check_param_conflicts(func: &ItemFn) -> Result<(), TokenStream> {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use quote::quote;

@@ -73,7 +73,7 @@ impl GicBases {
     /// Access to these registers are exclusive to this GicBases instance.
     ///
     /// Caller must guarantee that access to these registers is exclusive to this GicBases instance.
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub unsafe fn new(gicd_base: u64, gicr_base: u64) -> Self {
         GicBases { gicd: gicd_base, gicr: gicr_base }
     }
@@ -113,7 +113,7 @@ pub trait CpuInfo {
     }
 }
 
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn initialize_cpu_subsystem() -> crate::error::Result<(EfiCpu, Interrupts)> {
     let mut cpu = EfiCpu::default();
     cpu.initialize().inspect_err(|err| {
@@ -129,7 +129,7 @@ pub fn initialize_cpu_subsystem() -> crate::error::Result<(EfiCpu, Interrupts)> 
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

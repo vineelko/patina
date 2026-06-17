@@ -98,7 +98,7 @@ impl TestRunner {
     }
 
     /// The entry point for the test runner component.
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn entry_point(self, storage: &mut Storage) -> patina::error::Result<()> {
         let test_list: &'static [__private_api::TestCase] = __private_api::test_cases();
         self.register_tests(test_list, storage)
@@ -139,7 +139,7 @@ impl TestRunner {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(crate) mod tests {
     extern crate std;
 

@@ -178,7 +178,7 @@ impl fmt::Debug for PrettyFixedBitSet<'_> {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     extern crate std;

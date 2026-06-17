@@ -62,7 +62,7 @@ impl FromHob for HobPerformanceData {
 }
 
 impl HobPerformanceDataExtractor for Hob<'_, HobPerformanceData> {
-    #[coverage(off)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn extract_hob_perf_data(&self) -> Result<(u32, PerformanceRecordBuffer), Error> {
         merge_hob_performance_buffer(self.iter())
     }
@@ -85,7 +85,7 @@ where
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub mod tests {
     use core::assert_eq;
 

@@ -292,7 +292,7 @@ impl<'h, T: FromHob + 'static> IntoIterator for &Hob<'h, T> {
 }
 
 #[cfg(test)]
-#[coverage(off)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use crate as patina;
     use crate::{
