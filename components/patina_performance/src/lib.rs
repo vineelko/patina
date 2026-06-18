@@ -6,7 +6,6 @@
 )]
 #![cfg_attr(not(test), no_std)]
 #![deny(missing_docs)]
-#![allow(unexpected_cfgs)]
 #![feature(coverage_attribute)]
 
 extern crate alloc;

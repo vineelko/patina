@@ -77,6 +77,11 @@ serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 indexing_slicing = "deny"
 undocumented_unsafe_blocks = "warn"
 
+[workspace.lints.rust]
+# Set by cargo-llvm-cov during coverage runs. Declared here so gating
+# `coverage_attribute` behind it does not trigger unexpected_cfgs warnings.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
+
 # Profile used to build workspace dependencies for `mdbook test`. Inherits from `dev`
 # but disables LTO so that the resulting rlibs contain machine code and can be linked
 # by `rustdoc --test` when running the doctests embedded in the mdbook.
