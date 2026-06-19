@@ -110,13 +110,45 @@ impl<P: PlatformInfo> PiDispatcher<P> {
 
     /// Displays drivers that were discovered but not dispatched.
     pub fn display_discovered_not_dispatched(&self) {
-        for driver in &self.dispatcher_context.lock().pending_drivers {
+        // Summary report
+        for driver in self.dispatcher_context.lock().pending_drivers.iter() {
             log::warn!(
                 "Driver {} ({:?}) found but not dispatched.",
                 driver.name.as_deref().unwrap_or("Unnamed"),
                 guid_fmt!(driver.file_name)
             );
         }
+
+        // Detail report
+        self.detail_report();
+    }
+
+    fn detail_report(&self) {
+        log::debug!("Begin Report of Drivers Not Dispatched:");
+        for driver in self.dispatcher_context.lock().pending_drivers.iter() {
+            log::debug!(
+                "Driver {} ({:?}) found but not dispatched. Protocols present:",
+                driver.name.as_deref().unwrap_or("Unnamed"),
+                guid_fmt!(driver.file_name)
+            );
+
+            if let Some(depex) = &driver.depex {
+                for opcode in depex.iter() {
+                    match opcode {
+                        Opcode::Push(guid, present) => {
+                            log::debug!("  {guid:?} : {present}");
+                        }
+                        Opcode::End => {
+                            log::debug!("  {opcode:?}");
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                log::debug!("  No Depex");
+            }
+        }
+        log::debug!("End Report of Drivers Not Dispatched.");
     }
 
     /// Initializes the dispatcher by registering for FV protocol installation events.

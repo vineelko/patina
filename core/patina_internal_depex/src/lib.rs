@@ -282,6 +282,11 @@ impl Depex {
         false
     }
 
+    /// Returns an iterator over internal opcodes.
+    pub fn iter(&self) -> impl Iterator<Item = &Opcode> {
+        self.expression.iter()
+    }
+
     /// If the depex expression is an associated dependency, it returns the associated dependency.
     pub fn is_associated(&self) -> Option<AssociatedDependency> {
         match self.expression.first() {
