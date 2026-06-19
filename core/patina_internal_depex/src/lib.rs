@@ -13,7 +13,11 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
 use core::mem;
 use r_efi::efi;
 use uuid::Uuid;
@@ -282,9 +286,56 @@ impl Depex {
         false
     }
 
-    /// Returns an iterator over internal opcodes.
-    pub fn iter(&self) -> impl Iterator<Item = &Opcode> {
-        self.expression.iter()
+    /// Returns an iterator over the protocols pushed by this expression, paired with whether each
+    /// was found to be present at the most recent evaluation, in expression order.
+    ///
+    /// The position of each item corresponds to the references used by [`Depex::infix_expression`].
+    pub fn pushes(&self) -> impl Iterator<Item = (&Uuid, bool)> {
+        self.expression.iter().filter_map(|opcode| match opcode {
+            Opcode::Push(guid, present) => Some((guid, *present)),
+            _ => None,
+        })
+    }
+
+    /// Renders the dependency expression in fully parenthesized infix form.
+    ///
+    /// Each pushed protocol is referenced by its position in [`Depex::pushes`]. It can be paired
+    /// with [`Depex::pushes`] to map the numbers back to GUIDs.
+    pub fn infix_expression(&self) -> String {
+        let mut stack: Vec<String> = Vec::new();
+        let mut prefix = String::new();
+        let mut push_index = 0usize;
+        for opcode in &self.expression {
+            match opcode {
+                Opcode::Push(_, _) => {
+                    push_index += 1;
+                    stack.push(push_index.to_string());
+                }
+                Opcode::And => {
+                    let rhs = stack.pop().unwrap_or_default();
+                    let lhs = stack.pop().unwrap_or_default();
+                    stack.push(format!("({lhs} AND {rhs})"));
+                }
+                Opcode::Or => {
+                    let rhs = stack.pop().unwrap_or_default();
+                    let lhs = stack.pop().unwrap_or_default();
+                    stack.push(format!("({lhs} OR {rhs})"));
+                }
+                Opcode::Not => {
+                    let operand = stack.pop().unwrap_or_default();
+                    stack.push(format!("(NOT {operand})"));
+                }
+                Opcode::True => stack.push(String::from("TRUE")),
+                Opcode::False => stack.push(String::from("FALSE")),
+                Opcode::Before(guid) => stack.push(format!("BEFORE {guid:?}")),
+                Opcode::After(guid) => stack.push(format!("AFTER {guid:?}")),
+                Opcode::Sor => prefix = String::from("SOR "),
+                Opcode::Unknown => stack.push(String::from("UNKNOWN")),
+                Opcode::Malformed { opcode, len } => stack.push(format!("MALFORMED(0x{opcode:02x}, len {len})")),
+                Opcode::End => break,
+            }
+        }
+        format!("{prefix}{}", stack.pop().unwrap_or_default())
     }
 
     /// If the depex expression is an associated dependency, it returns the associated dependency.
@@ -728,5 +779,109 @@ mod tests {
         let opcodes = [Opcode::Malformed { opcode: 0x00, len: 0 }];
         let mut depex = Depex::from(opcodes.as_slice());
         depex.eval(&[]);
+    }
+
+    #[test]
+    fn pushes_should_yield_protocols_in_order_with_presence() {
+        let guid_a = Uuid::from_str("1e5668e2-8481-11d4-bcf1-0080c73c8881").unwrap();
+        let guid_b = Uuid::from_str("6441f818-6362-eb44-5700-7dba31dd2453").unwrap();
+        let expression: &[Opcode] =
+            &[Opcode::Push(guid_a, true), Opcode::Push(guid_b, false), Opcode::And, Opcode::End];
+        let depex = Depex::from(expression);
+
+        let pushes: Vec<(Uuid, bool)> = depex.pushes().map(|(guid, present)| (*guid, present)).collect();
+        assert_eq!(pushes, vec![(guid_a, true), (guid_b, false)]);
+    }
+
+    #[test]
+    fn infix_expression_should_render_numbered_and_and_or() {
+        let guid = Uuid::from_str("1e5668e2-8481-11d4-bcf1-0080c73c8881").unwrap();
+        // 1 2 AND 3 4 AND OR
+        let expression: &[Opcode] = &[
+            Opcode::Push(guid, false),
+            Opcode::Push(guid, false),
+            Opcode::And,
+            Opcode::Push(guid, false),
+            Opcode::Push(guid, false),
+            Opcode::And,
+            Opcode::Or,
+            Opcode::End,
+        ];
+        let depex = Depex::from(expression);
+        assert_eq!(depex.infix_expression(), "((1 AND 2) OR (3 AND 4))");
+    }
+
+    #[test]
+    fn infix_expression_should_render_not_true_false() {
+        let expression: &[Opcode] = &[Opcode::True, Opcode::Not, Opcode::End];
+        let depex = Depex::from(expression);
+        assert_eq!(depex.infix_expression(), "(NOT TRUE)");
+
+        let expression: &[Opcode] = &[Opcode::False, Opcode::End];
+        let depex = Depex::from(expression);
+        assert_eq!(depex.infix_expression(), "FALSE");
+    }
+
+    #[test]
+    fn infix_expression_should_be_empty_for_empty_expression() {
+        let expression: &[Opcode] = &[];
+        let depex = Depex::from(expression);
+        assert_eq!(depex.infix_expression(), "");
+    }
+
+    #[test]
+    fn infix_expression_should_render_before_and_after() {
+        let guid = Uuid::from_str("76b6bdfa-2acd-4462-9e3f-cb58c969d937").unwrap();
+
+        let expression: &[Opcode] = &[Opcode::Before(guid), Opcode::End];
+        let depex = Depex::from(expression);
+        assert_eq!(depex.infix_expression(), format!("BEFORE {guid:?}"));
+
+        let expression: &[Opcode] = &[Opcode::After(guid), Opcode::End];
+        let depex = Depex::from(expression);
+        assert_eq!(depex.infix_expression(), format!("AFTER {guid:?}"));
+    }
+
+    #[test]
+    fn infix_expression_should_render_sor_as_prefix() {
+        let expression: &[Opcode] = &[Opcode::Sor, Opcode::True, Opcode::End];
+        let depex = Depex::from(expression);
+        assert_eq!(depex.infix_expression(), "SOR TRUE");
+    }
+
+    #[test]
+    fn infix_expression_should_render_unknown_and_malformed() {
+        let expression: &[Opcode] = &[Opcode::Unknown, Opcode::End];
+        let depex = Depex::from(expression);
+        assert_eq!(depex.infix_expression(), "UNKNOWN");
+
+        let expression: &[Opcode] = &[Opcode::Malformed { opcode: 0x02, len: 3 }, Opcode::End];
+        let depex = Depex::from(expression);
+        assert_eq!(depex.infix_expression(), "MALFORMED(0x02, len 3)");
+    }
+
+    #[test]
+    fn infix_expression_should_render_complex_before_after_and_or() {
+        let guid_a = Uuid::from_str("1e5668e2-8481-11d4-bcf1-0080c73c8881").unwrap();
+        let guid_b = Uuid::from_str("6441f818-6362-eb44-5700-7dba31dd2453").unwrap();
+        let guid_before = Uuid::from_str("76b6bdfa-2acd-4462-9e3f-cb58c969d937").unwrap();
+        let guid_after = Uuid::from_str("0379be4e-d706-437d-b037-edb82fb772a4").unwrap();
+
+        // Postfix: A B AND  BEFORE  AFTER  OR  AND
+        let expression: &[Opcode] = &[
+            Opcode::Push(guid_a, false),
+            Opcode::Push(guid_b, false),
+            Opcode::And,
+            Opcode::Before(guid_before),
+            Opcode::After(guid_after),
+            Opcode::Or,
+            Opcode::And,
+            Opcode::End,
+        ];
+        let depex = Depex::from(expression);
+        assert_eq!(
+            depex.infix_expression(),
+            format!("((1 AND 2) AND (BEFORE {guid_before:?} OR AFTER {guid_after:?}))")
+        );
     }
 }

@@ -133,17 +133,11 @@ impl<P: PlatformInfo> PiDispatcher<P> {
             );
 
             if let Some(depex) = &driver.depex {
-                for opcode in depex.iter() {
-                    match opcode {
-                        Opcode::Push(guid, present) => {
-                            log::debug!("  {guid:?} : {present}");
-                        }
-                        Opcode::End => {
-                            log::debug!("  {opcode:?}");
-                        }
-                        _ => {}
-                    }
+                // Number and print each pushed protocol GUID and whether it is present.
+                for (index, (guid, present)) in depex.pushes().enumerate() {
+                    log::debug!("  [{}] {guid:?} : {present}", index + 1);
                 }
+                log::debug!("  Expression: {}", depex.infix_expression());
             } else {
                 log::debug!("  No Depex");
             }
