@@ -14,11 +14,11 @@
 use core::ffi::c_void;
 
 use alloc::vec::Vec;
-use mu_rust_helpers::uefi_decompress::{DecompressionAlgorithm, decompress_into_with_algo};
 use patina::{
     component::service::memory::{AllocationOptions, MemoryManager, PageAllocationStrategy},
     guids,
     pi::hob::{self},
+    uefi_decompress::{DecompressionAlgorithm, decompress_into_with_algo},
     uefi_size_to_pages, writelncrlf,
 };
 
