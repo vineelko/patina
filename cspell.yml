@@ -60,6 +60,7 @@ words:
   - coverity
   - cpuid
   - csodimm
+  - ctable
   - ctypes
   - cudimm
   - cuviper
@@ -132,6 +133,7 @@ words:
   - lrdimm
   - lrpair
   - lzmatest
+  - maxnp
   - mdbook
   - mdscr
   - mmiport
@@ -169,6 +171,7 @@ words:
   - powerfmt
   - pread
   - psapi
+  - ptable
   - pterror
   - pwrite
   - pyserial
@@ -240,6 +243,7 @@ words:
   - wrmsr
   - xdata
   - xtask
+  - xxxxxxxxxb
   - zbuild
   - zeroize
   - zunstable

@@ -58,6 +58,7 @@ pub mod runtime_services;
 pub mod serial;
 #[cfg(any(test, feature = "alloc"))]
 pub mod tpl_mutex;
+pub mod uefi_decompress;
 #[cfg(any(test, feature = "alloc"))]
 pub mod uefi_protocol;
 
