@@ -16,3 +16,4 @@ pub mod gdt;
 pub mod interrupts;
 pub mod mp;
 pub mod paging;
+pub mod save_state;
