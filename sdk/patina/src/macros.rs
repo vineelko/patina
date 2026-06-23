@@ -93,6 +93,31 @@ macro_rules! log_debug_assert {
     }};
 }
 
+/// Gives a `&'static str` that is the name of the containing function.
+///
+/// # Example
+///
+/// ```rust
+/// fn demo_fn() -> &'static str {
+///     use patina::function;
+///
+///     function!()
+/// }
+///
+/// assert!(demo_fn().ends_with("demo_fn"));
+/// ```
+#[macro_export]
+macro_rules! function {
+    () => {{
+        fn f() {}
+        fn type_name_of<T>(_: T) -> &'static str {
+            core::any::type_name::<T>()
+        }
+        let name = type_name_of(f);
+        name.strip_suffix("::f").unwrap()
+    }};
+}
+
 /// Macro definitions for working with PCI devices.
 pub mod pci {
     /// Constructs a PCI library address from the given bus, device, function, and register values.
