@@ -21,7 +21,6 @@ crc32fast = { workspace = true }
 goblin = { workspace = true, features = ["pe32", "pe64", "te"] }
 linked_list_allocator = { workspace = true }
 log = { workspace = true }
-mu_rust_helpers = { workspace = true }
 patina_paging = { workspace = true }
 r-efi = { workspace = true }
 scroll = { workspace = true, features = ["derive"] }

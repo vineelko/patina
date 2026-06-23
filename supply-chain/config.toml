@@ -356,22 +356,6 @@ criteria = "safe-to-deploy"
 version = "0.13.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.mu_rust_helpers]]
-version = "3.0.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.mu_uefi_decompress]]
-version = "3.0.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.mu_uefi_guid]]
-version = "3.0.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.mu_uefi_perf_timer]]
-version = "3.0.2"
-criteria = "safe-to-deploy"
-
 [[exemptions.num-conv]]
 version = "0.2.0"
 criteria = "safe-to-deploy"
