@@ -21,9 +21,8 @@ use alloc::{
     vec::Vec,
 };
 use core::{cmp::Ordering, ffi::c_void};
-use mu_rust_helpers::guid::guid_fmt;
 use patina::{
-    BinaryGuid,
+    BinaryGuid, OwnedGuid,
     device_path::walker::concat_device_path_to_boxed_slice,
     error::EfiError,
     pi::{
@@ -115,7 +114,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
             log::warn!(
                 "Driver {} ({:?}) found but not dispatched.",
                 driver.name.as_deref().unwrap_or("Unnamed"),
-                guid_fmt!(driver.file_name)
+                OwnedGuid::from(driver.file_name)
             );
         }
 
@@ -129,7 +128,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
             log::debug!(
                 "Driver {} ({:?}) found but not dispatched. Protocols present:",
                 driver.name.as_deref().unwrap_or("Unnamed"),
-                guid_fmt!(driver.file_name)
+                OwnedGuid::from(driver.file_name)
             );
 
             if let Some(depex) = &driver.depex {
@@ -270,7 +269,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
             let driver_candidates: Vec<_> = dispatcher.pending_drivers.drain(..).collect();
             let mut scheduled_driver_candidates = Vec::new();
             for mut candidate in driver_candidates {
-                log::debug!(target: "patina_internal_depex", "Evaluating depex for candidate: {} ({:?})", candidate.name.as_deref().unwrap_or("Unnamed"), guid_fmt!(candidate.file_name));
+                log::debug!(target: "patina_internal_depex", "Evaluating depex for candidate: {} ({:?})", candidate.name.as_deref().unwrap_or("Unnamed"), OwnedGuid::from(candidate.file_name));
                 let depex_satisfied = match candidate.depex {
                     Some(ref mut depex) => depex.eval(&PROTOCOL_DB.registered_protocols()),
                     None => dispatcher.arch_protocols_available,
@@ -309,7 +308,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
         let mut dispatch_attempted = false;
         for mut driver in scheduled {
             if driver.image_handle.is_none() {
-                log::info!("Loading file: {:?}", guid_fmt!(driver.file_name));
+                log::info!("Loading file: {:?}", OwnedGuid::from(driver.file_name));
                 let data = driver.pe32.try_content_as_slice()?;
 
                 // `driver.device_path` is constructed from FV and file information and is
@@ -346,7 +345,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
                         log::info!(
                             "Deferring driver: {} ({:?}) due to security status: {:x?}",
                             driver.name.as_deref().unwrap_or("Unnamed"),
-                            guid_fmt!(driver.file_name),
+                            OwnedGuid::from(driver.file_name),
                             efi::Status::SECURITY_VIOLATION
                         );
                         self.dispatcher_context.lock().pending_drivers.push(driver);
@@ -355,7 +354,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
                         log::info!(
                             "Dropping driver: {} ({:?}) due to security status: {:x?}",
                             driver.name.as_deref().unwrap_or("Unnamed"),
-                            guid_fmt!(driver.file_name),
+                            OwnedGuid::from(driver.file_name),
                             unexpected_status
                         );
                     }
@@ -385,7 +384,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
                                 Err(e) => {
                                     log::warn!(
                                         "Failed to parse FV from file {:?}: {:?}",
-                                        guid_fmt!(candidate.file_name),
+                                        OwnedGuid::from(candidate.file_name),
                                         e
                                     );
                                     continue;
@@ -399,8 +398,8 @@ impl<P: PlatformInfo> PiDispatcher<P> {
                         {
                             log::debug!(
                                 "Skipping FV file {:?} - FV with name GUID {:?} is already installed",
-                                guid_fmt!(candidate.file_name),
-                                guid_fmt!(fv_name_guid)
+                                OwnedGuid::from(candidate.file_name),
+                                OwnedGuid::from(fv_name_guid)
                             );
                             continue;
                         }
@@ -422,7 +421,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
                         } else {
                             log::warn!(
                                 "couldn't install firmware volume image {:?}: {:?}",
-                                guid_fmt!(candidate.file_name),
+                                OwnedGuid::from(candidate.file_name),
                                 res
                             );
                         }
@@ -807,7 +806,7 @@ impl DispatcherContext {
                                 security_status: efi::Status::NOT_READY,
                             });
                         } else {
-                            log::warn!("driver {:?} does not contain a PE32 section.", guid_fmt!(file_name));
+                            log::warn!("driver {:?} does not contain a PE32 section.", OwnedGuid::from(file_name));
                         }
                     }
                     if file.file_type_raw() == ffs::file::raw::r#type::FIRMWARE_VOLUME_IMAGE {
@@ -846,7 +845,7 @@ impl DispatcherContext {
                         } else {
                             log::warn!(
                                 "firmware volume image {:?} does not contain a firmware volume image section.",
-                                guid_fmt!(file_name)
+                                OwnedGuid::from(file_name)
                             );
                         }
                     }
