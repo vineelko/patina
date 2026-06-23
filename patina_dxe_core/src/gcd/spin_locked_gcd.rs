@@ -11,9 +11,9 @@ use alloc::{boxed::Box, slice, vec, vec::Vec};
 use core::{fmt::Display, ptr};
 use patina::{base::DEFAULT_CACHE_ATTR, error::EfiError, log_debug_assert};
 
-use mu_rust_helpers::function;
 use patina::{
     base::{SIZE_4GB, UEFI_PAGE_MASK, UEFI_PAGE_SHIFT, UEFI_PAGE_SIZE, align_up},
+    function,
     guids::{self, CACHE_ATTRIBUTE_CHANGE_EVENT_GROUP},
     pi::{
         dxe_services::{self, GcdMemoryType, MemorySpaceDescriptor},

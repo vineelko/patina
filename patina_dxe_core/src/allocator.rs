@@ -24,7 +24,7 @@ use core::{
 
 extern crate alloc;
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
-use mu_rust_helpers::function;
+use patina::function;
 
 use crate::{
     GCD, config_tables,

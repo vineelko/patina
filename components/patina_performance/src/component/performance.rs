@@ -37,7 +37,7 @@ use patina::{
 use patina_mm::component::communicator::MmCommunication;
 use r_efi::system::EVENT_GROUP_READY_TO_BOOT;
 
-use mu_rust_helpers::function;
+use patina::function;
 
 use patina::guids::EVENT_GROUP_END_OF_DXE;
 
