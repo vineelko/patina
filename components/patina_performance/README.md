@@ -70,15 +70,14 @@ external component.
 *Example of measurement from within the core:*
 
 ```rust,no_run
-# extern crate mu_rust_helpers;
 # extern crate patina;
 use patina::performance::{
    logging::perf_function_begin,
    measurement::create_performance_measurement,
 };
-use mu_rust_helpers::guid::CALLER_ID;
+use patina::guids::CALLER_ID;
 
-perf_function_begin("foo", &CALLER_ID, create_performance_measurement);
+perf_function_begin("foo", CALLER_ID.as_efi_guid(), create_performance_measurement);
 ```
 
 ## Performance Component Overview

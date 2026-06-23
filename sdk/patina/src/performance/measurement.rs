@@ -79,7 +79,7 @@ pub mod event_callback {
             EFI_PROGRESS_CODE,
             EFI_SOFTWARE_DXE_BS_DRIVER,
             0,
-            &mu_rust_helpers::guid::CALLER_ID,
+            crate::guids::CALLER_ID.as_efi_guid(),
             efi::Guid::clone(&*EDKII_FPDT_EXTENDED_FIRMWARE_PERFORMANCE),
             fbpt_address,
         );
