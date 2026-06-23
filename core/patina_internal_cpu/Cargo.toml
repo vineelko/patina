@@ -39,5 +39,7 @@ patina_mtrr = { workspace = true, features = ["mockall"] }
 
 [features]
 std = []
+save_state_intel = []
+save_state_amd = []
 # All non-std features to test in CI
 ci_features = []

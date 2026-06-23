@@ -62,6 +62,7 @@ words:
   - coverity
   - cpuid
   - csodimm
+  - cstar
   - ctable
   - ctypes
   - cudimm
@@ -135,10 +136,12 @@ words:
   - lpddr
   - lrdimm
   - lrpair
+  - lstar
   - lzmatest
   - maxnp
   - mdbook
   - mdscr
+  - mmbase
   - mmiport
   - mmram
   - mpidr
@@ -197,8 +200,10 @@ words:
   - rwlock
   - sgram
   - smbus
+  - smbase
   - smcport
   - smiport
+  - smmrevid
   - smram
   - socketm
   - socketr
