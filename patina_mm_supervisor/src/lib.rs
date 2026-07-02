@@ -67,6 +67,8 @@ use mem::{AllocationType, SharedPagingAllocator};
 
 use privilege_mgmt::{invoke_demoted_routine, syscall_setup::SyscallInterface};
 
+use spin::Mutex;
+
 use patina::management_mode::supervisor::UserCommandType;
 
 use core::{
@@ -313,6 +315,8 @@ pub struct MmSupervisorCore<P: PlatformInfo, const MAX_CPUS: usize> {
     syscall_interface: SyscallInterface<MAX_CPUS>,
     /// Flag indicating if the core has been initialized.
     initialized: AtomicBool,
+    /// TESTING: serializes per-core initialization so only one core runs it at a time.
+    init_lock: Mutex<()>,
     /// Phantom data for the platform type.
     _phantom: core::marker::PhantomData<fn() -> P>,
 }
@@ -376,6 +380,8 @@ fn mark_core_initialized(cpu_index: usize) {
     }
 }
 
+
+
 #[coverage(off)]
 impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// Creates a new instance of the MM Supervisor Core.
@@ -387,6 +393,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             mailbox_manager: MailboxManager::new(),
             syscall_interface: SyscallInterface::new(),
             initialized: AtomicBool::new(false),
+            init_lock: Mutex::new(()),
             _phantom: core::marker::PhantomData,
         }
     }
@@ -453,6 +460,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             return;
         }
 
+        let _init_guard = self.init_lock.lock();
+
         // First entry: initialization phase
         if is_bsp {
             // BSP path: Initialize the supervisor
@@ -508,7 +517,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             log::info!("BSP one-time initialization complete.");
         } else {
             // AP path: Wait for BSP to complete one-time initialization
-            log::trace!("AP (CPU {}, index {}) waiting for BSP initialization...", cpu_id, cpu_index);
+            log::info!("AP (CPU {}, index {}) waiting for BSP initialization...", cpu_id, cpu_index);
 
             // Spin until BSP completes initialization
             while !init_state().is_bsp_init_complete() {
@@ -527,7 +536,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // Track that this core has completed per-core init
         let init_count = init_state().inc_per_core_init_count();
-        log::trace!("CPU {} (index {}) completed per-core init ({} cores initialized)", cpu_id, cpu_index, init_count);
+        log::info!(
+            "CPU {} (index {}) completed per-core init ({} cores initialized)",
+            cpu_id,
+            cpu_index,
+            init_count
+        );
 
         // BSP waits for all registered CPUs to complete per-core init before returning
         if is_bsp {
