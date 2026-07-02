@@ -95,6 +95,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// 3. BSP processes the pending request via `bsp_request_loop`
     /// 4. BSP broadcasts `Return` to all APs so they exit the holding pen
     /// 5. BSP waits for all AP responses before returning
+    /// 6. On exit, each AP clears its `InHoldingPen` state so the next entry's
+    ///    `wait_for_ap_arrival` waits for a fresh check-in instead of seeing stale state
     pub(crate) fn enter_runtime(&'static self, cpu_id: u32) {
         let is_bsp = is_bsp();
 
@@ -121,6 +123,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             self.cpu_manager.set_ap_state(cpu_id, ApState::InHoldingPen);
             log::trace!("AP (CPU {}) checked in, entering holding pen...", cpu_id);
             self.ap_holding_pen(cpu_id);
+
+            // Check out: clear the InHoldingPen state now that this AP has left the pen.
+            self.cpu_manager.set_ap_state(cpu_id, ApState::NotPresent);
         }
     }
 

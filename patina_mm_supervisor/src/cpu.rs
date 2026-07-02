@@ -196,7 +196,7 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
         }
 
         slot.is_bsp.store(if is_bsp { 1 } else { 0 }, Ordering::Release);
-        slot.state.store(if is_bsp { ApState::Busy as u8 } else { ApState::InHoldingPen as u8 }, Ordering::Release);
+        slot.state.store(if is_bsp { ApState::Busy as u8 } else { ApState::NotPresent as u8 }, Ordering::Release);
         // Publish the CPU ID last so readers that observe it also see the fields above.
         slot.cpu_id.store(cpu_id, Ordering::Release);
 
@@ -505,8 +505,8 @@ mod tests {
         manager.register_cpu(0, 0, true);
         manager.register_cpu(1, 1, false);
 
-        // Check initial state
-        assert_eq!(manager.get_ap_state(1), Some(ApState::InHoldingPen));
+        // APs register as NotPresent and only enter the holding pen on check-in.
+        assert_eq!(manager.get_ap_state(1), Some(ApState::NotPresent));
 
         // Change state
         assert!(manager.set_ap_state(1, ApState::Busy));
@@ -553,6 +553,13 @@ mod tests {
         manager.register_cpu(1, 1, false);
         manager.register_cpu(2, 2, false);
 
+        // APs register as NotPresent; they only count as InHoldingPen after checking in.
+        assert_eq!(manager.count_aps_in_state(ApState::NotPresent), 2);
+        assert_eq!(manager.count_aps_in_state(ApState::InHoldingPen), 0);
+
+        // Simulate both APs checking in to the holding pen.
+        manager.set_ap_state(1, ApState::InHoldingPen);
+        manager.set_ap_state(2, ApState::InHoldingPen);
         assert_eq!(manager.count_aps_in_state(ApState::InHoldingPen), 2);
         assert_eq!(manager.count_aps_in_state(ApState::Busy), 0);
 
