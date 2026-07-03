@@ -91,7 +91,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// Implements the MP synchronization protocol:
     /// 1. APs check in by setting their state to `InHoldingPen` and entering the holding pen
-    /// 2. BSP waits (with timeout) for all registered APs to arrive
+    /// 2. BSP waits for all registered APs, all cores must be in MM before servicing a request
     /// 3. BSP processes the pending request via `bsp_request_loop`
     /// 4. BSP releases every AP at once by advancing the mailbox release generation
     /// 5. BSP waits (with timeout) for the released APs to leave the pen and check out
@@ -103,11 +103,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         if is_bsp {
             log::trace!("BSP (CPU {}) waiting for APs to arrive...", cpu_id);
 
-            // Wait for all registered APs to check in (set state to InHoldingPen)
+            // Wait for all registered APs to check in (set state to InHoldingPen).
             let expected_aps = self.cpu_manager.registered_count().saturating_sub(1);
             self.wait_for_ap_arrival(expected_aps);
 
-            // All APs (or timeout) - proceed with request processing
+            // Every registered AP is now in MM - service the request.
             log::trace!("BSP (CPU {}) entering request serving routine...", cpu_id);
             self.bsp_request_loop(cpu_id as usize);
 
@@ -127,10 +127,18 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         }
     }
 
-    /// Waits for APs to arrive with a timeout.
+    /// Waits for all registered APs to rendezvous in the holding pen, enforcing the
+    /// all APs arrival guarantee.
     ///
-    /// Spins until the expected number of APs have set their state to `InHoldingPen`,
-    /// or the timeout expires (whichever comes first).
+    /// TODO: A fully robust implementation would first re-assert the MMI via SMI IPI to
+    /// force delayed/blocked stragglers in before failing. That force-in needs LAPIC
+    /// IPI support the supervisor does not yet provide; until then a straggler that misses
+    /// the window halts the platform instead of being pulled in.
+    ///
+    /// ## Panics
+    ///
+    /// Panics (fail-secure halt) if not all registered APs arrive within
+    /// `AP_ARRIVAL_TIMEOUT_US`.
     fn wait_for_ap_arrival(&self, expected_aps: usize) {
         if expected_aps == 0 {
             return;
@@ -143,8 +151,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         if all_arrived {
             log::trace!("All {} APs arrived", expected_aps);
         } else {
+            // All cores have to rendezvous in the holding pen before the BSP services a request. If any core
+            // fails to arrive within the window, this is a security-fatal condition.
             let arrived = self.cpu_manager.count_aps_in_state(ApState::InHoldingPen);
-            log::warn!("AP arrival timeout: {}/{} APs arrived, proceeding with available cores", arrived, expected_aps);
+            panic!(
+                "MM Supervisor fail-secure: only {}/{} APs rendezvoused within the arrival window; \
+                 refusing to service the request with a partial set of cores",
+                arrived, expected_aps
+            );
         }
     }
 
