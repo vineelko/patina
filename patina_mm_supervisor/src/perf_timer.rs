@@ -39,7 +39,7 @@ pub fn frequency<C: CpuInfo>() -> u64 {
 pub fn us_to_ticks<C: CpuInfo>(us: u64) -> Option<u64> {
     let freq = frequency::<C>();
     if freq == 0 {
-        return None;
+        panic!("Cannot convert microseconds to ticks: performance timer frequency is unknown");
     }
     Some(((freq as u128 * us as u128) / 1_000_000) as u64)
 }
