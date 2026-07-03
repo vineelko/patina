@@ -18,8 +18,8 @@ use patina::{
 use r_efi::efi;
 
 use crate::{
-    AP_ARRIVAL_TIMEOUT_US, AP_TIMEOUT_US, CommBufferConfig, MmSupervisorCore, PageOwnership, PlatformInfo,
-    RETURN_TIMEOUT_US,
+    AP_ARRIVAL_TIMEOUT_US, AP_TIMEOUT_US, CommBufferConfig, HOLDING_PEN_TIMEOUT_US, MmSupervisorCore, PageOwnership,
+    PlatformInfo, RETURN_TIMEOUT_US,
     cpu::{ApState, is_bsp},
     mailbox::{ApCommand, ApResponse},
     privilege_mgmt::invoke_demoted_routine,
@@ -93,8 +93,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// 1. APs check in by setting their state to `InHoldingPen` and entering the holding pen
     /// 2. BSP waits (with timeout) for all registered APs to arrive
     /// 3. BSP processes the pending request via `bsp_request_loop`
-    /// 4. BSP broadcasts `Return` to all APs so they exit the holding pen
-    /// 5. BSP waits for all AP responses before returning
+    /// 4. BSP releases every AP at once by advancing the mailbox release generation
+    /// 5. BSP waits (with timeout) for the released APs to leave the pen and check out
     /// 6. On exit, each AP clears its `InHoldingPen` state so the next entry's
     ///    `wait_for_ap_arrival` waits for a fresh check-in instead of seeing stale state
     pub(crate) fn enter_runtime(&'static self, cpu_id: u32) {
@@ -111,13 +111,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             log::trace!("BSP (CPU {}) entering request serving routine...", cpu_id);
             self.bsp_request_loop(cpu_id as usize);
 
-            // BSP is done handling the request - broadcast Return to all APs
-            log::trace!("BSP (CPU {}) broadcasting Return to all APs...", cpu_id);
-            let sent = self.mailbox_manager.broadcast_command(ApCommand::Return);
-            log::trace!("BSP (CPU {}) sent Return to {} APs, waiting for acknowledgement...", cpu_id, sent);
-
-            let responded = self.mailbox_manager.wait_all_responses(RETURN_TIMEOUT_US);
-            log::trace!("BSP (CPU {}) done: {}/{} APs acknowledged Return", cpu_id, responded, sent);
+            // Release every penned AP at once, then wait (bounded) for them to leave.
+            log::trace!("BSP (CPU {}) releasing all APs from the holding pen...", cpu_id);
+            let generation = self.mailbox_manager.release_all();
+            log::trace!("BSP (CPU {}) advanced release generation to {}, waiting for APs to exit...", cpu_id, generation);
+            self.wait_for_ap_exit();
         } else {
             // AP: check in by marking state, then enter holding pen
             self.cpu_manager.set_ap_state(cpu_id, ApState::InHoldingPen);
@@ -147,6 +145,30 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         } else {
             let arrived = self.cpu_manager.count_aps_in_state(ApState::InHoldingPen);
             log::warn!("AP arrival timeout: {}/{} APs arrived, proceeding with available cores", arrived, expected_aps);
+        }
+    }
+
+    /// Waits (with timeout) for all APs to leave the holding pen after release.
+    ///
+    /// After [`MmSupervisorCore::enter_runtime`] advances the release generation,
+    /// each penned AP observes the change, exits the pen, and checks out to
+    /// [`ApState::NotPresent`]. This spins until no AP remains `InHoldingPen` or
+    /// `Busy`, or until `RETURN_TIMEOUT_US` elapses. Never-arrived APs are already
+    /// `NotPresent`, so they do not affect the wait. Bounding it ensures the BSP
+    /// cannot stall indefinitely on an AP that fails to check out (e.g. a late AP
+    /// that will instead fall out of the pen via its own safety timeout).
+    fn wait_for_ap_exit(&self) {
+        let all_exited = crate::perf_timer::spin_until::<P::CpuInfo, _>(RETURN_TIMEOUT_US, || {
+            self.cpu_manager.count_aps_in_state(ApState::InHoldingPen) == 0
+                && self.cpu_manager.count_aps_in_state(ApState::Busy) == 0
+        });
+
+        if all_exited {
+            log::trace!("All APs left the holding pen");
+        } else {
+            let remaining = self.cpu_manager.count_aps_in_state(ApState::InHoldingPen)
+                + self.cpu_manager.count_aps_in_state(ApState::Busy);
+            log::warn!("AP exit timeout: {} AP(s) still in the holding pen after release", remaining);
         }
     }
 
@@ -532,35 +554,54 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
     /// The holding pen for APs.
     ///
-    /// APs wait here, polling their mailbox for commands from the BSP.
-    /// The loop exits when the AP receives a `Return` command.
+    /// APs wait here servicing point-to-point commands (e.g. `RunProcedure`) from
+    /// the BSP. The pen exits when the BSP advances the mailbox release generation
+    /// (the global "you may leave" signal), or immediately on a direct `Return`
+    /// command. As a last-resort safety net it also exits after
+    /// `HOLDING_PEN_TIMEOUT_US`, so an AP that somehow misses the release — e.g. it
+    /// entered the pen after the BSP had already released for this SMI — can never
+    /// hard-hang the core.
     fn ap_holding_pen(&'static self, cpu_id: u32) {
         log::trace!("AP (CPU {}) in holding pen, polling mailbox...", cpu_id);
 
-        loop {
-            // Check mailbox for commands
+        // Capture the release generation on entry. When the BSP advances it, we exit.
+        let entry_generation = self.mailbox_manager.release_generation();
+
+        let released = crate::perf_timer::spin_until::<P::CpuInfo, _>(HOLDING_PEN_TIMEOUT_US, || {
+            // Service any pending point-to-point command for this AP.
             if let Some(command) = self.mailbox_manager.check_mailbox(cpu_id) {
                 log::trace!("AP (CPU {}) received command: {:?}", cpu_id, command);
 
-                // Execute the command
+                // Execute the command and post the response.
                 let response = self.execute_ap_command(cpu_id, &command);
-
-                // Post the response
                 self.mailbox_manager.post_response(cpu_id, response);
 
-                // Break out of the holding pen on Return
+                // A direct Return releases this AP immediately.
                 if matches!(command, ApCommand::Return) {
-                    log::trace!("AP (CPU {}) exiting holding pen", cpu_id);
-                    break;
+                    return true;
                 }
             }
+
+            // Global release: the BSP finished this SMI and released every AP.
+            self.mailbox_manager.release_generation() != entry_generation
+        });
+
+        if released {
+            log::trace!("AP (CPU {}) exiting holding pen", cpu_id);
+        } else {
+            log::warn!("AP (CPU {}) holding pen timed out without release; exiting to avoid a hang", cpu_id);
         }
     }
 
     /// Execute a command received by an AP.
     fn execute_ap_command(&self, cpu_id: u32, command: &ApCommand) -> ApResponse {
         match *command {
-            ApCommand::RunProcedure { procedure, argument } => self.run_procedure_on_ap(cpu_id, procedure, argument),
+            ApCommand::RunProcedure { procedure, argument } => {
+                self.cpu_manager.set_ap_state(cpu_id, ApState::Busy);
+                let response = self.run_procedure_on_ap(cpu_id, procedure, argument);
+                self.cpu_manager.set_ap_state(cpu_id, ApState::InHoldingPen);
+                response
+            }
             ApCommand::Return => {
                 log::trace!("AP (CPU {}) received return command", cpu_id);
                 ApResponse::Success

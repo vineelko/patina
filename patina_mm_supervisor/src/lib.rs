@@ -130,6 +130,9 @@ const AP_ARRIVAL_TIMEOUT_US: u64 = 100_000;
 /// Timeout for waiting for an AP to complete a dispatched procedure (10 seconds).
 const AP_TIMEOUT_US: u64 = 10_000_000;
 
+/// Last-resort safety timeout for an AP sitting in the holding pen (30 seconds).
+const HOLDING_PEN_TIMEOUT_US: u64 = 30_000_000;
+
 /// A trait to be implemented by the platform to provide configuration values and types to be used
 /// by the MM Supervisor Core.
 ///

@@ -275,30 +275,6 @@ impl ApMailbox {
         }
     }
 
-    /// Spins until the mailbox reaches the `Empty` state, draining any pending response.
-    ///
-    /// This is analogous to the C code's `WaitForAllAPsNotBusy(TRUE)` which
-    /// acquires+releases each AP's Busy spinlock, blocking until the AP is done.
-    ///
-    /// If the mailbox is in `ResponseReady`, the response is consumed to transition
-    /// it back to `Empty`. If it is in `CommandPending` or `Processing`, this spins
-    /// until the AP finishes and posts a response (which is then drained).
-    fn drain_to_empty(&self) {
-        loop {
-            match self.state() {
-                MailboxState::Empty => return,
-                MailboxState::ResponseReady => {
-                    // Consume the response to transition back to Empty.
-                    let _ = self.get_response();
-                }
-                _ => {
-                    // CommandPending or Processing — AP is still working.
-                    core::hint::spin_loop();
-                }
-            }
-        }
-    }
-
     /// Checks if the mailbox is empty (no pending work).
     pub fn is_empty(&self) -> bool {
         self.state() == MailboxState::Empty
@@ -328,6 +304,8 @@ pub struct MailboxManager<const MAX_APS: usize, C: CpuInfo> {
     mailboxes: [ApMailbox; MAX_APS],
     /// Number of assigned mailboxes.
     assigned_count: AtomicU32,
+    /// Monotonic release generation.
+    release_generation: AtomicU64,
     /// Phantom data for the CpuInfo type.
     _cpu_info: core::marker::PhantomData<fn() -> C>,
 }
@@ -340,6 +318,7 @@ impl<const MAX_APS: usize, C: CpuInfo> MailboxManager<MAX_APS, C> {
         Self {
             mailboxes: [const { ApMailbox::new() }; MAX_APS],
             assigned_count: AtomicU32::new(0),
+            release_generation: AtomicU64::new(0),
             _cpu_info: core::marker::PhantomData,
         }
     }
@@ -409,71 +388,27 @@ impl<const MAX_APS: usize, C: CpuInfo> MailboxManager<MAX_APS, C> {
         result
     }
 
-    /// Broadcasts a command to all assigned APs.
-    ///
-    /// For each assigned mailbox, this first drains any pending response
-    /// (spinning until the mailbox is `Empty`), then sends the command.
-    /// This mirrors the C code's `WaitForAllAPsNotBusy(TRUE)` followed
-    /// by `ReleaseAllAPs()`, ensuring no AP is ever skipped.
-    ///
-    /// Returns the number of APs that received the command.
-    pub fn broadcast_command(&self, command: ApCommand) -> usize {
-        let mut success_count = 0;
-
-        for mailbox in &self.mailboxes {
-            if let Some(cpu_id) = mailbox.assigned_cpu() {
-                // Drain any in-flight work so the mailbox is Empty.
-                mailbox.drain_to_empty();
-
-                // Mailbox is now guaranteed Empty — send_command must succeed.
-                let sent = mailbox.send_command(command);
-                debug_assert!(sent, "send_command failed after drain_to_empty for CPU {}", cpu_id);
-                success_count += 1;
-                log::trace!("Broadcast command to CPU {}", cpu_id);
-            }
-        }
-
-        success_count
-    }
-
-    /// Waits for all assigned APs to post responses, with a timeout.
-    ///
-    /// Returns the number of APs that responded within the timeout.
-    pub fn wait_all_responses(&self, timeout_us: u64) -> usize {
-        let total = self.assigned_count();
-
-        perf_timer::spin_until::<C, _>(timeout_us, || {
-            let mut responded = 0;
-            for mailbox in &self.mailboxes {
-                if mailbox.assigned_cpu().is_some() {
-                    // Count APs that have already been consumed (Empty) or have response ready
-                    if mailbox.is_empty() || mailbox.has_response() {
-                        responded += 1;
-                    }
-                }
-            }
-            responded >= total
-        });
-
-        // Drain all pending responses and count
-        let mut responded = 0;
-        for mailbox in &self.mailboxes {
-            if mailbox.assigned_cpu().is_some() {
-                if mailbox.has_response() {
-                    let _ = mailbox.get_response();
-                    responded += 1;
-                } else if mailbox.is_empty() {
-                    responded += 1;
-                }
-            }
-        }
-
-        responded
-    }
-
     /// Gets the number of assigned mailboxes.
     pub fn assigned_count(&self) -> usize {
         self.assigned_count.load(Ordering::SeqCst) as usize
+    }
+
+    /// Returns the current release generation.
+    ///
+    /// APs capture this on entry to the holding pen and exit once it changes.
+    pub fn release_generation(&self) -> u64 {
+        self.release_generation.load(Ordering::Acquire)
+    }
+
+    /// Releases every AP currently in the holding pen by advancing the release
+    /// generation. Returns the new generation.
+    ///
+    /// This is the BSP's global "you may leave the pen" signal. It reaches every
+    /// AP that polls the generation, including late arrivals and APs that were
+    /// never assigned a mailbox, so no AP can be stranded waiting for a
+    /// point-to-point command that already went out.
+    pub fn release_all(&self) -> u64 {
+        self.release_generation.fetch_add(1, Ordering::AcqRel).wrapping_add(1)
     }
 
     /// Gets the maximum number of mailboxes.
@@ -586,28 +521,17 @@ mod tests {
     }
 
     #[test]
-    fn test_broadcast() {
+    fn test_release_generation() {
         let manager: MailboxManager<4, TestCpuInfo> = MailboxManager::new();
 
-        // Assign mailboxes for multiple APs
-        manager.send_command(1, ApCommand::Return).ok();
-        manager.check_mailbox(1); // Clear command
-        manager.post_response(1, ApResponse::Success);
-        manager.wait_response(1, 1);
+        // Starts at generation 0.
+        assert_eq!(manager.release_generation(), 0);
 
-        manager.send_command(2, ApCommand::Return).ok();
-        manager.check_mailbox(2);
-        manager.post_response(2, ApResponse::Success);
-        manager.wait_response(2, 1);
-
-        manager.send_command(3, ApCommand::Return).ok();
-        manager.check_mailbox(3);
-        manager.post_response(3, ApResponse::Success);
-        manager.wait_response(3, 1);
-
-        // Broadcast
-        let count = manager.broadcast_command(ApCommand::Return);
-        assert_eq!(count, 3);
+        // Each release advances the generation by one and returns the new value.
+        assert_eq!(manager.release_all(), 1);
+        assert_eq!(manager.release_generation(), 1);
+        assert_eq!(manager.release_all(), 2);
+        assert_eq!(manager.release_generation(), 2);
     }
 
     #[test]
