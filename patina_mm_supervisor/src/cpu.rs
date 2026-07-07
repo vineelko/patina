@@ -337,7 +337,7 @@ pub fn get_current_cpu_id() -> u32 {
     // CPUID function 0x01, EBX[31:24] contains the initial APIC ID
 
     // SAFETY: CPUID is always available on x86_64 and reading it is safe.
-    let CpuidResult { ebx, .. } = x86_64::__cpuid(0x01);
+    let CpuidResult { ebx, .. } = unsafe {x86_64::__cpuid(0x01)};
 
     (ebx >> 24) & 0xff
 }

@@ -455,9 +455,16 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // Determine if we're BSP by checking IA32_APIC_BASE MSR
         let is_bsp = is_bsp();
 
+        log::info!(
+            "CPU {} (index {}) entering MM Supervisor Core (BSP: {})",
+            cpu_id,
+            cpu_index,
+            is_bsp
+        );
         // Check if this core has already completed initialization (per-core check)
         if is_core_initialized(cpu_index) {
             // Subsequent entry: go directly to request loop or holding pen (does not return)
+            log::info!("CPU {} (index {}) re-entering MM Supervisor Core, skipping initialization.", cpu_id, cpu_index);
             self.enter_runtime(cpu_id);
 
             return;

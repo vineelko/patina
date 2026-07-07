@@ -37,11 +37,51 @@ pub fn frequency<C: CpuInfo>() -> u64 {
 /// Returns `None` if the frequency is unknown (0).
 #[inline]
 pub fn us_to_ticks<C: CpuInfo>(us: u64) -> Option<u64> {
-    let freq = frequency::<C>();
+    let mut freq = frequency::<C>();
     if freq == 0 {
-        panic!("Cannot convert microseconds to ticks: performance timer frequency is unknown");
+        freq = arch_perf_frequency();
     }
     Some(((freq as u128 * us as u128) / 1_000_000) as u64)
+}
+
+pub(crate) fn arch_perf_frequency() -> u64 {
+    // Try to get TSC frequency from CPUID (most Intel and AMD platforms).
+    #[cfg(target_arch = "x86_64")]
+    {
+        // `#[allow(unused_unsafe)]` is used here to simultaneously support Rust <= 1.93 toolchains
+        // that consider __cpuid unsafe and Rust >= 1.94 (or >= nightly-2025-12-27) toolchains that
+        // consider __cpuid safe.
+        #[allow(unused_unsafe)]
+        // SAFETY: Calling cpuid does not violate memory safety
+        let core::arch::x86_64::CpuidResult { eax, ebx, ecx, .. } = unsafe { core::arch::x86_64::__cpuid(0x15) };
+        if eax != 0 && ebx != 0 && ecx != 0 {
+            // CPUID 0x15 gives TSC_frequency = (ECX * EBX) / EAX.
+            // Most modern x86 platforms support this leaf.
+            return (ecx as u64 * ebx as u64) / eax as u64;
+        }
+
+        // CPUID 0x16 gives base frequency in MHz in EAX.
+        // This is supported on some older x86 platforms.
+        // This is a nominal frequency and is less accurate for reflecting actual operating conditions.
+        //
+        // `#[allow(unused_unsafe)]` is used here to simultaneously support Rust <= 1.93 toolchains
+        // that consider __cpuid unsafe and Rust >= 1.94 (or >= nightly-2025-12-27) toolchains that
+        // consider __cpuid safe.
+        #[allow(unused_unsafe)]
+        // SAFETY: Calling cpuid does not violate memory safety
+        let core::arch::x86_64::CpuidResult { eax, .. } = unsafe { core::arch::x86_64::__cpuid(0x16) };
+        if eax != 0 {
+            // CPUID 0x16 gives base frequency in MHz in EAX.
+            // This is supported on some older x86 platforms.
+            // This is a nominal frequency and is less accurate for reflecting actual operating conditions.
+            return (eax * 1_000_000) as u64;
+        }
+
+        0
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    0
 }
 
 /// Spins until at least `timeout_us` microseconds have elapsed.

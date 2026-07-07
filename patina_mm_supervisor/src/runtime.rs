@@ -101,7 +101,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let is_bsp = is_bsp();
 
         if is_bsp {
-            log::trace!("BSP (CPU {}) waiting for APs to arrive...", cpu_id);
+            log::info!("BSP (CPU {}) waiting for APs to arrive...", cpu_id);
 
             // Wait for all registered APs to check in (set state to InHoldingPen).
             let expected_aps = self.cpu_manager.registered_count().saturating_sub(1);
@@ -119,7 +119,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         } else {
             // AP: check in by marking state, then enter holding pen
             self.cpu_manager.set_ap_state(cpu_id, ApState::InHoldingPen);
-            log::trace!("AP (CPU {}) checked in, entering holding pen...", cpu_id);
+            log::info!("AP (CPU {}) checked in, entering holding pen...", cpu_id);
             self.ap_holding_pen(cpu_id);
 
             // Check out: clear the InHoldingPen state now that this AP has left the pen.

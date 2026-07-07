@@ -9,9 +9,9 @@ PATINA_CONFIG_VERSION = "1"
 
 [profile.dev]
 # optimize for size
-opt-level = "s"
+opt-level = 0
 # generate all debug info
-debug = true
+debug = "full"
 # retain all debug info
 strip = "none"
 # assert on debug_assert
@@ -19,7 +19,7 @@ debug-assertions = true
 # all addition/subtraction can cause panics with overflow/underflow
 overflow-checks = true
 # do fat LTO
-lto = true
+lto = false
 # do incremental builds for better compile times
 incremental = true
 
