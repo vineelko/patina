@@ -117,10 +117,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             log::trace!("BSP (CPU {}) advanced release generation to {}, waiting for APs to exit...", cpu_id, generation);
             self.wait_for_ap_exit();
         } else {
-            // AP: check in by marking state, then enter holding pen
+            // Snapshot the release generation before anything.
+            let entry_generation = self.mailbox_manager.release_generation();
+
+            // AP: check in by marking state, then enter holding pen.
             self.cpu_manager.set_ap_state(cpu_id, ApState::InHoldingPen);
             log::info!("AP (CPU {}) checked in, entering holding pen...", cpu_id);
-            self.ap_holding_pen(cpu_id);
+            self.ap_holding_pen(cpu_id, entry_generation);
 
             // Check out: clear the InHoldingPen state now that this AP has left the pen.
             self.cpu_manager.set_ap_state(cpu_id, ApState::NotPresent);
@@ -568,18 +571,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
     /// The holding pen for APs.
     ///
-    /// APs wait here servicing point-to-point commands (e.g. `RunProcedure`) from
-    /// the BSP. The pen exits when the BSP advances the mailbox release generation
-    /// (the global "you may leave" signal), or immediately on a direct `Return`
-    /// command. As a last-resort safety net it also exits after
-    /// `HOLDING_PEN_TIMEOUT_US`, so an AP that somehow misses the release — e.g. it
-    /// entered the pen after the BSP had already released for this SMI — can never
-    /// hard-hang the core.
-    fn ap_holding_pen(&'static self, cpu_id: u32) {
+    /// APs wait here servicing RunProcedure commands from the BSP. The pen exits
+    /// either when the BSP advances the mailbox release generation past entry_generation,
+    /// or after `HOLDING_PEN_TIMEOUT_US`.
+    fn ap_holding_pen(&'static self, cpu_id: u32, entry_generation: u64) {
         log::trace!("AP (CPU {}) in holding pen, polling mailbox...", cpu_id);
-
-        // Capture the release generation on entry. When the BSP advances it, we exit.
-        let entry_generation = self.mailbox_manager.release_generation();
 
         let released = crate::perf_timer::spin_until::<P::CpuInfo, _>(HOLDING_PEN_TIMEOUT_US, || {
             // Service any pending point-to-point command for this AP.
