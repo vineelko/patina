@@ -130,9 +130,18 @@ mod tests {
         }
     }
 
+    /// A CPU to make timer test happy.
+    struct FixedFreqCpu;
+    impl CpuInfo for FixedFreqCpu {
+        fn perf_timer_frequency() -> Option<u64> {
+            Some(1_000_000)
+        }
+    }
+
     #[test]
     fn test_us_to_ticks_basic() {
-        assert_eq!(us_to_ticks::<TestCpu>(1000), None);
+        // With a known 1 MHz frequency, 1000 us converts to exactly 1000 ticks.
+        assert_eq!(us_to_ticks::<FixedFreqCpu>(1000), Some(1000));
     }
 
     #[test]
