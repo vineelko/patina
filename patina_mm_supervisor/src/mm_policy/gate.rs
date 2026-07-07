@@ -187,9 +187,19 @@ impl PolicyGate {
         }
 
         // Evaluate based on allow/deny list semantics
-        if (found_match && policy_root.access_attr == ACCESS_ATTR_DENY)
-            || (!found_match && policy_root.access_attr == ACCESS_ATTR_ALLOW)
-        {
+        let allowed = if policy_root.access_attr == ACCESS_ATTR_ALLOW {
+            found_match
+        } else if policy_root.access_attr == ACCESS_ATTR_DENY {
+            !found_match
+        } else {
+            log::error!(
+                "IO access: unrecognized policy access_attr 0x{:x}; denying (fail-closed).",
+                policy_root.access_attr
+            );
+            false
+        };
+
+        if !allowed {
             log::debug!("Rejecting IO access: port=0x{:x}, width={}, type={:?}", io_address, io_size, access_type);
             return Err(PolicyError::AccessDenied);
         }
@@ -229,9 +239,19 @@ impl PolicyGate {
         }
 
         // Evaluate based on allow/deny list semantics
-        if (found_match && policy_root.access_attr == ACCESS_ATTR_DENY)
-            || (!found_match && policy_root.access_attr == ACCESS_ATTR_ALLOW)
-        {
+        let allowed = if policy_root.access_attr == ACCESS_ATTR_ALLOW {
+            found_match
+        } else if policy_root.access_attr == ACCESS_ATTR_DENY {
+            !found_match
+        } else {
+            log::error!(
+                "MSR access: unrecognized policy access_attr 0x{:x}; denying (fail-closed).",
+                policy_root.access_attr
+            );
+            false
+        };
+
+        if !allowed {
             log::debug!("Rejecting MSR access: address=0x{:x}, type={:?}", msr_address, access_type);
             return Err(PolicyError::AccessDenied);
         }
@@ -268,9 +288,19 @@ impl PolicyGate {
         }
 
         // Evaluate based on allow/deny list semantics
-        if (found_match && policy_root.access_attr == ACCESS_ATTR_DENY)
-            || (!found_match && policy_root.access_attr == ACCESS_ATTR_ALLOW)
-        {
+        let allowed = if policy_root.access_attr == ACCESS_ATTR_ALLOW {
+            found_match
+        } else if policy_root.access_attr == ACCESS_ATTR_DENY {
+            !found_match
+        } else {
+            log::error!(
+                "Instruction execution: unrecognized policy access_attr 0x{:x}; denying (fail-closed).",
+                policy_root.access_attr
+            );
+            false
+        };
+
+        if !allowed {
             log::debug!("Rejecting instruction execution: {:?}", instruction);
             return Err(PolicyError::AccessDenied);
         }
@@ -327,9 +357,21 @@ impl PolicyGate {
         }
 
         // Evaluate based on allow/deny list semantics
-        if (found_match && policy_root.access_attr == ACCESS_ATTR_DENY)
-            || (!found_match && policy_root.access_attr == ACCESS_ATTR_ALLOW)
-        {
+        let allowed = if policy_root.access_attr == ACCESS_ATTR_ALLOW {
+            // Allow-list: access is granted only if a matching descriptor was found.
+            found_match
+        } else if policy_root.access_attr == ACCESS_ATTR_DENY {
+            // Deny-list: access is granted only if no matching descriptor was found.
+            !found_match
+        } else {
+            log::error!(
+                "Save state read: unrecognized policy access_attr 0x{:x}; denying (fail-closed).",
+                policy_root.access_attr
+            );
+            false
+        };
+
+        if !allowed {
             log::debug!("Rejecting save state read: field={:?}, width={}", field, width);
             return Err(PolicyError::AccessDenied);
         }
