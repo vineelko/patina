@@ -116,6 +116,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             let generation = self.mailbox_manager.release_all();
             log::trace!("BSP (CPU {}) advanced release generation to {}, waiting for APs to exit...", cpu_id, generation);
             self.wait_for_ap_exit();
+
+            self.mailbox_manager.reset_all();
         } else {
             // Snapshot the release generation before anything.
             let entry_generation = self.mailbox_manager.release_generation();
@@ -763,7 +765,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // 5. Send the RunProcedure command to the AP via mailbox
         //    This will fail if the AP's mailbox is not empty (AP is busy).
         let command = ApCommand::RunProcedure { procedure, argument };
-        if let Err(()) = self.mailbox_manager.send_command(cpu_id, command) {
+        if self.mailbox_manager.send_command(cpu_id, command).is_err() {
             log::error!("START_AP: AP (CPU {}, index {}) is busy or mailbox unavailable", cpu_id, cpu_index);
             return efi::Status::INVALID_PARAMETER.as_usize() as u64;
         }

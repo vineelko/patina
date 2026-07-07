@@ -275,6 +275,17 @@ impl ApMailbox {
         }
     }
 
+    /// Forcibly resets the mailbox to the [`MailboxState::Empty`] state,
+    /// discarding any pending command, in-flight processing, or unread response.
+    ///
+    pub fn reset(&self) {
+        self.command.store(0, Ordering::Relaxed);
+        self.procedure.store(0, Ordering::Relaxed);
+        self.argument.store(0, Ordering::Relaxed);
+        self.response.store(ApResponse::None.into(), Ordering::Relaxed);
+        self.state.store(MailboxState::Empty as u32, Ordering::Release);
+    }
+
     /// Checks if the mailbox is empty (no pending work).
     pub fn is_empty(&self) -> bool {
         self.state() == MailboxState::Empty
@@ -366,6 +377,16 @@ impl<const MAX_APS: usize, C: CpuInfo> MailboxManager<MAX_APS, C> {
     pub fn post_response(&self, cpu_id: u32, response: ApResponse) {
         if let Some(mailbox) = self.get_mailbox(cpu_id) {
             mailbox.post_response(response);
+        }
+    }
+
+    /// Resets every assigned mailbox back to the empty state.
+    ///
+    pub fn reset_all(&self) {
+        for mailbox in &self.mailboxes {
+            if mailbox.assigned_cpu().is_some() {
+                mailbox.reset();
+            }
         }
     }
 
@@ -518,6 +539,51 @@ mod tests {
         // Wait for response
         let resp = manager.wait_response(1, 1000);
         assert_eq!(resp, Some(ApResponse::Success));
+    }
+
+    #[test]
+    fn test_mailbox_reset_forces_empty() {
+        let mailbox = ApMailbox::new();
+        mailbox.assign(1);
+
+        // Put the mailbox into a stuck, non-empty state: a command was sent and
+        // picked up for processing, but no response was ever posted (hung AP).
+        assert!(mailbox.send_command(ApCommand::RunProcedure { procedure: 0x1000, argument: 7 }));
+        let _ = mailbox.take_command();
+        assert!(!mailbox.is_empty());
+
+        // A fresh command cannot be sent while stuck.
+        assert!(!mailbox.send_command(ApCommand::RunProcedure { procedure: 0x2000, argument: 8 }));
+
+        // Reset forces the mailbox back to empty so it can be reused.
+        mailbox.reset();
+        assert!(mailbox.is_empty());
+        assert!(!mailbox.has_pending_command());
+        assert!(!mailbox.has_response());
+
+        // A new command now succeeds.
+        assert!(mailbox.send_command(ApCommand::RunProcedure { procedure: 0x2000, argument: 8 }));
+    }
+
+    #[test]
+    fn test_manager_reset_all_scrubs_every_mailbox() {
+        let manager: MailboxManager<4, TestCpuInfo> = MailboxManager::new();
+
+        // Leave two different CPUs' mailboxes stuck in non-empty states.
+        assert!(manager.send_command(1, ApCommand::RunProcedure { procedure: 0x10, argument: 0 }).is_ok());
+        let _ = manager.check_mailbox(1); // -> Processing
+        assert!(manager.send_command(2, ApCommand::RunProcedure { procedure: 0x20, argument: 0 }).is_ok()); // -> CommandPending
+
+        // Neither can accept a new command while stuck.
+        assert!(manager.send_command(1, ApCommand::RunProcedure { procedure: 0x11, argument: 0 }).is_err());
+        assert!(manager.send_command(2, ApCommand::RunProcedure { procedure: 0x21, argument: 0 }).is_err());
+
+        // The BSP's leave-time sweep clears every assigned mailbox at once.
+        manager.reset_all();
+
+        // Both CPUs are dispatchable again.
+        assert!(manager.send_command(1, ApCommand::RunProcedure { procedure: 0x11, argument: 0 }).is_ok());
+        assert!(manager.send_command(2, ApCommand::RunProcedure { procedure: 0x21, argument: 0 }).is_ok());
     }
 
     #[test]
