@@ -7,18 +7,18 @@
 //!
 //! Running this exact benchmark can be done with the following command:
 //!
-//! `> cargo make bench -p patina_internal_collections --bench bench_delete`
+//! `> cargo make bench -p patina_internal_core --bench bench_delete`
 //!
 //! If you wish to run a subset of benchmarks in this file, you can filter them by name:
 //!
-//! `> cargo make bench -p patina_internal_collections --bench bench_delete -- <filter>`
+//! `> cargo make bench -p patina_internal_core --bench bench_delete -- <filter>`
 //!
 //! ## Examples
 //!
 //! ```bash
-//! > cargo make bench -p patina_internal_collections --bench bench_delete -- rbt
-//! > cargo make bench -p patina_internal_collections --bench bench_delete -- 32bit
-//! > cargo make bench -p patina_internal_collections --bench bench_delete
+//! > cargo make bench -p patina_internal_core --bench bench_delete -- rbt
+//! > cargo make bench -p patina_internal_core --bench bench_delete -- 32bit
+//! > cargo make bench -p patina_internal_core --bench bench_delete
 //! ```
 //!
 //! ## License
@@ -28,7 +28,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use patina_internal_collections::{Bst, Rbt, SliceKey, SortedSlice, node_size};
+use patina_internal_core::collections::{Bst, Rbt, SliceKey, SortedSlice, node_size};
 use rand::{RngExt, seq::SliceRandom};
 use ruint::Uint;
 use std::{collections::HashSet, hash::Hash};
