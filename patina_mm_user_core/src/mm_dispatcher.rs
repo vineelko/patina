@@ -86,6 +86,8 @@ impl Ord for OrdGuid {
 pub struct MmDispatcher {
     /// Tracks whether the dispatcher is currently executing (prevents re-entrance).
     executing: Mutex<bool>,
+    /// Drivers discovered from HOBs during `StartUserCore`, awaiting dispatch.
+    pending: Mutex<Vec<DriverEntry>>,
 }
 
 impl Default for MmDispatcher {
@@ -97,7 +99,7 @@ impl Default for MmDispatcher {
 impl MmDispatcher {
     /// Creates a new `MmDispatcher`.
     pub const fn new() -> Self {
-        Self { executing: Mutex::new(false) }
+        Self { executing: Mutex::new(false), pending: Mutex::new(Vec::new()) }
     }
 
     /// Discover drivers from HOBs and dispatch them.
@@ -108,11 +110,22 @@ impl MmDispatcher {
     /// 3. Reads the paired depex `GuidHob` that follows each driver HOB
     /// 4. Evaluates dependencies and dispatches in order
     ///
+    /// The discovered drivers are dispatched later by [`dispatch`](Self::dispatch)
+    /// when the `MM_DISPATCH_EVENT` MMI is delivered.
+    pub fn discover(&self, hob: &Hob<'_>) {
+        let drivers = self.discover_drivers(hob);
+        log::info!("Discovered {} MM driver(s) from HOBs.", drivers.len());
+        *self.pending.lock() = drivers;
+    }
+
+    /// Dispatch the drivers recorded by [`discover`](Self::discover) in dependency order.
+    ///
+    /// Evaluates each pending driver's depex against `protocol_db` and calls the
+    /// entry points of drivers whose dependencies are satisfied.
+    ///
     /// Returns the number of drivers successfully dispatched, or an error status.
-    pub fn discover_and_dispatch_drivers(
+    pub fn dispatch(
         &self,
-        hob: &Hob<'_>,
-        _mmi_db: &MmiDatabase,
         protocol_db: &ProtocolDatabase,
         mm_system_table: *const c_void,
     ) -> Result<usize, efi::Status> {
@@ -123,10 +136,8 @@ impl MmDispatcher {
         *is_executing = true;
         drop(is_executing);
 
-        let drivers = self.discover_drivers(hob);
-        log::info!("Discovered {} MM driver(s) from HOBs.", drivers.len());
-
-        let dispatched = self.dispatch_drivers(drivers, protocol_db, mm_system_table);
+        let pending = core::mem::take(&mut *self.pending.lock());
+        let dispatched = self.dispatch_drivers(pending, protocol_db, mm_system_table);
 
         *self.executing.lock() = false;
         Ok(dispatched)

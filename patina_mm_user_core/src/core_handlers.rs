@@ -12,7 +12,7 @@
 //!
 //! | GUID | Handler | Description |
 //! |------|---------|-------------|
-//! | `MM_DISPATCH_EVENT` | `mm_driver_dispatch_handler` | Re-triggers driver dispatch |
+//! | `MM_DISPATCH_EVENT` | `mm_driver_dispatch_handler` | Dispatches discovered MM drivers |
 //! | `MM_DXE_READY_TO_LOCK_PROTOCOL` | `mm_ready_to_lock_handler` | Unregisters one-shot handlers, installs lock protocol |
 //! | `MM_END_OF_PEI_PROTOCOL` | `mm_end_of_pei_handler` | Installs end-of-PEI protocol |
 //! | `EVENT_GROUP_END_OF_DXE` | `mm_end_of_dxe_handler` | Installs end-of-DXE protocol |
@@ -39,7 +39,7 @@ static CORE_MMI_HANDLERS: &[CoreMmiHandler] = &[
     CoreMmiHandler {
         handler: mm_driver_dispatch_handler,
         handler_type: &guids::MM_DISPATCH_EVENT,
-        unregister_on_lock: false,
+        unregister_on_lock: true,
     },
     CoreMmiHandler {
         handler: mm_ready_to_lock_handler,
@@ -49,7 +49,7 @@ static CORE_MMI_HANDLERS: &[CoreMmiHandler] = &[
     CoreMmiHandler {
         handler: mm_end_of_pei_handler,
         handler_type: &guids::MM_END_OF_PEI_PROTOCOL,
-        unregister_on_lock: false,
+        unregister_on_lock: true,
     },
     CoreMmiHandler {
         handler: mm_end_of_dxe_handler,
@@ -99,8 +99,8 @@ impl SendHandle {
 
 /// Register all core MMI handlers with the global MMI database.
 ///
-/// This must be called after driver dispatch (matching the C `StandaloneMmMain`
-/// ordering where handlers are registered after `MmDispatchFvs`).
+/// Registration installs the `MM_DISPATCH_EVENT` handler that performs the
+/// deferred driver dispatch, so this runs before any drivers are dispatched.
 pub fn register_core_mmi_handlers() {
     let mut handles = DISPATCH_HANDLES.lock();
 
@@ -158,8 +158,11 @@ fn mm_driver_dispatch_handler(
 ) -> efi::Status {
     log::info!("MmDriverDispatchHandler");
 
-    // TODO: Re-dispatch any remaining drivers.
-    // Currently all drivers are dispatched during StartUserCore, so this is a no-op.
+    // Dispatch the MM drivers discovered during StartUserCore (single dependency-ordered pass).
+    match MmUserCore::instance().dispatch_drivers() {
+        Ok(count) => log::info!("Successfully dispatched {} MM driver(s).", count),
+        Err(status) => log::error!("Driver dispatch failed: {:?}", status),
+    }
 
     // Self-unregister (one-shot).
     let handles = DISPATCH_HANDLES.lock();

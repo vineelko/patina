@@ -268,10 +268,10 @@ impl MmUserCore {
     /// This is called once during initialization. The supervisor passes the HOB list
     /// pointer as `arg2`. We:
     /// 1. Set the static instance
-    /// 2. Walk HOBs to discover the communication buffer
-    /// 3. Walk HOBs to discover MM drivers (MemoryAllocationModule HOBs)
-    /// 4. Read paired depex GuidHobs for each driver
-    /// 5. Evaluate dependency expressions and dispatch drivers in order
+    /// 2. Walk HOBs to discover the communication buffer and MM drivers
+    /// 3. Build the MM System Table and publish the HOB list configuration table
+    /// 4. Register the core MMI handlers (driver dispatch is deferred to the
+    ///    `MM_DISPATCH_EVENT` handler, see [`dispatch_drivers`](Self::dispatch_drivers))
     fn handle_start_user_core(&'static self, hob_list: *const c_void) -> u64 {
         if !self.set_instance() {
             log::warn!("MM User Core instance was already set, skipping re-initialization.");
@@ -309,6 +309,10 @@ impl MmUserCore {
         // Discover communication buffer from HOBs
         self.discover_comm_buffer(&hob);
 
+        // Discover MM drivers from HOBs now, while the HOB list is available. The
+        // actual dispatch is deferred to the `MM_DISPATCH_EVENT` handler.
+        self.dispatcher.discover(&hob);
+
         // Initialize the MM System Table (heap-allocated, function pointers
         // are thunks that forward to this instance's databases).
         let mm_system_table = self.init_mm_system_table();
@@ -326,33 +330,27 @@ impl MmUserCore {
             log::error!("Failed to install HOB list configuration table: {:?}", status);
         }
 
-        // Discover and dispatch MM drivers from HOBs
-        let dispatch_result = self.dispatcher.discover_and_dispatch_drivers(
-            &hob,
-            &self.mmi_db,
-            &self.protocol_db,
-            mm_system_table as *const _ as *const core::ffi::c_void,
-        );
-
-        match dispatch_result {
-            Ok(count) => {
-                log::info!("Successfully dispatched {} MM driver(s).", count);
-            }
-            Err(status) => {
-                log::error!("Driver dispatch failed: {:?}", status);
-                return status.as_usize() as u64;
-            }
-        }
-
         // Register core MMI handlers (lifecycle events like ready-to-lock,
-        // end-of-DXE, exit-boot-services, etc.).  Matches the C ordering
-        // where handlers are registered after `MmDispatchFvs()`.
+        // end-of-DXE, exit-boot-services, etc.). Driver dispatch is deferred to
+        // the `MM_DISPATCH_EVENT` handler, which the supervisor forwards once the
+        // MM foundation is ready.
         core_handlers::register_core_mmi_handlers();
 
         self.initialized.store(true, Ordering::Release);
         log::info!("MM User Core initialization complete.");
 
         efi::Status::SUCCESS.as_usize() as u64
+    }
+
+    /// Dispatch the MM drivers discovered during `StartUserCore` in dependency order.
+    ///
+    /// Discovery happens eagerly in [`handle_start_user_core`](Self::handle_start_user_core);
+    /// the dispatch itself is deferred and driven by the `MM_DISPATCH_EVENT` handler
+    /// (see [`mm_driver_dispatch_handler`]).
+    ///
+    /// [`mm_driver_dispatch_handler`]: crate::core_handlers
+    pub(crate) fn dispatch_drivers(&self) -> Result<usize, efi::Status> {
+        self.dispatcher.dispatch(&self.protocol_db, self.mm_system_table_ptr() as *const c_void)
     }
 
     /// Handle the `UserRequest` command (runtime MMI dispatch).
