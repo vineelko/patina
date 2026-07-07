@@ -417,31 +417,22 @@ fn inspect_io_condition(view: &SaveStateView) -> Option<SaveStateCondition> {
 
     // Verify the save state revision supports IO info before reading the field.
     let smm_rev_id = view.read_u32(vc.smmrevid_offset as usize);
-    if smm_rev_id < vc.min_rev_id_io {
-        log::warn!(
-            "inspect_io_condition: SMMRevId 0x{:x} < 0x{:x}, IO info not available",
-            smm_rev_id,
-            vc.min_rev_id_io
-        );
+    if !save_state::io_info_supported(smm_rev_id) {
+        log::warn!("inspect_io_condition: SMMRevId 0x{:x} does not expose IO info", smm_rev_id);
         return None;
     }
 
     // Read the vendor-specific IO information field.
     let io_field = view.read_u32(vc.io_info_offset as usize);
-    log::info!("Inspecting IO condition: IO field = 0x{:x}", io_field);
+    // Intentionally commented out to avoid info leakage.
+    // log::info!("Inspecting IO condition: IO field = 0x{:x}", io_field);
 
     // Use the SDK's vendor-specific parser.
-    match save_state::parse_io_field(io_field) {
-        Some(parsed) => match parsed.io_type {
-            IO_TYPE_INPUT => Some(SaveStateCondition::IoRead),
-            IO_TYPE_OUTPUT => Some(SaveStateCondition::IoWrite),
-            _ => Some(SaveStateCondition::IoWrite),
-        },
-        None => {
-            // No valid IO info (Intel: SmiFlag not set, AMD: reserved size) —
-            // default to write condition (matching C behaviour).
-            Some(SaveStateCondition::IoWrite)
-        }
+    let parsed = save_state::parse_io_field(io_field)?;
+    match parsed.io_type {
+        IO_TYPE_INPUT => Some(SaveStateCondition::IoRead),
+        IO_TYPE_OUTPUT => Some(SaveStateCondition::IoWrite),
+        _ => Some(SaveStateCondition::IoWrite),
     }
 }
 
@@ -494,8 +485,8 @@ fn read_io_register(view: &SaveStateView, out: &mut [u8]) -> u64 {
 
     // 1. Read SMMRevId to verify IO info is available.
     let smm_rev_id = view.read_u32(vc.smmrevid_offset as usize);
-    if smm_rev_id < vc.min_rev_id_io {
-        log::error!("IO_READ: SMMRevId 0x{:x} < 0x{:x}, IO info not supported", smm_rev_id, vc.min_rev_id_io);
+    if !save_state::io_info_supported(smm_rev_id) {
+        log::error!("IO_READ: SMMRevId 0x{:x} does not expose IO info", smm_rev_id);
         return SyscallResult::EFI_UNSUPPORTED;
     }
 
