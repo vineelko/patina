@@ -358,6 +358,22 @@ pub fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
     intel::parse_io_field(io_field)
 }
 
+/// Returns whether the AMD's SMRAM save state map exposes I/O trap
+/// information for a save state with the given raw `SMMRevId`.
+///
+#[cfg(all(feature = "save_state_amd", not(feature = "save_state_intel")))]
+pub fn io_info_supported(smm_rev_id: u32) -> bool {
+    amd::io_info_supported(smm_rev_id)
+}
+
+/// Returns whether the Intel's SMRAM save state map exposes I/O trap
+/// information for a save state with the given raw `SMMRevId`.
+///
+#[cfg(not(all(feature = "save_state_amd", not(feature = "save_state_intel"))))]
+pub fn io_info_supported(smm_rev_id: u32) -> bool {
+    intel::io_info_supported(smm_rev_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,6 +406,7 @@ mod tests {
         assert_eq!(register_info(MmSaveStateRegister::Rax).unwrap().lo_offset, 0x03F8);
         assert_eq!(vendor_constants().io_info_offset, amd::VENDOR_CONSTANTS.io_info_offset);
         assert!(vendor_constants().lma_always_64);
+        assert!(io_info_supported(0));
     }
 
     /// Verifies the active-vendor dispatch resolves to Intel by default — i.e.
@@ -403,5 +420,7 @@ mod tests {
         assert_eq!(register_info(MmSaveStateRegister::Rax).unwrap().lo_offset, 0x035C);
         assert_eq!(vendor_constants().io_info_offset, intel::VENDOR_CONSTANTS.io_info_offset);
         assert!(!vendor_constants().lma_always_64);
+        assert!(!io_info_supported(intel::VENDOR_CONSTANTS.min_rev_id_io - 1));
+        assert!(io_info_supported(intel::VENDOR_CONSTANTS.min_rev_id_io));
     }
 }

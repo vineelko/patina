@@ -34,11 +34,15 @@ use super::{
 const IO_DIRECTION_IN: u32 = 1;
 //const IO_DIRECTION_OUT: u32 = 0;
 
-/// IO_DWord bits \[5:4\]: data size encoding.
-const IO_SIZE_BYTE: u32 = 0;
-const IO_SIZE_WORD: u32 = 1;
-//const IO_SIZE_RESERVED: u32 = 2;
-const IO_SIZE_DWORD: u32 = 3;
+/// IO_DWord bit 1: set when the field holds a valid I/O trap record.
+const IO_TRAP_VALID: u32 = 1 << 1;
+
+/// IO_DWord bit 4: SZ8 — 8-bit (byte) access.
+const IO_SIZE_BYTE: u32 = 1 << 4;
+/// IO_DWord bit 5: SZ16 — 16-bit (word) access.
+const IO_SIZE_WORD: u32 = 1 << 5;
+// IO_DWord bit 6 (SZ32, 32-bit) is the default when neither SZ8 nor SZ16 is
+// set, so it does not need a named constant in the decode path.
 
 /// AMD-specific offsets and behaviour constants.
 pub static VENDOR_CONSTANTS: VendorConstants = VendorConstants {
@@ -136,27 +140,40 @@ pub fn register_info(reg: MmSaveStateRegister) -> Option<RegisterInfo> {
 ///
 /// AMD `IO_DWord` bit layout:
 /// - Bit 0:      Direction — 0 = WRITE (OUT), 1 = READ (IN).
-/// - Bits \[3:1\]:  Reserved.
-/// - Bits \[5:4\]:  Data size — 0 = byte, 1 = word, 3 = dword.
-/// - Bits \[15:6\]: Reserved.
+/// - Bit 1:      Valid — set when the field holds a valid I/O trap record.
+/// - Bits \[3:2\]:  Reserved.
+/// - Bit 4:      SZ8 — 8-bit (byte) access.
+/// - Bit 5:      SZ16 — 16-bit (word) access.
+/// - Bit 6:      SZ32 — 32-bit (dword) access.
+/// - Bits \[15:7\]: Reserved.
 /// - Bits \[31:16\]: I/O port address.
 ///
 /// Returns `None` if the data-size encoding is invalid (value 2 is reserved).
 pub fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
-    let direction = io_field & 1;
-    let size_enc = (io_field >> 4) & 0x3;
+    if io_field & IO_TRAP_VALID == 0 {
+        return None;
+    }
+
+    let io_type = if io_field & IO_DIRECTION_IN != 0 { IO_TYPE_INPUT } else { IO_TYPE_OUTPUT };
     let port = (io_field >> 16) & 0xFFFF;
 
-    let io_type = if direction == IO_DIRECTION_IN { IO_TYPE_INPUT } else { IO_TYPE_OUTPUT };
-
-    let (io_width, byte_count) = match size_enc {
-        IO_SIZE_BYTE => (IO_WIDTH_UINT8, 1usize),
-        IO_SIZE_WORD => (IO_WIDTH_UINT16, 2usize),
-        IO_SIZE_DWORD => (IO_WIDTH_UINT32, 4usize),
-        _ => return None, // Reserved encoding.
+    let (io_width, byte_count) = if io_field & IO_SIZE_BYTE != 0 {
+        (IO_WIDTH_UINT8, 1usize)
+    } else if io_field & IO_SIZE_WORD != 0 {
+        (IO_WIDTH_UINT16, 2usize)
+    } else {
+        (IO_WIDTH_UINT32, 4usize)
     };
 
     Some(ParsedIoInfo { io_type, io_width, byte_count, io_port: port })
+}
+
+/// Returns whether the AMD SMRAM save state map exposes I/O trap information
+/// for a save state with the given raw `SMMRevId`.
+/// Always return true because this is not really used.
+///
+pub fn io_info_supported(_smm_rev_id: u32) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -286,8 +303,8 @@ mod tests {
 
     #[test]
     fn test_parse_io_field_in_byte() {
-        // Direction=1 (IN), Size=0 (byte), Port=0x80
-        let io_field: u32 = (0x0080 << 16) | (IO_SIZE_BYTE << 4) | IO_DIRECTION_IN;
+        // Direction=1 (IN), SZ8 (bit 4), Port=0x80
+        let io_field: u32 = (0x0080 << 16) | IO_SIZE_BYTE | IO_DIRECTION_IN | IO_TRAP_VALID;
         let parsed = parse_io_field(io_field).unwrap();
         assert_eq!(parsed.io_type, IO_TYPE_INPUT);
         assert_eq!(parsed.io_width, IO_WIDTH_UINT8);
@@ -297,8 +314,8 @@ mod tests {
 
     #[test]
     fn test_parse_io_field_out_dword() {
-        // Direction=0 (OUT), Size=3 (dword), Port=0xCF8
-        let io_field: u32 = (0x0CF8 << 16) | (IO_SIZE_DWORD << 4);
+        // Direction=0 (OUT), SZ32 (bit 6), Port=0xCF8
+        let io_field: u32 = (0x0CF8 << 16) | (1 << 6) | IO_TRAP_VALID;
         let parsed = parse_io_field(io_field).unwrap();
         assert_eq!(parsed.io_type, IO_TYPE_OUTPUT);
         assert_eq!(parsed.io_width, IO_WIDTH_UINT32);
@@ -308,8 +325,8 @@ mod tests {
 
     #[test]
     fn test_parse_io_field_in_word() {
-        // Direction=1 (IN), Size=1 (word), Port=0x3F8
-        let io_field: u32 = (0x03F8 << 16) | (IO_SIZE_WORD << 4) | IO_DIRECTION_IN;
+        // Direction=1 (IN), SZ16 (bit 5), Port=0x3F8
+        let io_field: u32 = (0x03F8 << 16) | IO_SIZE_WORD | IO_DIRECTION_IN | IO_TRAP_VALID;
         let parsed = parse_io_field(io_field).unwrap();
         assert_eq!(parsed.io_type, IO_TYPE_INPUT);
         assert_eq!(parsed.io_width, IO_WIDTH_UINT16);
@@ -318,10 +335,38 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_io_field_reserved_size() {
-        // Direction=0, Size=2 (reserved) → None
-        let io_field: u32 = (0x0080 << 16) | (2 << 4);
+    fn test_parse_io_field_defaults_to_dword() {
+        // No size bit set → dword (matches the AMD reference's `else` branch).
+        let io_field: u32 = (0x0CF8 << 16) | IO_TRAP_VALID;
+        let parsed = parse_io_field(io_field).unwrap();
+        assert_eq!(parsed.io_width, IO_WIDTH_UINT32);
+        assert_eq!(parsed.byte_count, 4);
+    }
+
+    #[test]
+    fn test_parse_io_field_byte_takes_priority_over_word() {
+        // Both SZ8 and SZ16 set → byte wins (bit 4 checked first), matching the
+        // AMD reference if/else order.
+        let io_field: u32 = (0x0080 << 16) | IO_SIZE_BYTE | IO_SIZE_WORD | IO_TRAP_VALID;
+        let parsed = parse_io_field(io_field).unwrap();
+        assert_eq!(parsed.io_width, IO_WIDTH_UINT8);
+        assert_eq!(parsed.byte_count, 1);
+    }
+
+    #[test]
+    fn test_parse_io_field_valid_bit_clear() {
+        // Valid bit (bit 1) clear → SMI not caused by I/O → None, even though
+        // the direction and size encodings are otherwise well-formed.
+        let io_field: u32 = (0x0080 << 16) | IO_SIZE_BYTE | IO_DIRECTION_IN;
         assert!(parse_io_field(io_field).is_none());
+    }
+
+    #[test]
+    fn test_io_info_supported_always_true_on_amd() {
+        // AMD does not gate on SMMRevId; any value reports info as available.
+        assert!(io_info_supported(0));
+        assert!(io_info_supported(VENDOR_CONSTANTS.min_rev_id_io));
+        assert!(io_info_supported(u32::MAX));
     }
 
     #[test]

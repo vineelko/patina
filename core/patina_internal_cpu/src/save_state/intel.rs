@@ -135,6 +135,15 @@ pub fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
     Some(ParsedIoInfo { io_type, io_width, byte_count, io_port: port })
 }
 
+/// Returns whether the Intel SMRAM save state map exposes I/O trap information
+/// for a save state with the given raw `SMMRevId`.
+/// Must be above 0x30004
+///
+/// older revisions do not carry I/O trap information.
+pub fn io_info_supported(smm_rev_id: u32) -> bool {
+    smm_rev_id >= VENDOR_CONSTANTS.min_rev_id_io
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,6 +236,14 @@ mod tests {
         // SmiFlag=1, Length=1, Type=4 (string, not IN/OUT) → None
         let io_field: u32 = (0x0080 << 16) | (4 << 4) | (1 << 1) | 1;
         assert!(parse_io_field(io_field).is_none());
+    }
+
+    #[test]
+    fn test_io_info_supported_gated_on_rev_id() {
+        // IOMisc is only present once SMMRevId >= min_rev_id_io.
+        assert!(!io_info_supported(VENDOR_CONSTANTS.min_rev_id_io - 1));
+        assert!(io_info_supported(VENDOR_CONSTANTS.min_rev_id_io));
+        assert!(io_info_supported(VENDOR_CONSTANTS.min_rev_id_io + 1));
     }
 
     #[test]
