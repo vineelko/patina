@@ -43,18 +43,6 @@ pub enum ApCommand {
         /// The argument to pass to the procedure.
         argument: u64,
     },
-    /// Exit the holding pen and return to the caller.
-    Return,
-}
-
-impl ApCommand {
-    /// Converts the command to a u64 tag for atomic storage.
-    fn to_u64(self) -> u64 {
-        match self {
-            ApCommand::RunProcedure { .. } => 1,
-            ApCommand::Return => 2,
-        }
-    }
 }
 
 /// Responses from APs to the BSP.
@@ -113,33 +101,17 @@ enum MailboxState {
     ResponseReady = 3,
 }
 
-impl From<u32> for MailboxState {
-    fn from(value: u32) -> Self {
-        match value {
-            0 => MailboxState::Empty,
-            1 => MailboxState::CommandPending,
-            2 => MailboxState::Processing,
-            3 => MailboxState::ResponseReady,
-            _ => MailboxState::Empty,
-        }
-    }
-}
-
 /// A single AP's mailbox for communication with the BSP.
 #[repr(align(64))] // Cache-line aligned to avoid false sharing
 pub struct ApMailbox {
     /// Current state of the mailbox.
     state: AtomicU32,
-    /// The command tag (discriminant packed into u64).
-    command: AtomicU64,
     /// The procedure function pointer (for RunProcedure).
     procedure: AtomicU64,
     /// The argument to pass to the procedure (for RunProcedure).
     argument: AtomicU64,
     /// The response data (packed into u64).
     response: AtomicU64,
-    /// The CPU ID this mailbox is assigned to (u32::MAX = unassigned).
-    assigned_cpu: AtomicU32,
 }
 
 impl ApMailbox {
@@ -147,35 +119,10 @@ impl ApMailbox {
     pub const fn new() -> Self {
         Self {
             state: AtomicU32::new(MailboxState::Empty as u32),
-            command: AtomicU64::new(0),
             procedure: AtomicU64::new(0),
             argument: AtomicU64::new(0),
             response: AtomicU64::new(0),
-            assigned_cpu: AtomicU32::new(u32::MAX),
         }
-    }
-
-    /// Gets the current state of the mailbox.
-    fn state(&self) -> MailboxState {
-        self.state.load(Ordering::Acquire).into()
-    }
-
-    /// Gets the assigned CPU ID, if any.
-    pub fn assigned_cpu(&self) -> Option<u32> {
-        let cpu = self.assigned_cpu.load(Ordering::Acquire);
-        if cpu == u32::MAX { None } else { Some(cpu) }
-    }
-
-    /// Assigns this mailbox to a CPU.
-    ///
-    /// Returns true if assignment succeeded, false if already assigned.
-    fn assign(&self, cpu_id: u32) -> bool {
-        self.assigned_cpu.compare_exchange(u32::MAX, cpu_id, Ordering::AcqRel, Ordering::Acquire).is_ok()
-    }
-
-    /// Checks if a command is pending (called by AP).
-    pub fn has_pending_command(&self) -> bool {
-        self.state() == MailboxState::CommandPending
     }
 
     /// Gets the pending command (called by AP).
@@ -192,17 +139,9 @@ impl ApMailbox {
         );
 
         if result.is_ok() {
-            let tag = self.command.load(Ordering::Acquire);
-            match tag & 0xFF {
-                // Only RunProcedure carries a payload, so load procedure/argument in this arm only.
-                1 => {
-                    let procedure = self.procedure.load(Ordering::Acquire);
-                    let argument = self.argument.load(Ordering::Acquire);
-                    Some(ApCommand::RunProcedure { procedure, argument })
-                }
-                2 => Some(ApCommand::Return),
-                _ => None,
-            }
+            let procedure = self.procedure.load(Ordering::Acquire);
+            let argument = self.argument.load(Ordering::Acquire);
+            Some(ApCommand::RunProcedure { procedure, argument })
         } else {
             None
         }
@@ -218,7 +157,7 @@ impl ApMailbox {
     ///
     /// Returns `true` if the command was successfully posted, `false` if the mailbox is busy.
     ///
-    /// The payload (command tag, procedure, argument) is written first with `Relaxed`
+    /// The payload (procedure and argument) is written first with `Relaxed`
     /// ordering, then `state` is set to `CommandPending` with `Release` ordering.
     /// The AP acquires `state`, which guarantees it sees the fully-written payload.
     pub fn send_command(&self, command: ApCommand) -> bool {
@@ -234,17 +173,9 @@ impl ApMailbox {
             // Write all payload fields before publishing.
             // Relaxed is fine here — the Release store to `state` below
             // will fence all prior writes.
-            match command {
-                ApCommand::RunProcedure { procedure, argument } => {
-                    self.procedure.store(procedure, Ordering::Relaxed);
-                    self.argument.store(argument, Ordering::Relaxed);
-                }
-                ApCommand::Return => {
-                    self.procedure.store(0, Ordering::Relaxed);
-                    self.argument.store(0, Ordering::Relaxed);
-                }
-            }
-            self.command.store(command.to_u64(), Ordering::Relaxed);
+            let ApCommand::RunProcedure { procedure, argument } = command;
+            self.procedure.store(procedure, Ordering::Relaxed);
+            self.argument.store(argument, Ordering::Relaxed);
 
             // Publish: the AP polls on `state` with Acquire, so this
             // Release ensures it sees the payload written above.
@@ -279,21 +210,10 @@ impl ApMailbox {
     /// discarding any pending command, in-flight processing, or unread response.
     ///
     pub fn reset(&self) {
-        self.command.store(0, Ordering::Relaxed);
         self.procedure.store(0, Ordering::Relaxed);
         self.argument.store(0, Ordering::Relaxed);
         self.response.store(ApResponse::None.into(), Ordering::Relaxed);
         self.state.store(MailboxState::Empty as u32, Ordering::Release);
-    }
-
-    /// Checks if the mailbox is empty (no pending work).
-    pub fn is_empty(&self) -> bool {
-        self.state() == MailboxState::Empty
-    }
-
-    /// Checks if a response is ready.
-    pub fn has_response(&self) -> bool {
-        self.state() == MailboxState::ResponseReady
     }
 }
 
@@ -313,8 +233,6 @@ impl Default for ApMailbox {
 pub struct MailboxManager<const MAX_APS: usize, C: CpuInfo> {
     /// Mailboxes - fixed size array.
     mailboxes: [ApMailbox; MAX_APS],
-    /// Number of assigned mailboxes.
-    assigned_count: AtomicU32,
     /// Monotonic release generation.
     release_generation: AtomicU64,
     /// Phantom data for the CpuInfo type.
@@ -328,54 +246,25 @@ impl<const MAX_APS: usize, C: CpuInfo> MailboxManager<MAX_APS, C> {
     pub const fn new() -> Self {
         Self {
             mailboxes: [const { ApMailbox::new() }; MAX_APS],
-            assigned_count: AtomicU32::new(0),
             release_generation: AtomicU64::new(0),
             _cpu_info: core::marker::PhantomData,
         }
     }
 
-    /// Finds or allocates a mailbox for the specified CPU ID.
-    fn get_or_assign_mailbox(&self, cpu_id: u32) -> Option<&ApMailbox> {
-        // First, check if already assigned
-        for mailbox in &self.mailboxes {
-            if mailbox.assigned_cpu() == Some(cpu_id) {
-                return Some(mailbox);
-            }
-        }
-
-        // Find an unassigned mailbox
-        for mailbox in &self.mailboxes {
-            if mailbox.assign(cpu_id) {
-                self.assigned_count.fetch_add(1, Ordering::SeqCst);
-                log::trace!("Assigned mailbox to CPU {}", cpu_id);
-                return Some(mailbox);
-            }
-        }
-
-        log::warn!("No available mailbox for CPU {}", cpu_id);
-        None
-    }
-
-    /// Gets the mailbox for the specified CPU ID.
-    fn get_mailbox(&self, cpu_id: u32) -> Option<&ApMailbox> {
-        self.mailboxes.iter().find(|&mailbox| mailbox.assigned_cpu() == Some(cpu_id)).map(|v| v as _)
-    }
-
     /// Sends a command to a specific AP.
-    pub fn send_command(&self, cpu_id: u32, command: ApCommand) -> Result<(), ()> {
-        let mailbox = self.get_or_assign_mailbox(cpu_id).ok_or(())?;
+    pub fn send_command(&self, cpu_index: usize, command: ApCommand) -> Result<(), ()> {
+        let mailbox = self.mailboxes.get(cpu_index).ok_or(())?;
         if mailbox.send_command(command) { Ok(()) } else { Err(()) }
     }
 
     /// Checks for a pending command (called by AP).
-    pub fn check_mailbox(&self, cpu_id: u32) -> Option<ApCommand> {
-        let mailbox = self.get_or_assign_mailbox(cpu_id)?;
-        mailbox.take_command()
+    pub fn check_mailbox(&self, cpu_index: usize) -> Option<ApCommand> {
+        self.mailboxes.get(cpu_index)?.take_command()
     }
 
     /// Posts a response (called by AP).
-    pub fn post_response(&self, cpu_id: u32, response: ApResponse) {
-        if let Some(mailbox) = self.get_mailbox(cpu_id) {
+    pub fn post_response(&self, cpu_index: usize, response: ApResponse) {
+        if let Some(mailbox) = self.mailboxes.get(cpu_index) {
             mailbox.post_response(response);
         }
     }
@@ -384,17 +273,15 @@ impl<const MAX_APS: usize, C: CpuInfo> MailboxManager<MAX_APS, C> {
     ///
     pub fn reset_all(&self) {
         for mailbox in &self.mailboxes {
-            if mailbox.assigned_cpu().is_some() {
-                mailbox.reset();
-            }
+            mailbox.reset();
         }
     }
 
     /// Waits for a response from an AP with timeout.
     ///
     /// Returns the response, or `None` if timeout.
-    pub fn wait_response(&self, cpu_id: u32, timeout_us: u64) -> Option<ApResponse> {
-        let mailbox = self.get_mailbox(cpu_id)?;
+    pub fn wait_response(&self, cpu_index: usize, timeout_us: u64) -> Option<ApResponse> {
+        let mailbox = self.mailboxes.get(cpu_index)?;
         let mut result = None;
 
         perf_timer::spin_until::<C, _>(timeout_us, || {
@@ -407,11 +294,6 @@ impl<const MAX_APS: usize, C: CpuInfo> MailboxManager<MAX_APS, C> {
         });
 
         result
-    }
-
-    /// Gets the number of assigned mailboxes.
-    pub fn assigned_count(&self) -> usize {
-        self.assigned_count.load(Ordering::SeqCst) as usize
     }
 
     /// Returns the current release generation.
@@ -430,20 +312,6 @@ impl<const MAX_APS: usize, C: CpuInfo> MailboxManager<MAX_APS, C> {
     /// point-to-point command that already went out.
     pub fn release_all(&self) -> u64 {
         self.release_generation.fetch_add(1, Ordering::AcqRel).wrapping_add(1)
-    }
-
-    /// Gets the maximum number of mailboxes.
-    pub const fn max_mailboxes(&self) -> usize {
-        MAX_APS
-    }
-
-    /// Iterates over assigned mailboxes, calling the closure for each.
-    pub fn for_each_assigned<F: FnMut(u32, &ApMailbox)>(&self, mut f: F) {
-        for mailbox in &self.mailboxes {
-            if let Some(cpu_id) = mailbox.assigned_cpu() {
-                f(cpu_id, mailbox);
-            }
-        }
     }
 }
 
@@ -464,10 +332,9 @@ mod tests {
     #[test]
     fn test_mailbox_creation() {
         let mailbox = ApMailbox::new();
-        assert!(mailbox.is_empty());
-        assert!(!mailbox.has_pending_command());
-        assert!(!mailbox.has_response());
-        assert!(mailbox.assigned_cpu().is_none());
+        // A fresh mailbox has nothing to take or read back.
+        assert_eq!(mailbox.take_command(), None);
+        assert_eq!(mailbox.get_response(), None);
     }
 
     #[test]
@@ -479,34 +346,24 @@ mod tests {
     #[test]
     fn test_command_send_receive() {
         let mailbox = ApMailbox::new();
-        mailbox.assign(1);
+        let cmd = ApCommand::RunProcedure { procedure: 0x1234, argument: 0x5678 };
 
-        // Send a command
-        assert!(mailbox.send_command(ApCommand::Return));
-        assert!(mailbox.has_pending_command());
+        // Send a command; a second send is rejected while one is pending.
+        assert!(mailbox.send_command(cmd));
+        assert!(!mailbox.send_command(cmd));
 
-        // Cannot send another while one is pending
-        assert!(!mailbox.send_command(ApCommand::Return));
-
-        // Take the command
-        let cmd = mailbox.take_command();
-        assert_eq!(cmd, Some(ApCommand::Return));
-        assert!(!mailbox.has_pending_command());
-
-        // Post response
+        // Take the command, then post and read back the response.
+        assert_eq!(mailbox.take_command(), Some(cmd));
         mailbox.post_response(ApResponse::Success);
-        assert!(mailbox.has_response());
+        assert_eq!(mailbox.get_response(), Some(ApResponse::Success));
 
-        // Get response
-        let resp = mailbox.get_response();
-        assert_eq!(resp, Some(ApResponse::Success));
-        assert!(mailbox.is_empty());
+        // The mailbox is empty again: a fresh command can be sent.
+        assert!(mailbox.send_command(cmd));
     }
 
     #[test]
     fn test_run_procedure_command() {
         let mailbox = ApMailbox::new();
-        mailbox.assign(1);
 
         let cmd = ApCommand::RunProcedure { procedure: 0xDEAD_BEEF, argument: 0x12345678 };
 
@@ -525,13 +382,13 @@ mod tests {
     fn test_mailbox_manager() {
         let manager: MailboxManager<4, TestCpuInfo> = MailboxManager::new();
 
-        // Send command (implicitly assigns mailbox)
-        assert!(manager.send_command(1, ApCommand::Return).is_ok());
-        assert_eq!(manager.assigned_count(), 1);
+        // Send a command to the AP occupying slot index 1.
+        let command = ApCommand::RunProcedure { procedure: 0x1000, argument: 0x2000 };
+        assert!(manager.send_command(1, command).is_ok());
 
         // Check mailbox
         let cmd = manager.check_mailbox(1);
-        assert_eq!(cmd, Some(ApCommand::Return));
+        assert_eq!(cmd, Some(command));
 
         // Post response
         manager.post_response(1, ApResponse::Success);
@@ -544,24 +401,17 @@ mod tests {
     #[test]
     fn test_mailbox_reset_forces_empty() {
         let mailbox = ApMailbox::new();
-        mailbox.assign(1);
 
         // Put the mailbox into a stuck, non-empty state: a command was sent and
         // picked up for processing, but no response was ever posted (hung AP).
         assert!(mailbox.send_command(ApCommand::RunProcedure { procedure: 0x1000, argument: 7 }));
         let _ = mailbox.take_command();
-        assert!(!mailbox.is_empty());
 
         // A fresh command cannot be sent while stuck.
         assert!(!mailbox.send_command(ApCommand::RunProcedure { procedure: 0x2000, argument: 8 }));
 
-        // Reset forces the mailbox back to empty so it can be reused.
+        // Reset forces the mailbox back to empty, so a new command now succeeds.
         mailbox.reset();
-        assert!(mailbox.is_empty());
-        assert!(!mailbox.has_pending_command());
-        assert!(!mailbox.has_response());
-
-        // A new command now succeeds.
         assert!(mailbox.send_command(ApCommand::RunProcedure { procedure: 0x2000, argument: 8 }));
     }
 
@@ -569,7 +419,7 @@ mod tests {
     fn test_manager_reset_all_scrubs_every_mailbox() {
         let manager: MailboxManager<4, TestCpuInfo> = MailboxManager::new();
 
-        // Leave two different CPUs' mailboxes stuck in non-empty states.
+        // Leave two different slots' mailboxes stuck in non-empty states.
         assert!(manager.send_command(1, ApCommand::RunProcedure { procedure: 0x10, argument: 0 }).is_ok());
         let _ = manager.check_mailbox(1); // -> Processing
         assert!(manager.send_command(2, ApCommand::RunProcedure { procedure: 0x20, argument: 0 }).is_ok()); // -> CommandPending
@@ -578,10 +428,10 @@ mod tests {
         assert!(manager.send_command(1, ApCommand::RunProcedure { procedure: 0x11, argument: 0 }).is_err());
         assert!(manager.send_command(2, ApCommand::RunProcedure { procedure: 0x21, argument: 0 }).is_err());
 
-        // The BSP's leave-time sweep clears every assigned mailbox at once.
+        // The BSP's leave-time sweep clears every mailbox at once.
         manager.reset_all();
 
-        // Both CPUs are dispatchable again.
+        // Both slots are dispatchable again.
         assert!(manager.send_command(1, ApCommand::RunProcedure { procedure: 0x11, argument: 0 }).is_ok());
         assert!(manager.send_command(2, ApCommand::RunProcedure { procedure: 0x21, argument: 0 }).is_ok());
     }

@@ -577,21 +577,24 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// either when the BSP advances the mailbox release generation past entry_generation,
     /// or after `HOLDING_PEN_TIMEOUT_US`.
     fn ap_holding_pen(&'static self, cpu_id: u32, entry_generation: u64) {
+        // Each CPU owns the mailbox at its dense slot index; resolve it once.
+        let cpu_index = match self.cpu_manager.find_cpu_index(cpu_id) {
+            Some(idx) => idx,
+            None => {
+                log::error!("AP (CPU {}) has no registered slot; skipping holding pen", cpu_id);
+                return;
+            }
+        };
         log::trace!("AP (CPU {}) in holding pen, polling mailbox...", cpu_id);
 
         let released = crate::perf_timer::spin_until::<P::CpuInfo, _>(HOLDING_PEN_TIMEOUT_US, || {
             // Service any pending point-to-point command for this AP.
-            if let Some(command) = self.mailbox_manager.check_mailbox(cpu_id) {
+            if let Some(command) = self.mailbox_manager.check_mailbox(cpu_index) {
                 log::trace!("AP (CPU {}) received command: {:?}", cpu_id, command);
 
                 // Execute the command and post the response.
                 let response = self.execute_ap_command(cpu_id, &command);
-                self.mailbox_manager.post_response(cpu_id, response);
-
-                // A direct Return releases this AP immediately.
-                if matches!(command, ApCommand::Return) {
-                    return true;
-                }
+                self.mailbox_manager.post_response(cpu_index, response);
             }
 
             // Global release: the BSP finished this SMI and released every AP.
@@ -607,18 +610,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
     /// Execute a command received by an AP.
     fn execute_ap_command(&self, cpu_id: u32, command: &ApCommand) -> ApResponse {
-        match *command {
-            ApCommand::RunProcedure { procedure, argument } => {
-                self.cpu_manager.set_ap_state(cpu_id, ApState::Busy);
-                let response = self.run_procedure_on_ap(cpu_id, procedure, argument);
-                self.cpu_manager.set_ap_state(cpu_id, ApState::InHoldingPen);
-                response
-            }
-            ApCommand::Return => {
-                log::trace!("AP (CPU {}) received return command", cpu_id);
-                ApResponse::Success
-            }
-        }
+        let ApCommand::RunProcedure { procedure, argument } = *command;
+        self.cpu_manager.set_ap_state(cpu_id, ApState::Busy);
+        let response = self.run_procedure_on_ap(cpu_id, procedure, argument);
+        self.cpu_manager.set_ap_state(cpu_id, ApState::InHoldingPen);
+        response
     }
 
     /// Run a procedure on an AP, demoting to user mode if the procedure is in user-owned range.
@@ -765,7 +761,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // 5. Send the RunProcedure command to the AP via mailbox
         //    This will fail if the AP's mailbox is not empty (AP is busy).
         let command = ApCommand::RunProcedure { procedure, argument };
-        if self.mailbox_manager.send_command(cpu_id, command).is_err() {
+        if self.mailbox_manager.send_command(cpu_index, command).is_err() {
             log::error!("START_AP: AP (CPU {}, index {}) is busy or mailbox unavailable", cpu_id, cpu_index);
             return efi::Status::INVALID_PARAMETER.as_usize() as u64;
         }
@@ -780,7 +776,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // 6. Wait for the AP to complete (blocking mode)
         //    Use a generous timeout (10 seconds = 10_000_000 microseconds)
-        match self.mailbox_manager.wait_response(cpu_id, AP_TIMEOUT_US) {
+        match self.mailbox_manager.wait_response(cpu_index, AP_TIMEOUT_US) {
             Some(ApResponse::Success) => {
                 log::trace!("START_AP: AP (CPU {}) completed successfully", cpu_id);
                 efi::Status::SUCCESS.as_usize() as u64
