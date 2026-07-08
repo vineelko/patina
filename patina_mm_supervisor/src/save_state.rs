@@ -37,6 +37,7 @@ use patina_internal_cpu::save_state::{
     self, IA32_EFER_LMA, IO_INFO_SIZE, IO_TYPE_INPUT, IO_TYPE_OUTPUT, LMA_32BIT, LMA_64BIT, MmSaveStateIoInfo,
     MmSaveStateRegister, PROCESSOR_INFO_ENTRY_SIZE,
 };
+use r_efi::efi::Status;
 
 use crate::{PageOwnership, privilege_mgmt::SyscallResult, query_address_ownership, state::security_state};
 
@@ -111,19 +112,19 @@ pub fn save_state_read_phase1(protocol: u64, register_raw: u64, cpu_index: u64) 
         Some(r) => r,
         None => {
             log::error!("SAVE_STATE_READ: Unknown register value: {}", register_raw);
-            return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+            return Err(Status::INVALID_PARAMETER);
         }
     };
 
     // Validate CPU index against NumberOfCpus
     let num_cpus = match get_number_of_cpus() {
         Ok(n) => n,
-        Err(status) => return SyscallResult::error(status),
+        Err(status) => return Err(status),
     };
 
     if cpu_index >= num_cpus {
         log::error!("SAVE_STATE_READ: CPU index {} >= NumberOfCpus {}", cpu_index, num_cpus);
-        return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+        return Err(Status::INVALID_PARAMETER);
     }
 
     // Store for Phase 2
@@ -131,7 +132,7 @@ pub fn save_state_read_phase1(protocol: u64, register_raw: u64, cpu_index: u64) 
     *access = Some(SaveStateAccessHolder { user_protocol: protocol, register, cpu_index });
 
     log::debug!("SAVE_STATE_READ: Stored register={:?}, cpu_index={} for Phase 2", register, cpu_index);
-    SyscallResult::success(0)
+    Ok(0)
 }
 
 /// Processes Phase 2 of the save state read syscall.
@@ -147,7 +148,7 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
             Some(h) => h,
             None => {
                 log::error!("SAVE_STATE_READ2: Phase 1 not completed");
-                return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+                return Err(Status::INVALID_PARAMETER);
             }
         }
     };
@@ -155,13 +156,13 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
     // Verify protocol matches Phase 1
     if holder.user_protocol != protocol {
         log::error!("SAVE_STATE_READ2: Protocol mismatch: expected 0x{:x}, got 0x{:x}", holder.user_protocol, protocol);
-        return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+        return Err(Status::INVALID_PARAMETER);
     }
 
     // Validate width and buffer
     if width == 0 || buffer == 0 {
         log::error!("SAVE_STATE_READ2: Invalid width ({}) or null buffer", width);
-        return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+        return Err(Status::INVALID_PARAMETER);
     }
 
     let register = holder.register;
@@ -171,7 +172,8 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
     let write_size = actual_write_size(register, width);
     if write_size == 0 {
         log::error!("SAVE_STATE_READ2: Unsupported width {} for register {:?}", width, register);
-        return SyscallResult::error(SyscallResult::EFI_UNSUPPORTED);
+        return Err(Status::UNSUPPORTED);
+
     }
 
     // Validate buffer is in user-owned memory
@@ -179,11 +181,11 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
         Some(PageOwnership::User) => {}
         Some(owner) => {
             log::error!("SAVE_STATE_READ2: Buffer 0x{:x} owned by {:?}, expected User", buffer, owner);
-            return SyscallResult::error(SyscallResult::EFI_ACCESS_DENIED);
+            return Err(Status::ACCESS_DENIED);
         }
         None => {
             log::error!("SAVE_STATE_READ2: Buffer 0x{:x} not in mapped memory", buffer);
-            return SyscallResult::error(SyscallResult::EFI_ACCESS_DENIED);
+            return Err(Status::ACCESS_DENIED);
         }
     }
 
@@ -203,7 +205,7 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
     // Build a safe view over this CPU's save state region.
     let view = match get_save_state_view(cpu_index) {
         Ok(v) => v,
-        Err(status) => return SyscallResult::error(status),
+        Err(status) => return Err(status),
     };
 
     // Policy check for gated registers (RAX, IO)
@@ -213,13 +215,13 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
             Some(g) => g,
             None => {
                 log::error!("SAVE_STATE_READ2: Policy gate not initialized");
-                return SyscallResult::error(SyscallResult::EFI_NOT_READY);
+                return Err(Status::NOT_READY);
             }
         };
 
         if let Err(e) = gate.is_save_state_read_allowed(policy_field, width as usize, condition) {
             log::error!("SAVE_STATE_READ2: Policy denied read of {:?}: {:?}", register, e);
-            return SyscallResult::error(SyscallResult::EFI_ACCESS_DENIED);
+            return Err(Status::ACCESS_DENIED);
         }
     }
 
@@ -232,27 +234,22 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
         _ => read_architectural_register(&view, register, width, out),
     };
 
-    if status == SyscallResult::EFI_SUCCESS {
-        log::debug!("SAVE_STATE_READ2: Read {:?} (cpu={}, width={}) successfully", register, cpu_index, width);
-        SyscallResult::success(0)
-    } else {
-        SyscallResult::error(status)
-    }
+    status
 }
 
 /// Returns the per-CPU save-state metadata captured at initialization.
-fn save_state_info() -> Result<SaveStateInfo, u64> {
+fn save_state_info() -> Result<SaveStateInfo, Status> {
     match security_state().save_state_info() {
         Some(info) => Ok(info),
         None => {
             log::error!("Save-state metadata not initialized");
-            Err(SyscallResult::EFI_NOT_READY)
+            Err(Status::NOT_READY)
         }
     }
 }
 
 /// Returns the number of CPUs from the save-state metadata.
-fn get_number_of_cpus() -> Result<u64, u64> {
+fn get_number_of_cpus() -> Result<u64, Status> {
     Ok(save_state_info()?.number_of_cpus)
 }
 
@@ -301,18 +298,18 @@ impl SaveStateView {
 /// `sm_base[cpu_index] + SMRAM_SAVE_STATE_MAP_OFFSET`, with the SMBASE array
 /// passed through the MM Supervisor PassDown HOB. The region length is the fixed
 /// [`SMRAM_SAVE_STATE_MAP_SIZE`].
-fn get_save_state_view(cpu_index: u64) -> Result<SaveStateView, u64> {
+fn get_save_state_view(cpu_index: u64) -> Result<SaveStateView, Status> {
     let info = save_state_info()?;
 
     let num_cpus = info.number_of_cpus;
     if cpu_index >= num_cpus {
         log::error!("Save state read: CPU index {} >= NumberOfCpus {}", cpu_index, num_cpus);
-        return Err(SyscallResult::EFI_INVALID_PARAMETER);
+        return Err(Status::INVALID_PARAMETER);
     }
 
     if info.sm_base == 0 {
         log::error!("SmBase array pointer is null");
-        return Err(SyscallResult::EFI_NOT_READY);
+        return Err(Status::NOT_READY);
     }
 
     // The SMBASE array holds `num_cpus` per-CPU SMBASE values set up by the
@@ -327,7 +324,7 @@ fn get_save_state_view(cpu_index: u64) -> Result<SaveStateView, u64> {
     let smbase = sm_bases[cpu_index as usize];
     if smbase == 0 {
         log::error!("SmBase[{}] is null", cpu_index);
-        return Err(SyscallResult::EFI_INVALID_PARAMETER);
+        return Err(Status::INVALID_PARAMETER);
     }
     let base = smbase + SMRAM_SAVE_STATE_MAP_OFFSET;
 
@@ -376,12 +373,12 @@ fn actual_write_size(register: MmSaveStateRegister, width: u64) -> usize {
 fn read_processor_id(cpu_index: u64, out: &mut [u8]) -> SyscallResult {
     let info = match save_state_info() {
         Ok(i) => i,
-        Err(status) => return SyscallResult::error(status),
+        Err(status) => return Err(status),
     };
 
     if info.processor_info == 0 {
         log::error!("PROCESSOR_ID: ProcessorInfo array is null");
-        return SyscallResult::error(SyscallResult::EFI_NOT_READY);
+        return Err(Status::NOT_READY);
     }
 
     let num_cpus = info.number_of_cpus;
@@ -404,7 +401,7 @@ fn read_processor_id(cpu_index: u64, out: &mut [u8]) -> SyscallResult {
     out[..8].copy_from_slice(&processor_id.to_le_bytes());
 
     log::debug!("PROCESSOR_ID: CPU {} = 0x{:x}", cpu_index, processor_id);
-    SyscallResult::success(0)
+    Ok(0)
 }
 
 /// Inspects the I/O condition (IN vs OUT) from the save state for policy checking.
@@ -437,31 +434,37 @@ fn inspect_io_condition(view: &SaveStateView) -> Option<SaveStateCondition> {
 }
 
 /// Reads an architectural register from the vendor save state map into `out`.
-fn read_architectural_register(view: &SaveStateView, register: MmSaveStateRegister, width: u64, out: &mut [u8]) -> u64 {
+fn read_architectural_register(view: &SaveStateView, register: MmSaveStateRegister, width: u64, out: &mut [u8]) -> SyscallResult {
     let info = match save_state::register_info(register) {
         Some(i) => i,
         None => {
             log::error!("Register {:?} not found in save state map", register);
-            return SyscallResult::EFI_UNSUPPORTED;
+            return Err(Status::NOT_FOUND);
         }
     };
 
     let lo = info.lo_offset as usize;
-    if width == 2 {
+    if width == 0 {
+        log::error!("Register {:?} does not support 0-byte read", register);
+        return Err(Status::NOT_FOUND);
+    } else if width == 2 {
         if info.native_width < 2 {
-            return SyscallResult::EFI_UNSUPPORTED;
+            log::error!("Register {:?} does not support 2-byte read", register);
+            return Err(Status::INVALID_PARAMETER);
         }
         // Read the low 2 bytes (AMD segment selectors, DT limits).
         out[..2].copy_from_slice(&view.read_u16(lo).to_le_bytes());
     } else if width == 4 {
         if info.native_width < 4 {
-            return SyscallResult::EFI_UNSUPPORTED;
+            log::error!("Register {:?} does not support 4-byte read", register);
+            return Err(Status::INVALID_PARAMETER);
         }
         // Read the low 4 bytes.
         out[..4].copy_from_slice(&view.read_u32(lo).to_le_bytes());
     } else if width == 8 {
         if info.native_width != 8 {
-            return SyscallResult::EFI_UNSUPPORTED;
+            log::error!("Register {:?} does not support 8-byte read", register);
+            return Err(Status::INVALID_PARAMETER);
         }
         // Read lo u32 then hi u32 (handles both contiguous and split
         // layouts) and write them as two adjacent u32 (matching C
@@ -469,10 +472,11 @@ fn read_architectural_register(view: &SaveStateView, register: MmSaveStateRegist
         out[..4].copy_from_slice(&view.read_u32(lo).to_le_bytes());
         out[4..8].copy_from_slice(&view.read_u32(info.hi_offset as usize).to_le_bytes());
     } else {
-        return SyscallResult::EFI_INVALID_PARAMETER;
+        log::error!("Register {:?} does not support {}-byte read", register, width);
+        return Err(Status::INVALID_PARAMETER);
     }
 
-    SyscallResult::EFI_SUCCESS
+    Ok(0)
 }
 
 /// Reads the IO pseudo-register and writes an `EFI_MM_SAVE_STATE_IO_INFO`
@@ -480,14 +484,14 @@ fn read_architectural_register(view: &SaveStateView, register: MmSaveStateRegist
 ///
 /// The IO pseudo-register provides information about the I/O instruction that
 /// triggered the SMI, including the port, width, direction, and data value.
-fn read_io_register(view: &SaveStateView, out: &mut [u8]) -> u64 {
+fn read_io_register(view: &SaveStateView, out: &mut [u8]) -> SyscallResult {
     let vc = save_state::vendor_constants();
 
     // 1. Read SMMRevId to verify IO info is available.
     let smm_rev_id = view.read_u32(vc.smmrevid_offset as usize);
     if !save_state::io_info_supported(smm_rev_id) {
-        log::error!("IO_READ: SMMRevId 0x{:x} does not expose IO info", smm_rev_id);
-        return SyscallResult::EFI_UNSUPPORTED;
+        log::trace!("IO_READ: SMMRevId 0x{:x} does not expose IO info", smm_rev_id);
+        return Err(Status::NOT_FOUND);
     }
 
     // 2. Read the vendor-specific IO information field and parse it.
@@ -495,8 +499,8 @@ fn read_io_register(view: &SaveStateView, out: &mut [u8]) -> u64 {
     let parsed = match save_state::parse_io_field(io_field) {
         Some(p) => p,
         None => {
-            log::debug!("IO_READ: IO field 0x{:x} did not indicate a valid I/O trap", io_field);
-            return SyscallResult::EFI_UNSUPPORTED;
+            log::trace!("IO_READ: IO field 0x{:x} did not indicate a valid I/O trap", io_field);
+            return Err(Status::NOT_FOUND);
         }
     };
 
@@ -523,14 +527,14 @@ fn read_io_register(view: &SaveStateView, out: &mut [u8]) -> u64 {
     out[16..20].copy_from_slice(&io_info.io_width.to_le_bytes());
     out[20..24].copy_from_slice(&io_info.io_type.to_le_bytes());
 
-    SyscallResult::EFI_SUCCESS
+    Ok(0)
 }
 
 /// Reads the LMA pseudo-register (processor Long Mode Active state) into `out`.
 ///
 /// Returns `LMA_32BIT` (32) or `LMA_64BIT` (64) depending on the IA32_EFER.LMA
 /// bit in the save state.
-fn read_lma_register(view: &SaveStateView, width: u64, out: &mut [u8]) -> u64 {
+fn read_lma_register(view: &SaveStateView, width: u64, out: &mut [u8]) -> SyscallResult {
     let vc = save_state::vendor_constants();
 
     // AMD64 always operates in 64-bit mode during SMM.
@@ -547,10 +551,10 @@ fn read_lma_register(view: &SaveStateView, width: u64, out: &mut [u8]) -> u64 {
     } else if width == 8 {
         out[..8].copy_from_slice(&lma_value.to_le_bytes());
     } else {
-        return SyscallResult::EFI_INVALID_PARAMETER;
+        return Err(Status::INVALID_PARAMETER);
     }
 
-    SyscallResult::EFI_SUCCESS
+    Ok(0)
 }
 
 #[cfg(test)]

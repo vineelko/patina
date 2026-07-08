@@ -38,6 +38,7 @@ use crate::{
     PageOwnership, query_address_ownership,
     state::{init_state, security_state},
 };
+use r_efi::efi::Status;
 
 use super::SyscallResult;
 
@@ -186,7 +187,7 @@ impl SyscallDispatcher {
             Some(idx) => idx,
             None => {
                 log::warn!("Unknown syscall index: 0x{:x}", ctx.call_index);
-                return SyscallResult::error(SyscallResult::EFI_UNSUPPORTED);
+                return Err(Status::UNSUPPORTED);
             }
         };
 
@@ -202,7 +203,7 @@ impl SyscallDispatcher {
         );
 
         // Dispatch to the appropriate handler
-        match index {
+        let result = match index {
             SyscallIndex::RdMsr => self.handle_rdmsr(ctx),
             SyscallIndex::WrMsr => self.handle_wrmsr(ctx),
             SyscallIndex::Cli => self.handle_cli(ctx),
@@ -218,6 +219,17 @@ impl SyscallDispatcher {
             SyscallIndex::SaveStateRead2 => self.handle_save_state_read2(ctx),
             SyscallIndex::MmMemoryUnblocked => self.handle_mm_memory_unblocked(ctx),
             SyscallIndex::MmIsCommBuffer => self.handle_mm_is_comm_buffer(ctx),
+        };
+
+        match result {
+            Err(err) if index == SyscallIndex::SaveStateRead2 => {
+                log::trace!("Syscall: {:?} returned value=0x{:x}", index, err.as_usize());
+                Ok(err.as_usize() as u64) // Return error code to caller for SaveStateRead2
+            }
+            Err(err) => {
+                panic!("Syscall: {:?} failed with error: {:?}", index, err); // Panic for other syscalls
+            }
+            _ => result
         }
     }
 
@@ -235,13 +247,13 @@ impl SyscallDispatcher {
             Some(g) => g,
             None => {
                 log::error!("RDMSR: Policy gate not initialized");
-                return SyscallResult::error(SyscallResult::EFI_NOT_READY);
+                return Err(Status::NOT_READY);
             }
         };
 
         if let Err(e) = gate.is_msr_allowed(msr_index, AccessType::Read) {
             log::error!("RDMSR: MSR 0x{:x} blocked by policy: {:?}", msr_index, e);
-            return SyscallResult::error(SyscallResult::EFI_ACCESS_DENIED);
+            return Err(Status::ACCESS_DENIED);
         }
 
         // Policy allows - execute the MSR read
@@ -250,7 +262,7 @@ impl SyscallDispatcher {
             0
         });
         log::debug!("RDMSR: MSR 0x{:x} = 0x{:x}", msr_index, value);
-        SyscallResult::success(value)
+        Ok(value)
     }
 
     /// Handles MSR write syscall.
@@ -268,22 +280,22 @@ impl SyscallDispatcher {
             Some(g) => g,
             None => {
                 log::error!("WRMSR: Policy gate not initialized");
-                return SyscallResult::error(SyscallResult::EFI_NOT_READY);
+                return Err(Status::NOT_READY);
             }
         };
 
         if let Err(e) = gate.is_msr_allowed(msr_index, AccessType::Write) {
             log::error!("WRMSR: MSR 0x{:x} blocked by policy: {:?}", msr_index, e);
-            return SyscallResult::error(SyscallResult::EFI_ACCESS_DENIED);
+            return Err(Status::ACCESS_DENIED);
         }
 
         // Policy allows - execute the MSR write
         if let Err(e) = unsafe { crate::cpu::write_msr(msr_index, value) } {
             log::error!("WRMSR: wrmsr failed: {}", e);
-            return SyscallResult::error(SyscallResult::EFI_UNSUPPORTED);
+            return Err(Status::UNSUPPORTED);
         }
         log::debug!("WRMSR: MSR 0x{:x} written with 0x{:x}", msr_index, value);
-        SyscallResult::success(0)
+        Ok(0)
     }
 
     /// Handles CLI (clear interrupt flag) syscall.
@@ -297,19 +309,19 @@ impl SyscallDispatcher {
             Some(g) => g,
             None => {
                 log::error!("CLI: Policy gate not initialized");
-                return SyscallResult::error(SyscallResult::EFI_NOT_READY);
+                return Err(Status::NOT_READY);
             }
         };
 
         if let Err(e) = gate.is_instruction_allowed(Instruction::Cli) {
             log::error!("CLI: Instruction blocked by policy: {:?}", e);
-            return SyscallResult::error(SyscallResult::EFI_ACCESS_DENIED);
+            return Err(Status::ACCESS_DENIED);
         }
 
         // Policy allows - disable interrupts
         unsafe { asm!("cli", options(nomem, nostack)) };
         log::debug!("CLI: Interrupts disabled");
-        SyscallResult::success(0)
+        Ok(0)
     }
 
     /// Handles I/O port read syscall.
@@ -328,7 +340,7 @@ impl SyscallDispatcher {
             Some(w) => w,
             None => {
                 log::error!("IO_READ: Invalid IO width: {}", efi_width);
-                return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+                return Err(Status::INVALID_PARAMETER);
             }
         };
 
@@ -337,13 +349,13 @@ impl SyscallDispatcher {
             Some(g) => g,
             None => {
                 log::error!("IO_READ: Policy gate not initialized");
-                return SyscallResult::error(SyscallResult::EFI_NOT_READY);
+                return Err(Status::NOT_READY);
             }
         };
 
         if let Err(e) = gate.is_io_allowed(port as u32, io_width, AccessType::Read) {
             log::error!("IO_READ: Port 0x{:x} width {:?} blocked by policy: {:?}", port, io_width, e);
-            return SyscallResult::error(SyscallResult::EFI_ACCESS_DENIED);
+            return Err(Status::ACCESS_DENIED);
         }
 
         // Policy allows - execute the I/O read
@@ -358,7 +370,7 @@ impl SyscallDispatcher {
         };
 
         log::debug!("IO_READ: port=0x{:x} => 0x{:x}", port, value);
-        SyscallResult::success(value)
+        Ok(value)
     }
 
     /// Handles I/O port write syscall.
@@ -378,7 +390,7 @@ impl SyscallDispatcher {
             Some(w) => w,
             None => {
                 log::error!("IO_WRITE: Invalid IO width: {}", efi_width);
-                return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+                return Err(Status::INVALID_PARAMETER);
             }
         };
 
@@ -387,13 +399,13 @@ impl SyscallDispatcher {
             Some(g) => g,
             None => {
                 log::error!("IO_WRITE: Policy gate not initialized");
-                return SyscallResult::error(SyscallResult::EFI_NOT_READY);
+                return Err(Status::NOT_READY);
             }
         };
 
         if let Err(e) = gate.is_io_allowed(port as u32, io_width, AccessType::Write) {
             log::error!("IO_WRITE: Port 0x{:x} width {:?} blocked by policy: {:?}", port, io_width, e);
-            return SyscallResult::error(SyscallResult::EFI_ACCESS_DENIED);
+            return Err(Status::ACCESS_DENIED);
         }
 
         // Policy allows - execute the I/O write
@@ -408,7 +420,7 @@ impl SyscallDispatcher {
         }
 
         log::debug!("IO_WRITE: port=0x{:x} <= 0x{:x}", port, value);
-        SyscallResult::success(0)
+        Ok(0)
     }
 
     /// Handles WBINVD (write-back and invalidate cache) syscall.
@@ -422,19 +434,19 @@ impl SyscallDispatcher {
             Some(g) => g,
             None => {
                 log::error!("WBINVD: Policy gate not initialized");
-                return SyscallResult::error(SyscallResult::EFI_NOT_READY);
+                return Err(Status::NOT_READY);
             }
         };
 
         if let Err(e) = gate.is_instruction_allowed(Instruction::Wbinvd) {
             log::error!("WBINVD: Instruction blocked by policy: {:?}", e);
-            return SyscallResult::error(SyscallResult::EFI_ACCESS_DENIED);
+            return Err(Status::ACCESS_DENIED);
         }
 
         // Policy allows - write back and invalidate cache
         unsafe { asm!("wbinvd", options(nomem, nostack)) };
         log::debug!("WBINVD: Cache written back and invalidated");
-        SyscallResult::success(0)
+        Ok(0)
     }
 
     /// Handles HLT (halt processor) syscall.
@@ -448,19 +460,19 @@ impl SyscallDispatcher {
             Some(g) => g,
             None => {
                 log::error!("HLT: Policy gate not initialized");
-                return SyscallResult::error(SyscallResult::EFI_NOT_READY);
+                return Err(Status::NOT_READY);
             }
         };
 
         if let Err(e) = gate.is_instruction_allowed(Instruction::Hlt) {
             log::error!("HLT: Instruction blocked by policy: {:?}", e);
-            return SyscallResult::error(SyscallResult::EFI_ACCESS_DENIED);
+            return Err(Status::ACCESS_DENIED);
         }
 
         // Policy allows - halt processor (sleep until next interrupt)
         unsafe { asm!("hlt", options(nomem, nostack)) };
         log::debug!("HLT: Processor halted and resumed");
-        SyscallResult::success(0)
+        Ok(0)
     }
 
     /// Handles save state read syscall (legacy).
@@ -474,7 +486,7 @@ impl SyscallDispatcher {
         // Validate parameters
         if ctx.arg1 == 0 {
             log::error!("SAVE_STATE_READ: Null protocol pointer");
-            return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+            return Err(Status::INVALID_PARAMETER);
         }
 
         // Delegate to save state module Phase 1
@@ -496,23 +508,23 @@ impl SyscallDispatcher {
         // Only BSP can allocate pages (AP allocating involves page table updates)
         if !crate::is_bsp() {
             log::error!("ALLOC_PAGE: AP cannot allocate pages");
-            return SyscallResult::error(SyscallResult::EFI_ACCESS_DENIED);
+            return Err(Status::ACCESS_DENIED);
         }
 
         if mem_type != RUNTIME_SERVICES_DATA {
             log::error!("ALLOC_PAGE: Invalid memory type: {}", mem_type);
-            return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+            return Err(Status::INVALID_PARAMETER);
         }
 
         // Currently only AllocateAnyPages is supported by our page allocator
         if alloc_type != ALLOCATE_ANY_PAGES {
             log::error!("ALLOC_PAGE: Only AllocateAnyPages (0) is supported, got {}", alloc_type);
-            return SyscallResult::error(SyscallResult::EFI_UNSUPPORTED);
+            return Err(Status::UNSUPPORTED);
         }
 
         if page_count == 0 {
             log::error!("ALLOC_PAGE: Zero page count");
-            return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+            return Err(Status::INVALID_PARAMETER);
         }
 
         // Allocate pages as User type (Ring 3 driver request)
@@ -522,11 +534,11 @@ impl SyscallDispatcher {
         {
             Ok(addr) => {
                 log::trace!("ALLOC_PAGE: Allocated {} page(s) at 0x{:x}", page_count, addr);
-                SyscallResult::success(addr)
+                Ok(addr)
             }
             Err(e) => {
                 log::error!("ALLOC_PAGE: Allocation failed: {:?}", e);
-                SyscallResult::error(SyscallResult::EFI_OUT_OF_RESOURCES)
+                Err(Status::OUT_OF_RESOURCES)
             }
         }
     }
@@ -543,13 +555,13 @@ impl SyscallDispatcher {
 
         if page_count == 0 {
             log::error!("FREE_PAGE: Zero page count");
-            return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+            return Err(Status::INVALID_PARAMETER);
         }
 
         // Validate the address is page-aligned
         if !addr.is_multiple_of(UEFI_PAGE_SIZE as u64) {
             log::error!("FREE_PAGE: Address 0x{:x} is not page-aligned", addr);
-            return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+            return Err(Status::INVALID_PARAMETER);
         }
 
         // Verify the range was allocated as User type (Ring 3 code should only free its own memory)
@@ -560,11 +572,11 @@ impl SyscallDispatcher {
             }
             Some(crate::mem::AllocationType::Supervisor) => {
                 log::error!("FREE_PAGE: Address 0x{:x} is a supervisor allocation - access denied", addr);
-                return SyscallResult::error(SyscallResult::EFI_SECURITY_VIOLATION);
+                return Err(Status::SECURITY_VIOLATION);
             }
             None => {
                 log::error!("FREE_PAGE: Address 0x{:x} is not allocated", addr);
-                return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+                return Err(Status::INVALID_PARAMETER);
             }
         }
 
@@ -576,11 +588,11 @@ impl SyscallDispatcher {
         ) {
             Ok(()) => {
                 log::debug!("FREE_PAGE: Freed {} page(s) at 0x{:x}", page_count, addr);
-                SyscallResult::success(0)
+                Ok(0)
             }
             Err(e) => {
                 log::error!("FREE_PAGE: Free failed: {:?}", e);
-                SyscallResult::error(SyscallResult::EFI_SECURITY_VIOLATION)
+                Err(Status::SECURITY_VIOLATION)
             }
         }
     }
@@ -612,19 +624,19 @@ impl SyscallDispatcher {
         // 1. Validate procedure pointer is non-null
         if procedure == 0 {
             log::error!("START_AP_PROC: Null procedure pointer");
-            return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+            return Err(Status::INVALID_PARAMETER);
         }
 
         // 2. Validate procedure pointer is within mapped memory via page table query
         if crate::query_address_ownership(procedure, core::mem::size_of::<usize>() as u64).is_none() {
             log::error!("START_AP_PROC: Procedure 0x{:x} not in mapped memory", procedure);
-            return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+            return Err(Status::INVALID_PARAMETER);
         }
 
         // 3. Validate argument pointer (if non-null) is within mapped memory
         if argument != 0 && crate::query_address_ownership(argument, core::mem::size_of::<usize>() as u64).is_none() {
             log::error!("START_AP_PROC: Argument 0x{:x} not in mapped memory", argument);
-            return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+            return Err(Status::INVALID_PARAMETER);
         }
 
         // 4. Delegate to the registered AP startup function
@@ -636,11 +648,11 @@ impl SyscallDispatcher {
                     cpu_index
                 );
                 let status = start_fn(cpu_index, procedure, argument);
-                if status == 0 { SyscallResult::success(0) } else { SyscallResult::error(status) }
+                if status == 0 { Ok(0) } else { Err(Status::from_usize(status as usize)) }
             }
             None => {
                 log::error!("START_AP_PROC: AP startup not initialized");
-                SyscallResult::error(SyscallResult::EFI_NOT_READY)
+                Err(Status::NOT_READY)
             }
         }
     }
@@ -656,7 +668,7 @@ impl SyscallDispatcher {
         // Validate parameters
         if ctx.arg1 == 0 {
             log::error!("SAVE_STATE_READ2: Null protocol pointer");
-            return SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
+            return Err(Status::INVALID_PARAMETER);
         }
 
         // Delegate to save state module Phase 2
@@ -680,7 +692,7 @@ impl SyscallDispatcher {
 
         if !is_valid {
             log::trace!("MM_MEMORY_UNBLOCKED: addr=0x{:x} size=0x{:x} not in unblocked region", addr, size);
-            return SyscallResult::success(0); // FALSE
+            return Ok(0); // FALSE
         }
 
         // Additional check - verify buffer is in user-owned space
@@ -693,17 +705,17 @@ impl SyscallDispatcher {
                         size,
                         owner
                     );
-                    return SyscallResult::success(0); // FALSE
+                    return Ok(0); // FALSE
                 }
             }
             None => {
                 log::trace!("MM_MEMORY_UNBLOCKED: addr=0x{:x} size=0x{:x} not in mapped memory", addr, size);
-                return SyscallResult::success(0); // FALSE
+                return Ok(0); // FALSE
             }
         }
 
         log::trace!("MM_MEMORY_UNBLOCKED: addr=0x{:x} size=0x{:x} is valid", addr, size);
-        SyscallResult::success(1) // TRUE
+        Ok(1) // TRUE
     }
 
     /// Handles MM is communication buffer check syscall.
@@ -721,7 +733,7 @@ impl SyscallDispatcher {
             Some(c) => c,
             None => {
                 log::error!("MM_IS_COMM_BUFFER: Comm buffer config not initialized");
-                return SyscallResult::success(0); // FALSE
+                return Ok(0); // FALSE
             }
         };
 
@@ -733,7 +745,7 @@ impl SyscallDispatcher {
         let is_valid = size > 0 && address >= buf_start && range_end <= buf_end;
 
         log::debug!("MM_IS_COMM_BUFFER: addr=0x{:x} size=0x{:x} => {}", address, size, is_valid);
-        SyscallResult::success(if is_valid { 1 } else { 0 })
+        if is_valid { Ok(1) } else { Ok(0) }
     }
 }
 
@@ -753,15 +765,9 @@ pub extern "efiapi" fn syscall_dispatcher(
 ) -> u64 {
     let ctx = SyscallContext { call_index, arg1, arg2, arg3, caller_addr, ring3_stack_ptr };
 
-    let result = SyscallDispatcher::new().dispatch(&ctx);
-
-    // For now, just return the value. In the future, we may need to handle
-    // error codes differently.
-    if result.status != 0 {
-        panic!("Syscall error: status=0x{:x}", result.status);
-    } else {
-        result.value
-    }
+    // Unwrap is safe here because the dispatch() will always return a u64
+    // result, and panic on failure.
+    SyscallDispatcher::new().dispatch(&ctx).unwrap()
 }
 
 #[cfg(test)]
@@ -783,16 +789,5 @@ mod tests {
         assert_eq!(SyscallIndex::from_u64(0x0008), None);
         assert_eq!(SyscallIndex::from_u64(0x10000), None);
         assert_eq!(SyscallIndex::from_u64(0xDEAD_BEEF), None);
-    }
-
-    #[test]
-    fn test_syscall_result() {
-        let success = SyscallResult::success(42);
-        assert_eq!(success.value, 42);
-        assert_eq!(success.status, 0);
-
-        let error = SyscallResult::error(SyscallResult::EFI_INVALID_PARAMETER);
-        assert_eq!(error.value, 0);
-        assert_eq!(error.status, SyscallResult::EFI_INVALID_PARAMETER);
     }
 }

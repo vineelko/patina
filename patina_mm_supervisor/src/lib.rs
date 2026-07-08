@@ -121,11 +121,11 @@ pub const MP_INFORMATION_HOB_GUID: patina::BinaryGuid =
 /// MM Supervisor PassDown HOB Revision
 pub const MM_SUPV_PASS_DOWN_HOB_REVISION: u32 = 2;
 
-/// Timeout for waiting for AP return acknowledgement (100 ms).
-const RETURN_TIMEOUT_US: u64 = 100_000;
+/// Timeout for waiting for AP return acknowledgement (1 second).
+const RETURN_TIMEOUT_US: u64 = 1_000_000;
 
-/// Timeout for waiting for APs to arrive in the holding pen (100 ms).
-const AP_ARRIVAL_TIMEOUT_US: u64 = 100_000;
+/// Timeout for waiting for APs to arrive in the holding pen (1 second).
+const AP_ARRIVAL_TIMEOUT_US: u64 = 1_000_000;
 
 /// Timeout for waiting for an AP to complete a dispatched procedure (10 seconds).
 const AP_TIMEOUT_US: u64 = 10_000_000;
@@ -193,7 +193,7 @@ pub(crate) fn query_address_ownership(address: u64, size: u64) -> Option<PageOwn
     let page_table = security_state().lock_page_table();
     let pt = page_table.as_ref()?;
     let attrs = pt.query_memory_region(aligned_addr, aligned_size).ok()?;
-    log::info!(
+    log::trace!(
         "Queried page ownership for address range 0x{:016x}-0x{:016x}: attributes={:?}",
         aligned_addr,
         aligned_addr + aligned_size,
@@ -455,7 +455,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // Determine if we're BSP by checking IA32_APIC_BASE MSR
         let is_bsp = is_bsp();
 
-        log::info!(
+        log::trace!(
             "CPU {} (index {}) entering MM Supervisor Core (BSP: {})",
             cpu_id,
             cpu_index,
@@ -464,7 +464,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // Check if this core has already completed initialization (per-core check)
         if is_core_initialized(cpu_index) {
             // Subsequent entry: go directly to request loop or holding pen (does not return)
-            log::info!("CPU {} (index {}) re-entering MM Supervisor Core, skipping initialization.", cpu_id, cpu_index);
+            log::trace!("CPU {} (index {}) re-entering MM Supervisor Core, skipping initialization.", cpu_id, cpu_index);
             self.enter_runtime(cpu_id);
 
             return;
@@ -478,8 +478,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             assert!(self.set_instance(), "MM Supervisor Core instance was already set!");
             assert!(!hob_list.is_null(), "MM Supervisor Core requires a non-null HOB list pointer.");
 
-            log::info!("MM Supervisor Core v{}", env!("CARGO_PKG_VERSION"));
-            log::info!("BSP (CPU {}, index {}) starting one-time initialization...", cpu_id, cpu_index);
+            log::trace!("MM Supervisor Core v{}", env!("CARGO_PKG_VERSION"));
+            log::trace!("BSP (CPU {}, index {}) starting one-time initialization...", cpu_id, cpu_index);
 
             // Register BSP with CPU manager
             self.cpu_manager.register_cpu(cpu_id, cpu_index, true);
@@ -518,16 +518,16 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                     0,
                 )
             };
-            log::info!("Returned from user entry point with value: 0x{:016x}", ret);
+            log::trace!("Returned from user entry point with value: 0x{:016x}", ret);
 
             // Mark BSP init as complete so APs can proceed
             self.initialized.store(true, Ordering::Release);
             init_state().mark_bsp_init_complete();
 
-            log::info!("BSP one-time initialization complete.");
+            log::trace!("BSP one-time initialization complete.");
         } else {
             // AP path: Wait for BSP to complete one-time initialization
-            log::info!("AP (CPU {}, index {}) waiting for BSP initialization...", cpu_id, cpu_index);
+            log::trace!("AP (CPU {}, index {}) waiting for BSP initialization...", cpu_id, cpu_index);
 
             // Spin until BSP completes initialization
             while !init_state().is_bsp_init_complete() {
@@ -546,7 +546,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // Track that this core has completed per-core init
         let init_count = init_state().inc_per_core_init_count();
-        log::info!(
+        log::trace!(
             "CPU {} (index {}) completed per-core init ({} cores initialized)",
             cpu_id,
             cpu_index,
@@ -560,7 +560,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 core::hint::spin_loop();
             }
 
-            log::info!("All {} cores completed initialization, returning to caller.", expected_cpus);
+            log::trace!("All {} cores completed initialization, returning to caller.", expected_cpus);
         }
 
         // First entry returns to caller after init is complete

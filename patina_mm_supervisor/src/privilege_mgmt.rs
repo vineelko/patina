@@ -46,45 +46,13 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
+use r_efi::efi::Status;
+
 mod call_gate;
 mod syscall_dispatcher;
 pub(crate) mod syscall_setup;
 
-/// Result of a syscall operation.
-#[derive(Debug, Clone, Copy)]
-pub struct SyscallResult {
-    /// Return value (in RAX on return to Ring 3).
-    pub value: u64,
-    /// Status code (EFI_STATUS compatible).
-    pub status: u64,
-}
-
-impl SyscallResult {
-    /// Creates a successful result with a value.
-    pub const fn success(value: u64) -> Self {
-        Self { value, status: 0 }
-    }
-
-    /// Creates an error result.
-    pub const fn error(status: u64) -> Self {
-        Self { value: 0, status }
-    }
-
-    /// EFI_SUCCESS
-    pub const EFI_SUCCESS: u64 = 0;
-    /// EFI_INVALID_PARAMETER
-    pub const EFI_INVALID_PARAMETER: u64 = 0x8000_0000_0000_0002;
-    /// EFI_UNSUPPORTED
-    pub const EFI_UNSUPPORTED: u64 = 0x8000_0000_0000_0003;
-    /// EFI_ACCESS_DENIED
-    pub const EFI_ACCESS_DENIED: u64 = 0x8000_0000_0000_000F;
-    /// EFI_NOT_READY
-    pub const EFI_NOT_READY: u64 = 0x8000_0000_0000_0006;
-    /// EFI_OUT_OF_RESOURCES
-    pub const EFI_OUT_OF_RESOURCES: u64 = 0x8000_0000_0000_0009;
-    /// EFI_SECURITY_VIOLATION
-    pub const EFI_SECURITY_VIOLATION: u64 = 0x8000_0000_0000_001A;
-}
+pub type SyscallResult = Result<u64, Status>;  // Result of a syscall: Ok(value) or Err(EFI_STATUS)
 
 // FFI binding to the assembly `invoke_demoted_routine` routine (`call_gate_transfer.asm`).
 // Only linked for the firmware (UEFI) target; host builds (unit tests, doctests, `check`)

@@ -187,7 +187,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         } else {
             let remaining = self.cpu_manager.count_aps_in_state(ApState::InHoldingPen)
                 + self.cpu_manager.count_aps_in_state(ApState::Busy);
-            log::warn!("AP exit timeout: {} AP(s) still in the holding pen after release", remaining);
+            log::error!("AP exit timeout: {} AP(s) still in the holding pen after release", remaining);
         }
     }
 
