@@ -43,10 +43,7 @@ use patina_internal_depex::{AssociatedDependency, Depex};
 use r_efi::efi;
 use spin::Mutex;
 
-use crate::{
-    DepexHobData, MM_SUPERVISOR_CORE_GUID, MM_SUPERVISOR_DEPEX_HOB_GUID, mmi::MmiDatabase,
-    protocol_db::ProtocolDatabase,
-};
+use crate::{DepexHobData, MM_SUPERVISOR_CORE_GUID, MM_SUPERVISOR_DEPEX_HOB_GUID, protocol_db::ProtocolDatabase};
 
 /// Represents a discovered MM driver pending dispatch.
 #[derive(Debug)]
