@@ -29,10 +29,8 @@ impl SectionExtractor for Crc32SectionExtractor {
         if let SectionHeader::GuidDefined(guid_header, crc_header, _) = section.header()
             && guid_header.section_definition_guid == fw_fs::guid::CRC32_SECTION
         {
-            if crc_header.len() < 4 {
-                Err(FirmwareFileSystemError::DataCorrupt)?;
-            }
-            let crc32 = u32::from_le_bytes((**crc_header).try_into().unwrap());
+            let crc32_bytes = crc_header.get(..4).ok_or(FirmwareFileSystemError::DataCorrupt)?;
+            let crc32 = u32::from_le_bytes(crc32_bytes.try_into().unwrap());
             let content = section.try_content_as_slice()?;
             if crc32 != crc32fast::hash(content) {
                 //TODO: in EDK2 C reference implementation, data is returned along with EFI_AUTH_STATUS_TEST_FAILED.
@@ -88,6 +86,34 @@ mod tests {
         let result = extractor.extract(&section).expect("Empty content with valid CRC should succeed");
 
         assert_eq!(result, content);
+    }
+
+    #[test]
+    fn test_crc32_extractor_oversized_guid_data() {
+        // A malformed section whose GUID-specific data is larger than the 4-byte CRC32 value
+        // should only have the first 4 bytes interpreted as the checksum.
+        let content = b"Hello, CRC32!";
+        let crc32 = crc32fast::hash(content);
+        let mut guid_data = crc32.to_le_bytes().to_vec();
+        guid_data.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]); // give trailing bytes beyond the CRC32
+        let section = create_crc32_section(content, guid_data);
+
+        let extractor = Crc32SectionExtractor;
+        let result = extractor.extract(&section).expect("Oversized GUID data with a valid CRC should succeed");
+
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn test_crc32_extractor_truncated_guid_data() {
+        // GUID-specific data shorter than 4 bytes should just return a DataCorrupt error.
+        let content = b"Hello, CRC32!";
+        let section = create_crc32_section(content, [0x00, 0x01].to_vec()); // only 2 bytes
+
+        let extractor = Crc32SectionExtractor;
+        let result = extractor.extract(&section);
+
+        assert!(matches!(result, Err(FirmwareFileSystemError::DataCorrupt)));
     }
 
     #[test]
