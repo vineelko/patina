@@ -212,14 +212,20 @@ impl<'a> HobList<'a> {
     /// ```
     pub fn discover_hobs(&mut self, hob_list: *const c_void) {
         const NOT_NULL: &str = "Ptr should not be NULL";
-        fn assert_hob_size<T>(hob: &header::Hob) {
+        // Validates that a HOB's declared length matches the size of the type it will be cast to.
+        //
+        // A size mismatch panics in debug builds and logs a warning and returns `false` in release builds.
+        fn hob_size_ok<T>(hob: &header::Hob) -> bool {
             let hob_len = hob.length as usize;
             let hob_size = mem::size_of::<T>();
-            assert_eq!(
-                hob_len, hob_size,
-                "Trying to cast hob of length {hob_len} into a pointer of size {hob_size}. Hob type: {:?}",
-                hob.r#type
-            );
+            if hob_len != hob_size {
+                crate::log_debug_assert!(
+                    "Ignoring malformed HOB: type {:?} has length {hob_len} but expected size {hob_size}.",
+                    hob.r#type
+                );
+                return false;
+            }
+            true
         }
 
         let mut hob_header: *const header::Hob = hob_list as *const header::Hob;
@@ -229,11 +235,12 @@ impl<'a> HobList<'a> {
             let current_header = unsafe { hob_header.cast::<header::Hob>().as_ref().expect(NOT_NULL) };
             match current_header.r#type {
                 HANDOFF => {
-                    assert_hob_size::<PhaseHandoffInformationTable>(current_header);
-                    // SAFETY: HOB type is HANDOFF and size was validated. Cast to specific HOB type is valid.
-                    let phit_hob =
-                        unsafe { hob_header.cast::<PhaseHandoffInformationTable>().as_ref().expect(NOT_NULL) };
-                    self.0.push(Hob::Handoff(phit_hob));
+                    if hob_size_ok::<PhaseHandoffInformationTable>(current_header) {
+                        // SAFETY: HOB type is HANDOFF and size was validated. Cast to specific HOB type is valid.
+                        let phit_hob =
+                            unsafe { hob_header.cast::<PhaseHandoffInformationTable>().as_ref().expect(NOT_NULL) };
+                        self.0.push(Hob::Handoff(phit_hob));
+                    }
                 }
                 MEMORY_ALLOCATION => {
                     if current_header.length == mem::size_of::<MemoryAllocationModule>() as u16 {
@@ -241,19 +248,19 @@ impl<'a> HobList<'a> {
                         let mem_alloc_hob =
                             unsafe { hob_header.cast::<MemoryAllocationModule>().as_ref().expect(NOT_NULL) };
                         self.0.push(Hob::MemoryAllocationModule(mem_alloc_hob));
-                    } else {
-                        assert_hob_size::<MemoryAllocation>(current_header);
+                    } else if hob_size_ok::<MemoryAllocation>(current_header) {
                         // SAFETY: HOB type is MEMORY_ALLOCATION and size was validated.
                         let mem_alloc_hob = unsafe { hob_header.cast::<MemoryAllocation>().as_ref().expect(NOT_NULL) };
                         self.0.push(Hob::MemoryAllocation(mem_alloc_hob));
                     }
                 }
                 RESOURCE_DESCRIPTOR => {
-                    assert_hob_size::<ResourceDescriptor>(current_header);
-                    // SAFETY: HOB type is RESOURCE_DESCRIPTOR and size was validated.
-                    let resource_desc_hob =
-                        unsafe { hob_header.cast::<ResourceDescriptor>().as_ref().expect(NOT_NULL) };
-                    self.0.push(Hob::ResourceDescriptor(resource_desc_hob));
+                    if hob_size_ok::<ResourceDescriptor>(current_header) {
+                        // SAFETY: HOB type is RESOURCE_DESCRIPTOR and size was validated.
+                        let resource_desc_hob =
+                            unsafe { hob_header.cast::<ResourceDescriptor>().as_ref().expect(NOT_NULL) };
+                        self.0.push(Hob::ResourceDescriptor(resource_desc_hob));
+                    }
                 }
                 GUID_EXTENSION => {
                     // SAFETY: HOB type is GUID_EXTENSION. GuidHob header is valid, and data follows immediately after.
@@ -274,41 +281,47 @@ impl<'a> HobList<'a> {
                     self.0.push(Hob::GuidHob(guid_hob, data));
                 }
                 FV => {
-                    assert_hob_size::<FirmwareVolume>(current_header);
-                    // SAFETY: HOB type is FV and size was validated.
-                    let fv_hob = unsafe { hob_header.cast::<FirmwareVolume>().as_ref().expect(NOT_NULL) };
-                    self.0.push(Hob::FirmwareVolume(fv_hob));
+                    if hob_size_ok::<FirmwareVolume>(current_header) {
+                        // SAFETY: HOB type is FV and size was validated.
+                        let fv_hob = unsafe { hob_header.cast::<FirmwareVolume>().as_ref().expect(NOT_NULL) };
+                        self.0.push(Hob::FirmwareVolume(fv_hob));
+                    }
                 }
                 FV2 => {
-                    assert_hob_size::<FirmwareVolume2>(current_header);
-                    // SAFETY: HOB type is FV2 and size was validated.
-                    let fv2_hob = unsafe { hob_header.cast::<FirmwareVolume2>().as_ref().expect(NOT_NULL) };
-                    self.0.push(Hob::FirmwareVolume2(fv2_hob));
+                    if hob_size_ok::<FirmwareVolume2>(current_header) {
+                        // SAFETY: HOB type is FV2 and size was validated.
+                        let fv2_hob = unsafe { hob_header.cast::<FirmwareVolume2>().as_ref().expect(NOT_NULL) };
+                        self.0.push(Hob::FirmwareVolume2(fv2_hob));
+                    }
                 }
                 FV3 => {
-                    assert_hob_size::<FirmwareVolume3>(current_header);
-                    // SAFETY: HOB type is FV3 and size was validated.
-                    let fv3_hob = unsafe { hob_header.cast::<FirmwareVolume3>().as_ref().expect(NOT_NULL) };
-                    self.0.push(Hob::FirmwareVolume3(fv3_hob));
+                    if hob_size_ok::<FirmwareVolume3>(current_header) {
+                        // SAFETY: HOB type is FV3 and size was validated.
+                        let fv3_hob = unsafe { hob_header.cast::<FirmwareVolume3>().as_ref().expect(NOT_NULL) };
+                        self.0.push(Hob::FirmwareVolume3(fv3_hob));
+                    }
                 }
                 CPU => {
-                    assert_hob_size::<Cpu>(current_header);
-                    // SAFETY: HOB type is CPU and size was validated.
-                    let cpu_hob = unsafe { hob_header.cast::<Cpu>().as_ref().expect(NOT_NULL) };
-                    self.0.push(Hob::Cpu(cpu_hob));
+                    if hob_size_ok::<Cpu>(current_header) {
+                        // SAFETY: HOB type is CPU and size was validated.
+                        let cpu_hob = unsafe { hob_header.cast::<Cpu>().as_ref().expect(NOT_NULL) };
+                        self.0.push(Hob::Cpu(cpu_hob));
+                    }
                 }
                 UEFI_CAPSULE => {
-                    assert_hob_size::<Capsule>(current_header);
-                    // SAFETY: HOB type is UEFI_CAPSULE and size was validated.
-                    let capsule_hob = unsafe { hob_header.cast::<Capsule>().as_ref().expect(NOT_NULL) };
-                    self.0.push(Hob::Capsule(capsule_hob));
+                    if hob_size_ok::<Capsule>(current_header) {
+                        // SAFETY: HOB type is UEFI_CAPSULE and size was validated.
+                        let capsule_hob = unsafe { hob_header.cast::<Capsule>().as_ref().expect(NOT_NULL) };
+                        self.0.push(Hob::Capsule(capsule_hob));
+                    }
                 }
                 RESOURCE_DESCRIPTOR2 => {
-                    assert_hob_size::<ResourceDescriptorV2>(current_header);
-                    // SAFETY: HOB type is RESOURCE_DESCRIPTOR2 and size was validated.
-                    let resource_desc_hob =
-                        unsafe { hob_header.cast::<ResourceDescriptorV2>().as_ref().expect(NOT_NULL) };
-                    self.0.push(Hob::ResourceDescriptorV2(resource_desc_hob));
+                    if hob_size_ok::<ResourceDescriptorV2>(current_header) {
+                        // SAFETY: HOB type is RESOURCE_DESCRIPTOR2 and size was validated.
+                        let resource_desc_hob =
+                            unsafe { hob_header.cast::<ResourceDescriptorV2>().as_ref().expect(NOT_NULL) };
+                        self.0.push(Hob::ResourceDescriptorV2(resource_desc_hob));
+                    }
                 }
                 END_OF_HOB_LIST => {
                     break;
