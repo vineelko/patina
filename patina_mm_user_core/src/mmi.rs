@@ -290,13 +290,11 @@ impl MmiDatabase {
         );
 
         // ----- Phase 3: update depth and clean up under the lock -----
-        {
-            let mut inner = self.inner.lock();
-            inner.manage_calling_depth -= 1;
+        let mut inner = self.inner.lock();
+        inner.manage_calling_depth -= 1;
 
-            if inner.manage_calling_depth == 0 {
-                Self::cleanup_removed_handlers(&mut inner);
-            }
+        if inner.manage_calling_depth == 0 {
+            Self::cleanup_removed_handlers(&mut inner);
         }
 
         return_status

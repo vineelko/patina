@@ -386,20 +386,28 @@ impl MmUserCore {
         };
 
         // ---- Synchronous MMI dispatch ----
-        let mut sync_status = efi::Status::NOT_FOUND;
-        let mut return_buffer_size: u64 = 0;
-
         let comm_buffer_base = COMM_BUFFER_BASE.load(Ordering::Acquire);
         let comm_buffer_size = COMM_BUFFER_SIZE.load(Ordering::Acquire);
 
+        let mut updated_status = comm_status;
+
         if comm_buffer_base != 0 && comm_status.is_comm_buffer_valid != 0 {
             // Validate the communication buffer via a supervisor syscall.
-            if !mm_mem::is_comm_buffer(comm_buffer_base, comm_buffer_size) {
+            let mut return_buffer_size: u64 = 0;
+            let sync_status = if !mm_mem::is_comm_buffer(comm_buffer_base, comm_buffer_size) {
                 log::error!("MmIsCommBuffer rejected buffer at 0x{:x} size 0x{:x}", comm_buffer_base, comm_buffer_size);
+                efi::Status::NOT_FOUND
             } else {
-                sync_status =
-                    self.dispatch_synchronous_mmi(comm_buffer_base, comm_buffer_size, &mut return_buffer_size);
-            }
+                self.dispatch_synchronous_mmi(comm_buffer_base, comm_buffer_size, &mut return_buffer_size)
+            };
+
+            updated_status.is_comm_buffer_valid = 0;
+            updated_status.return_status = if sync_status == efi::Status::SUCCESS {
+                efi::Status::SUCCESS.as_usize() as u64
+            } else {
+                efi::Status::NOT_FOUND.as_usize() as u64
+            };
+            updated_status.return_buffer_size = return_buffer_size;
         }
 
         // ---- Asynchronous MMI dispatch (always runs) ----
@@ -407,17 +415,6 @@ impl MmUserCore {
         unsafe { self.mmi_manage(None, core::ptr::null(), core::ptr::null_mut(), core::ptr::null_mut()) };
 
         // Write back the updated status to the supervisor-to-user buffer
-        let updated_status = MmCommBufferStatus {
-            is_comm_buffer_valid: 0,
-            _padding: [0; 7],
-            return_status: if sync_status == efi::Status::SUCCESS {
-                efi::Status::SUCCESS.as_usize() as u64
-            } else {
-                efi::Status::NOT_FOUND.as_usize() as u64
-            },
-            return_buffer_size,
-        };
-
         unsafe {
             core::ptr::write(
                 (supv_to_user_buffer as *mut u8).add(context_size as usize) as *mut MmCommBufferStatus,
