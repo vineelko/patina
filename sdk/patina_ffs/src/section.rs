@@ -330,7 +330,9 @@ impl Section {
                             as *const section::header::Compression,
                     )
                 };
-                let content_size: u32 = (section_size - (section_data_offset + compression_header_size))
+                let content_size: u32 = section_size
+                    .checked_sub(section_data_offset + compression_header_size)
+                    .ok_or(FirmwareFileSystemError::InvalidHeader)?
                     .try_into()
                     .map_err(|_| FirmwareFileSystemError::InvalidHeader)?;
                 (
@@ -362,8 +364,11 @@ impl Section {
                     .get(section_data_offset + guid_header_size..data_offset)
                     .ok_or(FirmwareFileSystemError::InvalidHeader)?
                     .to_vec();
-                let content_size: u32 =
-                    (section_size - data_offset).try_into().map_err(|_| FirmwareFileSystemError::InvalidHeader)?;
+                let content_size: u32 = section_size
+                    .checked_sub(data_offset)
+                    .ok_or(FirmwareFileSystemError::InvalidHeader)?
+                    .try_into()
+                    .map_err(|_| FirmwareFileSystemError::InvalidHeader)?;
                 (SectionHeader::GuidDefined(guid_defined_header, guid_specific_data, content_size), data_offset)
             }
             section::raw_type::VERSION => {
@@ -379,7 +384,9 @@ impl Section {
                             as *const section::header::Version,
                     )
                 };
-                let content_size: u32 = (section_size - (section_data_offset + version_header_size))
+                let content_size: u32 = section_size
+                    .checked_sub(section_data_offset + version_header_size)
+                    .ok_or(FirmwareFileSystemError::InvalidHeader)?
                     .try_into()
                     .map_err(|_| FirmwareFileSystemError::InvalidHeader)?;
                 (SectionHeader::Version(version_header, content_size), section_data_offset + version_header_size)
@@ -397,7 +404,9 @@ impl Section {
                             as *const section::header::FreeformSubtypeGuid,
                     )
                 };
-                let content_size: u32 = (section_size - (section_data_offset + freeform_subtype_size))
+                let content_size: u32 = section_size
+                    .checked_sub(section_data_offset + freeform_subtype_size)
+                    .ok_or(FirmwareFileSystemError::InvalidHeader)?
                     .try_into()
                     .map_err(|_| FirmwareFileSystemError::InvalidHeader)?;
                 (
@@ -406,7 +415,9 @@ impl Section {
                 )
             }
             _ => {
-                let content_size: u32 = (section_size - section_data_offset)
+                let content_size: u32 = section_size
+                    .checked_sub(section_data_offset)
+                    .ok_or(FirmwareFileSystemError::InvalidHeader)?
                     .try_into()
                     .map_err(|_| FirmwareFileSystemError::InvalidHeader)?;
                 (SectionHeader::Standard(section_header.section_type, content_size), section_data_offset)

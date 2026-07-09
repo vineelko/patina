@@ -1267,6 +1267,66 @@ mod test {
     }
 
     #[test]
+    fn section_with_undersized_size_field_should_error() {
+        set_logger();
+
+        // For each of these buffers the declared section size is smaller than the header(s) it
+        // must contain. The buffer itself is large enough to hold the headers, so the size/header
+        // checks that only look at buffer length pass, and the content-size computation must not
+        // underflow (or slice a reverse range) but instead return InvalidHeader.
+
+        // Standard (PE32) section with size (2) smaller than the common header (4).
+        let undersized_standard: [u8; 4] = [0x02, 0x00, 0x00, 0x10];
+        assert!(matches!(Section::new_from_buffer(&undersized_standard), Err(FirmwareFileSystemError::InvalidHeader)));
+
+        // Compression section with size (8) smaller than common header + compression header (4 + 5).
+        let undersized_compression: [u8; 9] = [0x08, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00];
+        assert!(matches!(
+            Section::new_from_buffer(&undersized_compression),
+            Err(FirmwareFileSystemError::InvalidHeader)
+        ));
+
+        // GuidDefined section whose data_offset (10) points before the end of the common + guid
+        // header (4 + 20), which would produce a reverse slice range.
+        let reverse_range_guid_defined: [u8; 24] = [
+            0x18, 0x00, 0x00, 0x02, // Header (size = 24)
+            0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD,
+            0xEF, // GUID
+            0x0A, 0x00, // Data offset = 10 (before end of header)
+            0x00, 0x00, // Attributes
+        ];
+        assert!(matches!(
+            Section::new_from_buffer(&reverse_range_guid_defined),
+            Err(FirmwareFileSystemError::InvalidHeader)
+        ));
+
+        // GuidDefined section whose data_offset (24) exceeds the declared section size (20).
+        let undersized_guid_defined: [u8; 24] = [
+            0x14, 0x00, 0x00, 0x02, // Header (size = 20)
+            0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD,
+            0xEF, // GUID
+            0x18, 0x00, // Data offset = 24 (> section size)
+            0x00, 0x00, // Attributes
+        ];
+        assert!(matches!(
+            Section::new_from_buffer(&undersized_guid_defined),
+            Err(FirmwareFileSystemError::InvalidHeader)
+        ));
+
+        // Version section with size (5) smaller than common header + version header (4 + 2).
+        let undersized_version: [u8; 6] = [0x05, 0x00, 0x00, 0x14, 0x00, 0x00];
+        assert!(matches!(Section::new_from_buffer(&undersized_version), Err(FirmwareFileSystemError::InvalidHeader)));
+
+        // FreeformSubtypeGuid section with size (10) smaller than common + freeform header (4 + 16).
+        let undersized_freeform: [u8; 20] = [
+            0x0A, 0x00, 0x00, 0x18, // Header (size = 10)
+            0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD,
+            0xEF, // GUID
+        ];
+        assert!(matches!(Section::new_from_buffer(&undersized_freeform), Err(FirmwareFileSystemError::InvalidHeader)));
+    }
+
+    #[test]
     fn test_firmware_volume_serialization() -> Result<(), Box<dyn Error>> {
         set_logger();
         let paths = &[
