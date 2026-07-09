@@ -261,7 +261,14 @@ impl<'a> HobList<'a> {
                     let (guid_hob, data) = unsafe {
                         let hob = hob_header.cast::<GuidHob>().as_ref().expect(NOT_NULL);
                         let data_ptr = hob_header.byte_add(mem::size_of::<GuidHob>()) as *mut u8;
-                        let data_len = hob.header.length as usize - mem::size_of::<GuidHob>();
+                        // A well-formed GUID extension HOB length that covers at least `GuidHob` header.
+                        debug_assert!(
+                            hob.header.length as usize >= mem::size_of::<GuidHob>(),
+                            "GUID extension HOB length {} is smaller than the GuidHob header size {}",
+                            hob.header.length,
+                            mem::size_of::<GuidHob>()
+                        );
+                        let data_len = (hob.header.length as usize).saturating_sub(mem::size_of::<GuidHob>());
                         (hob, slice::from_raw_parts(data_ptr, data_len))
                     };
                     self.0.push(Hob::GuidHob(guid_hob, data));
@@ -691,6 +698,46 @@ mod tests {
             count += 1;
         });
         assert_eq!(count, 9);
+    }
+
+    #[test]
+    fn test_hoblist_discover_undersized_guid_hob_does_not_underflow() {
+        // A GUID extension HOB whose declared length is smaller than the `GuidHob` header is malformed.
+        let guid_hob_size = size_of::<hob::GuidHob>();
+        let header_size = size_of::<hob::header::Hob>();
+        let malformed_len = (guid_hob_size - header_size) as u16;
+        assert!(
+            (malformed_len as usize) >= header_size,
+            "test HOB length must be large enough for the discover loop to advance"
+        );
+
+        // Layout: [undersized GUID_EXTENSION header | ... | END_OF_HOB_LIST].
+        let write_header = |buf: &mut [u8], offset: usize, r#type: u16, length: u16| {
+            let header = hob::header::Hob { r#type, length, reserved: 0 };
+            // SAFETY: Test code - `header::Hob` is `repr(C)` plain data serialized into the test-allocated buffer.
+            let bytes = unsafe { from_raw_parts(&header as *const _ as *const u8, size_of::<hob::header::Hob>()) };
+            buf[offset..offset + bytes.len()].copy_from_slice(bytes);
+        };
+
+        let mut buf: Vec<u8> = std::vec![0u8; guid_hob_size];
+        write_header(&mut buf, 0, hob::GUID_EXTENSION, malformed_len);
+        write_header(&mut buf, malformed_len as usize, hob::END_OF_HOB_LIST, header_size as u16);
+
+        let mut hoblist = HobList::new();
+        hoblist.discover_hobs(buf.as_ptr() as *const c_void);
+        assert_eq!(hoblist.len(), 1);
+        match hoblist.iter().next().unwrap() {
+            Hob::GuidHob(_, data) => assert!(data.is_empty(), "an undersized GUID HOB must give empty data"),
+            other => panic!("expected GuidHob, got {other:?}"),
+        }
+
+        // SAFETY: Test code. The buffer begins with a valid GUID_EXTENSION HOB header constructed in the test.
+        let first = Hob::GuidHob(unsafe { (buf.as_ptr() as *const hob::GuidHob).as_ref().unwrap() }, &[]);
+        for hob in &first {
+            if let Hob::GuidHob(_, data) = hob {
+                assert!(data.is_empty(), "HobIter should give empty data for an undersized GUID HOB");
+            }
+        }
     }
 
     #[test]

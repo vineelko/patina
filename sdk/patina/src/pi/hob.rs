@@ -963,7 +963,14 @@ impl<'a> Iterator for HobIter<'a> {
                 GUID_EXTENSION => {
                     let hob = (self.hob_ptr as *const GuidHob).as_ref().expect(NOT_NULL);
                     let data_ptr = self.hob_ptr.byte_add(mem::size_of::<GuidHob>()) as *const u8;
-                    let data_len = hob.header.length as usize - mem::size_of::<GuidHob>();
+                    // A well-formed GUID extension HOB length that covers at least `GuidHob` header.
+                    debug_assert!(
+                        hob.header.length as usize >= mem::size_of::<GuidHob>(),
+                        "GUID extension HOB length {} is smaller than the GuidHob header size {}",
+                        hob.header.length,
+                        mem::size_of::<GuidHob>()
+                    );
+                    let data_len = (hob.header.length as usize).saturating_sub(mem::size_of::<GuidHob>());
                     Hob::GuidHob(hob, slice::from_raw_parts(data_ptr, data_len))
                 }
                 FV => Hob::FirmwareVolume((self.hob_ptr as *const FirmwareVolume).as_ref().expect(NOT_NULL)),
