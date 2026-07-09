@@ -101,6 +101,8 @@ struct CpuSlot {
     state: AtomicU8,
     /// Padding for alignment.
     _padding: [u8; 2],
+    /// Rendezvous semaphore for the SMI exit barrier.
+    run: AtomicU32,
 }
 
 impl CpuSlot {
@@ -111,6 +113,7 @@ impl CpuSlot {
             is_bsp: AtomicU8::new(0),
             state: AtomicU8::new(ApState::NotPresent as u8),
             _padding: [0; 2],
+            run: AtomicU32::new(0),
         }
     }
 
@@ -124,6 +127,38 @@ impl CpuSlot {
         let id = self.cpu_id.load(Ordering::Acquire);
         if id == u32::MAX { None } else { Some(id) }
     }
+}
+
+/// Signals a counting rendezvous semaphore (atomic increment).
+#[inline]
+fn sem_signal(sem: &AtomicU32) {
+    sem.fetch_add(1, Ordering::AcqRel);
+}
+
+/// Blocks (spins, no timer) until the semaphore is positive, then consumes one count.
+#[inline]
+fn sem_wait(sem: &AtomicU32) {
+    loop {
+        let value = sem.load(Ordering::Acquire);
+        if value != 0 && sem.compare_exchange_weak(value, value - 1, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            return;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+/// Consumes one count if the semaphore is positive. Non-blocking; returns whether a
+/// count was taken.
+#[inline]
+fn sem_try_take(sem: &AtomicU32) -> bool {
+    let mut value = sem.load(Ordering::Acquire);
+    while value != 0 {
+        match sem.compare_exchange_weak(value, value - 1, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(current) => value = current,
+        }
+    }
+    false
 }
 
 /// Manager for CPU-related operations.
@@ -319,6 +354,51 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
             }
         }
         count
+    }
+
+    /// Releases every registered AP from the exit barrier by signaling each AP's
+    /// rendezvous semaphore. (Called by the BSP)
+    ///
+    pub fn release_all_aps(&self) {
+        for slot in &self.slots {
+            if slot.is_used() && slot.is_bsp.load(Ordering::Acquire) == 0 {
+                sem_signal(&slot.run);
+            }
+        }
+    }
+
+    /// Consumes a pending exit-barrier release for the AP at `cpu_index`, if the BSP has
+    /// signaled one. Non-blocking; returns whether the AP was released.
+    ///
+    /// Called by an AP spinning in the holding pen.
+    pub fn take_release_by_index(&self, cpu_index: usize) -> bool {
+        if cpu_index >= MAX_CPUS {
+            return false;
+        }
+        sem_try_take(&self.slots[cpu_index].run)
+    }
+
+    /// Acknowledges to the BSP that this AP has left the holding pen by signaling the
+    /// BSP's rendezvous semaphore.
+    ///
+    pub fn ack_exit_to_bsp(&self) {
+        if let Some(bsp_id) = self.bsp_id()
+            && let Some(index) = self.find_slot(bsp_id)
+        {
+            sem_signal(&self.slots[index].run);
+        }
+    }
+
+    /// Blocks (spins, no timer) until `ap_count` APs have acknowledged leaving the pen.
+    ///
+    pub fn wait_for_ap_exit_acks(&self, ap_count: usize) {
+        let bsp_index = match self.bsp_id().and_then(|bsp_id| self.find_slot(bsp_id)) {
+            Some(index) => index,
+            None => return,
+        };
+        for _ in 0..ap_count {
+            sem_wait(&self.slots[bsp_index].run);
+        }
     }
 }
 
@@ -566,5 +646,33 @@ mod tests {
         manager.set_ap_state(1, ApState::Busy);
         assert_eq!(manager.count_aps_in_state(ApState::InHoldingPen), 1);
         assert_eq!(manager.count_aps_in_state(ApState::Busy), 1);
+    }
+
+    #[test]
+    fn test_exit_barrier_rendezvous() {
+        let manager: CpuManager<4> = CpuManager::new();
+        manager.register_cpu(0, 0, true); // BSP at slot 0
+        manager.register_cpu(10, 1, false); // AP at slot 1
+        manager.register_cpu(20, 2, false); // AP at slot 2
+
+        // Nothing is pending before the BSP releases.
+        assert!(!manager.take_release_by_index(1));
+        assert!(!manager.take_release_by_index(2));
+
+        // BSP releases all APs; each AP consumes its release exactly once.
+        manager.release_all_aps();
+        assert!(manager.take_release_by_index(1));
+        assert!(!manager.take_release_by_index(1));
+        assert!(manager.take_release_by_index(2));
+        assert!(!manager.take_release_by_index(2));
+
+        // Each AP acknowledges exit; the BSP's barrier then completes without blocking
+        // (the acks were already counted into the BSP's semaphore).
+        manager.ack_exit_to_bsp();
+        manager.ack_exit_to_bsp();
+        manager.wait_for_ap_exit_acks(2);
+
+        // The semaphores are balanced again, ready for the next round.
+        assert!(!manager.take_release_by_index(1));
     }
 }

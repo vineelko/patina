@@ -121,17 +121,11 @@ pub const MP_INFORMATION_HOB_GUID: patina::BinaryGuid =
 /// MM Supervisor PassDown HOB Revision
 pub const MM_SUPV_PASS_DOWN_HOB_REVISION: u32 = 2;
 
-/// Timeout for waiting for AP return acknowledgement (1 second).
-const RETURN_TIMEOUT_US: u64 = 1_000_000;
-
 /// Timeout for waiting for APs to arrive in the holding pen (1 second).
 const AP_ARRIVAL_TIMEOUT_US: u64 = 1_000_000;
 
 /// Timeout for waiting for an AP to complete a dispatched procedure (10 seconds).
 const AP_TIMEOUT_US: u64 = 10_000_000;
-
-/// Last-resort safety timeout for an AP sitting in the holding pen (30 seconds).
-const HOLDING_PEN_TIMEOUT_US: u64 = 30_000_000;
 
 /// A trait to be implemented by the platform to provide configuration values and types to be used
 /// by the MM Supervisor Core.

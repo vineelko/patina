@@ -233,8 +233,6 @@ impl Default for ApMailbox {
 pub struct MailboxManager<const MAX_APS: usize, C: CpuInfo> {
     /// Mailboxes - fixed size array.
     mailboxes: [ApMailbox; MAX_APS],
-    /// Monotonic release generation.
-    release_generation: AtomicU64,
     /// Phantom data for the CpuInfo type.
     _cpu_info: core::marker::PhantomData<fn() -> C>,
 }
@@ -246,7 +244,6 @@ impl<const MAX_APS: usize, C: CpuInfo> MailboxManager<MAX_APS, C> {
     pub const fn new() -> Self {
         Self {
             mailboxes: [const { ApMailbox::new() }; MAX_APS],
-            release_generation: AtomicU64::new(0),
             _cpu_info: core::marker::PhantomData,
         }
     }
@@ -294,24 +291,6 @@ impl<const MAX_APS: usize, C: CpuInfo> MailboxManager<MAX_APS, C> {
         });
 
         result
-    }
-
-    /// Returns the current release generation.
-    ///
-    /// APs capture this on entry to the holding pen and exit once it changes.
-    pub fn release_generation(&self) -> u64 {
-        self.release_generation.load(Ordering::Acquire)
-    }
-
-    /// Releases every AP currently in the holding pen by advancing the release
-    /// generation. Returns the new generation.
-    ///
-    /// This is the BSP's global "you may leave the pen" signal. It reaches every
-    /// AP that polls the generation, including late arrivals and APs that were
-    /// never assigned a mailbox, so no AP can be stranded waiting for a
-    /// point-to-point command that already went out.
-    pub fn release_all(&self) -> u64 {
-        self.release_generation.fetch_add(1, Ordering::AcqRel).wrapping_add(1)
     }
 }
 
@@ -434,20 +413,6 @@ mod tests {
         // Both slots are dispatchable again.
         assert!(manager.send_command(1, ApCommand::RunProcedure { procedure: 0x11, argument: 0 }).is_ok());
         assert!(manager.send_command(2, ApCommand::RunProcedure { procedure: 0x21, argument: 0 }).is_ok());
-    }
-
-    #[test]
-    fn test_release_generation() {
-        let manager: MailboxManager<4, TestCpuInfo> = MailboxManager::new();
-
-        // Starts at generation 0.
-        assert_eq!(manager.release_generation(), 0);
-
-        // Each release advances the generation by one and returns the new value.
-        assert_eq!(manager.release_all(), 1);
-        assert_eq!(manager.release_generation(), 1);
-        assert_eq!(manager.release_all(), 2);
-        assert_eq!(manager.release_generation(), 2);
     }
 
     #[test]
