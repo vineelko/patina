@@ -18,6 +18,12 @@ use r_efi::protocols::device_path::{End, Hardware, Media, Protocol};
 
 use r_efi::efi;
 
+/// Minimum length in bytes of a device path node.
+///
+/// Every node begins with a 4-byte header (type, sub-type, and length fields), so a node whose
+/// `length` field is smaller than this is malformed.
+const DEVICE_PATH_NODE_MIN_LENGTH: usize = core::mem::size_of::<Protocol>();
+
 /// Returns the count of nodes and size (in bytes) of the given device path.
 ///
 /// count and size outputs both include the terminating end node.
@@ -78,6 +84,9 @@ pub fn device_path_node_count(
         // a well-formed device path as described in the function documentation above.
         let current_node = unsafe { current_node_ptr.read_unaligned() };
         let current_length: usize = u16::from_le_bytes(current_node.length).into();
+        if current_length < DEVICE_PATH_NODE_MIN_LENGTH {
+            return Err(efi::Status::INVALID_PARAMETER);
+        }
         node_count += 1;
         dev_path_size += current_length;
 
@@ -249,6 +258,9 @@ pub unsafe fn remaining_device_path(a: NonNull<Protocol>, b: NonNull<Protocol>) 
 
         let a_length: usize = u16::from_le_bytes(a_node.length).into();
         let b_length: usize = u16::from_le_bytes(b_node.length).into();
+        if a_length < DEVICE_PATH_NODE_MIN_LENGTH || b_length < DEVICE_PATH_NODE_MIN_LENGTH {
+            return None;
+        }
         // SAFETY: caller must assure that device path is valid
         let a_slice = unsafe { slice_from_raw_parts(a_ptr as *const u8, a_length).as_ref() };
 
@@ -490,6 +502,65 @@ mod tests {
         let (nodes, length) = device_path_node_count(device_path_ptr).unwrap();
         assert_eq!(nodes, 4);
         assert_eq!(length, device_path_bytes.len());
+    }
+
+    #[test]
+    fn device_path_node_count_should_reject_node_shorter_than_header() {
+        // A node whose length is smaller than the 4-byte header is malformed.
+        let device_path_bytes = [
+            TYPE_HARDWARE,
+            Hardware::SUBTYPE_PCI,
+            0x2, //length[0] invalid: smaller than the node header
+            0x0, //length[1]
+        ];
+        let device_path_ptr = device_path_bytes.as_ptr() as *const efi::protocols::device_path::Protocol;
+        assert_eq!(device_path_node_count(device_path_ptr), Err(efi::Status::INVALID_PARAMETER));
+    }
+
+    #[test]
+    fn remaining_device_path_should_return_none_for_node_shorter_than_header() {
+        let malformed_bytes = [
+            TYPE_HARDWARE,
+            Hardware::SUBTYPE_PCI,
+            0x2, //length[0] invalid: smaller than the node header
+            0x0, //length[1]
+        ];
+        // SAFETY: malformed_bytes is a non-null byte array for test code.
+        let malformed =
+            unsafe { NonNull::new_unchecked(malformed_bytes.as_ptr() as *mut efi::protocols::device_path::Protocol) };
+        let valid_bytes = [
+            TYPE_HARDWARE,
+            Hardware::SUBTYPE_PCI,
+            0x6,  //length[0]
+            0x0,  //length[1]
+            0x0,  //func
+            0x1C, //device
+            TYPE_END,
+            End::SUBTYPE_ENTIRE,
+            0x4,  //length[0]
+            0x00, //length[1]
+        ];
+        // SAFETY: valid_bytes is a non-null device path byte array for test code.
+        let valid =
+            unsafe { NonNull::new_unchecked(valid_bytes.as_ptr() as *mut efi::protocols::device_path::Protocol) };
+        // SAFETY: both pointers reference valid test byte arrays.
+        let result = unsafe { remaining_device_path(malformed, valid) };
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn device_path_walker_should_terminate_on_node_shorter_than_header() {
+        // A non-end node with a length smaller than the header must not cause an infinite loop.
+        let device_path_bytes = [
+            TYPE_HARDWARE,
+            Hardware::SUBTYPE_PCI,
+            0x0, //length[0] invalid zero length
+            0x0, //length[1]
+        ];
+        let device_path_ptr = device_path_bytes.as_ptr() as *const efi::protocols::device_path::Protocol;
+        // SAFETY: device_path_ptr is a valid pointer to a test byte array.
+        let mut device_path_walker = unsafe { DevicePathWalker::new(device_path_ptr) };
+        assert_eq!(device_path_walker.next(), None);
     }
 
     #[test]
