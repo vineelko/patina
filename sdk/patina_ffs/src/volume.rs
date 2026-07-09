@@ -1165,6 +1165,30 @@ mod test {
     }
 
     #[test]
+    fn section_extract_should_limit_recursion_depth() {
+        set_logger();
+
+        // An empty compression (encapsulation) section.
+        const COMPRESSION_SECTION: [u8; 0x11] =
+            [0x11, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+
+        // Extractor that always gives a fresh, unextracted encapsulation section, that will
+        // keep driving `Section::extract` into unbounded recursion.
+        struct InfiniteExtractor {}
+        impl SectionExtractor for InfiniteExtractor {
+            fn extract(&self, _section: &Section) -> Result<Vec<u8>, FirmwareFileSystemError> {
+                Ok(COMPRESSION_SECTION.to_vec())
+            }
+        }
+
+        let mut section = Section::new_from_buffer(&COMPRESSION_SECTION).unwrap();
+        assert_eq!(
+            section.extract(&InfiniteExtractor {}).unwrap_err(),
+            FirmwareFileSystemError::RecursionLimitExceeded
+        );
+    }
+
+    #[test]
     fn section_should_have_correct_metadata() -> Result<(), Box<dyn Error>> {
         set_logger();
         let empty_pe32: [u8; 4] = [0x04, 0x00, 0x00, 0x10];

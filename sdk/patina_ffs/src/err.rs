@@ -32,6 +32,8 @@ pub enum FirmwareFileSystemError {
     NotLeaf,
     /// Composing the FFS structure failed.
     ComposeFailed,
+    /// The maximum supported nesting depth of encapsulation sections was exceeded.
+    RecursionLimitExceeded,
 }
 
 impl From<FirmwareFileSystemError> for EfiError {
@@ -45,7 +47,8 @@ impl From<FirmwareFileSystemError> for EfiError {
             FirmwareFileSystemError::InvalidHeader
             | FirmwareFileSystemError::InvalidBlockMap
             | FirmwareFileSystemError::InvalidState
-            | FirmwareFileSystemError::DataCorrupt => EfiError::VolumeCorrupted,
+            | FirmwareFileSystemError::DataCorrupt
+            | FirmwareFileSystemError::RecursionLimitExceeded => EfiError::VolumeCorrupted,
             FirmwareFileSystemError::ComposeFailed => EfiError::DeviceError,
         }
     }

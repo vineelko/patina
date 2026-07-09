@@ -22,6 +22,13 @@ use crate::FirmwareFileSystemError;
 
 const MAX_STANDARD_SECTION_SIZE: usize = 0x1000000;
 
+/// Maximum depth of nested encapsulation sections that [`Section::extract`] will traverse.
+///
+/// Firmware volumes are generally trusted, but this bound provides defense-in-depth against
+/// malformed inputs that would otherwise cause unbounded recursion. The limit is intentionally
+/// generous.
+const MAX_ENCAPSULATION_DEPTH: usize = 16;
+
 /// Extracts the payload of an encapsulation section into raw bytes.
 ///
 /// An implementation should return:
@@ -521,9 +528,27 @@ impl Section {
     ///
     /// If the extractor returns `Unsupported`, the method is a no-op. Otherwise, the returned
     /// bytes are parsed into immediate sub-sections and marked as extracted.
+    ///
+    /// Nested encapsulation sections are traversed recursively up to `MAX_ENCAPSULATION_DEPTH`
+    /// levels deep. Inputs that exceed this bound result in `RecursionLimitExceeded` as a
+    /// guard against unbounded recursion.
     pub fn extract(&mut self, extractor: &dyn SectionExtractor) -> Result<(), FirmwareFileSystemError> {
+        self.extract_with_depth(extractor, 0)
+    }
+
+    /// Recursive worker for [`Section::extract`] that tracks the current encapsulation nesting
+    /// `depth` and rejects inputs that would exceed [`MAX_ENCAPSULATION_DEPTH`].
+    fn extract_with_depth(
+        &mut self,
+        extractor: &dyn SectionExtractor,
+        depth: usize,
+    ) -> Result<(), FirmwareFileSystemError> {
         if !matches!(&self.data, SectionData::Encapsulation(x) if !x.extracted) {
             return Ok(()); //nothing to do for non-encapsulation sections or already extracted encapsulation sections.
+        }
+
+        if depth >= MAX_ENCAPSULATION_DEPTH {
+            return Err(FirmwareFileSystemError::RecursionLimitExceeded);
         }
 
         let extracted_data = match extractor.extract(self) {
@@ -535,7 +560,7 @@ impl Section {
             SectionIterator::new(&extracted_data).collect::<Result<Vec<_>, FirmwareFileSystemError>>()?;
 
         for section in sections.iter_mut() {
-            section.extract(extractor)?;
+            section.extract_with_depth(extractor, depth + 1)?;
         }
 
         match &mut self.data {
