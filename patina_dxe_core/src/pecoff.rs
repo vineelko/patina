@@ -842,6 +842,9 @@ mod tests {
     #[test]
     fn flatten_runtime_relocation_data_serializes_supported_types() {
         test_support::with_global_lock(|| {
+            // Reset global state on exit (even if `f` panics) so nothing leaks to the next test.
+            let _guard = test_support::StateGuard::new(test_support::reset_global_state);
+
             test_support::init_test_logger();
             // SAFETY: Initialization for testing under the global lock so the runtime services data
             // allocator can service allocations.

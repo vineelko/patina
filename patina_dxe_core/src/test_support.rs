@@ -333,6 +333,29 @@ pub(crate) unsafe fn reset_allocators() {
     unsafe { crate::allocator::reset_allocators() }
 }
 
+/// Resets the shared global state that tests mutate: the [`GCD`], the protocol database
+/// (`PROTOCOL_DB`), and the allocators to a clean, uninitialized state.
+///
+/// Every reset performed here is idempotent and independent of whether the corresponding subsystem
+/// was initialized, and no test relies on inheriting any of this state (each consumer re-initializes
+/// what it needs on entry). It is recommended to register it in a [`StateGuard`] before test setup
+/// so that cleanup runs even if setup panics.
+///
+/// This intentionally does not reset subsystem-specific state (for example the system table or
+/// per-module statics) so it is more broadly applicable.
+///
+/// ## Locking
+/// Must be called with the global test lock held (see [`with_global_lock`]). It does not acquire
+/// the lock itself.
+pub(crate) fn reset_global_state() {
+    // SAFETY: Callers hold the global test lock, so no other test can access the state concurrently.
+    unsafe {
+        GCD.reset();
+        PROTOCOL_DB.reset();
+        reset_allocators();
+    }
+}
+
 /// Reset and re-initialize the protocol database to default empty state.
 ///
 /// ## Safety

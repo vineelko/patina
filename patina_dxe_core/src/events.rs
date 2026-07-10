@@ -408,6 +408,9 @@ mod tests {
 
     fn with_locked_state<F: Fn() + std::panic::RefUnwindSafe>(f: F) {
         test_support::with_global_lock(|| {
+            // Reset global state on exit (even if setup or `f` panics) so nothing leaks to the next test.
+            let _guard = test_support::StateGuard::new(test_support::reset_global_state);
+
             test_support::init_test_logger();
             // SAFETY: Test-only initialization of global services under the global lock.
             unsafe {
@@ -415,16 +418,6 @@ mod tests {
                 crate::test_support::reset_allocators();
                 crate::test_support::init_test_protocol_db();
             }
-
-            let _guard = test_support::StateGuard::new(|| {
-                // SAFETY: Cleanup code runs with global lock held, resetting
-                // global state that was initialized above.
-                unsafe {
-                    crate::GCD.reset();
-                    crate::PROTOCOL_DB.reset();
-                    crate::allocator::reset_allocators();
-                }
-            });
 
             f();
         })

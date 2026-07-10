@@ -264,8 +264,14 @@ mod tests {
 
     fn with_locked_state<F: Fn() + std::panic::RefUnwindSafe>(f: F) {
         test_support::with_global_lock(|| {
-            POST_RTB.reset();
+            // Reset global state and POST_RTB on exit (even if setup or `f` panics) so nothing
+            // leaks to the next test.
+            let _guard = test_support::StateGuard::new(|| {
+                test_support::reset_global_state();
+                POST_RTB.reset();
+            });
 
+            POST_RTB.reset();
             // SAFETY: Test-only initialization under the global lock.
             unsafe {
                 test_support::init_test_gcd(None);
@@ -273,8 +279,6 @@ mod tests {
                 init_system_table();
             }
             f();
-
-            POST_RTB.reset();
         })
         .unwrap();
     }

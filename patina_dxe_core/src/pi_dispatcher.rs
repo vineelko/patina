@@ -926,6 +926,9 @@ mod tests {
         F: Fn() + std::panic::RefUnwindSafe,
     {
         test_support::with_global_lock(|| {
+            // Reset global state on exit (even if setup panics) so nothing leaks to the next test.
+            let _guard = test_support::StateGuard::new(test_support::reset_global_state);
+
             // SAFETY: Test-only initialization of the protocol database occurs under the global lock.
             unsafe { test_support::init_test_protocol_db() };
             f();

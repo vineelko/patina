@@ -220,6 +220,9 @@ mod tests {
 
     fn with_locked_state<F: Fn() + std::panic::RefUnwindSafe>(f: F) {
         test_support::with_global_lock(|| {
+            // Reset global state on exit (even if setup or `f` panics) so nothing leaks to the next test.
+            let _guard = test_support::StateGuard::new(test_support::reset_global_state);
+
             test_support::init_test_logger();
             // SAFETY: Test code only - initializing test infrastructure with the test lock held
             // prevents concurrent access during initialization.
