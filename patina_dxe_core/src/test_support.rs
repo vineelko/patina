@@ -268,6 +268,27 @@ pub(crate) fn with_global_lock<F: Fn() + std::panic::RefUnwindSafe>(f: F) -> Res
     })
 }
 
+/// Like [`with_global_lock`], but additionally resets the shared global state via
+/// [`reset_global_state`] both before running `f` (so the test starts from a clean slate
+/// regardless of what a prior test left behind) and after `f` returns or panics (so nothing
+/// leaks to the next test).
+///
+/// This is the preferred entry point for tests that mutate the global GCD, protocol database, or
+/// allocators as it makes correct cleanup automatic.
+///
+/// Tests that also mutate *other* global state (for example the system table pointer or a
+/// per-module static) should register an additional [`StateGuard`] inside the closure to reset
+/// that state or use [`with_global_lock`] directly, since [`reset_global_state`] intentionally
+/// does not touch subsystem-specific state.
+pub(crate) fn with_clean_global_lock<F: Fn() + std::panic::RefUnwindSafe>(f: F) -> Result<(), Box<dyn Any + Send>> {
+    with_global_lock(|| {
+        // Reset on exit (even if `f` panics), and up front, so the test both starts and ends clean.
+        let _guard = StateGuard::new(reset_global_state);
+        reset_global_state();
+        f();
+    })
+}
+
 /// Allocates a chunk of memory of the specified size from the system allocator.
 ///
 /// The memory allocated will be 64Kb aligned to simplify alignment requirements such

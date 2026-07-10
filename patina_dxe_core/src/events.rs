@@ -407,10 +407,7 @@ mod tests {
     use std::{ptr, sync::atomic::Ordering};
 
     fn with_locked_state<F: Fn() + std::panic::RefUnwindSafe>(f: F) {
-        test_support::with_global_lock(|| {
-            // Reset global state on exit (even if setup or `f` panics) so nothing leaks to the next test.
-            let _guard = test_support::StateGuard::new(test_support::reset_global_state);
-
+        test_support::with_clean_global_lock(|| {
             test_support::init_test_logger();
             // SAFETY: Test-only initialization of global services under the global lock.
             unsafe {

@@ -263,15 +263,10 @@ mod tests {
     use patina::{base::UEFI_PAGE_SIZE, uefi_size_to_pages};
 
     fn with_locked_state<F: Fn() + std::panic::RefUnwindSafe>(f: F) {
-        test_support::with_global_lock(|| {
-            // Reset global state and POST_RTB on exit (even if setup or `f` panics) so nothing
-            // leaks to the next test.
-            let _guard = test_support::StateGuard::new(|| {
-                test_support::reset_global_state();
-                POST_RTB.reset();
-            });
-
+        test_support::with_clean_global_lock(|| {
+            let _post_rtb_guard = test_support::StateGuard::new(|| POST_RTB.reset());
             POST_RTB.reset();
+
             // SAFETY: Test-only initialization under the global lock.
             unsafe {
                 test_support::init_test_gcd(None);

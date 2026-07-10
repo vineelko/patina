@@ -1656,13 +1656,7 @@ mod tests {
     ///
     /// Cleans up global state after `f` returns.
     fn with_locked_state<F: Fn(*const c_void) + std::panic::RefUnwindSafe>(gcd_init: GcdInit, f: F) {
-        test_support::with_global_lock(|| {
-            // Reset shared global state on exit (even if setup or `f` panics) so nothing leaks to
-            // the next test, and up front so this test starts clean regardless of what a prior test
-            // left behind.
-            let _guard = test_support::StateGuard::new(test_support::reset_global_state);
-            test_support::reset_global_state();
-
+        test_support::with_clean_global_lock(|| {
             let physical_hob_list = match gcd_init {
                 GcdInit::WithSize(gcd_size) => {
                     // SAFETY: multiple functions modify global state. Functions are

@@ -310,10 +310,7 @@ mod tests {
 
         /// Execute the test scenario and validate results
         pub fn run_test(&self) {
-            test_support::with_global_lock(|| {
-                // Reset global state on exit (even if setup panics) so nothing leaks to the next test.
-                let _guard = test_support::StateGuard::new(test_support::reset_global_state);
-
+            test_support::with_clean_global_lock(|| {
                 test_support::init_test_logger();
                 let hob_list_ptr = self.build_custom_hob_list();
 
