@@ -144,9 +144,12 @@ pub fn add_runtime_image(
     relocation_data: &[RelocationBlock],
     handle: efi::Handle,
 ) -> Result<(), EfiError> {
-    let mut data = RUNTIME_DATA.lock();
+    let relocation_data = crate::pecoff::flatten_runtime_relocation_data(relocation_data).map_err(|err| {
+        log::error!("add_runtime_image() failed to flatten relocation data: {err:?}");
+        EfiError::Unsupported
+    })?;
 
-    let relocation_data = crate::pecoff::flatten_runtime_relocation_data(relocation_data);
+    let mut data = RUNTIME_DATA.lock();
     data.runtime_images.push_back(runtime::ImageEntry {
         image_base,
         image_size,
@@ -227,6 +230,21 @@ mod tests {
             f();
         })
         .unwrap();
+    }
+
+    #[test]
+    fn test_add_runtime_image_rejects_unsupported_relocation() {
+        with_locked_state(|| {
+            let block = RelocationBlock {
+                block_header: crate::pecoff::relocation::BaseRelocationBlockHeader { page_rva: 0, block_size: 0 },
+                relocations: alloc::vec![crate::pecoff::relocation::Relocation {
+                    type_and_offset: 0x1 << 12,
+                    value: 0
+                }],
+            };
+            let result = add_runtime_image(ptr::null_mut(), 0, &[block], 0x1 as efi::Handle);
+            assert!(matches!(result, Err(EfiError::Unsupported)), "unexpected result: {result:?}");
+        });
     }
 
     #[test]

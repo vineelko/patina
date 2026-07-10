@@ -350,7 +350,7 @@ pub fn relocate_image(
                     let subslice = image.get_mut(fixup..fixup + 8).ok_or(error::Error::BufferTooShort(8, "image"))?;
                     subslice.copy_from_slice(&value.to_le_bytes()[..]);
                 }
-                _ => todo!(), // Other fixups not implemented at this time
+                _ => return Err(error::Error::UnsupportedRelocation(fixup_type)),
             }
         }
     }
@@ -358,7 +358,12 @@ pub fn relocate_image(
 }
 
 /// Converts a vector of relocation blocks into a flat buffer suitable for use in the runtime protocol.
-pub fn flatten_runtime_relocation_data(relocation_data: &[RelocationBlock]) -> &'static mut [u8] {
+///
+/// ## Errors
+///
+/// Returns [`UnsupportedRelocation`](error::Error::UnsupportedRelocation) if a block contains a
+/// relocation type this loader does not support.
+pub fn flatten_runtime_relocation_data(relocation_data: &[RelocationBlock]) -> error::Result<&'static mut [u8]> {
     // The runtime protocol expects linearly appended values, determine how much space
     // is needed to store this.
 
@@ -370,7 +375,9 @@ pub fn flatten_runtime_relocation_data(relocation_data: &[RelocationBlock]) -> &
                 IMAGE_REL_BASED_ABSOLUTE => 0,
                 IMAGE_REL_BASED_HIGHLOW => core::mem::size_of::<u32>(),
                 IMAGE_REL_BASED_DIR64 => core::mem::size_of::<u64>(),
-                _ => todo!(), // Other fixups not implemented at this time
+                // If this is reached, an unsupported relocation type might need to be
+                // supported or there is a bug.
+                _ => return Err(error::Error::UnsupportedRelocation(fixup_type)),
             }
         }
     }
@@ -387,14 +394,16 @@ pub fn flatten_runtime_relocation_data(relocation_data: &[RelocationBlock]) -> &
                 IMAGE_REL_BASED_DIR64 => {
                     flat_data.extend_from_slice(&reloc.value.to_le_bytes());
                 }
-                _ => todo!(), // Other fixups not implemented at this time
+                // Since the size-calculation pass above returns `Err` for unsupported types
+                // over this same slice before this loop runs, this should be unreachable.
+                _ => unreachable!("unsupported relocation types are rejected by the size-calculation pass above"),
             }
         }
     }
 
     // Double check that the capacity calculation was correct.
     debug_assert!(flat_data.capacity() == size && flat_data.len() == size);
-    flat_data.leak()
+    Ok(flat_data.leak())
 }
 
 /// Attempts to load the HII resource section data for a given PE32 image.
@@ -795,6 +804,72 @@ mod tests {
             Ok(_) => panic!("Expected BufferTooShort error"),
             Err(e) => panic!("Expected BufferTooShort error, got {e:?}"),
         }
+    }
+
+    #[test]
+    fn relocate_image_with_unsupported_reloc_type_returns_error() {
+        test_support::init_test_logger();
+        let image = include_bytes!("../resources/test/te/test_image_with_reloc_section.te");
+        let image_info = UefiPeInfo::parse(image).unwrap();
+        let mut loaded_image = vec![0; image_info.size_of_image as usize];
+        load_image(&image_info, image, &mut loaded_image).unwrap();
+
+        // Corrupt the first relocation entry's type nibble (top 4 bits of the u16
+        // `type_and_offset`) to IMAGE_REL_BASED_HIGH (0x1).
+        let dir = image_info.reloc_dir.unwrap();
+        let first_entry_offset = dir.virtual_address as usize + 8;
+        let entry = u16::from_le_bytes([loaded_image[first_entry_offset], loaded_image[first_entry_offset + 1]]);
+        let corrupted = (entry & 0x0FFF) | (0x1 << 12);
+        loaded_image[first_entry_offset..first_entry_offset + 2].copy_from_slice(&corrupted.to_le_bytes());
+
+        let result = relocate_image(&image_info, 0x7CC5_8000, &mut loaded_image, &Vec::new());
+        assert!(matches!(result, Err(error::Error::UnsupportedRelocation(0x1))), "unexpected result: {result:?}");
+    }
+
+    #[test]
+    fn flatten_runtime_relocation_data_rejects_unsupported_type() {
+        test_support::init_test_logger();
+        // A block whose relocation carries an unsupported type (0x1 = IMAGE_REL_BASED_HIGH) must be
+        // rejected during the size-calculation pass, before any allocation occurs.
+        let block = RelocationBlock {
+            block_header: relocation::BaseRelocationBlockHeader { page_rva: 0, block_size: 0 },
+            relocations: vec![relocation::Relocation { type_and_offset: 0x1 << 12, value: 0 }],
+        };
+        let result = flatten_runtime_relocation_data(&[block]);
+        assert!(matches!(result, Err(error::Error::UnsupportedRelocation(0x1))), "unexpected result: {result:?}");
+    }
+
+    #[test]
+    fn flatten_runtime_relocation_data_serializes_supported_types() {
+        test_support::with_global_lock(|| {
+            test_support::init_test_logger();
+            // SAFETY: Initialization for testing under the global lock so the runtime services data
+            // allocator can service allocations.
+            unsafe {
+                test_support::init_test_gcd(None);
+                test_support::reset_allocators();
+            }
+
+            let block = RelocationBlock {
+                block_header: relocation::BaseRelocationBlockHeader { page_rva: 0, block_size: 0 },
+                relocations: vec![
+                    relocation::Relocation { type_and_offset: IMAGE_REL_BASED_ABSOLUTE << 12, value: 0xAAAA },
+                    relocation::Relocation { type_and_offset: IMAGE_REL_BASED_HIGHLOW << 12, value: 0xAABB_CCDD },
+                    relocation::Relocation {
+                        type_and_offset: IMAGE_REL_BASED_DIR64 << 12,
+                        value: 0x1122_3344_5566_7788,
+                    },
+                ],
+            };
+
+            let flattened = flatten_runtime_relocation_data(&[block]).unwrap();
+
+            let mut expected = Vec::new();
+            expected.extend_from_slice(&0xAABB_CCDDu32.to_le_bytes());
+            expected.extend_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
+            assert_eq!(&flattened[..], &expected[..]);
+        })
+        .unwrap();
     }
 
     #[test]

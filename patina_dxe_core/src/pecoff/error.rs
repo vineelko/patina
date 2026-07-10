@@ -24,6 +24,9 @@ pub enum Error {
     /// The parsed relocation blocks do not match a previous call to `relocate_image`.
     /// Indicates caller error or image corruption.
     RelocationBlockLengthMismatch,
+    /// The image contains a base relocation type that is not supported by this loader.
+    /// Contains the unsupported relocation type value.
+    UnsupportedRelocation(u16),
 }
 
 impl From<scroll::Error> for Error {
