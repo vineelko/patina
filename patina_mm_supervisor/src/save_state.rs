@@ -211,6 +211,11 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
     // Policy check for gated registers (RAX, IO)
     if let Some(policy_field) = to_policy_field(register) {
         let condition = inspect_io_condition(&view);
+        if condition.is_none() && register == MmSaveStateRegister::Io {
+            log::error!("SAVE_STATE_READ2: Unable to determine I/O condition from save state");
+            return Err(Status::NOT_FOUND);
+        }
+
         let gate = match security_state().policy_gate() {
             Some(g) => g,
             None => {
@@ -415,7 +420,7 @@ fn inspect_io_condition(view: &SaveStateView) -> Option<SaveStateCondition> {
     // Verify the save state revision supports IO info before reading the field.
     let smm_rev_id = view.read_u32(vc.smmrevid_offset as usize);
     if !save_state::io_info_supported(smm_rev_id) {
-        log::warn!("inspect_io_condition: SMMRevId 0x{:x} does not expose IO info", smm_rev_id);
+        log::error!("inspect_io_condition: SMMRevId 0x{:x} does not expose IO info", smm_rev_id);
         return None;
     }
 
@@ -490,7 +495,7 @@ fn read_io_register(view: &SaveStateView, out: &mut [u8]) -> SyscallResult {
     // 1. Read SMMRevId to verify IO info is available.
     let smm_rev_id = view.read_u32(vc.smmrevid_offset as usize);
     if !save_state::io_info_supported(smm_rev_id) {
-        log::trace!("IO_READ: SMMRevId 0x{:x} does not expose IO info", smm_rev_id);
+        log::error!("IO_READ: SMMRevId 0x{:x} does not expose IO info", smm_rev_id);
         return Err(Status::NOT_FOUND);
     }
 
@@ -499,7 +504,7 @@ fn read_io_register(view: &SaveStateView, out: &mut [u8]) -> SyscallResult {
     let parsed = match save_state::parse_io_field(io_field) {
         Some(p) => p,
         None => {
-            log::trace!("IO_READ: IO field 0x{:x} did not indicate a valid I/O trap", io_field);
+            log::error!("IO_READ: IO field 0x{:x} did not indicate a valid I/O trap", io_field);
             return Err(Status::NOT_FOUND);
         }
     };
