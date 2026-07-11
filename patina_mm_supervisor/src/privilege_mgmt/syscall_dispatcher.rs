@@ -186,7 +186,7 @@ impl SyscallDispatcher {
         let index = match SyscallIndex::from_u64(ctx.call_index) {
             Some(idx) => idx,
             None => {
-                log::warn!("Unknown syscall index: 0x{:x}", ctx.call_index);
+                log::error!("Unknown syscall index: 0x{:x}", ctx.call_index);
                 return Err(Status::UNSUPPORTED);
             }
         };

@@ -319,7 +319,7 @@ impl PolicyGate {
             Some(root) => root,
             None => {
                 // No save state policy = level 20, allow all reads
-                log::debug!("No save state policy root found, allowing read (level 20 policy).");
+                log::warn!("No save state policy root found, allowing read (level 20 policy).");
                 return Ok(());
             }
         };
