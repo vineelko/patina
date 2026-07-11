@@ -17,10 +17,14 @@ use super::{
     RegisterInfo, VendorConstants,
 };
 
-/// IOMisc Type field value: OUT instruction.
+/// IOMisc Type field value: OUT instruction (port in DX).
 const IO_MISC_TYPE_OUT: u32 = 0;
-/// IOMisc Type field value: IN instruction.
+/// IOMisc Type field value: IN instruction (port in DX).
 const IO_MISC_TYPE_IN: u32 = 1;
+/// IOMisc Type field value: OUT instruction (immediate port operand).
+const IO_MISC_TYPE_OUT_IMMEDIATE: u32 = 8;
+/// IOMisc Type field value: IN instruction (immediate port operand).
+const IO_MISC_TYPE_IN_IMMEDIATE: u32 = 9;
 
 /// Intel-specific offsets and behaviour constants.
 pub static VENDOR_CONSTANTS: VendorConstants = VendorConstants {
@@ -101,7 +105,7 @@ pub fn register_info(reg: MmSaveStateRegister) -> Option<RegisterInfo> {
 /// Intel IOMisc bit layout:
 /// - Bit 0:      `SmiFlag` — 1 if the SMI was caused by an I/O instruction.
 /// - Bits \[3:1\]:  `Length` — I/O width in bytes (1, 2, or 4).
-/// - Bits \[7:4\]:  `Type` — 0 = OUT, 1 = IN.
+/// - Bits \[7:4\]:  `Type` — 0/8 = OUT (DX/immediate), 1/9 = IN (DX/immediate).
 /// - Bits \[31:16\]: `Port` — I/O port address.
 ///
 /// Returns `None` if `SmiFlag` is 0 (SMI was not caused by I/O) or the I/O
@@ -117,10 +121,10 @@ pub fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
     let io_type_raw = (io_field >> 4) & 0xF;
     let port = (io_field >> 16) & 0xFFFF;
 
-    // Only simple IN/OUT are supported.
+    // Simple IN/OUT in both DX and immediate-port forms are supported.
     let io_type = match io_type_raw {
-        IO_MISC_TYPE_OUT => IO_TYPE_OUTPUT,
-        IO_MISC_TYPE_IN => IO_TYPE_INPUT,
+        IO_MISC_TYPE_OUT | IO_MISC_TYPE_OUT_IMMEDIATE => IO_TYPE_OUTPUT,
+        IO_MISC_TYPE_IN | IO_MISC_TYPE_IN_IMMEDIATE => IO_TYPE_INPUT,
         _ => return None,
     };
 
@@ -222,6 +226,28 @@ mod tests {
         assert_eq!(parsed.io_width, IO_WIDTH_UINT32);
         assert_eq!(parsed.byte_count, 4);
         assert_eq!(parsed.io_port, 0x0CF8);
+    }
+
+    #[test]
+    fn test_parse_io_field_out_immediate() {
+        // SmiFlag=1, Length=1 (byte), Type=8 (OUT_IMMEDIATE), Port=0xB2
+        let io_field: u32 = (0x00B2 << 16) | (8 << 4) | (1 << 1) | 1;
+        let parsed = parse_io_field(io_field).unwrap();
+        assert_eq!(parsed.io_type, IO_TYPE_OUTPUT);
+        assert_eq!(parsed.io_width, IO_WIDTH_UINT8);
+        assert_eq!(parsed.byte_count, 1);
+        assert_eq!(parsed.io_port, 0xB2);
+    }
+
+    #[test]
+    fn test_parse_io_field_in_immediate() {
+        // SmiFlag=1, Length=1 (byte), Type=9 (IN_IMMEDIATE), Port=0x80
+        let io_field: u32 = (0x0080 << 16) | (9 << 4) | (1 << 1) | 1;
+        let parsed = parse_io_field(io_field).unwrap();
+        assert_eq!(parsed.io_type, IO_TYPE_INPUT);
+        assert_eq!(parsed.io_width, IO_WIDTH_UINT8);
+        assert_eq!(parsed.byte_count, 1);
+        assert_eq!(parsed.io_port, 0x80);
     }
 
     #[test]
