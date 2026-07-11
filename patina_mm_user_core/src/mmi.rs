@@ -51,6 +51,10 @@ use patina::pi::mm_cis::MmiHandlerEntryPoint;
 /// Indicates an interrupt source was quiesced.
 const WARN_INTERRUPT_SOURCE_QUIESCED: efi::Status = efi::Status::from_usize(3);
 
+/// EFI_WARN_INTERRUPT_SOURCE_PENDING — PI spec warning status code.
+/// Indicates an interrupt source was processed but not quiesced.
+const WARN_INTERRUPT_SOURCE_PENDING: efi::Status = efi::Status::from_usize(2);
+
 /// EFI_INTERRUPT_PENDING — PI spec status for pending interrupts.
 const INTERRUPT_PENDING: efi::Status = efi::Status::from_usize(0x80000000 | 0x00000004);
 
@@ -277,8 +281,6 @@ impl MmiDatabase {
             // lock released here
         };
 
-        let short_circuit = handler_type.is_some();
-
         // ----- Phase 2: dispatch without the lock held -----
         let return_status = Self::dispatch_handler_snapshot(
             &handlers_snapshot,
@@ -286,7 +288,6 @@ impl MmiDatabase {
             context,
             comm_buffer,
             comm_buffer_size,
-            short_circuit,
         );
 
         // ----- Phase 3: update depth and clean up under the lock -----
@@ -307,11 +308,12 @@ impl MmiDatabase {
         context: *const c_void,
         comm_buffer: *mut c_void,
         comm_buffer_size: *mut usize,
-        short_circuit: bool,
     ) -> efi::Status {
         if handlers.is_empty() {
             return efi::Status::NOT_FOUND;
         }
+
+        let short_circuit = handler_type.is_some();
 
         let mut return_status = efi::Status::NOT_FOUND;
 
@@ -346,6 +348,11 @@ impl MmiDatabase {
                 }
                 s if s == WARN_INTERRUPT_SOURCE_QUIESCED => {
                     return_status = efi::Status::SUCCESS;
+                }
+                s if s == WARN_INTERRUPT_SOURCE_PENDING => {
+                    if return_status != efi::Status::SUCCESS {
+                        return_status = status;
+                    }
                 }
                 _ => {
                     // Other statuses are ignored per PI spec
