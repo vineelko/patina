@@ -208,26 +208,34 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
         Err(status) => return Err(status),
     };
 
-    // Policy check for gated registers (RAX, IO)
-    if let Some(policy_field) = to_policy_field(register) {
-        let condition = inspect_io_condition(&view);
-        if condition.is_none() && register == MmSaveStateRegister::Io {
-            log::error!("SAVE_STATE_READ2: Unable to determine I/O condition from save state");
-            return Err(Status::NOT_FOUND);
-        }
+    // Every register except PROCESSOR_ID (returned above) must clear the
+    // save-state policy — not just RAX and IO. RAX and IO map to explicit policy
+    // fields (evaluated against the current I/O trap condition); every other
+    // register has no field and can only clear the policy as "not in the list":
+    // allowed under a deny-list root, denied under an allow-list root. This
+    // mirrors the C `IsIhvSmmSaveStateReadAllowed` switch (RAX/IO -> field,
+    // `default` -> allow/deny with no match).
+    let policy_field = to_policy_field(register);
+    let condition = if policy_field.is_some() { inspect_io_condition(&view) } else { None };
 
-        let gate = match security_state().policy_gate() {
-            Some(g) => g,
-            None => {
-                log::error!("SAVE_STATE_READ2: Policy gate not initialized");
-                return Err(Status::NOT_READY);
-            }
-        };
+    // An IO read needs the trap condition; if it can't be determined the CPU did
+    // not trap an I/O instruction, which is NOT_FOUND rather than a policy denial.
+    if register == MmSaveStateRegister::Io && condition.is_none() {
+        log::error!("SAVE_STATE_READ2: Unable to determine I/O condition from save state");
+        return Err(Status::NOT_FOUND);
+    }
 
-        if let Err(e) = gate.is_save_state_read_allowed(policy_field, width as usize, condition) {
-            log::error!("SAVE_STATE_READ2: Policy denied read of {:?}: {:?}", register, e);
-            return Err(Status::ACCESS_DENIED);
+    let gate = match security_state().policy_gate() {
+        Some(g) => g,
+        None => {
+            log::error!("SAVE_STATE_READ2: Policy gate not initialized");
+            return Err(Status::NOT_READY);
         }
+    };
+
+    if let Err(e) = gate.is_save_state_read_allowed(policy_field, width as usize, condition) {
+        log::error!("SAVE_STATE_READ2: Policy denied read of {:?}: {:?}", register, e);
+        return Err(Status::ACCESS_DENIED);
     }
 
     // Dispatch to the appropriate read handler.  Each handler reads from the
@@ -421,7 +429,7 @@ fn inspect_io_condition(view: &SaveStateView) -> Option<SaveStateCondition> {
     let smm_rev_id = view.read_u32(vc.smmrevid_offset as usize);
     if !save_state::io_info_supported(smm_rev_id) {
         log::error!("inspect_io_condition: SMMRevId 0x{:x} does not expose IO info", smm_rev_id);
-        return None;
+        // return None;
     }
 
     // Read the vendor-specific IO information field.
@@ -496,7 +504,7 @@ fn read_io_register(view: &SaveStateView, out: &mut [u8]) -> SyscallResult {
     let smm_rev_id = view.read_u32(vc.smmrevid_offset as usize);
     if !save_state::io_info_supported(smm_rev_id) {
         log::error!("IO_READ: SMMRevId 0x{:x} does not expose IO info", smm_rev_id);
-        return Err(Status::NOT_FOUND);
+        // return Err(Status::NOT_FOUND);
     }
 
     // 2. Read the vendor-specific IO information field and parse it.
