@@ -527,18 +527,20 @@ fn read_io_register(view: &SaveStateView, out: &mut [u8]) -> SyscallResult {
     };
 
     // 4. Serialize the EFI_MM_SAVE_STATE_IO_INFO structure into the output
-    //    buffer.  The field layout matches the #[repr(C)] definition:
-    //    io_data@0 (u64), io_port@8 (u64), io_width@16 (u32), io_type@20 (u32).
+    //    buffer by writing the whole #[repr(C)] struct at once.
     let io_info = MmSaveStateIoInfo {
         io_data,
-        io_port: parsed.io_port as u64,
+        io_port: parsed.io_port,
         io_width: parsed.io_width,
         io_type: parsed.io_type,
     };
-    out[0..8].copy_from_slice(&io_info.io_data.to_le_bytes());
-    out[8..16].copy_from_slice(&io_info.io_port.to_le_bytes());
-    out[16..20].copy_from_slice(&io_info.io_width.to_le_bytes());
-    out[20..24].copy_from_slice(&io_info.io_type.to_le_bytes());
+
+    // SAFETY: `out` was validated as a user owned, writable region of at least
+    // `IO_INFO_SIZE` bytes, which equals `size_of::<MmSaveStateIoInfo>()`.
+    // `write_unaligned` accounts for the buffer's unknown alignment.
+    unsafe {
+        core::ptr::write_unaligned(out.as_mut_ptr() as *mut MmSaveStateIoInfo, io_info);
+    }
 
     Ok(0)
 }
