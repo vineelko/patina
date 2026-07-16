@@ -39,6 +39,7 @@ patina_ffs = { version = "23.0.1", path = "sdk/patina_ffs" }
 patina_ffs_extractors = { version = "23.0.1", path = "sdk/patina_ffs_extractors" }
 patina_internal_core = { version = "23.0.1", path = "core/patina_internal_core", default-features = false }
 patina_internal_cpu = { version = "23.0.1", path = "core/patina_internal_cpu" }
+patina_internal_mm_common = { version = "23.0.1", path = "core/patina_internal_mm_common" }
 lzma-rust2 = { version = "0.16", default-features = false }
 patina_macro = { version = "23.0.1", path = "sdk/patina_macro" }
 patina_mm = { version = "23.0.1", path = "components/patina_mm" }
