@@ -20,6 +20,7 @@
 - [Dependency Management](dev/principles/dependency-management.md)
 - [Error Handling](dev/principles/error-handling.md)
 - [FFI Authoring](dev/principles/ffi.md)
+- [UEFI Strings](dev/principles/strings.md)
 - [Unsafe Guidance](dev/principles/unsafe.md)
 
 # Developer Guides
