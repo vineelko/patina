@@ -63,7 +63,7 @@ impl PE<'_> {
     // for at least one page on every probe performed by this routine. The
     // caller guarantees that probing the surrounding pages does not perform
     // an out-of-bounds or use-after-free memory access.
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub(crate) unsafe fn locate_image(mut rip: u64) -> StResult<Self> {
         let original_rip = rip;
 
@@ -245,7 +245,7 @@ impl PE<'_> {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
     use crate::error::Error;

@@ -17,7 +17,7 @@ use r_efi::efi;
 
 use crate::{memory_log, protocol::AdvancedLoggerProtocol, reader::AdvancedLogReader};
 
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 #[patina_test]
 fn adv_logger_test(bs: StandardBootServices) -> patina_test::error::Result {
     const DIRECT_STR: &str = "adv_logger_test: Direct log message!!!";

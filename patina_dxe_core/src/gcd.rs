@@ -507,7 +507,7 @@ pub fn init_gcd(physical_hob_list: *const c_void) {
     }
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 /// Initialize the patina-paging crate
 ///
 /// # Arguments
@@ -734,7 +734,7 @@ fn parse_resource_descriptor_hob(hob: &Hob) -> Option<(hob::ResourceDescriptor, 
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use core::ffi::c_void;
 

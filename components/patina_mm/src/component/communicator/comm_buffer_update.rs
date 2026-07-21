@@ -163,7 +163,7 @@ pub(super) fn apply_pending_buffer_update(
 /// 3. Raw pointer manipulation of protocol data
 ///
 /// ELements of the protocol update process are unit tested but the notification function as a whole is not.
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 extern "efiapi" fn protocol_notify_callback(_event: r_efi::efi::Event, context: &'static ProtocolNotifyContext) {
     log::trace!(target: "mm_comm", "=== Protocol callback ENTRY ===");
     log::info!(target: "mm_comm", "Protocol notify callback triggered for {}", mm_comm_buffer_update::GUID);

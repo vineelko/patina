@@ -382,7 +382,7 @@ impl Iterator for DepexParser {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     extern crate std;
     use alloc::vec;

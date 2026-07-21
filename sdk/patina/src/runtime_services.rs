@@ -504,7 +504,7 @@ impl Clone for MockRuntimeServices {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 pub(crate) mod test {
     use super::*;
     use core::{mem, slice};

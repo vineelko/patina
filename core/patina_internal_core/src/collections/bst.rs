@@ -675,7 +675,7 @@ where
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 #[allow(clippy::undocumented_unsafe_blocks)]
 mod tests {
     use crate::collections::{Bst, node_size};

@@ -111,7 +111,7 @@ impl<'a> RuntimeFunction<'a> {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
     use crate::{error::Error, pe::PE, stacktrace::StackFrame};

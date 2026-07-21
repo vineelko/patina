@@ -148,7 +148,7 @@ pub fn hob_config2(item: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
     use proc_macro2::TokenStream;

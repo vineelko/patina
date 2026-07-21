@@ -85,7 +85,7 @@ impl SmbiosProtocolInternal {
     ///
     /// This constructor is tested via integration (Q35 platform component)
     /// as it requires 'static boot services which cannot be mocked in unit tests.
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub(super) fn new(
         major_version: u8,
         minor_version: u8,
@@ -103,7 +103,7 @@ impl SmbiosProtocol {
     ///
     /// This function is only safe to call from the C UEFI protocol layer where the
     /// caller guarantees that `record` points to a complete, valid SMBIOS record.
-    #[cfg_attr(coverage_nightly, coverage(off))] // FFI function - tested via integration tests
+    #[cfg_attr(coverage, coverage(off))] // FFI function - tested via integration tests
     extern "efiapi" fn add_ext(
         protocol: *const SmbiosProtocol,
         producer_handle: efi::Handle,
@@ -199,7 +199,7 @@ impl SmbiosProtocol {
         }
     }
 
-    #[cfg_attr(coverage_nightly, coverage(off))] // FFI function - tested via integration tests
+    #[cfg_attr(coverage, coverage(off))] // FFI function - tested via integration tests
     extern "efiapi" fn update_string_ext(
         protocol: *const SmbiosProtocol,
         smbios_handle: *mut SmbiosHandle,
@@ -249,7 +249,7 @@ impl SmbiosProtocol {
         }
     }
 
-    #[cfg_attr(coverage_nightly, coverage(off))] // FFI function - tested via integration tests
+    #[cfg_attr(coverage, coverage(off))] // FFI function - tested via integration tests
     extern "efiapi" fn remove_ext(protocol: *const SmbiosProtocol, smbios_handle: SmbiosHandle) -> efi::Status {
         // Safety check: validate protocol pointer before dereferencing
         if protocol.is_null() {
@@ -279,7 +279,7 @@ impl SmbiosProtocol {
         }
     }
 
-    #[cfg_attr(coverage_nightly, coverage(off))] // FFI function - tested via integration tests
+    #[cfg_attr(coverage, coverage(off))] // FFI function - tested via integration tests
     extern "efiapi" fn get_next_ext(
         protocol: *const SmbiosProtocol,
         smbios_handle: *mut SmbiosHandle,

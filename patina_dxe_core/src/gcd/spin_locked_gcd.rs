@@ -577,7 +577,7 @@ impl GCD {
         }
     }
 
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     fn allocate_memory_space_null(
         _gcd: &mut GCD,
         _allocate_type: AllocateType,
@@ -652,7 +652,7 @@ impl GCD {
             .map_err(|e| e.into())
     }
 
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     fn free_memory_space_null(
         _gcd: &mut GCD,
         _base_address: usize,
@@ -2027,7 +2027,7 @@ impl SpinLockedGcd {
     /// Creates a new uninitialized GCD. [`Self::init`] must be invoked before any other functions or they will return
     /// [`EfiError::NotReady`]. An optional callback can be provided which will be invoked whenever an operation
     /// changes the GCD map.
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub const fn new(memory_change_callback: Option<MapChangeCallback>) -> Self {
         Self {
             memory: tpl_mutex::TplMutex::new(
@@ -2058,7 +2058,7 @@ impl SpinLockedGcd {
     /// # Safety
     /// The caller must ensure that the memory region specified by `base_address` and `len` is freely usable RAM and
     /// will never be used by any other part of the system at any time.
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub(crate) unsafe fn init_memory_blocks(
         &self,
         memory_type: dxe_services::GcdMemoryType,
@@ -2071,7 +2071,7 @@ impl SpinLockedGcd {
         unsafe { self.memory.lock().init_memory_blocks(memory_type, base_address, len, attributes, capabilities) }
     }
 
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub fn prioritize_32_bit_memory(&self, value: bool) {
         self.memory.lock().prioritize_32_bit_memory = value;
     }
@@ -2580,7 +2580,7 @@ impl SpinLockedGcd {
     ///
     /// # Documentation
     /// UEFI Platform Initialization Specification, Release 1.8, Section II-7.2.4.4
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub fn remove_memory_space(&self, base_address: usize, len: usize) -> Result<(), EfiError> {
         let result = self.memory.lock().remove_memory_space(base_address, len);
         if result.is_ok() {
@@ -2737,7 +2737,7 @@ impl SpinLockedGcd {
     ///
     /// # Documentation
     /// UEFI Platform Initialization Specification, Release 1.8, Section II-7.2.4.3
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub fn free_memory_space(&self, base_address: usize, len: usize) -> Result<(), EfiError> {
         self.free_memory_space_internal(base_address, len, MemoryStateTransition::Free)
     }
@@ -2751,7 +2751,7 @@ impl SpinLockedGcd {
     ///
     /// # Documentation
     /// UEFI Platform Initialization Specification, Release 1.8, Section II-7.2.4.3
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub fn free_memory_space_preserving_ownership(&self, base_address: usize, len: usize) -> Result<(), EfiError> {
         self.free_memory_space_internal(base_address, len, MemoryStateTransition::FreePreservingOwnership)
     }
@@ -3081,7 +3081,7 @@ impl<'a> Iterator for DescRangeIterator<'a> {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     //! GCD (Global Coherency Domain) test module.
     //!

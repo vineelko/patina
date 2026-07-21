@@ -153,7 +153,7 @@ impl<R: RuntimeServices> FallibleStreamingIterator for VariableNameIterator<'_, 
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod test {
     use r_efi::efi;
 

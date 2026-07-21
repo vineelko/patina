@@ -97,7 +97,7 @@ pub(crate) unsafe fn read_pointer64(pointer: u64) -> StResult<u64> {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
 

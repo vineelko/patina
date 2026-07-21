@@ -258,7 +258,7 @@ impl AcpiGetProtocol {
 type AcpiNotifyFnExt = fn(*const AcpiTableHeader, u32, usize) -> efi::Status;
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
 

@@ -9,7 +9,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
-#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(coverage, feature(coverage_attribute))]
 
 pub mod cpu;
 pub mod interrupts;

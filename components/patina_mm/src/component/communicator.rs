@@ -70,14 +70,14 @@ pub struct RealMmExecutor {
 
 impl RealMmExecutor {
     /// Creates a new MM executor instance.
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub fn new(sw_mmi_trigger_service: Service<dyn SwMmiTrigger>) -> Self {
         Self { sw_mmi_trigger_service }
     }
 }
 
 impl MmExecutor for RealMmExecutor {
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     fn execute_mm(&self, _comm_buffer: &mut CommunicateBuffer) -> Result<(), Status> {
         log::debug!(target: "mm_comm", "Triggering SW MMI for MM communication");
         self.sw_mmi_trigger_service.trigger_sw_mmi(0xFF, 0).map_err(|err| {
@@ -174,7 +174,7 @@ impl<E: MmExecutor + 'static> MmCommunicator<E> {
     }
 
     /// Set communication buffers for testing purposes.
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub fn set_test_comm_buffers(&self, buffers: Vec<CommunicateBuffer>) {
         *self.comm_buffers.borrow_mut() = buffers;
     }
@@ -193,7 +193,7 @@ impl MmCommunicator {
     ///
     /// This function is marked with `#[coverage(off)]` because it requires StandardBootServices
     /// which is not available in unit tests. It is tested through integration tests.
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     fn entry_point(
         mut self,
         storage: &mut Storage,
@@ -370,7 +370,7 @@ impl Default for MmCommunicator {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
     use crate::{

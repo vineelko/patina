@@ -248,7 +248,7 @@ impl TryFrom<u16> for KnownPerfId {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use core::{assert_eq, convert::From, ptr};
 

@@ -20,7 +20,7 @@ pub(crate) struct PerfTimer {
 
 impl ArchTimerFunctionality for PerfTimer {
     /// Value of the counter (ticks).
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     fn cpu_count(&self) -> u64 {
         arch_cpu_count()
     }
@@ -57,7 +57,7 @@ impl Default for PerfTimer {
 /// Returns the current CPU count using architecture-specific methods.
 ///
 /// Skip coverage as any value could be valid, including 0.
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 fn arch_cpu_count() -> u64 {
     #[cfg(target_arch = "x86_64")]
     {
@@ -75,7 +75,7 @@ fn arch_cpu_count() -> u64 {
 /// platform-specific configuration is provided.
 ///
 /// Skip coverage as any value could be valid, including 0.
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 pub(crate) fn arch_perf_frequency() -> u64 {
     // Try to get TSC frequency from CPUID (most Intel and AMD platforms).
     #[cfg(target_arch = "x86_64")]
@@ -124,7 +124,7 @@ pub(crate) fn arch_perf_frequency() -> u64 {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
 

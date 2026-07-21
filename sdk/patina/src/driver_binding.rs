@@ -308,7 +308,7 @@ impl<T: DriverBinding + 'static, U: BootServices + 'static> UefiDriverBinding<T,
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use core::{
         mem::MaybeUninit,

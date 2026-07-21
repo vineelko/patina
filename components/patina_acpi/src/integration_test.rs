@@ -37,7 +37,7 @@ struct MockLargeTable {
     data: [u8; 32],
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 #[patina_test]
 fn acpi_test(table_manager: Service<AcpiTableManager>) -> patina_test::error::Result {
     let original_length = table_manager.iter_tables().len();
@@ -95,7 +95,7 @@ fn acpi_test(table_manager: Service<AcpiTableManager>) -> patina_test::error::Re
     Ok(())
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 #[patina_test]
 fn acpi_protocol_test(bs: StandardBootServices) -> patina_test::error::Result {
     // SAFETY: there is only one reference to the `AcpiTableProtocol` during this test.

@@ -47,7 +47,7 @@ use self::protocol::{SmbiosProtocol, SmbiosProtocolInternal};
 ///
 /// Returns the protocol handle on success. The caller is responsible for managing the
 /// protocol lifetime (though in practice, UEFI protocols persist for the system lifetime).
-#[cfg_attr(coverage_nightly, coverage(off))] // Protocol installation - tested via integration tests
+#[cfg_attr(coverage, coverage(off))] // Protocol installation - tested via integration tests
 pub fn install_smbios_protocol(
     major_version: u8,
     minor_version: u8,

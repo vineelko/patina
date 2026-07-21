@@ -843,7 +843,7 @@ unsafe impl Send for SpinLockedEventDb {}
 unsafe impl Sync for SpinLockedEventDb {}
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     extern crate std;
     use core::{iter, str::FromStr};

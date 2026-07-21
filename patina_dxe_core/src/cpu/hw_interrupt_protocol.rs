@@ -492,7 +492,7 @@ pub(crate) struct HwInterruptProtocolInstaller {
 #[component]
 impl HwInterruptProtocolInstaller {
     /// Creates a new `HwInterruptProtocolInstaller` instance.
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub fn new(gic_bases: GicBases) -> Self {
         Self { gic_bases }
     }

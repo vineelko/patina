@@ -21,10 +21,10 @@ use patina::{error::EfiError, pi::protocols::cpu_arch::EfiSystemContext};
 mod exception_handling;
 
 // The aarch64 module contains all exception handlers and architecture specific code, of little testing value.
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 #[cfg(any(target_arch = "aarch64", test))]
 mod aarch64;
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 #[cfg(not(target_os = "uefi"))]
 mod stub;
 #[cfg(any(target_arch = "x86_64", test))]
@@ -41,15 +41,15 @@ cfg_if::cfg_if! {
         pub type Interrupts = stub::InterruptsStub;
 
         /// Enables CPU interrupts.
-        #[cfg_attr(coverage_nightly, coverage(off))]
+        #[cfg_attr(coverage, coverage(off))]
         pub fn enable_interrupts() {}
 
         /// Disables CPU interrupts.
-        #[cfg_attr(coverage_nightly, coverage(off))]
+        #[cfg_attr(coverage, coverage(off))]
         pub fn disable_interrupts() {}
 
         /// Gets the current state of CPU interrupts.
-        #[cfg_attr(coverage_nightly, coverage(off))]
+        #[cfg_attr(coverage, coverage(off))]
         pub fn get_interrupt_state() -> Result<bool, EfiError> {
             Ok(false)
         }
@@ -219,7 +219,7 @@ pub trait InterruptHandler<T = ExceptionContextArch>: Sync {
     fn handle_interrupt(&'static self, exception_type: ExceptionType, context: &mut ExceptionContext<T>);
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;

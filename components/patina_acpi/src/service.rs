@@ -166,7 +166,7 @@ pub(crate) trait AcpiProvider {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use alloc::boxed::Box;
     use core::mem;

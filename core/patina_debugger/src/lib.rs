@@ -102,15 +102,15 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 #![cfg_attr(not(test), no_std)]
-#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(coverage, feature(coverage_attribute))]
 
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 // The debugger needs integration test infrastructure. Disabling coverage until this is completed.
 mod arch;
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 // The debugger needs integration test infrastructure. Disabling coverage until this is completed.
 mod dbg_target;
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 // The debugger needs integration test infrastructure. Disabling coverage until this is completed.
 mod debugger;
 mod memory;
@@ -227,7 +227,7 @@ pub fn set_debugger<T: SerialIO>(debugger: &'static PatinaDebugger<T>) {
 /// Initializes the debugger. This will install the debugger into the exception
 /// handlers using the provided interrupt manager. This routine may invoke a debug
 /// break depending on configuration.
-#[cfg_attr(coverage_nightly, coverage(off))] // Initializing the debugger requires integration testing infrastructure. Disabling coverage until this is completed.
+#[cfg_attr(coverage, coverage(off))] // Initializing the debugger requires integration testing infrastructure. Disabling coverage until this is completed.
 pub fn initialize(interrupt_manager: &mut dyn InterruptManager, timer: Option<&'static dyn ArchTimerFunctionality>) {
     if let Some(debugger) = DEBUGGER.get() {
         debugger.initialize(interrupt_manager, timer);
@@ -380,7 +380,7 @@ impl core::fmt::Display for ExceptionType {
     }
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;

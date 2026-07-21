@@ -161,7 +161,7 @@ unsafe impl<T: ?Sized + Send, B: BootServices + Send> Send for TplMutex<T, B> {}
 unsafe impl<T: ?Sized + Sync, B: BootServices> Sync for TplMutexGuard<'_, T, B> {}
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
     use crate::boot_services::MockBootServices;

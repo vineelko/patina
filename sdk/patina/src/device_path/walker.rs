@@ -462,7 +462,7 @@ fn protocol_to_subtype_str(protocol: efi::protocols::device_path::Protocol) -> &
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use core::mem::size_of;
 

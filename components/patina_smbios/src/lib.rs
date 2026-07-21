@@ -311,7 +311,7 @@
 
 #![cfg_attr(all(not(feature = "std"), not(test), not(feature = "mockall")), no_std)]
 #![deny(missing_docs)]
-#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(coverage, feature(coverage_attribute))]
 
 // SMBIOS tables require little-endian byte order. The SmbiosRecord derive macro
 // uses zerocopy::IntoBytes::as_bytes() which returns native byte order.

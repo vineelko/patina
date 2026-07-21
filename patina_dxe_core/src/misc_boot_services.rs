@@ -140,7 +140,7 @@ extern "efiapi" fn set_watchdog_timer(
     }
 }
 // Requires excessive Mocking for the OK case.
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 // This callback is invoked when the Metronome Architectural protocol is installed. It initializes the
 // METRONOME_ARCH_PTR to point to the Metronome Architectural protocol interface.
 extern "efiapi" fn metronome_arch_available(event: efi::Event, _context: *mut c_void) {
@@ -160,7 +160,7 @@ extern "efiapi" fn metronome_arch_available(event: efi::Event, _context: *mut c_
     }
 }
 // Requires excessive Mocking for the OK case.
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 // This callback is invoked when the Watchdog Timer Architectural protocol is installed. It initializes the
 // WATCHDOG_ARCH_PTR to point to the Watchdog Timer Architectural protocol interface.
 extern "efiapi" fn watchdog_arch_available(event: efi::Event, _context: *mut c_void) {
@@ -310,7 +310,7 @@ pub fn init_misc_boot_services_support(st: &mut EfiSystemTable) {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
     use crate::{

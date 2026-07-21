@@ -10,7 +10,7 @@ mod fixed_size_block_allocator;
 mod uefi_allocator;
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod usage_tests;
 
 use core::{
@@ -984,7 +984,7 @@ unsafe extern "efiapi" fn get_memory_map(
 }
 
 /// Dumps bin manager peak tracking data at debug level.
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 fn dump_memory_bin_stats() {
     let bin_manager = MEMORY_BIN_MANAGER.lock();
     if bin_manager.is_initialized() {
@@ -1001,7 +1001,7 @@ fn dump_memory_bin_stats() {
 }
 
 /// Dumps per-allocator page counts at trace level.
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 fn dump_allocator_details() {
     log::trace!(target: "allocations", "Allocator page counts:");
     for (alloc, _) in STATIC_ALLOCATORS.iter() {
@@ -1028,7 +1028,7 @@ pub fn terminate_memory_map(map_key: usize) -> Result<(), EfiError> {
     }
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 pub fn install_memory_type_info_table(system_table: &mut EfiSystemTable) -> Result<(), EfiError> {
     let bin_manager = MEMORY_BIN_MANAGER.lock();
     if !bin_manager.is_initialized() || bin_manager.memory_type_information().is_empty() {
@@ -1298,7 +1298,7 @@ pub fn init_memory_support(hob_list: &HobList) {
 /// Note: A local `MemoryBinManager` is used during initialization to avoid holding the global lock
 /// during GCD allocations (which would cause re-entrant lock panics since allocation recording also
 /// acquires the lock).
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 fn initialize_memory_bins(hob_list: &HobList, memory_type_info: &[EFiMemoryTypeInformation]) {
     if MEMORY_BIN_MANAGER.lock().is_initialized() {
         return;
@@ -1324,7 +1324,7 @@ fn initialize_memory_bins(hob_list: &HobList, memory_type_info: &[EFiMemoryTypeI
 }
 
 /// Attempts to find a PEI-provided bin range from a Resource Descriptor HOB.
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 fn find_pei_bin_range(
     hob_list: &HobList,
     memory_type_info: &[EFiMemoryTypeInformation],
@@ -1337,7 +1337,7 @@ fn find_pei_bin_range(
 /// Allocates a single contiguous block from the GCD for all bin types.
 ///
 /// The block is freed back to the GCD immediately so that it can be reclaimed for per-type ranges.
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 fn allocate_contiguous_bin_range(memory_type_info: &[EFiMemoryTypeInformation]) -> Option<(efi::PhysicalAddress, u64)> {
     log::info!(target: "memory_bin", "No PEI bin region found. Allocating a contiguous bin range from the GCD.");
 
@@ -1629,7 +1629,7 @@ pub(crate) unsafe fn reset_allocators() {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
 
     use crate::{

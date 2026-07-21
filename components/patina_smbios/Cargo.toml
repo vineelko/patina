@@ -32,4 +32,4 @@ ci_features = []
 undocumented_unsafe_blocks = "warn"
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }

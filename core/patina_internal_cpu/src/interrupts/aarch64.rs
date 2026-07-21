@@ -74,7 +74,7 @@ impl super::EfiExceptionInfoDump for ExceptionContextAArch64 {
     }
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 #[allow(unused)]
 pub fn enable_interrupts() {
     cfg_if::cfg_if! {
@@ -86,7 +86,7 @@ pub fn enable_interrupts() {
     }
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 #[allow(unused)]
 pub fn disable_interrupts() {
     cfg_if::cfg_if! {
@@ -98,7 +98,7 @@ pub fn disable_interrupts() {
     }
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 #[allow(unused)]
 pub fn get_interrupt_state() -> Result<bool, EfiError> {
     cfg_if::cfg_if! {

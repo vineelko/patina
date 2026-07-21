@@ -7,7 +7,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
-#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(coverage, feature(coverage_attribute))]
 
 mod hob_macro;
 mod service_macro;

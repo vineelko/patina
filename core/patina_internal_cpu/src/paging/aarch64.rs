@@ -78,7 +78,7 @@ where
 }
 
 /// Create an AArch64 paging instance under the general PatinaPageTable trait.
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 pub fn create_cpu_aarch64_paging<A: PageAllocator + 'static>(
     page_allocator: A,
 ) -> Result<impl PatinaPageTable, efi::Status> {
@@ -89,7 +89,7 @@ pub fn create_cpu_aarch64_paging<A: PageAllocator + 'static>(
 ///
 /// ## Safety
 /// The caller must ensure no other entity is concurrently modifying the page tables.
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 pub unsafe fn open_active_cpu_aarch64_paging<A: PageAllocator + 'static>(
     page_allocator: A,
 ) -> Result<impl PatinaPageTable, PtError> {
@@ -99,7 +99,7 @@ pub unsafe fn open_active_cpu_aarch64_paging<A: PageAllocator + 'static>(
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
 
     use super::*;

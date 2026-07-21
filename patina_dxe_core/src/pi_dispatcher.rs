@@ -244,7 +244,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
 
     /// Installs any firmware volumes from FV HOBs in the hob list
     #[inline(always)]
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub fn install_firmware_volumes_from_hoblist(
         &self,
         hob_list: &patina::pi::hob::HobList,
@@ -504,26 +504,26 @@ impl<P: PlatformInfo> PiDispatcher<P> {
 
     /// Schedules a driver for execution.
     #[inline(always)]
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub fn schedule(&self, handle: efi::Handle, file: &efi::Guid) -> Result<(), EfiError> {
         self.dispatcher_context.lock().schedule(handle, file)
     }
 
     /// Marks a driver as trusted for execution.
     #[inline(always)]
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub fn trust(&self, handle: efi::Handle, file: &efi::Guid) -> Result<(), EfiError> {
         self.dispatcher_context.lock().trust(handle, file)
     }
 
     #[inline(always)]
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     fn add_fv_handles(&self, new_handles: Vec<efi::Handle>) -> Result<(), EfiError> {
         self.dispatcher_context.lock().add_fv_handles(new_handles, &self.section_extractor)
     }
 
     #[inline(always)]
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     /// Caller must ensure that the base address is a valid firmware volume.
     pub unsafe fn install_firmware_volume(
         &self,
@@ -883,7 +883,7 @@ impl DispatcherContext {
 unsafe impl Send for DispatcherContext {}
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use core::sync::atomic::AtomicBool;
     use std::{fs::File, io::Read, vec};

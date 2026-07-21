@@ -78,7 +78,7 @@ pub(crate) fn unregister_exception_handler(exception_type: ExceptionType) -> Res
 }
 
 // This function does actually have coverage but no_mangle functions confuse the coverage tool.
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 /// The architecture agnostic entry of the exception handler stack.
 ///
 /// This will be invoked by the architectures assembly entry and so requires
@@ -117,7 +117,7 @@ extern "efiapi" fn exception_handler(exception_type: usize, context: &mut Except
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     extern crate std;
 

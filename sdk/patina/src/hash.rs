@@ -59,7 +59,7 @@ impl Hasher for Xorshift64starHasher {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
 

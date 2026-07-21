@@ -18,7 +18,7 @@ pub struct Crc32SectionExtractor;
 
 impl Crc32SectionExtractor {
     /// Creates a new `Crc32SectionExtractor` instance.
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub const fn new() -> Self {
         Self {}
     }
@@ -44,7 +44,7 @@ impl SectionExtractor for Crc32SectionExtractor {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use crate::tests::create_crc32_section;
 

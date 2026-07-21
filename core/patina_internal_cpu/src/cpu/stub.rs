@@ -26,7 +26,7 @@ impl EfiCpuStub {
     }
     /// Causes the CPU to enter a low power state until the next interrupt.
     // Trivial emulation of hardware access, so no coverage.
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     pub fn sleep() {}
 }
 

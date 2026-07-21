@@ -152,7 +152,7 @@ impl<'a> Iterator for AdvLogIterator<'a> {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     extern crate std;
     use core::{mem::size_of, sync::atomic::Ordering};

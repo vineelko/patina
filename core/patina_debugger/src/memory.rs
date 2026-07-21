@@ -173,7 +173,7 @@ fn check_paging_range<P: PatinaPageTable>(page_table: &P, start_address: u64, le
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
 
     use super::*;

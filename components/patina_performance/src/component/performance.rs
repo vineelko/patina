@@ -118,7 +118,7 @@ impl Performance {
     }
 
     /// Entry point of [`Performance`]
-    #[cfg_attr(coverage_nightly, coverage(off))] // This is tested via the generic version, see _entry_point.
+    #[cfg_attr(coverage, coverage(off))] // This is tested via the generic version, see _entry_point.
     fn entry_point(
         self,
         hob: Option<Hob<PerformanceConfig>>,

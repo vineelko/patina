@@ -67,7 +67,7 @@ pub struct MmCommBufferStatus {
 }
 
 impl Default for MmCommBufferStatus {
-    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(coverage, coverage(off))]
     fn default() -> Self {
         Self::new()
     }
