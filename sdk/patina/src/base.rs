@@ -16,6 +16,7 @@ use crate::error::EfiError;
 pub mod guid;
 #[cfg(any(test, feature = "alloc"))]
 pub mod memory_map;
+pub mod string;
 
 /// EFI memory allocation functions work in units of EFI_PAGEs that are 4KB.
 /// This should in no way be confused with the page size of the processor.

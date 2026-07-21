@@ -23,6 +23,7 @@
 extern crate alloc;
 
 pub use base::guid::{BinaryGuid, Guid, GuidError, OwnedGuid};
+pub use base::string::{Char8Array, Char8Str, Char8String, Char16Array, Char16Str, Char16String, StringError};
 
 /// Common GUID constants
 pub mod guid_constants {
