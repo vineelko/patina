@@ -40,7 +40,6 @@ num-traits = { workspace = true }
 indoc = { workspace = true }
 fallible-streaming-iterator = { workspace = true }
 safe-mmio = { workspace = true }
-linkme = { workspace = true }
 scroll = { workspace = true }
 uuid = { workspace = true }
 serde = { workspace = true, optional = true }

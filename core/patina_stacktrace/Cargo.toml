@@ -14,18 +14,6 @@ workspace = true
 cfg-if = { workspace = true }
 log = { workspace = true }
 
-[dev-dependencies]
-winapi = { workspace = true, features = [
-    "psapi",
-    "libloaderapi",
-    "minwinbase",
-    "errhandlingapi",
-    "processthreadsapi",
-    "winbase",
-    "synchapi",
-    "debugapi",
-] }
-
 [features]
 std = []
 doc = []

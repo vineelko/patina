@@ -13,7 +13,6 @@ workspace = true
 [dependencies]
 r-efi = { workspace = true }
 log = { workspace = true }
-uuid = { workspace = true }
 
 patina = { workspace = true }
 patina_mm = { workspace = true }
@@ -23,7 +22,6 @@ zerocopy-derive = { workspace = true }
 [dev-dependencies]
 patina = { path = "../../sdk/patina", features = ["mockall"] }
 patina_dxe_core = { path = "../../patina_dxe_core"}
-mockall = { workspace = true }
 
 [features]
 # All non-std features to test in CI
