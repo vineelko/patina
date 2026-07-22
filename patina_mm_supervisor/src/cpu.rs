@@ -16,9 +16,11 @@
 //!
 
 use core::{
-    arch::{x86_64, x86_64::CpuidResult},
+    arch::x86_64::{__cpuid, CpuidResult},
     sync::atomic::{AtomicU8, AtomicU32, Ordering},
 };
+
+const CPUID_VERSION_INFO: u32 = 0x01;
 
 /// MSR index for IA32_APIC_BASE.
 const IA32_APIC_BASE_MSR_INDEX: u32 = 0x1B;
@@ -412,21 +414,14 @@ impl<const MAX_CPUS: usize> Default for CpuManager<MAX_CPUS> {
 /// Gets the current CPU's APIC ID.
 ///
 /// On x86_64, this reads the APIC ID from the Local APIC or CPUID.
-#[cfg(target_arch = "x86_64")]
 pub fn get_current_cpu_id() -> u32 {
     // Use CPUID to get the initial APIC ID
     // CPUID function 0x01, EBX[31:24] contains the initial APIC ID
 
     // CPUID is always available on x86_64 and `__cpuid` is a safe intrinsic.
-    let CpuidResult { ebx, .. } = x86_64::__cpuid(0x01);
+    let CpuidResult { ebx, .. } = __cpuid(CPUID_VERSION_INFO);
 
     (ebx >> 24) & 0xff
-}
-
-/// Gets the current CPU's APIC ID (stub for non-x86_64).
-#[cfg(not(target_arch = "x86_64"))]
-pub fn get_current_cpu_id() -> u32 {
-    0
 }
 
 /// Reads a Model-Specific Register (MSR) by index.
@@ -434,7 +429,6 @@ pub fn get_current_cpu_id() -> u32 {
 /// ## Safety
 ///
 /// The caller must ensure the MSR index is valid and readable on the current platform.
-#[cfg(target_arch = "x86_64")]
 pub unsafe fn read_msr(msr: u32) -> u64 {
     let lo: u32;
     let hi: u32;
@@ -453,18 +447,11 @@ pub unsafe fn read_msr(msr: u32) -> u64 {
     ((hi as u64) << 32) | (lo as u64)
 }
 
-/// Reads a Model-Specific Register (stub for non-x86_64).
-#[cfg(not(target_arch = "x86_64"))]
-pub unsafe fn read_msr(_msr: u32) -> u64 {
-    0
-}
-
 /// Writes a 64-bit value to a Model-Specific Register (MSR).
 ///
 /// ## Safety
 ///
 /// The caller must ensure the MSR index is valid and writable on the current platform.
-#[cfg(target_arch = "x86_64")]
 pub unsafe fn write_msr(msr: u32, value: u64) {
     let lo = value as u32;
     let hi = (value >> 32) as u32;
@@ -482,28 +469,15 @@ pub unsafe fn write_msr(msr: u32, value: u64) {
     }
 }
 
-/// Writes a Model-Specific Register (stub for non-x86_64).
-#[cfg(not(target_arch = "x86_64"))]
-pub unsafe fn write_msr(_msr: u32, _value: u64) {
-    // No-op on non-x86_64 architectures
-}
-
 /// Checks if the current processor is the Bootstrap Processor (BSP).
 ///
 /// This reads the IA32_APIC_BASE MSR and checks the BSP flag (bit 8).
 /// The BSP flag is set by hardware during reset and indicates which
 /// processor is the bootstrap processor.
-#[cfg(target_arch = "x86_64")]
 pub fn is_bsp() -> bool {
     // SAFETY: The IA32_APIC_BASE MSR is safe to read on x86_64.
     let apic_base = unsafe { read_msr(IA32_APIC_BASE_MSR_INDEX) };
     (apic_base & IA32_APIC_BSP) != 0
-}
-
-/// Checks if the current processor is the BSP (stub for non-x86_64).
-#[cfg(not(target_arch = "x86_64"))]
-pub fn is_bsp() -> bool {
-    true // Assume BSP on non-x86_64 platforms
 }
 
 #[cfg(test)]
