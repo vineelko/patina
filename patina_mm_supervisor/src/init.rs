@@ -14,7 +14,7 @@
 use core::ffi::c_void;
 
 use patina::{
-    base::{UEFI_PAGE_SIZE, align_range},
+    base::{SIZE_256KB, UEFI_PAGE_SIZE, align_range},
     management_mode::{
         MmCommBufferStatus,
         comm_buffer_hob::{MM_COMM_BUFFER_HOB_GUID, MmCommonBufferHobData},
@@ -38,6 +38,11 @@ use crate::{
 
 use patina_internal_cpu::interrupts::Interrupts;
 use zerocopy::FromBytes;
+use zerocopy_derive::Immutable;
+
+use crate::mem::page_allocator::{
+    EFI_ALLOCATED, MM_PEI_MMRAM_MEMORY_RESERVE_GUID, SMM_SMRAM_MEMORY_GUID, SmramDescriptor, SmramReserveHobData,
+};
 
 /// Errors that can occur during policy initialization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,7 +84,7 @@ const FIXUP64_SMI_HANDLER_IDTR: usize = 5;
 /// `MM_SUPERVISOR_BUFFER_T` (0) in practice — the user channel uses the
 /// separate `gMmCommBufferHobGuid` HOB.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, zerocopy_derive::FromBytes, zerocopy_derive::Immutable)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable)]
 pub struct MmCommonRegionHobData {
     /// Region type discriminator. Always `MM_SUPERVISOR_BUFFER_T` (0) for
     /// the HOB the supervisor consumes.
@@ -101,7 +106,7 @@ pub struct MmCommonRegionHobData {
 /// has the same byte layout the C producer emits while still allowing safe,
 /// reference-based field access once parsed via `zerocopy`.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, zerocopy_derive::FromBytes, zerocopy_derive::Immutable)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable)]
 pub struct MmSupvPassDownHobData {
     /// Revision of this HOB structure
     pub revision: u32,
@@ -232,6 +237,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // valid HOB list (the caller asserts it is non-null before dispatching).
         unsafe {
             self.discover_and_store_user_entry(hob_list);
+            self.discover_and_store_smram_regions(hob_list);
             self.init_policy_and_validate(hob_list);
             self.remap_hob_list_to_user(hob_list);
         }
@@ -317,6 +323,23 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 init_state().set_user_entry_point(entry);
             }
             None => log::warn!("MM User module entry point not found in HOB list"),
+        }
+    }
+
+    /// Discovers the SMRAM regions from the HOB list and stores them for use during
+    /// request processing.
+    ///
+    /// ## Safety
+    ///
+    /// The caller must ensure that `hob_list` points to a valid HOB list.
+    unsafe fn discover_and_store_smram_regions(&self, hob_list: *const c_void) {
+        // SAFETY: `hob_list` is a valid HOB list per this function's contract.
+        match unsafe { find_smram_from_hoblist(hob_list) } {
+            Some((smrr_base, smrr_size)) => {
+                log::info!("Discovered SMRR range: base=0x{:08x}, size=0x{:08x}", smrr_base, smrr_size);
+                init_state().set_smrr_base_size(smrr_base, smrr_size);
+            }
+            None => panic!("Failed to discover SMRAM regions from HOB list"),
         }
     }
 
@@ -799,6 +822,122 @@ fn find_guid_hob(hob_list_info: &PhaseHandoffInformationTable, target_guid: pati
         }
     }
     None
+}
+
+/// Finds the SMRAM information (SMRR base and size) from the raw HOB list.
+///
+/// Returns (smrr_base, smrr_size) on success, or None if the HOB is missing,
+/// malformed, or contains no range that meets the SMRR requirements.
+///
+/// ## Safety
+///
+/// The caller must ensure that hob_list points to a valid HOB list.
+pub(crate) unsafe fn find_smram_from_hoblist(hob_list: *const c_void) -> Option<(u32, u32)> {
+    /// Lowest CPU start address a candidate SMRR range may have.
+    const BASE_1MB: u64 = 0x0010_0000;
+    /// Highest address the primary SMRR can cover (4 GiB).
+    const SMRR_MAX_ADDRESS: u64 = 0x1_0000_0000;
+    /// EFI_NEEDS_TESTING region-state bit.
+    const EFI_NEEDS_TESTING: u64 = 0x0000_0000_0000_0020;
+    /// EFI_NEEDS_ECC_INITIALIZATION region-state bit.
+    const EFI_NEEDS_ECC_INITIALIZATION: u64 = 0x0000_0000_0000_0040;
+    /// Region-state bits that disqualify a range from SMRR coverage.
+    const UNUSABLE_STATE_MASK: u64 = EFI_ALLOCATED | EFI_NEEDS_TESTING | EFI_NEEDS_ECC_INITIALIZATION;
+
+    if hob_list.is_null() {
+        log::error!("Cannot find SMRAM info: HOB list is null");
+        return None;
+    }
+
+    // SAFETY: hob_list was checked non-null above and, per this function's contract, points to a
+    // valid HOB list, so reinterpreting it as the handoff table header and taking a shared
+    // reference is sound.
+    let hob_list_info = unsafe { (hob_list as *const PhaseHandoffInformationTable).as_ref()? };
+
+    // Prefer the MM PEI MMRAM reserve HOB, falling back to the SMM SMRAM HOB (mirrors the C order).
+    let data = find_guid_hob(hob_list_info, MM_PEI_MMRAM_MEMORY_RESERVE_GUID)
+        .or_else(|| find_guid_hob(hob_list_info, SMM_SMRAM_MEMORY_GUID));
+    let Some(data) = data else {
+        log::error!("Critical HOB missing that describes MMRAM regions. Cannot determine SMRR range.");
+        return None;
+    };
+
+    let header_size = size_of::<SmramReserveHobData>();
+    if data.len() < header_size {
+        log::error!("MMRAM reserve HOB is smaller than its header");
+        return None;
+    }
+
+    // SAFETY: data is at least header_size bytes (checked above) and begins with a suitably
+    // aligned SmramReserveHobData header, per the MM IPL's HOB layout.
+    let header = unsafe { &*(data.as_ptr() as *const SmramReserveHobData) };
+
+    // Clamp the declared count to what the payload can actually hold, so the descriptor slice below
+    // stays in-bounds even if the HOB is malformed. There is no fixed cap on the region count.
+    let max_fit = (data.len() - header_size) / size_of::<SmramDescriptor>();
+    let count = (header.number_of_smram_regions as usize).min(max_fit);
+    if count == 0 {
+        log::error!("MMRAM reserve HOB describes no usable SMRAM regions");
+        return None;
+    }
+
+    // View the descriptor array as a read-only slice, in place inside the HOB.
+    let end = header_size + count * size_of::<SmramDescriptor>();
+    let descriptor_bytes = data.get(header_size..end)?;
+    // SAFETY: descriptor_bytes is exactly count SmramDescriptors' worth of in-bounds bytes and
+    // is suitably aligned per the HOB layout, so viewing it as a SmramDescriptor slice is sound.
+    let ranges = unsafe { core::slice::from_raw_parts(descriptor_bytes.as_ptr() as *const SmramDescriptor, count) };
+
+    // Find the largest usable SMRAM range in [1 MiB, 4 GiB] that is at least 256 KiB - 4 KiB.
+    let mut max_size = SIZE_256KB as u64 - UEFI_PAGE_SIZE as u64;
+    let mut current: Option<SmramDescriptor> = None;
+    for d in ranges.iter() {
+        // Skip any region that is already allocated, needs testing, or needs ECC initialization.
+        if d.region_state & UNUSABLE_STATE_MASK != 0 {
+            continue;
+        }
+
+        if d.cpu_start >= BASE_1MB && d.cpu_start + d.physical_size <= SMRR_MAX_ADDRESS && d.physical_size >= max_size {
+            max_size = d.physical_size;
+            current = Some(*d);
+        }
+    }
+
+    let current = match current {
+        Some(range) => range,
+        None => {
+            log::error!("No SMRAM range meets the SMRR base/size requirements");
+            return None;
+        }
+    };
+
+    let mut smrr_base = current.cpu_start as u32;
+    let mut smrr_size = current.physical_size as u32;
+
+    // Coalesce any physically adjacent ranges into the selected range. This scans the (unsorted)
+    // descriptor array repeatedly until no further adjacent range is found, so ordering does not
+    // matter.
+    loop {
+        let mut found = false;
+        for d in ranges.iter() {
+            if d.cpu_start < smrr_base as u64 && smrr_base as u64 == d.cpu_start + d.physical_size {
+                // d sits immediately before the current range: extend downward.
+                smrr_base = d.cpu_start as u32;
+                smrr_size = smrr_size.wrapping_add(d.physical_size as u32);
+                found = true;
+            } else if smrr_base as u64 + smrr_size as u64 == d.cpu_start && d.physical_size > 0 {
+                // d sits immediately after the current range: extend upward.
+                smrr_size = smrr_size.wrapping_add(d.physical_size as u32);
+                found = true;
+            }
+        }
+        if !found {
+            break;
+        }
+    }
+
+    log::info!("SMRR Base: 0x{:x}, SMRR Size: 0x{:x}", smrr_base, smrr_size);
+    Some((smrr_base, smrr_size))
 }
 
 /// Parses an `MP_INFORMATION_HOB_DATA` payload (`gMpInformationHobGuid`).
