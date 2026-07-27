@@ -13,9 +13,12 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
+extern crate alloc;
+
 use core::ffi::c_char;
 
-use patina::{tpl_mutex::TplMutex, uefi_protocol::ProtocolInterface};
+use alloc::string::ToString;
+use patina::{Char8Str, tpl_mutex::TplMutex, uefi_protocol::ProtocolInterface};
 use r_efi::efi;
 
 use crate::service::{SMBIOS_HANDLE_PI_RESERVED, SmbiosHandle, SmbiosTableHeader, SmbiosType};
@@ -226,17 +229,13 @@ impl SmbiosProtocol {
             let handle = smbios_handle.read_unaligned();
             let str_num = string_number.read_unaligned();
 
-            // Convert C string to Rust str
-            let c_str = core::ffi::CStr::from_ptr(string);
-            let rust_str = match c_str.to_str() {
-                Ok(s) => s,
-                Err(_) => return efi::Status::INVALID_PARAMETER,
-            };
+            // `string` is a NUL-terminated CHAR8 string, per the SMBIOS Protocol's `UpdateString()` interface.
+            let rust_str = Char8Str::from_ptr(string.cast()).to_string();
 
             (handle, str_num, rust_str)
         };
 
-        match manager.update_string(handle, str_num, rust_str) {
+        match manager.update_string(handle, str_num, &rust_str) {
             Ok(()) => {
                 if manager.republish_table().is_err() {
                     log::error!("[SMBIOS UpdateString] Failed to rebuild table");

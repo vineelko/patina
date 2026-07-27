@@ -10,12 +10,13 @@
 //!
 
 use core::{
-    ffi::{CStr, c_char, c_void},
+    ffi::{c_char, c_void},
     sync::atomic::{AtomicBool, Ordering},
 };
 
 use alloc::string::ToString;
 use patina::{
+    Char8Str,
     performance::{
         error::Error,
         measurement::{CallerIdentifier, create_performance_measurement},
@@ -42,8 +43,8 @@ pub(crate) unsafe extern "efiapi" fn create_performance_measurement_efiapi(
     identifier: u32,
     attribute: PerfAttribute,
 ) -> efi::Status {
-    // SAFETY: The caller ensures that string is a valid C string pointer (or NULL).
-    let string = unsafe { string.as_ref().map(|s| CStr::from_ptr(s).to_string_lossy().to_string()) };
+    // SAFETY: The caller ensures that `string` is a valid, NUL-terminated CHAR8 pointer (or NULL).
+    let string = unsafe { string.as_ref().map(|s| Char8Str::from_ptr((s as *const c_char).cast()).to_string()) };
 
     // To conform with UEFI spec, `identifier` must be a u32 when passed in.
     // However, FPDT performance measurement IDs are always u16.
