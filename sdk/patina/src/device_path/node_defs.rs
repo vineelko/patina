@@ -15,6 +15,7 @@ use core::{
 use alloc::{
     boxed::Box,
     string::{String, ToString},
+    vec::Vec,
 };
 
 use scroll::{
@@ -23,6 +24,7 @@ use scroll::{
 };
 
 use crate::{
+    Char16Str, Char16String,
     device_path::parse_node::{self, DevicePathNode, UnknownDevicePathNode},
     device_path_node,
 };
@@ -835,13 +837,12 @@ impl parse_node::DevicePathNode for FilePath {
         let header = self.header();
         let mut offset = 0;
         buffer.gwrite_with(header, &mut offset, scroll::Endian::Little)?;
-        // Write the path as UTF-16LE (UCS-2)
-        for c in self.path.chars() {
-            let code_point = c as u16;
-            buffer.gwrite_with(code_point, &mut offset, scroll::LE)?;
+        // Write the path as UCS-2 (UEFI CHAR16), including the trailing NUL terminator.
+        let encoded = Char16String::try_from_str(&self.path)
+            .map_err(|_| scroll::Error::BadInput { size: offset, msg: "file path is not valid UCS-2" })?;
+        for unit in encoded.as_units_with_nul() {
+            buffer.gwrite_with(*unit, &mut offset, scroll::LE)?;
         }
-        // Write null terminator (UTF-16)
-        buffer.gwrite_with(0u16, &mut offset, scroll::LE)?;
         Ok(offset)
     }
 }
@@ -863,13 +864,12 @@ impl TryIntoCtx<scroll::Endian> for FilePath {
 
     fn try_into_ctx(self, dest: &mut [u8], _ctx: scroll::Endian) -> Result<usize, Self::Error> {
         let mut offset = 0;
-        // Write the path as UTF-16LE (UCS-2)
-        for c in self.path.chars() {
-            let code_point = c as u16;
-            dest.gwrite_with(code_point, &mut offset, scroll::LE)?;
+        // Write the path as UCS-2 (UEFI CHAR16), including the trailing NUL terminator.
+        let encoded = Char16String::try_from_str(&self.path)
+            .map_err(|_| scroll::Error::BadInput { size: offset, msg: "file path is not valid UCS-2" })?;
+        for unit in encoded.as_units_with_nul() {
+            dest.gwrite_with(*unit, &mut offset, scroll::LE)?;
         }
-        // Write null terminator (UTF-16)
-        dest.gwrite_with(0u16, &mut offset, scroll::LE)?;
         Ok(offset)
     }
 }
@@ -879,22 +879,26 @@ impl TryFromCtx<'_, scroll::Endian> for FilePath {
 
     fn try_from_ctx(buffer: &[u8], _ctx: scroll::Endian) -> Result<(Self, usize), Self::Error> {
         let mut offset = 0;
-        let mut path = String::new();
+        let mut units = Vec::new();
 
-        // Read UTF-16LE characters until null terminator
+        // Read UCS-2 code units until the null terminator.
         loop {
             if offset + 2 > buffer.len() {
                 break;
             }
-            let code_point: u16 = buffer.gread_with(&mut offset, scroll::LE)?;
-            if code_point == 0 {
+            let code_unit: u16 = buffer.gread_with(&mut offset, scroll::LE)?;
+            if code_unit == 0 {
                 break;
             }
-            // Convert UTF-16 code point to char
-            if let Some(c) = char::from_u32(code_point as u32) {
-                path.push(c);
-            }
+            units.push(code_unit);
         }
+        units.push(0);
+
+        // Validate the collected code units as UCS-2 before decoding.
+        let path = Char16Str::from_units_with_nul(&units)
+            .map_err(|_| scroll::Error::BadInput { size: offset, msg: "file path is not valid UCS-2" })?
+            .chars()
+            .collect();
 
         Ok((Self { path }, offset))
     }

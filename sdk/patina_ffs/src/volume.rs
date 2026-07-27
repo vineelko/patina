@@ -792,6 +792,7 @@ mod test {
         section::{Section, SectionComposer, SectionExtractor, SectionHeader},
         volume::{Volume, VolumeRef},
     };
+    use patina::Char16String;
 
     #[derive(Debug, Deserialize, Clone)]
     struct TargetValues {
@@ -849,13 +850,7 @@ mod test {
 
     fn extract_text_from_section(section: &Section) -> Option<String> {
         if section.section_type() == Some(ffs::section::Type::UserInterface) {
-            let display_name_chars: Vec<u16> = section
-                .try_content_as_slice()
-                .ok()?
-                .chunks(2)
-                .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
-                .collect();
-            Some(String::from_utf16_lossy(&display_name_chars).trim_end_matches(char::from(0)).to_string())
+            Char16String::from_le_bytes_until_nul(section.try_content_as_slice().ok()?).ok().map(|s| s.to_string())
         } else {
             None
         }

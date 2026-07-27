@@ -40,6 +40,8 @@ pub use fv::{
 pub use fvb::attributes::{EfiFvbAttributes2, Fvb2 as Fvb2Attributes, raw::fvb2 as Fvb2RawAttributes};
 use zerocopy::FromBytes;
 
+#[cfg(test)]
+use crate::Char16String;
 use crate::{BinaryGuid, base::align_up};
 use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
 use num_traits::WrappingSub;
@@ -1007,7 +1009,7 @@ mod unit_tests {
 
     use crate::pi::fw_fs::{SectionMetaData, guid};
 
-    use super::{FfsSectionType, FirmwareVolume, NullSectionExtractor, Section, SectionExtractor, fv};
+    use super::{Char16String, FfsSectionType, FirmwareVolume, NullSectionExtractor, Section, SectionExtractor, fv};
 
     #[derive(Debug, Deserialize)]
     struct TargetValues {
@@ -1102,9 +1104,7 @@ mod unit_tests {
 
     fn extract_text_from_section(section: &Section) -> Option<String> {
         if section.section_type() == Some(FfsSectionType::UserInterface) {
-            let display_name_chars: Vec<u16> =
-                section.section_data().chunks(2).map(|x| u16::from_le_bytes(x.try_into().unwrap())).collect();
-            Some(String::from_utf16_lossy(&display_name_chars).trim_end_matches(char::from(0)).to_string())
+            Char16String::from_le_bytes_until_nul(section.section_data()).ok().map(|s| s.to_string())
         } else {
             None
         }
