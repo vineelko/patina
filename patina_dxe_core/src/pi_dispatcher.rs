@@ -17,12 +17,12 @@ mod section_decompress;
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
-    string::{String, ToString},
+    string::String,
     vec::Vec,
 };
 use core::{cmp::Ordering, ffi::c_void};
 use patina::{
-    BinaryGuid, OwnedGuid,
+    BinaryGuid, Char16Str, OwnedGuid,
     device_path::walker::concat_device_path_to_boxed_slice,
     error::EfiError,
     pi::{
@@ -731,14 +731,14 @@ impl DispatcherContext {
                             .iter()
                             .find(|x| x.section_type() == Some(ffs::section::Type::UserInterface))
                             .and_then(|x| x.try_content_as_slice().ok())
-                            .map(|data| {
-                                let chars: Vec<u16> = data
+                            .and_then(|data| {
+                                let units: Vec<u16> = data
                                     .chunks_exact(2)
                                     .map(|c| {
                                         u16::from_le_bytes(c.try_into().expect("chunks_exact(2) guarantees length"))
                                     })
                                     .collect();
-                                String::from_utf16_lossy(&chars).trim_end_matches('\0').to_string()
+                                Char16Str::from_units_until_nul(&units).ok().map(|s| s.chars().collect())
                             });
 
                         if let Some(pe32_section) =

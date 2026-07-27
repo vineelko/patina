@@ -16,6 +16,7 @@ use core::{
     slice::from_raw_parts,
 };
 use patina::{
+    Char16Str,
     base::{DEFAULT_CACHE_ATTR, UEFI_PAGE_SIZE, align_up},
     component::service::memory::{AllocationOptions, MemoryManager, PageFree},
     device_path::walker::{DevicePathWalker, copy_device_path_to_boxed_slice, device_path_node_count},
@@ -1415,7 +1416,8 @@ fn get_file_buffer_from_sfs(file_path: NonNull<Protocol>) -> Result<(Vec<u8>, ef
             efi::protocols::device_path::TYPE_END => break,
             _ => Err(EfiError::Unsupported)?,
         }
-        //For MEDIA_FILE_PATH_DP, file name is in the node data, but it needs to be converted to Vec<u16> for call to open.
+        // For MEDIA_FILE_PATH_DP, file name is in the node data, but it needs to be converted to u16 code units for
+        // the call to open, since the raw device path bytes are not guaranteed to be aligned.
         let filename: Vec<u16> = node
             .data()
             .chunks_exact(2)
@@ -1427,8 +1429,9 @@ fn get_file_buffer_from_sfs(file_path: NonNull<Protocol>) -> Result<(Vec<u8>, ef
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let filename = Char16Str::from_units_until_nul(&filename)?;
 
-        file = file.open(filename, efi::protocols::file::MODE_READ, 0)?;
+        file = file.open(filename.as_units_with_nul().to_vec(), efi::protocols::file::MODE_READ, 0)?;
     }
 
     // if execution comes here, the above loop was successfully able to open all the files on the remaining device path,
