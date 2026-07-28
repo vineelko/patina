@@ -11,8 +11,13 @@
 use super::{StringError, char_count, decode_utf8};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
+use super::char8::Char8Array;
+
 #[cfg(any(test, feature = "alloc"))]
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
+
+#[cfg(any(test, feature = "alloc"))]
+use super::char8::{Char8Str, Char8String};
 
 /// The inclusive range of UTF-16 surrogate code units, which are not valid UCS-2.
 const SURROGATE_RANGE: core::ops::RangeInclusive<u16> = 0xD800..=0xDFFF;
@@ -463,6 +468,36 @@ impl<'a> TryFrom<&'a str> for Char16String {
 }
 
 #[cfg(any(test, feature = "alloc"))]
+impl From<&Char8Str> for Char16String {
+    /// Converts Latin-1 to UCS-2.
+    ///
+    /// Always succeeds since every Latin-1 byte maps directly onto an identically-valued, non-surrogate
+    /// UCS-2 code unit.
+    fn from(value: &Char8Str) -> Self {
+        let mut units = Vec::with_capacity(value.len() + 1);
+        for &byte in value.iter() {
+            units.push(byte as u16);
+        }
+        units.push(0);
+        Self(units)
+    }
+}
+
+#[cfg(any(test, feature = "alloc"))]
+impl From<&Char8String> for Char16String {
+    fn from(value: &Char8String) -> Self {
+        Self::from(value.as_char8_str())
+    }
+}
+
+#[cfg(any(test, feature = "alloc"))]
+impl From<Char8String> for Char16String {
+    fn from(value: Char8String) -> Self {
+        Self::from(&value)
+    }
+}
+
+#[cfg(any(test, feature = "alloc"))]
 impl core::fmt::Display for Char16String {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         core::fmt::Display::fmt(self.as_char16_str(), f)
@@ -666,6 +701,57 @@ impl<const N: usize> Default for Char16Array<N> {
     /// [`Char16Array::try_from_str`], a capacity of `0` cannot represent a valid string.
     fn default() -> Self {
         Self([0; N])
+    }
+}
+
+impl<'a, const N: usize> TryFrom<&'a str> for Char16Array<N> {
+    type Error = StringError;
+
+    /// Equivalent to [`Char16Array::try_from_str`], provided for generic code written against the
+    /// standard [`TryFrom`] trait.
+    fn try_from(s: &'a str) -> Result<Self, StringError> {
+        Self::try_from_str(s)
+    }
+}
+
+impl<const N: usize> From<Char8Array<N>> for Char16Array<N> {
+    /// Converts Latin-1 to UCS-2.
+    ///
+    /// Always succeeds since every Latin-1 byte maps directly onto an identically-valued, non-surrogate
+    /// UCS-2 code unit, and a `Char8Array<N>`'s logical content (at most `N - 1` characters) always
+    /// fits within `Char16Array<N>`'s equal capacity.
+    // Note: `out[position]` is safe because `position < src.len() < N`, except when `N == 0`, where `src`
+    // is empty and the loop never runs.
+    #[allow(clippy::indexing_slicing)]
+    fn from(value: Char8Array<N>) -> Self {
+        let src = value.as_char8_str();
+        // Note: The terminator and any trailing padding are already present due to zero-initialization.
+        let mut out = [0u16; N];
+        for (position, &byte) in src.iter().enumerate() {
+            out[position] = byte as u16;
+        }
+        Self(out)
+    }
+}
+
+#[cfg(any(test, feature = "alloc"))]
+impl<const N: usize> From<Char16Array<N>> for Char16String {
+    /// Converts a fixed-capacity array to a heap-owned string, dropping the const capacity `N`.
+    fn from(value: Char16Array<N>) -> Self {
+        use alloc::borrow::ToOwned;
+        value.as_char16_str().to_owned()
+    }
+}
+
+#[cfg(any(test, feature = "alloc"))]
+impl<const N: usize> From<Char16Array<N>> for String {
+    /// Converts to a native Rust string.
+    ///
+    /// Always succeeds. Lossless for arrays built through a safe constructor; a surrogate code unit
+    /// reachable only via an unchecked constructor is replaced with [`char::REPLACEMENT_CHARACTER`]
+    /// rather than causing a panic.
+    fn from(value: Char16Array<N>) -> Self {
+        value.as_char16_str().chars().collect()
     }
 }
 
@@ -1086,5 +1172,62 @@ mod tests {
     fn test_char16_capacity_helper_runtime() {
         assert_eq!(ucs2_capacity("EFI"), 4);
         assert_eq!(ucs2_capacity(""), 1);
+    }
+
+    #[test]
+    fn test_char16_array_try_from_str_trait() {
+        let array = Char16Array::<9>::try_from("Firmware").unwrap();
+        assert!(array.as_char16_str() == "Firmware");
+    }
+
+    #[test]
+    fn test_char16_array_from_char8_array() {
+        let narrow = Char8Array::<9>::from_str("Firmware");
+        let wide: Char16Array<9> = narrow.into();
+        assert!(wide.as_char16_str() == "Firmware");
+    }
+
+    #[test]
+    fn test_char16_array_from_char8_array_high_latin1() {
+        let narrow = Char8Array::<2>::from_str("\u{00E9}"); // 'é'
+        let wide: Char16Array<2> = narrow.into();
+        assert!(wide.as_char16_str() == "\u{00E9}");
+    }
+
+    #[test]
+    fn test_char16_array_from_char8_array_empty_capacity() {
+        let narrow = Char8Array::<0>::default();
+        let wide: Char16Array<0> = narrow.into();
+        assert!(wide.as_char16_str().is_empty());
+    }
+
+    #[test]
+    fn test_char16_array_to_char16string() {
+        let array = Char16Array::<9>::from_str("Firmware");
+        let owned: Char16String = array.into();
+        assert!(owned == "Firmware");
+    }
+
+    #[test]
+    fn test_char16_array_to_string() {
+        let array = Char16Array::<9>::from_str("Firmware");
+        let owned: alloc::string::String = array.into();
+        assert_eq!(owned, "Firmware");
+    }
+
+    #[test]
+    fn test_char16string_from_char8str() {
+        let narrow = Char8Array::<4>::from_str("EFI");
+        let wide = Char16String::from(narrow.as_char8_str());
+        assert!(wide == "EFI");
+    }
+
+    #[test]
+    fn test_char16string_from_char8string() {
+        let narrow = Char8String::try_from_str("EFI").unwrap();
+        let wide = Char16String::from(&narrow);
+        assert!(wide == "EFI");
+        let wide_owned = Char16String::from(narrow);
+        assert!(wide_owned == "EFI");
     }
 }

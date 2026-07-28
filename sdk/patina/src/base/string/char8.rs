@@ -11,8 +11,13 @@
 use super::{StringError, char_count, decode_utf8};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
+use super::char16::Char16Array;
+
 #[cfg(any(test, feature = "alloc"))]
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
+
+#[cfg(any(test, feature = "alloc"))]
+use super::char16::{Char16Str, Char16String};
 
 /// A borrowed, NUL-terminated CHAR8 (ASCII / ISO-Latin-1) string.
 ///
@@ -398,6 +403,46 @@ impl<'a> TryFrom<&'a str> for Char8String {
 }
 
 #[cfg(any(test, feature = "alloc"))]
+impl TryFrom<&Char16Str> for Char8String {
+    type Error = StringError;
+
+    /// Converts UCS-2 to Latin-1.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StringError::NotLatin1`] if any code unit is above `0xFF`.
+    fn try_from(value: &Char16Str) -> Result<Self, StringError> {
+        let mut bytes = Vec::with_capacity(value.len() + 1);
+        for (position, &unit) in value.iter().enumerate() {
+            if unit > 0xFF {
+                return Err(StringError::NotLatin1 { position, value: unit as u32 });
+            }
+            bytes.push(unit as u8);
+        }
+        bytes.push(0);
+        Ok(Self(bytes))
+    }
+}
+
+#[cfg(any(test, feature = "alloc"))]
+impl TryFrom<&Char16String> for Char8String {
+    type Error = StringError;
+
+    fn try_from(value: &Char16String) -> Result<Self, StringError> {
+        Self::try_from(value.as_char16_str())
+    }
+}
+
+#[cfg(any(test, feature = "alloc"))]
+impl TryFrom<Char16String> for Char8String {
+    type Error = StringError;
+
+    fn try_from(value: Char16String) -> Result<Self, StringError> {
+        Self::try_from(&value)
+    }
+}
+
+#[cfg(any(test, feature = "alloc"))]
 impl core::fmt::Display for Char8String {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         core::fmt::Display::fmt(self.as_char8_str(), f)
@@ -601,6 +646,62 @@ impl<const N: usize> Default for Char8Array<N> {
     /// [`Char8Array::try_from_str`], a capacity of `0` cannot represent a valid string.
     fn default() -> Self {
         Self([0; N])
+    }
+}
+
+impl<'a, const N: usize> TryFrom<&'a str> for Char8Array<N> {
+    type Error = StringError;
+
+    /// Equivalent to [`Char8Array::try_from_str`], provided for generic code written against the
+    /// standard [`TryFrom`] trait.
+    fn try_from(s: &'a str) -> Result<Self, StringError> {
+        Self::try_from_str(s)
+    }
+}
+
+impl<const N: usize> TryFrom<Char16Array<N>> for Char8Array<N> {
+    type Error = StringError;
+
+    /// Converts UCS-2 to Latin-1.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StringError::NotLatin1`] if any code unit is above `0xFF`. This can never fail with
+    /// [`StringError::TooLong`] since both arrays share the same capacity `N`, and a `Char16Array<N>`'s
+    /// logical content is always at most `N - 1` code units.
+    // Note: `out[position]` is safe because `position < src.len() < N`, except when `N == 0`, where `src`
+    // is empty and the loop never runs.
+    #[allow(clippy::indexing_slicing)]
+    fn try_from(value: Char16Array<N>) -> Result<Self, StringError> {
+        let src = value.as_char16_str();
+        // Note: The terminator and any trailing padding are already present due to zero-initialization.
+        let mut out = [0u8; N];
+        for (position, &unit) in src.iter().enumerate() {
+            if unit > 0xFF {
+                return Err(StringError::NotLatin1 { position, value: unit as u32 });
+            }
+            out[position] = unit as u8;
+        }
+        Ok(Self(out))
+    }
+}
+
+#[cfg(any(test, feature = "alloc"))]
+impl<const N: usize> From<Char8Array<N>> for Char8String {
+    /// Converts a fixed-capacity array to a heap-owned string, dropping the const capacity `N`.
+    fn from(value: Char8Array<N>) -> Self {
+        use alloc::borrow::ToOwned;
+        value.as_char8_str().to_owned()
+    }
+}
+
+#[cfg(any(test, feature = "alloc"))]
+impl<const N: usize> From<Char8Array<N>> for String {
+    /// Converts to a native Rust string.
+    ///
+    /// This will always succeed since every Latin-1 character is a valid Unicode scalar value.
+    fn from(value: Char8Array<N>) -> Self {
+        value.as_char8_str().chars().collect()
     }
 }
 
@@ -909,5 +1010,74 @@ mod tests {
     #[test]
     fn test_char8_capacity_helper_runtime() {
         assert_eq!(latin1_capacity("café"), 5);
+    }
+
+    #[test]
+    fn test_char8_array_try_from_str_trait() {
+        let array = Char8Array::<9>::try_from("Firmware").unwrap();
+        assert!(array.as_char8_str() == "Firmware");
+    }
+
+    #[test]
+    fn test_char8_array_from_char16_array() {
+        let wide = Char16Array::<9>::from_str("Firmware");
+        let narrow = Char8Array::<9>::try_from(wide).unwrap();
+        assert!(narrow.as_char8_str() == "Firmware");
+    }
+
+    #[test]
+    fn test_char8_array_from_char16_array_high_latin1() {
+        let wide = Char16Array::<2>::from_str("\u{00E9}"); // 'é'
+        let narrow = Char8Array::<2>::try_from(wide).unwrap();
+        assert!(narrow.as_char8_str() == "\u{00E9}");
+    }
+
+    #[test]
+    fn test_char8_array_from_char16_array_not_latin1() {
+        let wide = Char16Array::<4>::from_str("A\u{20AC}"); // '€' (U+20AC) exceeds Latin-1
+        assert_eq!(Char8Array::<4>::try_from(wide), Err(StringError::NotLatin1 { position: 1, value: 0x20AC }));
+    }
+
+    #[test]
+    fn test_char8_array_from_char16_array_empty_capacity() {
+        let wide = Char16Array::<0>::default();
+        let narrow = Char8Array::<0>::try_from(wide).unwrap();
+        assert!(narrow.as_char8_str().is_empty());
+    }
+
+    #[test]
+    fn test_char8_array_to_char8string() {
+        let array = Char8Array::<9>::from_str("Firmware");
+        let owned: Char8String = array.into();
+        assert!(owned == "Firmware");
+    }
+
+    #[test]
+    fn test_char8_array_to_string() {
+        let array = Char8Array::<9>::from_str("Firmware");
+        let owned: alloc::string::String = array.into();
+        assert_eq!(owned, "Firmware");
+    }
+
+    #[test]
+    fn test_char8string_try_from_char16str() {
+        let wide = Char16Array::<4>::from_str("EFI");
+        let narrow = Char8String::try_from(wide.as_char16_str()).unwrap();
+        assert!(narrow == "EFI");
+    }
+
+    #[test]
+    fn test_char8string_try_from_char16string() {
+        let wide = Char16String::try_from_str("EFI").unwrap();
+        let narrow = Char8String::try_from(&wide).unwrap();
+        assert!(narrow == "EFI");
+        let narrow_owned = Char8String::try_from(wide).unwrap();
+        assert!(narrow_owned == "EFI");
+    }
+
+    #[test]
+    fn test_char8string_try_from_char16string_not_latin1() {
+        let wide = Char16String::try_from_str("A\u{20AC}").unwrap();
+        assert_eq!(Char8String::try_from(&wide), Err(StringError::NotLatin1 { position: 1, value: 0x20AC }));
     }
 }
