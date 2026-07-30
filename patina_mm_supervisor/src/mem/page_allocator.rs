@@ -532,9 +532,7 @@ pub(crate) fn coalesced_smrr_range(regions: &[SmramRegion]) -> Option<SmramRegio
         }
     }
 
-    let (base, size) = current?;
-    let mut smrr_base = base as u32;
-    let mut smrr_size = size as u32;
+    let (mut smrr_base, mut smrr_size) = current?;
 
     // Coalesce any physically adjacent ranges into the selected range. This
     // scans the (unsorted) region array repeatedly until no further
@@ -546,14 +544,14 @@ pub(crate) fn coalesced_smrr_range(regions: &[SmramRegion]) -> Option<SmramRegio
         for region in regions {
             let region_base = region.base;
             let region_size = region.size;
-            if region_base < smrr_base as u64 && smrr_base as u64 == region_base + region_size {
+            if region_base < smrr_base && smrr_base == region_base + region_size {
                 // Region sits immediately before the current range: extend downward.
-                smrr_base = region_base as u32;
-                smrr_size = smrr_size.wrapping_add(region_size as u32);
+                smrr_base = region_base;
+                smrr_size = smrr_size.checked_add(region_size)?;
                 found = true;
-            } else if smrr_base as u64 + smrr_size as u64 == region_base && region_size > 0 {
+            } else if smrr_base + smrr_size == region_base && region_size > 0 {
                 // Region sits immediately after the current range: extend upward.
-                smrr_size = smrr_size.wrapping_add(region_size as u32);
+                smrr_size = smrr_size.checked_add(region_size)?;
                 found = true;
             }
         }
@@ -561,6 +559,9 @@ pub(crate) fn coalesced_smrr_range(regions: &[SmramRegion]) -> Option<SmramRegio
             break;
         }
     }
+
+    let smrr_base = u32::try_from(smrr_base).ok()?;
+    let smrr_size = u32::try_from(smrr_size).ok()?;
 
     if !verify_smrr_base_size(smrr_base, smrr_size) {
         log::warn!(
