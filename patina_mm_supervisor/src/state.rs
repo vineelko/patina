@@ -34,6 +34,7 @@ use crate::{
     mem::{PageAllocator, PagingPoolAllocator, SharedPagingAllocator},
     mm_policy::gate::PolicyGate,
     save_state::{SaveStateAccessHolder, SaveStateInfo},
+    smrr::SmrrRange,
     supervisor_handlers::{
         EFI_DXE_MM_READY_TO_LOCK_PROTOCOL_GUID, SupervisorMmiHandler, UnblockedMemoryTracker,
         mm_exit_boot_services_handler, mm_ready_to_lock_handler, mm_supv_request_handler,
@@ -59,8 +60,8 @@ pub(crate) struct InitState {
     ap_startup_fn: Once<fn(u64, u64, u64) -> u64>,
     /// Set once ExitBootServices has been signaled.
     at_runtime: Once<()>,
-    /// SMRR base and size
-    smrr_base_size: Once<(u32, u32)>,
+    /// SMRR region (base and size) derived during BSP initialization.
+    smrr_range: Once<SmrrRange>,
 }
 
 impl InitState {
@@ -74,7 +75,7 @@ impl InitState {
             user_entry_point: Once::new(),
             ap_startup_fn: Once::new(),
             at_runtime: Once::new(),
-            smrr_base_size: Once::new(),
+            smrr_range: Once::new(),
         }
     }
 
@@ -153,14 +154,14 @@ impl InitState {
         self.at_runtime.is_completed()
     }
 
-    /// Stores the SMRR base and size (one-time).
-    pub(crate) fn set_smrr_base_size(&self, base: u32, size: u32) {
-        self.smrr_base_size.call_once(|| (base, size));
+    /// Stores the SMRR region (one-time).
+    pub(crate) fn set_smrr_range(&self, range: SmrrRange) {
+        self.smrr_range.call_once(|| range);
     }
 
-    /// Returns the SMRR base and size, if set.
-    pub(crate) fn smrr_base_size(&self) -> Option<(u32, u32)> {
-        self.smrr_base_size.get().copied()
+    /// Returns the SMRR region, if set.
+    pub(crate) fn smrr_range(&self) -> Option<SmrrRange> {
+        self.smrr_range.get().copied()
     }
 }
 

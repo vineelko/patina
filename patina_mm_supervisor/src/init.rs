@@ -33,6 +33,7 @@ use crate::{
     mm_policy::{self, MemDescriptorV1_0, dump_policy, gate::PolicyGate, walk_page_table},
     query_address_ownership, read_cr3,
     save_state::SaveStateInfo,
+    smrr::{configure_smm_code_access, smrr_initialize},
     state::{init_state, security_state},
 };
 
@@ -262,9 +263,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // Derive the SMRR range from the scanned regions, coalescing physically adjacent
         // regions, and store it for later SMRR programming.
         match smram_scanned_regions.coalesced_smrr_range() {
-            Some((smrr_base, smrr_size)) => {
-                log::info!("Discovered SMRR range: base=0x{:08x}, size=0x{:08x}", smrr_base, smrr_size);
-                init_state().set_smrr_base_size(smrr_base, smrr_size);
+            Some(range) => {
+                log::info!("Discovered SMRR range: base=0x{:08x}, size=0x{:08x}", range.base, range.size);
+                init_state().set_smrr_range(range);
             }
             None => panic!("Failed to determine SMRR range from scanned SMRAM regions"),
         }
@@ -497,7 +498,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let core_type = if is_bsp { "BSP" } else { "AP" };
         log::trace!("{} (CPU {}) performing per-core initialization...", core_type, cpu_id);
 
-        // TODO: Initialize per-CPU data structures
+        let range =
+            init_state().smrr_range().expect("SMRR range must be determined during BSP init before per-core init");
+        smrr_initialize(range);
+        configure_smm_code_access();
 
         log::trace!("{} (CPU {}) per-core initialization complete.", core_type, cpu_id);
     }

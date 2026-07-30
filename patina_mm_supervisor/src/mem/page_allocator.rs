@@ -49,6 +49,8 @@ use patina_paging::{MemoryAttributes, PageTable};
 use r_efi::efi;
 use spin::{Mutex, MutexGuard, relax::Spin};
 
+use crate::smrr::{SmrrRange, verify_smrr_base_size};
+
 /// Bits per byte.
 const BITS_PER_BYTE: usize = 8;
 
@@ -555,9 +557,9 @@ impl ScannedRegions {
     /// allocation state), scanning repeatedly until no further adjacent region
     /// is found.
     ///
-    /// Returns `(smrr_base, smrr_size)` on success, or `None` if no scanned
+    /// Returns the coalesced [`SmrrRange`] on success, or `None` if no scanned
     /// region meets the SMRR base/size requirements.
-    pub(crate) fn coalesced_smrr_range(&self) -> Option<(u32, u32)> {
+    pub(crate) fn coalesced_smrr_range(&self) -> Option<SmrrRange> {
         /// Lowest CPU start address a candidate SMRR range may have.
         const BASE_1MB: u64 = 0x0010_0000;
         /// Highest address the primary SMRR can cover (4 GiB).
@@ -607,8 +609,17 @@ impl ScannedRegions {
             }
         }
 
+        if !verify_smrr_base_size(smrr_base, smrr_size) {
+            log::warn!(
+                "Coalesced SMRR range base=0x{:x} size=0x{:x} does not meet SMRR alignment/size requirements",
+                smrr_base,
+                smrr_size
+            );
+            return None;
+        }
+
         log::info!("SMRR Base: 0x{:x}, SMRR Size: 0x{:x}", smrr_base, smrr_size);
-        Some((smrr_base, smrr_size))
+        Some(SmrrRange { base: smrr_base, size: smrr_size })
     }
 }
 
@@ -1068,15 +1079,16 @@ mod tests {
         let base = 0x8000_0000u64;
         let size = SIZE_256KB as u64;
         let scanned = regions_from(&[(base, size, false)]);
-        assert_eq!(scanned.coalesced_smrr_range(), Some((base as u32, size as u32)));
+        assert_eq!(scanned.coalesced_smrr_range(), Some(SmrrRange { base: base as u32, size: size as u32 }));
     }
 
     #[test]
-    fn test_page_allocator_coalesced_smrr_range_minimum_size_boundary() {
-        // Exactly the minimum accepted size is valid.
+    fn test_page_allocator_coalesced_smrr_range_rejects_non_power_of_two_size() {
+        // A region large enough to be selected but whose size is not a power of
+        // two fails SMRR verification and is rejected.
         let base = 0x8000_0000u64;
         let scanned = regions_from(&[(base, MIN_SMRR_SIZE, false)]);
-        assert_eq!(scanned.coalesced_smrr_range(), Some((base as u32, MIN_SMRR_SIZE as u32)));
+        assert_eq!(scanned.coalesced_smrr_range(), None);
     }
 
     #[test]
@@ -1084,7 +1096,7 @@ mod tests {
         let small = (0x8000_0000u64, SIZE_256KB as u64, false);
         let large = (0x9000_0000u64, SIZE_256KB as u64 * 4, false);
         let scanned = regions_from(&[small, large]);
-        assert_eq!(scanned.coalesced_smrr_range(), Some((large.0 as u32, large.1 as u32)));
+        assert_eq!(scanned.coalesced_smrr_range(), Some(SmrrRange { base: large.0 as u32, size: large.1 as u32 }));
     }
 
     #[test]
@@ -1097,22 +1109,44 @@ mod tests {
 
     #[test]
     fn test_page_allocator_coalesced_smrr_range_coalesces_adjacent_upward() {
+        // Selected (larger) region extends upward into the adjacent region; the
+        // coalesced size is a power of two with a naturally aligned base.
         let base = 0x8000_0000u64;
-        let size = SIZE_256KB as u64 * 2; // selected as the largest region
-        let above_size = SIZE_256KB as u64;
+        let size = SIZE_256KB as u64 * 6; // selected as the largest region
+        let above_size = SIZE_256KB as u64 * 2;
         let above = (base + size, above_size, false);
         let scanned = regions_from(&[(base, size, false), above]);
-        assert_eq!(scanned.coalesced_smrr_range(), Some((base as u32, (size + above_size) as u32)));
+        assert_eq!(
+            scanned.coalesced_smrr_range(),
+            Some(SmrrRange { base: base as u32, size: (size + above_size) as u32 })
+        );
     }
 
     #[test]
     fn test_page_allocator_coalesced_smrr_range_coalesces_adjacent_downward() {
-        let base = 0x8000_0000u64;
-        let size = SIZE_256KB as u64 * 2; // selected as the largest region
-        let below_size = SIZE_256KB as u64;
-        let below = (base - below_size, below_size, false);
+        // Selected (larger) region extends downward into the adjacent region;
+        // the coalesced size is a power of two with a naturally aligned base.
+        let low_base = 0x8000_0000u64;
+        let below_size = SIZE_256KB as u64 * 2;
+        let base = low_base + below_size;
+        let size = SIZE_256KB as u64 * 6; // selected as the largest region
+        let below = (low_base, below_size, false);
         let scanned = regions_from(&[below, (base, size, false)]);
-        assert_eq!(scanned.coalesced_smrr_range(), Some(((base - below_size) as u32, (size + below_size) as u32)));
+        assert_eq!(
+            scanned.coalesced_smrr_range(),
+            Some(SmrrRange { base: low_base as u32, size: (size + below_size) as u32 })
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_coalesced_smrr_range_rejects_non_power_of_two_coalesced_size() {
+        // Coalescing yields 0xC0000 bytes, which is not a power of two, so the
+        // range is rejected rather than causing a later panic in smrr_initialize.
+        let base = 0x8000_0000u64;
+        let size = SIZE_256KB as u64 * 2; // 0x80000, selected
+        let above = (base + size, SIZE_256KB as u64, false); // + 0x40000 => 0xC0000
+        let scanned = regions_from(&[(base, size, false), above]);
+        assert_eq!(scanned.coalesced_smrr_range(), None);
     }
 
     #[test]
@@ -1123,6 +1157,6 @@ mod tests {
         // SMRR must cover a single contiguous physical range.
         let above = (base + size, size, true);
         let scanned = regions_from(&[(base, size, false), above]);
-        assert_eq!(scanned.coalesced_smrr_range(), Some((base as u32, (size * 2) as u32)));
+        assert_eq!(scanned.coalesced_smrr_range(), Some(SmrrRange { base: base as u32, size: (size * 2) as u32 }));
     }
 }

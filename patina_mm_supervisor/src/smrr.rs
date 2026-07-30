@@ -13,6 +13,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
+use crate::cpu::CPUID_VERSION_INFO;
 use crate::cpu::read_msr;
 use crate::cpu::write_msr;
 use core::arch::x86_64::__cpuid;
@@ -38,12 +39,21 @@ const MSR_SMRR_MASK: u32 = 0x1F3;
 const _MTRR_CACHE_WRITE_PROTECTED: u8 = 5;
 const MTRR_CACHE_WRITE_BACK: u8 = 6;
 
-const CPUID_VERSION_INFO: u32 = 0x1;
-
 const PHYS_ADDR_MASK: u64 = 0xFFFF_F000; // bits [31:12]
 const MEMTYPE_MASK: u64 = 0x0000_00FF; // bits [7:0]
 const MASK_BIT_10: u64 = 1 << 10;
 const MASK_VALID_BIT: u64 = 1 << 11;
+
+/// A System Management Range Register (SMRR) region: a physical base address
+/// and a size in bytes. Validity (power-of-two size, naturally aligned base) is
+/// checked with [`verify_smrr_base_size`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SmrrRange {
+    /// Physical base address of the SMRR region.
+    pub base: u32,
+    /// Size of the SMRR region, in bytes.
+    pub size: u32,
+}
 
 /// Enables the SMM Code Access Check feature.
 ///
@@ -56,7 +66,7 @@ const MASK_VALID_BIT: u64 = 1 << 11;
 ///
 /// Panics if the CPU does not report support for SMM Code Access Check.
 #[cfg_attr(coverage_nightly, coverage(off))]
-pub fn configure_smm_code_access() {
+pub(crate) fn configure_smm_code_access() {
     // SAFETY: MSR_SMM_MCA_CAP is a read-only architectural capability MSR that is
     // valid on all CPUs targeted by this code; reading it has no side effects.
     let smm_code_access_supported = (unsafe { read_msr(MSR_SMM_MCA_CAP) } & SMM_CODE_ACCESS_CHK_BIT) != 0;
@@ -83,27 +93,30 @@ const fn get_power_of_two32(value: u32) -> u32 {
 }
 
 /// Sets the memory type field ([7:0]) of a raw SMRR base register value.
-fn base_reg_set_memtype(raw: u64, memtype: u8) -> u64 {
+const fn base_reg_set_memtype(raw: u64, memtype: u8) -> u64 {
     (raw & !MEMTYPE_MASK) | (memtype as u64 & MEMTYPE_MASK)
 }
 
 /// Sets the physical base address field ([31:12]) of a raw SMRR base register
 /// value.
-fn base_reg_set_base(raw: u64, base: u32) -> u64 {
-    // Stores `base >> 12` into [31:12], i.e. the address bits [31:12].
+const fn base_reg_set_base(raw: u64, base: u32) -> u64 {
+    // `base` is a naturally aligned physical address whose low 12 bits are
+    // zero, so its address bits [31:12] already sit at the register field's
+    // positions; mask them in place without shifting.
     (raw & !PHYS_ADDR_MASK) | (base as u64 & PHYS_ADDR_MASK)
 }
 
 /// Sets the mask field ([31:12]) of a raw SMRR mask register value for the
 /// given region `size`.
-fn mask_reg_set_mask(raw: u64, size: u32) -> u64 {
-    // Mask field = ~(size - 1) >> 12, placed back into [31:12].
+const fn mask_reg_set_mask(raw: u64, size: u32) -> u64 {
+    // Mask field = ~(size - 1), which for a power-of-two `size` has zeros in the
+    // low bits and ones above; mask its bits [31:12] in place without shifting.
     let mask_bits = (!(size.wrapping_sub(1))) as u64 & PHYS_ADDR_MASK;
     (raw & !PHYS_ADDR_MASK) | mask_bits
 }
 
 /// Returns `true` if bit 10 is set in a raw SMRR mask register value.
-fn mask_reg_bit10_set(raw: u64) -> bool {
+const fn mask_reg_bit10_set(raw: u64) -> bool {
     (raw & MASK_BIT_10) != 0
 }
 
@@ -112,7 +125,7 @@ fn mask_reg_bit10_set(raw: u64) -> bool {
 ///
 /// A valid region must be at least 4 KiB, have a size that is a power of two,
 /// and have a base address that is naturally aligned to its size.
-pub const fn verify_smrr_base_size(smrr_base: u32, smrr_size: u32) -> bool {
+pub(crate) const fn verify_smrr_base_size(smrr_base: u32, smrr_size: u32) -> bool {
     if smrr_size < SIZE_4KB
         || smrr_size != get_power_of_two32(smrr_size)
         || (smrr_base & !(smrr_size.wrapping_sub(1))) != smrr_base
@@ -156,10 +169,11 @@ fn is_smrr_ext_supported() -> bool {
 /// # Panics
 ///
 /// Panics if the CPU does not support MTRRs, SMRRs, or the extended SMRR
-/// capability, or if the provided `smrr_base`/`smrr_size` fail
-/// [`verify_smrr_base_size`].
+/// capability, or if the provided `range` fails [`verify_smrr_base_size`].
 #[cfg_attr(coverage_nightly, coverage(off))]
-pub fn smrr_initialize(smrr_base: u32, smrr_size: u32) {
+pub(crate) fn smrr_initialize(range: SmrrRange) {
+    let SmrrRange { base: smrr_base, size: smrr_size } = range;
+
     if !is_mtrr_supported() {
         panic!("Unsupported CPU: MTRR not supported");
     }
@@ -202,28 +216,15 @@ pub fn smrr_initialize(smrr_base: u32, smrr_size: u32) {
 /// already set, the function does nothing, since a finalized SMRR cannot be
 /// modified until the next processor reset.
 ///
-/// # Panics
-///
-/// Panics if the CPU does not support MTRRs, SMRRs, or the extended SMRR
-/// capability.
+/// CPU MTRR/SMRR support is verified once in [`smrr_initialize`] on the first
+/// SMI, so it is not re-checked here on every SMI.
 #[cfg_attr(coverage_nightly, coverage(off))]
-pub fn smrr_enable() {
-    if !is_mtrr_supported() {
-        panic!("Unsupported CPU: MTRR not supported");
-    }
-
-    if !is_smrr_supported() {
-        panic!("Unsupported CPU: SMRR not supported");
-    }
-
-    if !is_smrr_ext_supported() {
-        panic!("Unsupported CPU: SMRR extended capability not supported");
-    }
-
-    // SAFETY: SMRR support was verified above, so MSR_SMRR_MASK is a valid
-    // architectural MSR. We only set the valid and bit-10 fields to enable and
-    // finalize the previously programmed range, preserving all other bits. The
-    // write is skipped if the range is already finalized.
+pub(crate) fn smrr_enable() {
+    // SAFETY: SMRR support was verified in `smrr_initialize` on the first SMI,
+    // so MSR_SMRR_MASK is a valid architectural MSR. We only set the valid and
+    // bit-10 fields to enable and finalize the previously programmed range,
+    // preserving all other bits. The write is skipped if the range is already
+    // finalized.
     unsafe {
         let mut mask = read_msr(MSR_SMRR_MASK);
         if !mask_reg_bit10_set(mask) {

@@ -94,7 +94,7 @@ pub use cpu::CpuInfo;
 pub use init::PolicyInitError;
 pub use supervisor_handlers::SupervisorMmiHandler;
 
-use crate::smrr::{configure_smm_code_access, smrr_enable, smrr_initialize};
+use crate::smrr::smrr_enable;
 
 // The entry-point shim references `rust_main`, which is provided by the platform binary, and is
 // only meaningful on the firmware (UEFI) target. Exclude it from host builds (tests, doctests)
@@ -541,14 +541,6 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // Track that this core has completed per-core init
         let init_count = init_state().inc_per_core_init_count();
         log::trace!("CPU {} (index {}) completed per-core init ({} cores initialized)", cpu_id, cpu_index, init_count);
-
-        // If smrr region in the initstate is set, use that otherwise don't
-        // program smrr
-        if let Some((base, size)) = init_state().smrr_base_size() {
-            smrr_initialize(base, size);
-        }
-
-        configure_smm_code_access();
 
         // BSP waits for all registered CPUs to complete per-core init before returning
         if is_bsp {
