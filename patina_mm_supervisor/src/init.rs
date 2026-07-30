@@ -29,7 +29,8 @@ use patina_paging::{
 
 use crate::{
     AllocationType, CommBufferConfig, MmSupervisorCore, PageOwnership, PlatformInfo, SharedPagingAllocator,
-    is_buffer_inside_mmram, mem,
+    is_buffer_inside_mmram,
+    mem::{self, page_allocator::coalesced_smrr_range},
     mm_policy::{self, MemDescriptorV1_0, dump_policy, gate::PolicyGate, walk_page_table},
     query_address_ownership, read_cr3,
     save_state::SaveStateInfo,
@@ -255,14 +256,15 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // Initialize the page allocator from the HOB list. This finds all SMRAM
         // regions and sets up memory tracking.
         // SAFETY: `hob_list` is a valid HOB list per this function's contract.
-        let smram_scanned_regions = match unsafe { security_state().page_allocator().init_from_hob_list(hob_list) } {
-            Ok(scanned_regions) => scanned_regions,
-            Err(e) => panic!("Failed to initialize page allocator: {:?}", e),
-        };
+        let (smram_regions, region_count) =
+            match unsafe { security_state().page_allocator().init_from_hob_list(hob_list) } {
+                Ok(scanned_regions) => scanned_regions,
+                Err(e) => panic!("Failed to initialize page allocator: {:?}", e),
+            };
 
-        // Derive the SMRR range from the scanned regions, coalescing physically adjacent
-        // regions, and store it for later SMRR programming.
-        match smram_scanned_regions.coalesced_smrr_range() {
+        // Derive the SMRR range from the scanned SMRAM regions, coalescing
+        // physically adjacent regions, and store it for later SMRR programming.
+        match coalesced_smrr_range(smram_regions.get(..region_count).unwrap_or(&smram_regions)) {
             Some(range) => {
                 log::info!("Discovered SMRR range: base=0x{:08x}, size=0x{:08x}", range.base, range.size);
                 init_state().set_smrr_range(range);

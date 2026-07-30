@@ -34,7 +34,7 @@ use crate::{
     mem::{PageAllocator, PagingPoolAllocator, SharedPagingAllocator},
     mm_policy::gate::PolicyGate,
     save_state::{SaveStateAccessHolder, SaveStateInfo},
-    smrr::SmrrRange,
+    smrr::SmramRegion,
     supervisor_handlers::{
         EFI_DXE_MM_READY_TO_LOCK_PROTOCOL_GUID, SupervisorMmiHandler, UnblockedMemoryTracker,
         mm_exit_boot_services_handler, mm_ready_to_lock_handler, mm_supv_request_handler,
@@ -61,7 +61,7 @@ pub(crate) struct InitState {
     /// Set once ExitBootServices has been signaled.
     at_runtime: Once<()>,
     /// SMRR region (base and size) derived during BSP initialization.
-    smrr_range: Once<SmrrRange>,
+    smrr_range: Once<SmramRegion>,
 }
 
 impl InitState {
@@ -155,12 +155,12 @@ impl InitState {
     }
 
     /// Stores the SMRR region (one-time).
-    pub(crate) fn set_smrr_range(&self, range: SmrrRange) {
+    pub(crate) fn set_smrr_range(&self, range: SmramRegion) {
         self.smrr_range.call_once(|| range);
     }
 
     /// Returns the SMRR region, if set.
-    pub(crate) fn smrr_range(&self) -> Option<SmrrRange> {
+    pub(crate) fn smrr_range(&self) -> Option<SmramRegion> {
         self.smrr_range.get().copied()
     }
 }

@@ -44,15 +44,16 @@ const MEMTYPE_MASK: u64 = 0x0000_00FF; // bits [7:0]
 const MASK_BIT_10: u64 = 1 << 10;
 const MASK_VALID_BIT: u64 = 1 << 11;
 
-/// A System Management Range Register (SMRR) region: a physical base address
-/// and a size in bytes. Validity (power-of-two size, naturally aligned base) is
-/// checked with [`verify_smrr_base_size`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SmrrRange {
-    /// Physical base address of the SMRR region.
-    pub base: u32,
-    /// Size of the SMRR region, in bytes.
-    pub size: u32,
+/// A region of SMRAM: a physical base address, a size in bytes, and whether it
+/// was reported as pre-allocated in the HOB list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct SmramRegion {
+    /// Physical base address of the region.
+    pub base: u64,
+    /// Size of the region, in bytes.
+    pub size: u64,
+    /// Whether the region was reported as pre-allocated (`EFI_ALLOCATED`).
+    pub pre_allocated: bool,
 }
 
 /// Enables the SMM Code Access Check feature.
@@ -171,8 +172,9 @@ fn is_smrr_ext_supported() -> bool {
 /// Panics if the CPU does not support MTRRs, SMRRs, or the extended SMRR
 /// capability, or if the provided `range` fails [`verify_smrr_base_size`].
 #[cfg_attr(coverage_nightly, coverage(off))]
-pub(crate) fn smrr_initialize(range: SmrrRange) {
-    let SmrrRange { base: smrr_base, size: smrr_size } = range;
+pub(crate) fn smrr_initialize(range: SmramRegion) {
+    let smrr_base = range.base as u32;
+    let smrr_size = range.size as u32;
 
     if !is_mtrr_supported() {
         panic!("Unsupported CPU: MTRR not supported");
