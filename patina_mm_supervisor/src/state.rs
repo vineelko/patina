@@ -59,6 +59,8 @@ pub(crate) struct InitState {
     ap_startup_fn: Once<fn(u64, u64, u64) -> u64>,
     /// Set once ExitBootServices has been signaled.
     at_runtime: Once<()>,
+    /// SMRR base and size
+    smrr_base_size: Once<(u32, u32)>,
 }
 
 impl InitState {
@@ -72,6 +74,7 @@ impl InitState {
             user_entry_point: Once::new(),
             ap_startup_fn: Once::new(),
             at_runtime: Once::new(),
+            smrr_base_size: Once::new(),
         }
     }
 
@@ -148,6 +151,16 @@ impl InitState {
     /// Returns whether ExitBootServices has been signaled.
     pub(crate) fn is_at_runtime(&self) -> bool {
         self.at_runtime.is_completed()
+    }
+
+    /// Stores the SMRR base and size (one-time).
+    pub(crate) fn set_smrr_base_size(&self, base: u32, size: u32) {
+        self.smrr_base_size.call_once(|| (base, size));
+    }
+
+    /// Returns the SMRR base and size, if set.
+    pub(crate) fn smrr_base_size(&self) -> Option<(u32, u32)> {
+        self.smrr_base_size.get().copied()
     }
 }
 

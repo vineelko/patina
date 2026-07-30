@@ -41,7 +41,7 @@ use core::{
 };
 
 use patina::{
-    base::UEFI_PAGE_SIZE,
+    base::{SIZE_256KB, UEFI_PAGE_SIZE},
     pi::hob::{Hob, PhaseHandoffInformationTable},
     uefi_pages_to_size, uefi_size_to_pages,
 };
@@ -94,7 +94,7 @@ pub enum AllocationType {
 
 /// SMRAM descriptor structure matching EFI_SMRAM_DESCRIPTOR.
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct SmramDescriptor {
     /// Physical start address of the SMRAM region.
     pub physical_start: efi::PhysicalAddress,
@@ -503,7 +503,7 @@ const MAX_TEMP_REGIONS: usize = 256;
 
 /// SMRAM regions discovered while scanning the HOB list, before they are copied
 /// into the SMRAM bookkeeping structures.
-struct ScannedRegions {
+pub(crate) struct ScannedRegions {
     /// Discovered regions as `(base, size, pre_allocated)`.
     regions: [(u64, u64, bool); MAX_TEMP_REGIONS],
     /// Number of valid entries in `regions`.
@@ -544,6 +544,71 @@ impl ScannedRegions {
         }
         self.total_pages += uefi_size_to_pages!(size as usize);
         self.count += 1;
+    }
+
+    /// Selects the primary SMRR range from the scanned regions and coalesces
+    /// any physically adjacent regions into it.
+    ///
+    /// It picks the largest non pre-allocated region in `[1 MiB, 4 GiB]` that
+    /// is at least `256 KiB - 4 KiB`, then extends it downward and upward
+    /// across every region that is physically contiguous with it (regardless of
+    /// allocation state), scanning repeatedly until no further adjacent region
+    /// is found.
+    ///
+    /// Returns `(smrr_base, smrr_size)` on success, or `None` if no scanned
+    /// region meets the SMRR base/size requirements.
+    pub(crate) fn coalesced_smrr_range(&self) -> Option<(u32, u32)> {
+        /// Lowest CPU start address a candidate SMRR range may have.
+        const BASE_1MB: u64 = 0x0010_0000;
+        /// Highest address the primary SMRR can cover (4 GiB).
+        const SMRR_MAX_ADDRESS: u64 = 0x1_0000_0000;
+
+        let regions = self.regions.get(..self.count).unwrap_or(&self.regions);
+
+        // Find the largest usable (non-pre-allocated) range in [1 MiB, 4 GiB] that is at least
+        // 256 KiB - 4 KiB.
+        let mut max_size = SIZE_256KB as u64 - UEFI_PAGE_SIZE as u64;
+        let mut current: Option<(u64, u64)> = None;
+        for &(base, size, pre_allocated) in regions {
+            if pre_allocated {
+                continue;
+            }
+            if base >= BASE_1MB && base + size <= SMRR_MAX_ADDRESS && size >= max_size {
+                max_size = size;
+                current = Some((base, size));
+            }
+        }
+
+        let (base, size) = current?;
+        let mut smrr_base = base as u32;
+        let mut smrr_size = size as u32;
+
+        // Coalesce any physically adjacent ranges into the selected range. This
+        // scans the (unsorted) region array repeatedly until no further
+        // adjacent range is found, so ordering does not matter. Adjacency is
+        // considered regardless of allocation state, because the SMRR must
+        // cover a single contiguous physical range.
+        loop {
+            let mut found = false;
+            for &(region_base, region_size, _) in regions {
+                if region_base < smrr_base as u64 && smrr_base as u64 == region_base + region_size {
+                    // Region sits immediately before the current range: extend downward.
+                    smrr_base = region_base as u32;
+                    smrr_size = smrr_size.wrapping_add(region_size as u32);
+                    found = true;
+                } else if smrr_base as u64 + smrr_size as u64 == region_base && region_size > 0 {
+                    // Region sits immediately after the current range: extend upward.
+                    smrr_size = smrr_size.wrapping_add(region_size as u32);
+                    found = true;
+                }
+            }
+            if !found {
+                break;
+            }
+        }
+
+        log::info!("SMRR Base: 0x{:x}, SMRR Size: 0x{:x}", smrr_base, smrr_size);
+        Some((smrr_base, smrr_size))
     }
 }
 
@@ -673,7 +738,7 @@ impl PageAllocator {
     /// ## Safety
     ///
     /// The caller must ensure that `hob_list` points to a valid HOB list. Only null pointer will be rejected.
-    pub unsafe fn init_from_hob_list(&self, hob_list: *const c_void) -> Result<(), PageAllocError> {
+    pub unsafe fn init_from_hob_list(&self, hob_list: *const c_void) -> Result<ScannedRegions, PageAllocError> {
         if hob_list.is_null() {
             return Err(PageAllocError::NotInitialized);
         }
@@ -760,7 +825,7 @@ impl PageAllocator {
             self.allocated_page_count(AllocationType::User)
         );
 
-        Ok(())
+        Ok(scanned)
     }
 
     /// Allocates contiguous pages from SMRAM for supervisor use.
@@ -952,5 +1017,112 @@ impl PageAllocator {
             return false;
         }
         self.lock_state().is_region_inside_mmram(addr, size)
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    /// Smallest region size `coalesced_smrr_range` will accept (256 KiB - 4 KiB).
+    const MIN_SMRR_SIZE: u64 = SIZE_256KB as u64 - UEFI_PAGE_SIZE as u64;
+
+    /// Builds a `ScannedRegions` from `(base, size, pre_allocated)` tuples.
+    fn regions_from(entries: &[(u64, u64, bool)]) -> ScannedRegions {
+        let mut scanned = ScannedRegions::new();
+        for &(base, size, pre_allocated) in entries {
+            scanned.push(base, size, pre_allocated);
+        }
+        scanned
+    }
+
+    #[test]
+    fn test_page_allocator_coalesced_smrr_range_empty_returns_none() {
+        let scanned = ScannedRegions::new();
+        assert_eq!(scanned.coalesced_smrr_range(), None);
+    }
+
+    #[test]
+    fn test_page_allocator_coalesced_smrr_range_region_too_small_returns_none() {
+        let scanned = regions_from(&[(0x0010_0000, MIN_SMRR_SIZE - UEFI_PAGE_SIZE as u64, false)]);
+        assert_eq!(scanned.coalesced_smrr_range(), None);
+    }
+
+    #[test]
+    fn test_page_allocator_coalesced_smrr_range_below_1mb_returns_none() {
+        // Base below 1 MiB is rejected even when the region is large enough.
+        let scanned = regions_from(&[(0x0008_0000, SIZE_256KB as u64, false)]);
+        assert_eq!(scanned.coalesced_smrr_range(), None);
+    }
+
+    #[test]
+    fn test_page_allocator_coalesced_smrr_range_above_4gb_returns_none() {
+        // A range whose end exceeds 4 GiB is rejected.
+        let scanned = regions_from(&[(0xFFFF_F000, SIZE_256KB as u64, false)]);
+        assert_eq!(scanned.coalesced_smrr_range(), None);
+    }
+
+    #[test]
+    fn test_page_allocator_coalesced_smrr_range_single_valid_region() {
+        let base = 0x8000_0000u64;
+        let size = SIZE_256KB as u64;
+        let scanned = regions_from(&[(base, size, false)]);
+        assert_eq!(scanned.coalesced_smrr_range(), Some((base as u32, size as u32)));
+    }
+
+    #[test]
+    fn test_page_allocator_coalesced_smrr_range_minimum_size_boundary() {
+        // Exactly the minimum accepted size is valid.
+        let base = 0x8000_0000u64;
+        let scanned = regions_from(&[(base, MIN_SMRR_SIZE, false)]);
+        assert_eq!(scanned.coalesced_smrr_range(), Some((base as u32, MIN_SMRR_SIZE as u32)));
+    }
+
+    #[test]
+    fn test_page_allocator_coalesced_smrr_range_selects_largest_region() {
+        let small = (0x8000_0000u64, SIZE_256KB as u64, false);
+        let large = (0x9000_0000u64, SIZE_256KB as u64 * 4, false);
+        let scanned = regions_from(&[small, large]);
+        assert_eq!(scanned.coalesced_smrr_range(), Some((large.0 as u32, large.1 as u32)));
+    }
+
+    #[test]
+    fn test_page_allocator_coalesced_smrr_range_ignores_pre_allocated_for_selection() {
+        // A pre-allocated region cannot be selected as the primary range, so with
+        // no other usable region the result is None.
+        let scanned = regions_from(&[(0x8000_0000, SIZE_256KB as u64, true)]);
+        assert_eq!(scanned.coalesced_smrr_range(), None);
+    }
+
+    #[test]
+    fn test_page_allocator_coalesced_smrr_range_coalesces_adjacent_upward() {
+        let base = 0x8000_0000u64;
+        let size = SIZE_256KB as u64 * 2; // selected as the largest region
+        let above_size = SIZE_256KB as u64;
+        let above = (base + size, above_size, false);
+        let scanned = regions_from(&[(base, size, false), above]);
+        assert_eq!(scanned.coalesced_smrr_range(), Some((base as u32, (size + above_size) as u32)));
+    }
+
+    #[test]
+    fn test_page_allocator_coalesced_smrr_range_coalesces_adjacent_downward() {
+        let base = 0x8000_0000u64;
+        let size = SIZE_256KB as u64 * 2; // selected as the largest region
+        let below_size = SIZE_256KB as u64;
+        let below = (base - below_size, below_size, false);
+        let scanned = regions_from(&[below, (base, size, false)]);
+        assert_eq!(scanned.coalesced_smrr_range(), Some(((base - below_size) as u32, (size + below_size) as u32)));
+    }
+
+    #[test]
+    fn test_page_allocator_coalesced_smrr_range_coalesces_pre_allocated_adjacent() {
+        let base = 0x8000_0000u64;
+        let size = SIZE_256KB as u64;
+        // A physically adjacent pre-allocated region is still coalesced, since the
+        // SMRR must cover a single contiguous physical range.
+        let above = (base + size, size, true);
+        let scanned = regions_from(&[(base, size, false), above]);
+        assert_eq!(scanned.coalesced_smrr_range(), Some((base as u32, (size * 2) as u32)));
     }
 }

@@ -38,6 +38,7 @@ use crate::{
 
 use patina_internal_cpu::interrupts::Interrupts;
 use zerocopy::FromBytes;
+use zerocopy_derive::Immutable;
 
 /// Errors that can occur during policy initialization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,7 +80,7 @@ const FIXUP64_SMI_HANDLER_IDTR: usize = 5;
 /// `MM_SUPERVISOR_BUFFER_T` (0) in practice — the user channel uses the
 /// separate `gMmCommBufferHobGuid` HOB.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, zerocopy_derive::FromBytes, zerocopy_derive::Immutable)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable)]
 pub struct MmCommonRegionHobData {
     /// Region type discriminator. Always `MM_SUPERVISOR_BUFFER_T` (0) for
     /// the HOB the supervisor consumes.
@@ -101,7 +102,7 @@ pub struct MmCommonRegionHobData {
 /// has the same byte layout the C producer emits while still allowing safe,
 /// reference-based field access once parsed via `zerocopy`.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, zerocopy_derive::FromBytes, zerocopy_derive::Immutable)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable)]
 pub struct MmSupvPassDownHobData {
     /// Revision of this HOB structure
     pub revision: u32,
@@ -253,8 +254,19 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // Initialize the page allocator from the HOB list. This finds all SMRAM
         // regions and sets up memory tracking.
         // SAFETY: `hob_list` is a valid HOB list per this function's contract.
-        if let Err(e) = unsafe { security_state().page_allocator().init_from_hob_list(hob_list) } {
-            panic!("Failed to initialize page allocator: {:?}", e);
+        let smram_scanned_regions = match unsafe { security_state().page_allocator().init_from_hob_list(hob_list) } {
+            Ok(scanned_regions) => scanned_regions,
+            Err(e) => panic!("Failed to initialize page allocator: {:?}", e),
+        };
+
+        // Derive the SMRR range from the scanned regions, coalescing physically adjacent
+        // regions, and store it for later SMRR programming.
+        match smram_scanned_regions.coalesced_smrr_range() {
+            Some((smrr_base, smrr_size)) => {
+                log::info!("Discovered SMRR range: base=0x{:08x}, size=0x{:08x}", smrr_base, smrr_size);
+                init_state().set_smrr_base_size(smrr_base, smrr_size);
+            }
+            None => panic!("Failed to determine SMRR range from scanned SMRAM regions"),
         }
 
         // Reserve pages from the page allocator for paging structures. This is
