@@ -65,8 +65,13 @@ use crate::error::EfiError;
 pub mod char16;
 pub mod char8;
 
-pub use char8::{Char8Array, Char8Str, Char8String};
-pub use char16::{Char16Array, Char16Str, Char16String};
+pub use char8::{Char8Array, Char8Str};
+pub use char16::{Char16Array, Char16Str};
+
+#[cfg(any(test, feature = "alloc"))]
+pub use char8::Char8String;
+#[cfg(any(test, feature = "alloc"))]
+pub use char16::Char16String;
 
 #[doc(hidden)]
 pub use char8::latin1_capacity;
