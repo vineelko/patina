@@ -57,6 +57,7 @@ mod perf_timer;
 mod privilege_mgmt;
 mod runtime;
 mod save_state;
+mod smrr;
 mod state;
 mod supervisor_handlers;
 
@@ -92,6 +93,8 @@ pub use cpu::CpuInfo;
 // their function signatures and return types.
 pub use init::PolicyInitError;
 pub use supervisor_handlers::SupervisorMmiHandler;
+
+use crate::smrr::smrr_enable;
 
 // The entry-point shim references `rust_main`, which is provided by the platform binary, and is
 // only meaningful on the firmware (UEFI) target. Exclude it from host builds (tests, doctests)
@@ -455,6 +458,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 cpu_id,
                 cpu_index
             );
+            smrr_enable();
             self.enter_runtime(cpu_id);
 
             return;
