@@ -23,7 +23,10 @@
 extern crate alloc;
 
 pub use base::guid::{BinaryGuid, Guid, GuidError, OwnedGuid};
-pub use base::string::{Char8Array, Char8Str, Char8String, Char16Array, Char16Str, Char16String, StringError};
+pub use base::string::{Char8Array, Char8Str, Char16Array, Char16Str, StringError};
+
+#[cfg(any(test, feature = "alloc"))]
+pub use base::string::{Char8String, Char16String};
 
 /// Common GUID constants
 pub mod guid_constants {
