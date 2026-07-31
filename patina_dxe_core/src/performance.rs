@@ -587,8 +587,22 @@ pub(crate) fn push_generic_record(buffer: &mut PerformanceRecordBuffer, record_t
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
+    //! Global-state isolation has to be considered for the tests in this module.
+    //!
+    //! Each test should pick whether to use a wrapper and exactly one wrapper based on the following
+    //! criteria:
+    //!
+    //! - No wrapper: The test only touches locally-constructed resources (its own atomics and timer).
+    //!   It (and helpers it might use) reaches no global state, so it needs neither serialization
+    //!   nor cleanup.
+    //! - `with_global_lock`: The test locks the FBPT `TplMutex`. Since raising and restoring the TPL
+    //!   mutates the SDK's process-global interrupt state, the test must serialize against other
+    //!   tests. It does not touch the GCD, protocol database, or allocators, so no reset is required.
+    //! - `with_clean_global_lock`: The test reads or writes the global `PROTOCOL_DB` (directly or
+    //!   indirectly). In addition to taking the global lock, it resets that shared state before and
+    //!   after so the test starts and ends from a clean slate.
     use super::*;
-    use crate::test_support::with_global_lock;
+    use crate::test_support::{with_clean_global_lock, with_global_lock};
     use patina::standard::efi;
 
     /// Builds a `CorePerformance` backed by a real FBPT and a fixed-frequency timer for host testing.
@@ -606,7 +620,7 @@ mod tests {
     /// known performance id produces exactly one record in the table.
     #[test]
     fn test_core_performance_create_measurement_all_records() {
-        with_global_lock(|| {
+        with_clean_global_lock(|| {
             const EXPECTED_NUMBER_OF_RECORD: usize = 21;
             let perf = test_core_performance();
 
@@ -664,7 +678,7 @@ mod tests {
     /// Verifies the validation paths of [`CorePerformance::create_measurement_inner`] for unknown perf ids.
     #[test]
     fn test_core_performance_create_measurement_invalid_params() {
-        with_global_lock(|| {
+        with_clean_global_lock(|| {
             let perf = test_core_performance();
 
             // A PerfEntry must have a known perf id.
@@ -838,7 +852,7 @@ mod tests {
 
     #[test]
     fn test_core_performance_perf_helpers_record_when_enabled() {
-        with_global_lock(|| {
+        with_clean_global_lock(|| {
             const ALL_MEASUREMENTS: u32 = 0x1F;
             let perf = test_core_performance_with_mask(ALL_MEASUREMENTS);
 
@@ -962,7 +976,7 @@ mod tests {
 
     #[test]
     fn test_get_module_guid_from_handle_resolves_fw_file_guid() {
-        with_global_lock(|| {
+        with_clean_global_lock(|| {
             let file_guid = efi::Guid::from_bytes(&[0xAB; 16]);
             let node_length =
                 (mem::size_of::<efi::protocols::device_path::Protocol>() + mem::size_of::<efi::Guid>()) as u16;
@@ -976,7 +990,7 @@ mod tests {
 
     #[test]
     fn test_get_module_guid_from_handle_rejects_bad_node_length() {
-        with_global_lock(|| {
+        with_clean_global_lock(|| {
             let file_guid = efi::Guid::from_bytes(&[0xCD; 16]);
             // A node length that does not match the expected header + GUID size.
             let handle = install_loaded_image_with_fw_path(4, file_guid);
@@ -988,7 +1002,7 @@ mod tests {
 
     #[test]
     fn test_get_module_guid_from_handle_without_protocol_returns_zero() {
-        with_global_lock(|| {
+        with_clean_global_lock(|| {
             let resolved = get_module_guid_from_handle(0x1234_usize as efi::Handle).unwrap();
             assert_eq!(resolved, patina::BinaryGuid::ZERO);
         })
@@ -1020,7 +1034,7 @@ mod tests {
             efi::Status::SUCCESS
         }
 
-        with_global_lock(|| {
+        with_clean_global_lock(|| {
             let file_guid = efi::Guid::from_bytes(&[0xEF; 16]);
             let node_length =
                 (mem::size_of::<efi::protocols::device_path::Protocol>() + mem::size_of::<efi::Guid>()) as u16;
