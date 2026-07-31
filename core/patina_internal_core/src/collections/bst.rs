@@ -706,8 +706,11 @@ mod tests {
         assert_eq!(bst.storage.len(), 8);
         assert!(bst.add(10).is_err()); // Can't add the same value twice
 
-        let values = bst.dfs();
-        assert_eq!(values, [2, 3, 5, 6, 7, 8, 9, 10]);
+        #[cfg(feature = "alloc")]
+        {
+            let values = bst.dfs();
+            assert_eq!(values, [2, 3, 5, 6, 7, 8, 9, 10]);
+        }
     }
 
     #[test]
@@ -934,8 +937,11 @@ mod fuzz_tests {
             assert!(bst.height() < 50);
             random_numbers.sort();
 
-            let ordered_numbers = bst.dfs();
-            assert_eq!(ordered_numbers, random_numbers);
+            #[cfg(feature = "alloc")]
+            {
+                let ordered_numbers = bst.dfs();
+                assert_eq!(ordered_numbers, random_numbers);
+            }
         }
     }
 
