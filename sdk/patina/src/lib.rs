@@ -27,11 +27,11 @@ pub use string::{Char8Array, Char8Str, Char16Array, Char16Str, StringError};
 pub use base::string::{Char8String, Char16String};
 
 pub mod arch;
-#[cfg(any(test, feature = "alloc"))]
+#[cfg(feature = "alloc")]
 pub mod component;
 pub mod debug;
 pub mod management_mode;
-#[cfg(any(test, feature = "alloc"))]
+#[cfg(feature = "alloc")]
 pub mod performance;
 pub mod peripheral;
 pub mod pi;

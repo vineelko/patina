@@ -23,7 +23,24 @@ name = "bench_guid"
 harness = false
 
 [[example]]
+name = "basic_guid_usage"
+required-features = ["alloc"]
+
+[[example]]
 name = "basic_hob_usage"
+required-features = ["alloc"]
+
+[[example]]
+name = "brotli"
+required-features = ["alloc"]
+
+[[test]]
+name = "test_new_component_attr"
+required-features = ["alloc"]
+
+[[test]]
+name = "compile_fail_tests"
+required-features = ["alloc"]
 
 [dependencies]
 patina_macro = { workspace = true }

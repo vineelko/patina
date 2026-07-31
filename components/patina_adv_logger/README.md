@@ -41,6 +41,8 @@ below.
 #### Example
 
 ```rust
+# #[cfg(feature = "component")]
+# {
 use patina_dxe_core::*;
 use patina::{debug::log::Format, peripheral::serial::uart::UartNull};
 use patina_adv_logger::{component::AdvancedLoggerComponent, logger::{AdvancedLogger, TargetFilter}};
@@ -75,6 +77,7 @@ pub extern "efiapi" fn _start(physical_hob_list: *const c_void) -> ! {
 
    # loop { }
 }
+# }
 ```
 
 ### Platform Integration
