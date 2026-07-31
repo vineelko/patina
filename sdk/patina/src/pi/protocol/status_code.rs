@@ -11,7 +11,11 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
-use core::{mem, ptr, slice};
+#[cfg(feature = "alloc")]
+use core::mem;
+use core::ptr;
+#[cfg(feature = "alloc")]
+use core::slice;
 
 use crate::standard::efi;
 
@@ -67,6 +71,7 @@ unsafe impl crate::base::protocol::ProtocolInterface for StatusCodeProtocol {
 // Non-spec defined wrappers on top of the StatusCodeProtocol to make it easier to use in Rust.
 impl StatusCodeProtocol {
     /// Reports a status code to the platform firmware with data.
+    #[cfg(feature = "alloc")]
     pub fn report_status_code_with_data<T>(
         &self,
         status_code_type: EfiStatusCodeType,
@@ -107,6 +112,7 @@ impl StatusCodeProtocol {
     }
 }
 
+#[cfg(feature = "alloc")]
 fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
     // SAFETY: P is a ref thus a valid pointer and since the type is sized, the memory boundary of this type is known.
     unsafe { slice::from_raw_parts((p as *const T) as *const u8, mem::size_of::<T>()) }
