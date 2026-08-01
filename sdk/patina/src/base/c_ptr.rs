@@ -6,6 +6,7 @@
 //!
 //! SPDX-License-Identifier: Apache-2.0
 //!
+#[cfg(any(test, feature = "alloc"))]
 use alloc::boxed::Box;
 use core::{
     ffi::c_void,
@@ -170,6 +171,7 @@ unsafe impl<'a, T> CMutRef<'a> for &'a mut T {}
 
 // Box<T>
 // SAFETY: Memory layout and mutability are respected for these types.
+#[cfg(any(test, feature = "alloc"))]
 unsafe impl<T> CPtr<'_> for Box<T> {
     type Type = T;
 
@@ -178,10 +180,13 @@ unsafe impl<T> CPtr<'_> for Box<T> {
     }
 }
 // SAFETY: Memory layout and mutability are respected for these types.
+#[cfg(any(test, feature = "alloc"))]
 unsafe impl<T> CRef<'_> for Box<T> {}
 // SAFETY: Memory layout and mutability are respected for these types.
+#[cfg(any(test, feature = "alloc"))]
 unsafe impl<T> CMutPtr<'_> for Box<T> {}
 // SAFETY: Memory layout and mutability are respected for these types.
+#[cfg(any(test, feature = "alloc"))]
 unsafe impl<T> CMutRef<'_> for Box<T> {}
 
 // ()
