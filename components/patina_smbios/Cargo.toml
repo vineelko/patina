@@ -10,7 +10,7 @@ description = "System Management BIOS (SMBIOS) support for Patina UEFI component
 [dependencies]
 log = { workspace = true }
 mockall = { workspace = true, optional = true }
-patina = { workspace = true }
+patina = { workspace = true, features = ["alloc"] }
 patina_macro = { workspace = true }
 zerocopy = { workspace = true }
 zerocopy-derive = { workspace = true }
