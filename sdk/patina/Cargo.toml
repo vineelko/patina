@@ -82,7 +82,6 @@ alloc-no-stdlib = { workspace = true }
 trybuild = { version = "1.0", features = ["diff"] }
 
 [features]
-core = ['alloc']
 std = ['alloc']
 alloc = ["dep:goblin", "dep:fixedbitset"]
 mockall = ["dep:mockall", "std"]
@@ -93,4 +92,4 @@ serde-with-yaml = ["serde", "dep:serde_yaml"]
 unstable = ["unstable-device-path"]
 unstable-device-path = []
 # All non-std features to test in CI
-ci_features = ["core", "alloc", "global_allocator", "unstable", "unstable-device-path"]
+ci_features = ["alloc", "global_allocator", "unstable", "unstable-device-path"]

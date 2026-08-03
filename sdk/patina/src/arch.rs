@@ -53,16 +53,14 @@ trait Interrupts {
     fn enable_interrupts_and_sleep();
 }
 
-#[cfg(feature = "core")]
-/// Enables CPU interrupts on the current architecture. This is only exposed to core modules
-/// due to its inherent risk of misuse. Most components should use TPLs to manage execution priority.
+/// Enables CPU interrupts on the current architecture. Most components should
+/// use TPLs to manage execution priority.
 pub fn enable_interrupts() {
     <Arch as Interrupts>::enable_interrupts();
 }
 
-#[cfg(feature = "core")]
-/// Disables CPU interrupts on the current architecture. This is only exposed to core modules
-/// due to its inherent risk of misuse. Most components should use TPLs to manage execution priority.
+/// Disables CPU interrupts on the current architecture. Most components should
+/// use TPLs to manage execution priority.
 pub fn disable_interrupts() {
     <Arch as Interrupts>::disable_interrupts();
 }
