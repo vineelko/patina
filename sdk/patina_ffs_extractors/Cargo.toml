@@ -11,7 +11,7 @@ description = "UEFI section extractor implementations."
 workspace = true
 
 [dependencies]
-patina = { workspace = true }
+patina = { workspace = true, features = ["alloc"] }
 patina_ffs = { workspace = true }
 brotli-decompressor = { workspace = true, optional = true }
 alloc-no-stdlib = { workspace = true, optional = true }

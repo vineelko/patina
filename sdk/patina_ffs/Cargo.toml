@@ -11,7 +11,7 @@ description = "Support for Firmware File System as described in the UEFI Platfor
 workspace = true
 
 [dependencies]
-patina = {workspace = true}
+patina = {workspace = true, features = ["alloc"]}
 log = {workspace = true}
 
 [dev-dependencies]
