@@ -13,7 +13,7 @@ use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use super::char8::Char8Array;
 
-#[cfg(any(test, feature = "alloc"))]
+#[cfg(feature = "alloc")]
 use alloc::{string::String, vec::Vec};
 
 #[cfg(any(test, feature = "alloc"))]

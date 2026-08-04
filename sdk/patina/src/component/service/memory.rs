@@ -48,7 +48,7 @@ use crate::{
 #[cfg(any(test, feature = "alloc"))]
 use core::alloc::Allocator;
 
-#[cfg(any(test, feature = "alloc"))]
+#[cfg(feature = "alloc")]
 use alloc::boxed::Box;
 
 #[cfg(any(test, feature = "mockall"))]
