@@ -20,7 +20,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 #![cfg_attr(coverage, feature(coverage_attribute))]
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 extern crate alloc;
 
 #[cfg(feature = "brotli")]

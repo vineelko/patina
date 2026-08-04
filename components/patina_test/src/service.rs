@@ -313,7 +313,8 @@ mod tests {
     use core::mem::MaybeUninit;
 
     use super::*;
-    use crate::{alloc::format, component::tests::*};
+    use crate::component::tests::*;
+    use std::format;
 
     #[test]
     fn test_recorder_records_results() {
