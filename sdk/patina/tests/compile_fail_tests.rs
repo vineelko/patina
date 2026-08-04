@@ -23,5 +23,13 @@ fn compile_fail_tests() {
     t.compile_fail("tests/ui/duplicate_storage_mut.rs");
     t.compile_fail("tests/ui/storage_and_storage_mut_conflict.rs");
     t.compile_fail("tests/ui/storage_mut_and_storage_conflict.rs");
+    t.compile_fail("tests/ui/devpath_non_literal.rs");
+    t.compile_fail("tests/ui/devpath_malformed.rs");
+    t.compile_fail("tests/ui/devpath_unknown_node.rs");
+    t.compile_fail("tests/ui/devpath_wrong_arity.rs");
+    t.compile_fail("tests/ui/devpath_invalid_symbol.rs");
+    t.compile_fail("tests/ui/devpath_overflow.rs");
+    t.compile_fail("tests/ui/devpath_invalid_fields.rs");
+    t.compile_fail("tests/ui/devpath_vendor_schema.rs");
     t.pass("tests/ui/multiple_storage_allowed.rs");
 }
