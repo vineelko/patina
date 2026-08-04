@@ -11,9 +11,9 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
+use alloc::vec::Vec;
 use core::ffi::c_void;
 
-use alloc::vec::Vec;
 use patina::{
     component::service::memory::{AllocationOptions, MemoryManager, PageAllocationStrategy},
     guid as base_guids,

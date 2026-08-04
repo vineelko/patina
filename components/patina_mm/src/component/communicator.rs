@@ -15,6 +15,8 @@
 
 mod comm_buffer_update;
 
+use alloc::vec::Vec;
+
 use crate::{
     config::{CommunicateBuffer, MmCommunicationConfiguration},
     service::SwMmiTrigger,
@@ -29,8 +31,6 @@ use patina::{
     uefi::boot_services::StandardBootServices,
     writelncrlf,
 };
-
-use alloc::vec::Vec;
 
 use core::{
     cell::RefCell,

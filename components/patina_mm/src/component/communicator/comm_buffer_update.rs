@@ -11,6 +11,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 
 use crate::config::CommunicateBuffer;
+use alloc::boxed::Box;
 use patina::{
     UEFI_PAGE_SIZE,
     management_mode::protocol::mm_comm_buffer_update::{self, MmCommBufferUpdateProtocol},
@@ -21,8 +22,6 @@ use patina::{
 use zerocopy::FromBytes;
 
 use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-
-use alloc::boxed::Box;
 
 /// Context for the MM Comm Buffer Update Protocol notify callback
 ///

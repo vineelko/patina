@@ -13,10 +13,8 @@
 //!
 //! SPDX-License-Identifier: Apache-2.0
 //!
-use crate::{
-    __private_api::{TestCase, TestTrigger},
-    alloc::{boxed::Box, collections::BTreeMap, fmt::Display, string::String, vec::Vec},
-};
+use crate::__private_api::{TestCase, TestTrigger};
+use alloc::{boxed::Box, collections::BTreeMap, fmt::Display, string::String, vec::Vec};
 
 use core::{ops::DerefMut, ptr::NonNull};
 

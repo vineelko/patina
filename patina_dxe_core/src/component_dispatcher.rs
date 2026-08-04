@@ -9,6 +9,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 use crate::tpl_mutex::TplMutex;
+use alloc::{borrow::Cow, boxed::Box, vec::Vec};
 use patina::standard::efi;
 use patina::{
     component::{IntoComponent, Storage, service::IntoService},
@@ -17,8 +18,6 @@ use patina::{
     uefi::boot_services::StandardBootServices,
     uefi::runtime_services::StandardRuntimeServices,
 };
-
-use alloc::{borrow::Cow, boxed::Box, vec::Vec};
 
 /// A trait to be implemented by the platform to register additional components, configurations, and services.
 ///

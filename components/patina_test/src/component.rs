@@ -13,9 +13,9 @@
 //!
 use crate::{
     __private_api,
-    alloc::vec::Vec,
     service::{Recorder, TestRecord},
 };
+use alloc::vec::Vec;
 
 use patina::component::{Storage, component};
 
