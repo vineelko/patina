@@ -93,9 +93,7 @@ impl SmbiosManager {
     pub fn new(major_version: u8, minor_version: u8) -> Result<Self, SmbiosError> {
         if major_version != 3 {
             log::error!(
-                "SMBIOS version {}.{} is not supported. Only SMBIOS 3.x is supported.",
-                major_version,
-                minor_version
+                "SMBIOS version {major_version}.{minor_version} is not supported. Only SMBIOS 3.x is supported."
             );
             return Err(SmbiosError::UnsupportedVersion);
         }
@@ -490,10 +488,8 @@ impl SmbiosManager {
 
         if actual_checksum != expected_checksum {
             log::error!(
-                "[SMBIOS] Published table was modified directly (checksum mismatch: expected {:08X}, found {:08X}). \
-                 Use Remove() + Add() to modify records, or UpdateString() for string fields.",
-                expected_checksum,
-                actual_checksum
+                "[SMBIOS] Published table was modified directly (checksum mismatch: expected {expected_checksum:08X}, found {actual_checksum:08X}). \
+                 Use Remove() + Add() to modify records, or UpdateString() for string fields."
             );
             return Err(SmbiosError::TableDirectlyModified);
         }

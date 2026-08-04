@@ -343,7 +343,7 @@ mod tests {
         let codes = [0x04, 0x42];
         let bytes = build_unwind_bytes(1, 1, 8, 1, 5, 3, &codes); // flags = 1, frame_reg = 5, offset_units = 3 -> 48.
         let ui = UnwindInfo::parse(&bytes, Some("disp")).unwrap();
-        let s = format!("{}", ui);
+        let s = format!("{ui}");
         assert!(s.contains("UnwindInfo"));
         assert!(s.contains("version: 0x01"));
         assert!(s.contains("flags: 0x01"));

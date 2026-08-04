@@ -46,10 +46,10 @@ pub enum TestFrameworkError {
 impl core::fmt::Display for TestFrameworkError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            TestFrameworkError::HandlerRegistrationFailed(msg) => write!(f, "Handler registration failed: {}", msg),
-            TestFrameworkError::ServiceCreationFailed(msg) => write!(f, "Service creation failed: {}", msg),
-            TestFrameworkError::BufferError(msg) => write!(f, "Buffer error: {}", msg),
-            TestFrameworkError::HandlerError(msg) => write!(f, "Handler error: {}", msg),
+            TestFrameworkError::HandlerRegistrationFailed(msg) => write!(f, "Handler registration failed: {msg}"),
+            TestFrameworkError::ServiceCreationFailed(msg) => write!(f, "Service creation failed: {msg}"),
+            TestFrameworkError::BufferError(msg) => write!(f, "Buffer error: {msg}"),
+            TestFrameworkError::HandlerError(msg) => write!(f, "Handler error: {msg}"),
         }
     }
 }

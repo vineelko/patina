@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn test_smbios_table_header_debug() {
         let header = SmbiosTableHeader::new(127, 4, 0xFFFF);
-        let debug_str = format!("{:?}", header);
+        let debug_str = format!("{header:?}");
         assert!(debug_str.contains("127"));
         assert!(debug_str.contains("4"));
     }

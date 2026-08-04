@@ -152,7 +152,7 @@ where
 
         //must be true for any pool allocation
         if allocation_info.signature != POOL_SIG {
-            debug_assert!(false, "Pool signature is incorrect: {:#x?}", allocation_info);
+            debug_assert!(false, "Pool signature is incorrect: {allocation_info:#x?}");
             return Err(EfiError::InvalidParameter);
         }
         // check if allocation is from this pool.

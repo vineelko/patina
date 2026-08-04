@@ -42,9 +42,9 @@ pub enum MmHandlerError {
 impl core::fmt::Display for MmHandlerError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            MmHandlerError::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
-            MmHandlerError::ProcessingFailed(msg) => write!(f, "Processing failed: {}", msg),
-            MmHandlerError::UnsupportedOperation(msg) => write!(f, "Unsupported operation: {}", msg),
+            MmHandlerError::InvalidInput(msg) => write!(f, "Invalid input: {msg}"),
+            MmHandlerError::ProcessingFailed(msg) => write!(f, "Processing failed: {msg}"),
+            MmHandlerError::UnsupportedOperation(msg) => write!(f, "Unsupported operation: {msg}"),
         }
     }
 }
@@ -98,7 +98,7 @@ impl VersionInfoHandler {
     pub fn new(version: &str) -> Self {
         Self {
             version_string: version.to_string(),
-            description: format!("Version info handler - returns version: {}", version),
+            description: format!("Version info handler - returns version: {version}"),
         }
     }
 }

@@ -89,12 +89,12 @@ impl MmExecutor for TestMmExecutor {
                     Ok(())
                 }
                 Err(e) => {
-                    log::error!(target: "test_mm_executor", "Handler execution failed: {:?}", e);
+                    log::error!(target: "test_mm_executor", "Handler execution failed: {e:?}");
                     Err(Status::InvalidDataBuffer)
                 }
             }
         } else {
-            log::warn!(target: "test_mm_executor", "No handler found for recipient: {:?}", recipient);
+            log::warn!(target: "test_mm_executor", "No handler found for recipient: {recipient:?}");
             Err(Status::CommBufferNotFound)
         }
     }
@@ -126,7 +126,7 @@ impl RealComponentMmTestFramework {
         let result = self.mm_communicator.communicate(0, data, guid.clone());
 
         log::debug!(target: "real_test_framework", "Real component communication result: {:?}",
-                   result.as_ref().map(std::vec::Vec::len).map_err(|e| format!("{:?}", e)));
+                   result.as_ref().map(std::vec::Vec::len).map_err(|e| format!("{e:?}")));
         result
     }
 }

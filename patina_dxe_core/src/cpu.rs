@@ -119,12 +119,12 @@ pub trait CpuInfo {
 pub fn initialize_cpu_subsystem() -> crate::error::Result<Interrupts> {
     let mut cpu = EfiCpu::default();
     cpu.initialize().inspect_err(|err| {
-        log::error!("Failed to initialize CPU subsystem: {}", err);
+        log::error!("Failed to initialize CPU subsystem: {err}");
     })?;
 
     let mut interrupt_manager = Interrupts::new();
     interrupt_manager.initialize().inspect_err(|err| {
-        log::error!("Failed to initialize Interrupt Manager: {}", err);
+        log::error!("Failed to initialize Interrupt Manager: {err}");
     })?;
 
     Ok(interrupt_manager)

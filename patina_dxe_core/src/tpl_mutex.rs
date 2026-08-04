@@ -153,10 +153,10 @@ mod tests {
     fn test_tpl_mutex_preserves_core_debug_format() {
         with_reset_state(|| {
             let lock = TplMutex::new(efi::TPL_NOTIFY, 42, "test_lock");
-            let debug_str = format!("{:?}", lock);
+            let debug_str = format!("{lock:?}");
             assert_eq!(debug_str, "TplMutex { lock_tpl: 10, release_tpl: 4, data: 42 }");
             let _guard = lock.lock();
-            let debug_str_locked = format!("{:?}", lock);
+            let debug_str_locked = format!("{lock:?}");
             assert_eq!(debug_str_locked, "TplMutex { lock_tpl: 10, data: <locked> }");
         });
     }

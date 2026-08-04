@@ -58,7 +58,7 @@ pub(super) fn register_buffer_update_notify(
     boot_services: StandardBootServices,
     updatable_buffer_id: u8,
 ) -> patina::error::Result<&'static ProtocolNotifyContext> {
-    log::trace!(target: "mm_comm", "Setting up protocol notify callback for buffer ID {}", updatable_buffer_id);
+    log::trace!(target: "mm_comm", "Setting up protocol notify callback for buffer ID {updatable_buffer_id}");
 
     let context = Box::leak(Box::new(ProtocolNotifyContext {
         boot_services: boot_services.clone(),
@@ -142,7 +142,7 @@ pub(super) fn apply_pending_buffer_update(
         new_buffer.len()
     );
     comm_buffers.push(new_buffer);
-    log::info!(target: "mm_comm", "Successfully applied pending comm buffer {} update", updatable_buffer_id);
+    log::info!(target: "mm_comm", "Successfully applied pending comm buffer {updatable_buffer_id} update");
 
     // Clear the pending flag
     context.has_pending_update.store(false, Ordering::Release);
@@ -171,7 +171,7 @@ extern "efiapi" fn protocol_notify_callback(_event: efi::Event, context: &'stati
     log::info!(target: "mm_comm", "Protocol notify callback triggered for {}", mm_comm_buffer_update::PROTOCOL_GUID);
 
     let updatable_buffer_id = context.updatable_buffer_id;
-    log::debug!(target: "mm_comm", "Updatable buffer ID: {}", updatable_buffer_id);
+    log::debug!(target: "mm_comm", "Updatable buffer ID: {updatable_buffer_id}");
 
     // SAFETY: The boot_services pointer is passed in via ProtocolNotifyContext construction. A valid GUID reference
     // is used.
@@ -182,7 +182,7 @@ extern "efiapi" fn protocol_notify_callback(_event: efi::Event, context: &'stati
     } {
         Ok(ptr) => ptr,
         Err(status) => {
-            log::error!(target: "mm_comm", "Failed to locate protocol: status={}", status);
+            log::error!(target: "mm_comm", "Failed to locate protocol: status={status}");
             return;
         }
     };
@@ -201,7 +201,7 @@ extern "efiapi" fn protocol_notify_callback(_event: efi::Event, context: &'stati
         match MmCommBufferUpdateProtocol::read_from_bytes(protocol_bytes) {
             Ok(data) => data,
             Err(e) => {
-                log::error!(target: "mm_comm", "Failed to parse protocol data: {:?}", e);
+                log::error!(target: "mm_comm", "Failed to parse protocol data: {e:?}");
                 return;
             }
         }
@@ -216,12 +216,7 @@ extern "efiapi" fn protocol_notify_callback(_event: efi::Event, context: &'stati
 
     log::info!(
         target: "mm_comm",
-        "Received MM comm buffer update: version={}, addr=0x{:X}, size={} pages (0x{:X} bytes), status=0x{:X}",
-        version,
-        physical_start,
-        size_pages,
-        size_bytes,
-        status_address
+        "Received MM comm buffer update: version={version}, addr=0x{physical_start:X}, size={size_pages} pages (0x{size_bytes:X} bytes), status=0x{status_address:X}"
     );
 
     // Validate and create the new buffer from the protocol
@@ -245,7 +240,7 @@ extern "efiapi" fn protocol_notify_callback(_event: efi::Event, context: &'stati
             buffer
         }
         Err(err) => {
-            log::error!(target: "mm_comm", "Failed to validate comm buffer from protocol data: {:?}", err);
+            log::error!(target: "mm_comm", "Failed to validate comm buffer from protocol data: {err:?}");
             return;
         }
     };

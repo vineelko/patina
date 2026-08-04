@@ -609,8 +609,7 @@ impl ImageData {
 
         if handle != protocol_db::DXE_CORE_HANDLE {
             panic!(
-                "DXE Core image was installed with DXE_CORE_HANDLE but got {:?} after `install_protocol_interface`",
-                handle
+                "DXE Core image was installed with DXE_CORE_HANDLE but got {handle:?} after `install_protocol_interface`"
             );
         }
 

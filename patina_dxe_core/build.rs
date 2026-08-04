@@ -19,8 +19,7 @@ fn main() {
 
     if version != PATINA_CONFIG_VERSION {
         eprintln!(
-            "error: Incorrect PATINA_CONFIG_VERSION, expected version \"{}\", got version {:?}",
-            PATINA_CONFIG_VERSION, version
+            "error: Incorrect PATINA_CONFIG_VERSION, expected version \"{PATINA_CONFIG_VERSION}\", got version {version:?}"
         );
         eprintln!(
             "Use Patina's latest config.toml. See https://opendevicepartnership.github.io/patina/dev/toolchain_configuration.html"

@@ -2469,10 +2469,7 @@ impl SpinLockedGcd {
                     Ok(()) | Err(EfiError::NotReady) => (),
                     Err(e) => {
                         log::error!(
-                            "Could not set NX for memory address {:#X} for len {:#X} with error {:?}",
-                            stack_address,
-                            stack_length,
-                            e
+                            "Could not set NX for memory address {stack_address:#X} for len {stack_length:#X} with error {e:?}"
                         );
                         debug_assert!(false);
                     }
@@ -2486,10 +2483,7 @@ impl SpinLockedGcd {
                     Ok(()) | Err(EfiError::NotReady) => (),
                     Err(e) => {
                         log::error!(
-                            "Could not set RP for memory address {:#X} for len {:#X} with error {:?}",
-                            stack_address,
-                            UEFI_PAGE_SIZE,
-                            e
+                            "Could not set RP for memory address {stack_address:#X} for len {UEFI_PAGE_SIZE:#X} with error {e:?}"
                         );
                         debug_assert!(false);
                     }
@@ -2789,8 +2783,7 @@ impl SpinLockedGcd {
                     {
                         // well, we did our best. The GCD and page table are now out of sync, which is a critical error.
                         log::error!(
-                            "Failed to roll back GCD attributes after page table attribute set failure. This is a critical error. GCD and page table are now out of sync. Rollback error: {:?}",
-                            rollback_err
+                            "Failed to roll back GCD attributes after page table attribute set failure. This is a critical error. GCD and page table are now out of sync. Rollback error: {rollback_err:?}"
                         );
                     }
 
@@ -6107,7 +6100,7 @@ mod tests {
                         descriptors.push(desc);
                     }
                     Err(e) => {
-                        panic!("Should not get error for existing descriptors: {:?}", e);
+                        panic!("Should not get error for existing descriptors: {e:?}");
                     }
                 }
             }
@@ -6546,7 +6539,7 @@ mod tests {
                 };
 
                 let result_active = GCD::adjust_efi_memory_map_descriptor(&descriptor, efi::CONVENTIONAL_MEMORY, true);
-                assert_eq!(result_active, attributes, "Failed for attributes={:#x}", attributes);
+                assert_eq!(result_active, attributes, "Failed for attributes={attributes:#x}");
 
                 let result_capabilities =
                     GCD::adjust_efi_memory_map_descriptor(&descriptor, efi::CONVENTIONAL_MEMORY, false);
@@ -6556,7 +6549,7 @@ mod tests {
                     GcdMemoryType::SystemMemory,
                     efi::CONVENTIONAL_MEMORY,
                 );
-                assert_eq!(result_capabilities, expected, "Failed for capabilities={:#x}", capabilities);
+                assert_eq!(result_capabilities, expected, "Failed for capabilities={capabilities:#x}");
             }
         });
     }
@@ -6782,7 +6775,7 @@ mod tests {
 
             let count = gcd.memory_descriptor_count_for_efi_memory_map();
             // Should count: 1 SystemMemory (from create_gcd) + 1 runtime MMIO
-            assert!(count >= 2, "Expected at least 2 descriptors, got {}", count);
+            assert!(count >= 2, "Expected at least 2 descriptors, got {count}");
         });
     }
 
@@ -6821,7 +6814,7 @@ mod tests {
 
             let count = gcd.memory_descriptor_count_for_efi_memory_map();
             // Should count: SystemMemory (from create_gcd) + runtime MMIO + Persistent + Reserved = at least 4
-            assert!(count >= 4, "Expected at least 4 descriptors, got {}", count);
+            assert!(count >= 4, "Expected at least 4 descriptors, got {count}");
         });
     }
 
@@ -6864,7 +6857,7 @@ mod tests {
 
             let count = gcd.memory_descriptor_count_for_efi_memory_map();
             // Expect 1 SystemMemory (from create_gcd) + 1 Persistent
-            assert!(count >= 2, "Expected at least 2 descriptors, got {}", count);
+            assert!(count >= 2, "Expected at least 2 descriptors, got {count}");
         });
     }
 
@@ -6883,7 +6876,7 @@ mod tests {
 
             let count = gcd.memory_descriptor_count_for_efi_memory_map();
             // Expect 1 SystemMemory (from create_gcd) + 1 Unaccepted
-            assert!(count >= 2, "Expected at least 2 descriptors, got {}", count);
+            assert!(count >= 2, "Expected at least 2 descriptors, got {count}");
         });
     }
 
@@ -6899,7 +6892,7 @@ mod tests {
 
             let count = gcd.memory_descriptor_count_for_efi_memory_map();
             // Should count: 1 SystemMemory (from create_gcd) + 1 Reserved
-            assert!(count >= 2, "Expected at least 2 descriptors, got {}", count);
+            assert!(count >= 2, "Expected at least 2 descriptors, got {count}");
         });
     }
 

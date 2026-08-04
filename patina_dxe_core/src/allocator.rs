@@ -963,7 +963,7 @@ unsafe extern "efiapi" fn get_memory_map(
             let memory_map_as_bytes = slice::from_raw_parts(memory_map as *mut u8, actual_map_size);
             GCD.set_last_efi_memory_map_key(memory_map_as_bytes);
             if let Some(key) = GCD.get_last_efi_memory_map_key() {
-                log::debug!(target: "efi_memory_map", "Calculated EFI memory map key: {:#X}", key);
+                log::debug!(target: "efi_memory_map", "Calculated EFI memory map key: {key:#X}");
                 map_key.write_unaligned(key);
             }
         }
@@ -1316,7 +1316,7 @@ fn initialize_memory_bins(hob_list: &HobList, memory_type_info: &[EFiMemoryTypeI
 
     let mut local_manager = MemoryBinManager::new();
     if !local_manager.initialize_from_range(start, length, memory_type_info) {
-        log::warn!(target: "memory_bin", "Failed to initialize bins from range at {:#X}, length {:#X}.", start, length);
+        log::warn!(target: "memory_bin", "Failed to initialize bins from range at {start:#X}, length {length:#X}.");
         return;
     }
 
@@ -1331,7 +1331,7 @@ fn find_pei_bin_range(
     memory_type_info: &[EFiMemoryTypeInformation],
 ) -> Option<(efi::PhysicalAddress, u64)> {
     let (start, length) = crate::memory_bin::find_memory_type_info_resource_hob(hob_list, memory_type_info)?;
-    log::info!(target: "memory_bin", "Found PEI bin region at {:#X}, length {:#X}.", start, length);
+    log::info!(target: "memory_bin", "Found PEI bin region at {start:#X}, length {length:#X}.");
     Some((start, length))
 }
 
@@ -1363,9 +1363,7 @@ fn allocate_contiguous_bin_range(memory_type_info: &[EFiMemoryTypeInformation]) 
         .inspect_err(|err| {
             log::warn!(
                 target: "memory_bin",
-                "Failed to allocate contiguous bin range ({:#X} bytes) from GCD: {:?}",
-                alloc_size,
-                err
+                "Failed to allocate contiguous bin range ({alloc_size:#X} bytes) from GCD: {err:?}"
             );
         })
         .ok()?;
@@ -1405,7 +1403,7 @@ fn seed_bin_statistics_from_hobs(hob_list: &HobList) {
         seeded_count += 1;
     }
 
-    log::info!(target: "memory_bin", "Seeded bin statistics from {} PEI Memory Allocation HOBs.", seeded_count);
+    log::info!(target: "memory_bin", "Seeded bin statistics from {seeded_count} PEI Memory Allocation HOBs.");
 }
 
 /// Claims free GCD pages within each bin range for the corresponding bin type's allocator.
@@ -1517,9 +1515,7 @@ fn reserve_bin_ranges() {
                         if let Err(err) = GCD.free_memory_space_preserving_ownership(block_start as usize, block_len) {
                             log::error!(
                                 target: "memory_bin",
-                                "Failed to free-with-ownership bin pages at {:#X}: {:?}",
-                                block_start,
-                                err
+                                "Failed to free-with-ownership bin pages at {block_start:#X}: {err:?}"
                             );
                         }
                         claimed_pages += block_pages;
@@ -1527,10 +1523,7 @@ fn reserve_bin_ranges() {
                     Err(err) => {
                         log::warn!(
                             target: "memory_bin",
-                            "Failed to claim bin pages at {:#X} ({} pages): {:?}",
-                            block_start,
-                            block_pages,
-                            err
+                            "Failed to claim bin pages at {block_start:#X} ({block_pages} pages): {err:?}"
                         );
                     }
                 }
@@ -1701,7 +1694,7 @@ mod tests {
         let (_, base, max, _) = bins
             .iter()
             .find(|(mt, _, _, _)| *mt == memory_type)
-            .unwrap_or_else(|| panic!("Expected bin for memory type {:#X} not found", memory_type));
+            .unwrap_or_else(|| panic!("Expected bin for memory type {memory_type:#X} not found"));
         (*base, *max)
     }
 
@@ -2155,7 +2148,7 @@ mod tests {
             ] {
                 let allocator = allocators
                     .get_allocator(*memory_type)
-                    .unwrap_or_else(|| panic!("no allocator for type {:#x}", memory_type));
+                    .unwrap_or_else(|| panic!("no allocator for type {memory_type:#x}"));
 
                 let granularity = match *memory_type {
                     efi::RESERVED_MEMORY_TYPE
@@ -2173,8 +2166,7 @@ mod tests {
                 let claimed = allocator.stats().claimed_pages;
                 assert_eq!(
                     claimed, expected_pages,
-                    "For memory type {:?}: expected {}, got {}",
-                    memory_type, expected_pages, claimed
+                    "For memory type {memory_type:?}: expected {expected_pages}, got {claimed}"
                 );
             }
 
@@ -2922,7 +2914,7 @@ mod tests {
                     attribute,
                 })
             );
-            assert!(result.contains(expected), "Expected '{}' in the result for attribute 0x{:X}", expected, attribute);
+            assert!(result.contains(expected), "Expected '{expected}' in the result for attribute 0x{attribute:X}");
         }
     }
 
@@ -2977,8 +2969,7 @@ mod tests {
         // Just verify that the result contains the expected pattern for hex
         assert!(
             result.contains("0X") || result.contains("0x"),
-            "Expected hex representation in result when attributes exceed limit, got: {}",
-            result
+            "Expected hex representation in result when attributes exceed limit, got: {result}"
         );
     }
 
@@ -3047,7 +3038,7 @@ mod tests {
                 })
             );
 
-            assert!(result.contains(expected), "Expected '{}' in result for memory type {}", expected, memory_type);
+            assert!(result.contains(expected), "Expected '{expected}' in result for memory type {memory_type}");
         }
     }
 

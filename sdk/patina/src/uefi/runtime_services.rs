@@ -911,7 +911,7 @@ pub(crate) mod test {
     #[test]
     fn test_debug_output_should_not_crash() {
         let runtime_services = runtime_services!();
-        let debug_str = format!("{:?}", runtime_services);
+        let debug_str = format!("{runtime_services:?}");
         assert!(!debug_str.is_empty());
         assert!(debug_str.contains("StandardRuntimeServices"));
     }

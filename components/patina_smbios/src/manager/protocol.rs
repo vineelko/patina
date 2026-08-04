@@ -119,7 +119,7 @@ impl SmbiosProtocol {
 
         // Check protocol pointer alignment
         if !(protocol as usize).is_multiple_of(core::mem::align_of::<SmbiosProtocolInternal>()) {
-            debug_assert!(false, "[SMBIOS Add] Protocol pointer misaligned: {:p}", protocol);
+            debug_assert!(false, "[SMBIOS Add] Protocol pointer misaligned: {protocol:p}");
             return efi::Status::INVALID_PARAMETER;
         }
 
@@ -215,7 +215,7 @@ impl SmbiosProtocol {
 
         // Check protocol pointer alignment
         if !(protocol as usize).is_multiple_of(core::mem::align_of::<SmbiosProtocolInternal>()) {
-            debug_assert!(false, "[SMBIOS UpdateString] Protocol pointer misaligned: {:p}", protocol);
+            debug_assert!(false, "[SMBIOS UpdateString] Protocol pointer misaligned: {protocol:p}");
             return efi::Status::INVALID_PARAMETER;
         }
 
@@ -256,7 +256,7 @@ impl SmbiosProtocol {
 
         // Check protocol pointer alignment
         if !(protocol as usize).is_multiple_of(core::mem::align_of::<SmbiosProtocolInternal>()) {
-            debug_assert!(false, "[SMBIOS Remove] Protocol pointer misaligned: {:p}", protocol);
+            debug_assert!(false, "[SMBIOS Remove] Protocol pointer misaligned: {protocol:p}");
             return efi::Status::INVALID_PARAMETER;
         }
 
@@ -292,7 +292,7 @@ impl SmbiosProtocol {
 
         // Check protocol pointer alignment
         if !(protocol as usize).is_multiple_of(core::mem::align_of::<SmbiosProtocolInternal>()) {
-            debug_assert!(false, "[SMBIOS GetNext] Protocol pointer misaligned: {:p}", protocol);
+            debug_assert!(false, "[SMBIOS GetNext] Protocol pointer misaligned: {protocol:p}");
             return efi::Status::INVALID_PARAMETER;
         }
 
@@ -350,7 +350,7 @@ impl SmbiosProtocol {
             }
             efi::Status::SUCCESS
         } else {
-            debug_assert!(false, "[SMBIOS GetNext] Record handle {:04X} not found in second lookup", found_handle);
+            debug_assert!(false, "[SMBIOS GetNext] Record handle {found_handle:04X} not found in second lookup");
             efi::Status::NOT_FOUND
         }
     }

@@ -92,7 +92,7 @@ impl Debug for PrettyMetaData<'_> {
                     &uuid::Uuid::from_bytes(*guid_header.section_definition_guid.as_bytes()),
                 )
                 .finish_non_exhaustive(),
-            section => f.write_fmt(format_args!("{:?}", section)),
+            section => f.write_fmt(format_args!("{section:?}")),
         }
     }
 }

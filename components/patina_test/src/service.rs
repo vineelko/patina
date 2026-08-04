@@ -144,7 +144,7 @@ impl TestRecord {
             self.test_case.name,
             self.pass,
             self.fail,
-            self.err_msg.map_or(String::from("null"), |msg| alloc::format!(r#""{}""#, msg))
+            self.err_msg.map_or(String::from("null"), |msg| alloc::format!(r#""{msg}""#))
         )
     }
 
@@ -335,7 +335,7 @@ mod tests {
         tr3.pass = 1;
         recorder.update_record(tr3);
 
-        let output = format!("{}", recorder);
+        let output = format!("{recorder}");
         assert!(output.contains("test ... fail (1 fails, 2 passes): Failure 1"));
         assert!(output.contains("test_that_fails ... fail (2 fails, 0 passes): Failure 2"));
         assert!(output.contains("event_triggered_test ... ok (1 passes)"));
@@ -356,7 +356,7 @@ mod tests {
         recorder.update_record(test_data);
 
         let output = format!("{}", *recorder);
-        std::println!("{}", output);
+        std::println!("{output}");
         assert!(output.contains("test ... ok (1 passes)"));
     }
 

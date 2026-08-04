@@ -754,7 +754,7 @@ mod test {
             .unwrap();
         assert_eq!(test_buffer.len(), uncompressed_buffer.len());
         for (idx, (test, reference)) in zip(test_buffer, uncompressed_buffer).enumerate() {
-            assert!(test == reference, "mismatch at idx: {:}, expected {:#x} != {:#x} actual", idx, reference, test);
+            assert!(test == reference, "mismatch at idx: {idx:}, expected {reference:#x} != {test:#x} actual");
         }
     }
 
@@ -777,7 +777,7 @@ mod test {
             .unwrap();
         assert_eq!(test_buffer.len(), uncompressed_buffer.len());
         for (idx, (test, reference)) in zip(test_buffer, uncompressed_buffer).enumerate() {
-            assert!(test == reference, "mismatch at idx: {:}, expected {:#x} != {:#x} actual", idx, reference, test);
+            assert!(test == reference, "mismatch at idx: {idx:}, expected {reference:#x} != {test:#x} actual");
         }
     }
 

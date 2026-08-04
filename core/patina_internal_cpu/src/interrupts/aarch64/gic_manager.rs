@@ -114,7 +114,7 @@ impl AArch64InterruptInitializer {
         let mut r_count = 0;
 
         let mpidr = read_sysreg!(MPIDR_EL1) & MPIDR_AFFINITY_MASK;
-        log::debug!("Current CPU MPIDR: {:#x}", mpidr);
+        log::debug!("Current CPU MPIDR: {mpidr:#x}");
         // Support for GIC v4 is backward compatible with GIC v3, so always enable it.
         // SAFETY: function safety requirements guarantee exclusive access to the GICR registers.
         for (index, redistributor) in unsafe { GicRedistributorIterator::new(gicr, true) }.enumerate() {
@@ -122,10 +122,7 @@ impl AArch64InterruptInitializer {
             if redistributor.typer().core_mpidr() == mpidr {
                 if cpu_r_idx != usize::MAX {
                     log::error!(
-                        "Multiple redistributors found for current cpu mpidr {:#x} at index {} and {}",
-                        mpidr,
-                        cpu_r_idx,
-                        index
+                        "Multiple redistributors found for current cpu mpidr {mpidr:#x} at index {cpu_r_idx} and {index}"
                     );
                     return Err(EfiError::DeviceError);
                 }
@@ -138,7 +135,7 @@ impl AArch64InterruptInitializer {
                 if redistributor.typer().core_mpidr() == mpidr { "(Current CPU)" } else { "" }
             );
         }
-        log::info!("Total Redistributors: {}, Current CPU Redistributor Index: {}", r_count, cpu_r_idx);
+        log::info!("Total Redistributors: {r_count}, Current CPU Redistributor Index: {cpu_r_idx}");
         if cpu_r_idx == usize::MAX {
             log::error!("Failed to find redistributor for current cpu");
             return Err(EfiError::DeviceError);

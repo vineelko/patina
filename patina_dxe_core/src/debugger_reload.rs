@@ -234,8 +234,7 @@ fn core_reload(image: &[u8], out: &mut dyn core::fmt::Write) {
     };
 
     // Step 5: Provide the debugger with the context to start the new image.
-    let _ =
-        write!(out, "success:{:x}\nip:{:x}\nsp:{:x}\narg0:{:x}\n", loaded_image_addr, entry_point, stack_ptr, hob_list);
+    let _ = write!(out, "success:{loaded_image_addr:x}\nip:{entry_point:x}\nsp:{stack_ptr:x}\narg0:{hob_list:x}\n");
 }
 
 /// Fixes up the HOB list to reflect the new core image. This involves updating the memory allocation hob for the DXE

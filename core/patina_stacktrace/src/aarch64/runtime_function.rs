@@ -210,11 +210,11 @@ impl<'a> RuntimeFunction<'a> {
                         module: pe.image_name,
                         reason: "pc underflow while adjusting to previous instruction",
                     })?;
-                    log::debug!("    > Decrementing pc_rva {:X} -> {:X}", pc_rva, decremented_pc_rva); // debug
+                    log::debug!("    > Decrementing pc_rva {pc_rva:X} -> {decremented_pc_rva:X}"); // debug
                     pc_rva = decremented_pc_rva;
                     stack_frame.pc = decremented_pc;
                 } else {
-                    log::debug!("    > Found Runtime function({}) for pc_rva {:X}", runtime_function, pc_rva); // debug
+                    log::debug!("    > Found Runtime function({runtime_function}) for pc_rva {pc_rva:X}"); // debug
                     return Ok(runtime_function);
                 }
             } else {
@@ -250,9 +250,7 @@ impl<'a> RuntimeFunction<'a> {
                     reason: "pc underflow while retrying runtime function lookup",
                 })?;
                 log::debug!(
-                    "    > Runtime Function not found, retrying by decrementing pc_rva {:X} -> {:X}",
-                    pc_rva,
-                    decremented_pc_rva
+                    "    > Runtime Function not found, retrying by decrementing pc_rva {pc_rva:X} -> {decremented_pc_rva:X}"
                 ); // debug
                 pc_rva = decremented_pc_rva;
                 stack_frame.pc = decremented_pc;

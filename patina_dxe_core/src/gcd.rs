@@ -290,8 +290,7 @@ impl MemoryProtectionPolicy {
         filename: &str,
     ) -> Result<(), EfiError> {
         log::error!(
-            "Attempting to load {} that is not NX compatible. Compatibility mode is not allowed in this build, not loading image.",
-            filename
+            "Attempting to load {filename} that is not NX compatible. Compatibility mode is not allowed in this build, not loading image."
         );
         Err(EfiError::LoadError)
     }

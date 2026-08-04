@@ -63,7 +63,7 @@ fn bench_r_efi_direct(b: &mut Bencher<'_>, _input: &usize) {
 // Display benchmarks
 fn bench_patina_format(b: &mut Bencher<'_>, _input: &usize) {
     let patina_guid = OwnedGuid::try_from_string(TEST_GUID_STRING).expect("Valid GUID");
-    b.iter(|| format!("{}", patina_guid));
+    b.iter(|| format!("{patina_guid}"));
 }
 
 fn bench_r_efi_manual_format(b: &mut Bencher<'_>, _input: &usize) {
@@ -117,9 +117,9 @@ fn bench_patina_complex(b: &mut Bencher<'_>, input: &usize) {
     let count = *input;
     b.iter(|| {
         for i in 0..count {
-            let guid_str = format!("{:08x}-0000-0000-0000-000000000000", i);
+            let guid_str = format!("{i:08x}-0000-0000-0000-000000000000");
             let guid = OwnedGuid::try_from_string(&guid_str).expect("Valid GUID");
-            let _formatted = format!("{}", guid);
+            let _formatted = format!("{guid}");
         }
     });
 }

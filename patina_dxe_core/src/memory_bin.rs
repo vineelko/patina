@@ -287,9 +287,7 @@ impl MemoryBinManager {
             _ => {
                 log::warn!(
                     target: LOG_TARGET,
-                    "Memory bin range invalid: start={:#X} length={:#X} (overflow or exceeds MAX_ALLOC_ADDRESS)",
-                    start,
-                    length
+                    "Memory bin range invalid: start={start:#X} length={length:#X} (overflow or exceeds MAX_ALLOC_ADDRESS)"
                 );
                 return false;
             }
@@ -299,19 +297,14 @@ impl MemoryBinManager {
         if total_needed > length {
             log::warn!(
                 target: LOG_TARGET,
-                "Memory bin range too small: need {:#X} bytes but only {:#X} available.",
-                total_needed,
-                length
+                "Memory bin range too small: need {total_needed:#X} bytes but only {length:#X} available."
             );
             return false;
         }
 
         log::info!(
             target: LOG_TARGET,
-            "Initializing memory bins from PEI range: base={:#X} length={:#X} total_needed={:#X}",
-            start,
-            length,
-            total_needed
+            "Initializing memory bins from PEI range: base={start:#X} length={length:#X} total_needed={total_needed:#X}"
         );
 
         let mut top = end;
@@ -389,8 +382,7 @@ impl MemoryBinManager {
         if log::log_enabled!(target: LOG_TARGET, log::Level::Trace) {
             log::trace!(
                 target: LOG_TARGET,
-                "Bin table: initialized with {} entries from HOB",
-                count
+                "Bin table: initialized with {count} entries from HOB"
             );
 
             if let Some(entries) = self.memory_type_information.get(..count) {
@@ -678,8 +670,7 @@ impl MemoryBinManager {
                     // in the future.
                     debug_assert!(
                         false,
-                        "apply_bin_descriptors: overlap case fell through; entry=[{:#X}..{:#X}] bin=[{:#X}..{:#X}]",
-                        entry_start, entry_end, bin_start, bin_end
+                        "apply_bin_descriptors: overlap case fell through; entry=[{entry_start:#X}..{entry_end:#X}] bin=[{bin_start:#X}..{bin_end:#X}]"
                     );
                     break;
                 }
@@ -842,8 +833,7 @@ pub(crate) fn find_memory_type_info_resource_hob(
     if count > 1 {
         log::warn!(
             target: LOG_TARGET,
-            "Multiple MemoryTypeInformation Resource Descriptor HOBs found ({}), rejecting all.",
-            count
+            "Multiple MemoryTypeInformation Resource Descriptor HOBs found ({count}), rejecting all."
         );
         return None;
     }
@@ -851,9 +841,7 @@ pub(crate) fn find_memory_type_info_resource_hob(
     if let Some((start, length)) = result {
         log::info!(
             target: LOG_TARGET,
-            "Found MemoryTypeInformation Resource Descriptor HOB: base={:#X} length={:#X}",
-            start,
-            length
+            "Found MemoryTypeInformation Resource Descriptor HOB: base={start:#X} length={length:#X}"
         );
     } else {
         log::info!(
@@ -1665,7 +1653,7 @@ mod tests {
         let size = MemoryBinManager::contiguous_alloc_size(&info).unwrap();
 
         let raw = total_pages * UEFI_PAGE_SIZE;
-        assert!(size >= raw, "size {:#X} must be >= raw {:#X}", size, raw);
+        assert!(size >= raw, "size {size:#X} must be >= raw {raw:#X}");
     }
 
     #[test]

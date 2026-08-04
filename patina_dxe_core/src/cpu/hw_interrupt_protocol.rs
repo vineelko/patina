@@ -418,7 +418,7 @@ impl InterruptHandler for HwInterruptProtocolHandler {
                     // The special interrupt do not need to be acknowledged
                 }
                 _ => {
-                    log::error!("Invalid interrupt source: 0x{:x}", raw_value);
+                    log::error!("Invalid interrupt source: 0x{raw_value:x}");
                 }
             }
             return;
@@ -435,8 +435,8 @@ impl InterruptHandler for HwInterruptProtocolHandler {
             handler(u64::from(raw_value), context);
         } else {
             GicCpuInterface::end_interrupt(int_id, InterruptGroup::Group1);
-            log::error!("Unhandled Exception! 0x{:x}", exception_type);
-            log::error!("Exception Context: {:#x?}", context);
+            log::error!("Unhandled Exception! 0x{exception_type:x}");
+            log::error!("Exception Context: {context:#x?}");
             panic! {"Unhandled Exception! 0x{:x}", exception_type};
         }
     }

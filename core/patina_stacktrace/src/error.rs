@@ -118,8 +118,7 @@ impl fmt::Display for Error {
             Error::UnwindCodeOutOfBounds { requested, available, .. } => {
                 write!(
                     fmt,
-                    "Unwind code read exceeded buffer bounds (requested offset {}, available {})",
-                    requested, available
+                    "Unwind code read exceeded buffer bounds (requested offset {requested}, available {available})"
                 )
             }
         }

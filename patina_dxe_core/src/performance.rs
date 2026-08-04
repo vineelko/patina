@@ -97,7 +97,7 @@ impl CorePerformance {
         }
 
         let enabled_measurements = config.enabled_measurements;
-        log::info!("Performance measurement is enabled. measurements: {:#X}", enabled_measurements);
+        log::info!("Performance measurement is enabled. measurements: {enabled_measurements:#X}");
         self.enabled.store(true, Ordering::Relaxed);
         self.timer.set_frequency(frequency);
 

@@ -354,7 +354,7 @@ fn normalize_type(ty: &Type) -> String {
         }
         Type::Reference(type_ref) => {
             let inner = normalize_type(&type_ref.elem);
-            if type_ref.mutability.is_some() { format!("&mut {}", inner) } else { format!("&{}", inner) }
+            if type_ref.mutability.is_some() { format!("&mut {inner}") } else { format!("&{inner}") }
         }
         _ => quote!(#ty).to_string(),
     }
@@ -443,7 +443,7 @@ pub(crate) fn check_param_conflicts(func: &ItemFn) -> Result<(), TokenStream> {
             let param_type = classify_param(&pat_type.ty);
             let param_name = match &*pat_type.pat {
                 Pat::Ident(ident) => ident.ident.to_string(),
-                _ => format!("param_{}", idx),
+                _ => format!("param_{idx}"),
             };
             // Get the span of the entire parameter (pattern + type)
             let param_span = pat_type.span();
@@ -462,18 +462,17 @@ pub(crate) fn check_param_conflicts(func: &ItemFn) -> Result<(), TokenStream> {
                 // For ConfigMut conflicts, include the concrete type in the message
                 let detailed_conflict_msg = match (type1, type2) {
                     (ParamType::ConfigMut(t1), ParamType::ConfigMut(_)) => {
-                        format!("Each ConfigMut<{}> type can only appear once in a component's entry point.", t1)
+                        format!("Each ConfigMut<{t1}> type can only appear once in a component's entry point.")
                     }
                     (ParamType::Config(t1), ParamType::ConfigMut(_))
                     | (ParamType::ConfigMut(t1), ParamType::Config(_)) => {
-                        format!("You cannot have both Config<{}> and ConfigMut<{}> for the same type.", t1, t1)
+                        format!("You cannot have both Config<{t1}> and ConfigMut<{t1}> for the same type.")
                     }
                     _ => conflict_msg.to_string(),
                 };
 
                 let error_msg = format!(
-                    "Patina component parameter conflict detected: parameter '{}' (position {}) conflicts with parameter '{}' (position {}). {}",
-                    name2, idx2, name1, idx1, detailed_conflict_msg
+                    "Patina component parameter conflict detected: parameter '{name2}' (position {idx2}) conflicts with parameter '{name1}' (position {idx1}). {detailed_conflict_msg}"
                 );
 
                 // Create the primary error at the second parameter location
@@ -486,9 +485,9 @@ pub(crate) fn check_param_conflicts(func: &ItemFn) -> Result<(), TokenStream> {
                     | (ParamType::Commands, ParamType::Commands)
                     | (ParamType::StandardBootServices, ParamType::StandardBootServices)
                     | (ParamType::StandardRuntimeServices, ParamType::StandardRuntimeServices) => {
-                        format!("first '{}' parameter here", name1)
+                        format!("first '{name1}' parameter here")
                     }
-                    _ => format!("conflicts with '{}' parameter here", name1),
+                    _ => format!("conflicts with '{name1}' parameter here"),
                 };
                 error.combine(syn::Error::new(*span1, note_msg));
 

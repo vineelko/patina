@@ -1061,7 +1061,7 @@ mod tests {
         let handoff = gen_phase_handoff_information_table();
         hoblist.push(Hob::Handoff(&handoff));
 
-        let debug_output = format!("{:?}", hoblist);
+        let debug_output = format!("{hoblist:?}");
 
         assert!(debug_output.contains("PHASE HANDOFF INFORMATION TABLE"));
         assert!(debug_output.contains("HOB Length:"));

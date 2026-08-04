@@ -845,7 +845,7 @@ mod test {
     }
 
     fn stringify(error: FirmwareFileSystemError) -> String {
-        format!("efi error: {:x?}", error).to_string()
+        format!("efi error: {error:x?}").to_string()
     }
 
     fn extract_text_from_section(section: &Section) -> Option<String> {
@@ -876,7 +876,7 @@ mod test {
                 assert_eq!(target.size, ffs_file.size(), "[{file_name}] Error with the file size (Full size).");
                 let sections = ffs_file.sections_with_extractor(extractor).map_err(stringify)?;
                 for section in sections.iter().enumerate() {
-                    println!("{:x?}", section);
+                    println!("{section:x?}");
                 }
                 assert_eq!(
                     target.number_of_sections,
@@ -929,7 +929,7 @@ mod test {
                 );
                 let sections: Vec<&Section> = ffs_file.section_iter().collect();
                 for section in sections.iter().enumerate() {
-                    println!("{:x?}", section);
+                    println!("{section:x?}");
                 }
                 assert_eq!(
                     target.number_of_sections,
@@ -1138,7 +1138,7 @@ mod test {
     struct ExampleSectionExtractor {}
     impl SectionExtractor for ExampleSectionExtractor {
         fn extract(&self, section: &Section) -> Result<Vec<u8>, FirmwareFileSystemError> {
-            println!("Encapsulated section: {:?}", section);
+            println!("Encapsulated section: {section:?}");
             Ok(Vec::new()) //A real section extractor would provide the extracted buffer on return.
         }
     }
@@ -1199,7 +1199,7 @@ mod test {
                 assert_eq!(length, 0);
                 assert_eq!(header.compression_type, 1);
             }
-            otherwise_bad => panic!("invalid section: {:x?}", otherwise_bad),
+            otherwise_bad => panic!("invalid section: {otherwise_bad:x?}"),
         }
 
         let empty_guid_defined: [u8; 32] = [
@@ -1224,7 +1224,7 @@ mod test {
                 assert_eq!(guid_data.to_vec(), &[0x00u8, 0x01, 0x02, 0x03]);
                 assert_eq!(section.try_content_as_slice().unwrap(), &[0x04, 0x15, 0x19, 0x80]);
             }
-            otherwise_bad => panic!("invalid section: {:x?}", otherwise_bad),
+            otherwise_bad => panic!("invalid section: {otherwise_bad:x?}"),
         }
 
         let empty_version: [u8; 14] =
@@ -1236,7 +1236,7 @@ mod test {
                 assert_eq!(build_number, 0);
                 assert_eq!(section.try_content_as_slice().unwrap(), &[0x31, 0x00, 0x2E, 0x00, 0x30, 0x00, 0x00, 0x00]);
             }
-            otherwise_bad => panic!("invalid section: {:x?}", otherwise_bad),
+            otherwise_bad => panic!("invalid section: {otherwise_bad:x?}"),
         }
 
         let empty_freeform_subtype: [u8; 24] = [
@@ -1255,7 +1255,7 @@ mod test {
                 );
                 assert_eq!(section.try_content_as_slice().unwrap(), &[0x04, 0x15, 0x19, 0x80]);
             }
-            otherwise_bad => panic!("invalid section: {:x?}", otherwise_bad),
+            otherwise_bad => panic!("invalid section: {otherwise_bad:x?}"),
         }
 
         Ok(())

@@ -510,7 +510,7 @@ impl core::fmt::Display for Guid<'_> {
             if DASH_POSITIONS.contains(&i) {
                 write!(f, "-")?;
             }
-            write!(f, "{}", c)?;
+            write!(f, "{c}")?;
         }
         Ok(())
     }
@@ -519,7 +519,7 @@ impl core::fmt::Display for Guid<'_> {
 impl core::fmt::Debug for Guid<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         // Use the Display format for Debug as well, since this is more useful for GUIDs
-        write!(f, "{}", self)
+        write!(f, "{self}")
     }
 }
 
@@ -730,7 +730,7 @@ mod tests {
         let original_string_guid = OwnedGuid::from_string(TEST_GUID_STRING);
 
         // Convert to a string with Display and back to a Patina GUID
-        let display_string = format!("{}", original_string_guid);
+        let display_string = format!("{original_string_guid}");
         let roundtrip_guid = OwnedGuid::from_string(&display_string);
 
         assert_eq!(original_string_guid.as_bytes(), roundtrip_guid.as_bytes());
@@ -739,7 +739,7 @@ mod tests {
         // Test the other direction
         let r_efi_guid = create_test_r_efi_guid();
         let ref_guid = Guid::from_ref(&r_efi_guid);
-        let ref_display = format!("{}", ref_guid);
+        let ref_display = format!("{ref_guid}");
         let bytes_guid = OwnedGuid::from_string(&ref_display);
 
         assert_eq!(ref_guid.as_bytes(), bytes_guid.as_bytes());
@@ -762,8 +762,8 @@ mod tests {
         assert_eq!(bytes_from_string, bytes_from_ref);
 
         // Test Display formatting consistency
-        let display_from_string = format!("{}", test_guid);
-        let display_from_ref = format!("{}", ref_guid);
+        let display_from_string = format!("{test_guid}");
+        let display_from_ref = format!("{ref_guid}");
         assert_eq!(display_from_string, display_from_ref);
         assert_eq!(display_from_string, TEST_GUID_STRING_UPPER);
     }
@@ -790,9 +790,7 @@ mod tests {
         // Allow some overhead for enum discriminant and alignment, but should be minimal
         assert!(
             patina_size <= guid_size + 8,
-            "Patina GUID size ({}) is within expected limits ({})",
-            patina_size,
-            guid_size
+            "Patina GUID size ({patina_size}) is within expected limits ({guid_size})"
         );
     }
 
@@ -814,15 +812,15 @@ mod tests {
 
         assert_eq!(ref_guid.as_bytes(), bytes_guid.as_bytes());
         assert_eq!(ref_guid, bytes_guid);
-        assert_eq!(format!("{}", ref_guid), format!("{}", bytes_guid));
+        assert_eq!(format!("{ref_guid}"), format!("{}", bytes_guid));
 
         let ref_guid_clone = ref_guid.clone();
         let bytes_guid_clone = bytes_guid.clone();
         assert_eq!(ref_guid, ref_guid_clone);
         assert_eq!(bytes_guid, bytes_guid_clone);
 
-        let debug_ref = format!("{:?}", ref_guid);
-        let debug_bytes = format!("{:?}", bytes_guid);
+        let debug_ref = format!("{ref_guid:?}");
+        let debug_bytes = format!("{bytes_guid:?}");
         assert_eq!(debug_ref, debug_bytes);
         assert_eq!(debug_ref, TEST_GUID_STRING_UPPER);
     }
@@ -856,7 +854,7 @@ mod tests {
 
         for input in test_cases {
             let result = OwnedGuid::try_from_string(input);
-            assert!(result.is_ok(), "Failed to parse valid GUID string: {}", input);
+            assert!(result.is_ok(), "Failed to parse valid GUID string: {input}");
 
             match result.unwrap() {
                 Guid::Owned(_) => {}
@@ -872,12 +870,12 @@ mod tests {
 
         for (input, _expected_count) in invalid_cases {
             let result = OwnedGuid::try_from_string(input);
-            assert!(result.is_err(), "Should have failed for invalid length: {}", input);
+            assert!(result.is_err(), "Should have failed for invalid length: {input}");
 
             match result.unwrap_err() {
                 GuidError::InvalidLength { .. } => {}
                 other @ GuidError::InvalidHexCharacter { .. } => {
-                    panic!("Expected InvalidLength error for: {}, got: {:?}", input, other)
+                    panic!("Expected InvalidLength error for: {input}, got: {other:?}")
                 }
             }
         }
@@ -889,7 +887,7 @@ mod tests {
 
         for input in invalid_cases {
             let result = OwnedGuid::try_from_string(input);
-            assert!(result.is_err(), "Should have failed for invalid input: {}", input);
+            assert!(result.is_err(), "Should have failed for invalid input: {input}");
         }
     }
 
@@ -900,11 +898,11 @@ mod tests {
 
         for input in invalid_cases {
             let result = OwnedGuid::try_from_string(input);
-            assert!(result.is_err(), "Should have failed for invalid character: {}", input);
+            assert!(result.is_err(), "Should have failed for invalid character: {input}");
 
             match result.unwrap_err() {
                 GuidError::InvalidHexCharacter { .. } => {}
-                GuidError::InvalidLength { .. } => panic!("Expected InvalidHexCharacter error for: {}", input),
+                GuidError::InvalidLength { .. } => panic!("Expected InvalidHexCharacter error for: {input}"),
             }
         }
     }
@@ -926,7 +924,7 @@ mod tests {
     fn display_from_ref() {
         let r_efi_guid = create_test_r_efi_guid();
         let guid = Guid::from_ref(&r_efi_guid);
-        let display_string = format!("{}", guid);
+        let display_string = format!("{guid}");
 
         assert_eq!(display_string, TEST_GUID_STRING_UPPER);
     }
@@ -937,7 +935,7 @@ mod tests {
 
         for input in test_cases {
             let guid = OwnedGuid::try_from_string(input).expect("Valid GUID string should parse");
-            let display_string = format!("{}", guid);
+            let display_string = format!("{guid}");
             assert_eq!(display_string, TEST_GUID_STRING_UPPER);
         }
     }
@@ -946,7 +944,7 @@ mod tests {
     fn debug_format() {
         let r_efi_guid = create_test_r_efi_guid();
         let guid = Guid::from_ref(&r_efi_guid);
-        let debug_string = format!("{:?}", guid);
+        let debug_string = format!("{guid:?}");
 
         assert_eq!(debug_string, TEST_GUID_STRING_UPPER);
     }
@@ -974,7 +972,7 @@ mod tests {
 
         for input in test_cases {
             let guid_from_string = OwnedGuid::from_string(input);
-            assert_eq!(guid_from_ref, guid_from_string, "Failed for input: {}", input);
+            assert_eq!(guid_from_ref, guid_from_string, "Failed for input: {input}");
         }
     }
 
@@ -1039,7 +1037,7 @@ mod tests {
     fn whitespace_handling() {
         let spaced_guid = " 550e8400-e29b-41d4-a716-446655440000 ";
         let guid = OwnedGuid::try_from_string(spaced_guid).expect("Should handle whitespace");
-        assert_eq!(format!("{}", guid), TEST_GUID_STRING_UPPER);
+        assert_eq!(format!("{guid}"), TEST_GUID_STRING_UPPER);
     }
 
     #[test]
@@ -1056,11 +1054,11 @@ mod tests {
     #[test]
     fn error_display() {
         let error = GuidError::InvalidLength { expected: 32, actual: 30 };
-        let display = format!("{}", error);
+        let display = format!("{error}");
         assert_eq!(display, "Invalid GUID length: expected 32 hex characters, found 30");
 
         let error = GuidError::InvalidHexCharacter { position: 5, character: 'z' };
-        let display = format!("{}", error);
+        let display = format!("{error}");
         assert_eq!(display, "Invalid hex character 'z' at position 5");
     }
 
@@ -1265,7 +1263,7 @@ mod tests {
         assert_eq!(fields, TEST_GUID_FIELDS);
 
         // Verify display formatting
-        assert_eq!(format!("{}", guid_from_bytes), TEST_GUID_STRING_UPPER);
+        assert_eq!(format!("{guid_from_bytes}"), TEST_GUID_STRING_UPPER);
     }
 
     #[test]
@@ -1332,7 +1330,7 @@ mod tests {
 
         for input in test_cases {
             let result = BinaryGuid::try_from_string(input);
-            assert!(result.is_ok(), "Failed to parse valid GUID string: {}", input);
+            assert!(result.is_ok(), "Failed to parse valid GUID string: {input}");
 
             let binary_guid = result.unwrap();
             assert_eq!(binary_guid.as_fields(), TEST_GUID_FIELDS);
@@ -1356,7 +1354,7 @@ mod tests {
 
         // Should have same fields and display
         assert_eq!(guid_ref.as_fields(), binary_guid.as_fields());
-        assert_eq!(format!("{}", guid_ref), format!("{}", binary_guid));
+        assert_eq!(format!("{guid_ref}"), format!("{}", binary_guid));
     }
 
     #[test]
@@ -1373,7 +1371,7 @@ mod tests {
 
         // Should have same fields and display
         assert_eq!(owned_guid.as_fields(), binary_guid.as_fields());
-        assert_eq!(format!("{}", owned_guid), format!("{}", binary_guid));
+        assert_eq!(format!("{owned_guid}"), format!("{}", binary_guid));
     }
 
     #[test]
@@ -1446,7 +1444,7 @@ mod tests {
         // Test round-trip
         let back_to_owned: OwnedGuid = binary_guid_from_owned.into();
         assert_eq!(back_to_owned.as_fields(), TEST_GUID_FIELDS);
-        assert_eq!(format!("{}", back_to_owned), TEST_GUID_STRING_UPPER);
+        assert_eq!(format!("{back_to_owned}"), TEST_GUID_STRING_UPPER);
     }
 
     #[test]
@@ -1462,7 +1460,7 @@ mod tests {
         }
 
         assert_eq!(guid_from_ref.as_fields(), binary_guid.as_fields());
-        assert_eq!(format!("{}", guid_from_ref), format!("{}", binary_guid));
+        assert_eq!(format!("{guid_from_ref}"), format!("{}", binary_guid));
     }
 
     #[test]
@@ -1522,20 +1520,20 @@ mod tests {
     fn binary_guid_display() {
         let binary_guid =
             BinaryGuid::from_fields(0x550e8400, 0xe29b, 0x41d4, 0xa7, 0x16, &[0x44, 0x66, 0x55, 0x44, 0x00, 0x00]);
-        let display_string = format!("{}", binary_guid);
+        let display_string = format!("{binary_guid}");
 
         assert_eq!(display_string, TEST_GUID_STRING_UPPER);
 
         // Should match the display of equivalent Guid types
         let owned_guid = OwnedGuid::from_string(TEST_GUID_STRING);
-        assert_eq!(format!("{}", binary_guid), format!("{}", owned_guid));
+        assert_eq!(format!("{binary_guid}"), format!("{}", owned_guid));
     }
 
     #[test]
     fn binary_guid_debug() {
         let binary_guid =
             BinaryGuid::from_fields(0x550e8400, 0xe29b, 0x41d4, 0xa7, 0x16, &[0x44, 0x66, 0x55, 0x44, 0x00, 0x00]);
-        let debug_string = format!("{:?}", binary_guid);
+        let debug_string = format!("{binary_guid:?}");
 
         // Defers to Guid's Debug impl
         assert_eq!(debug_string, TEST_GUID_STRING_UPPER);
@@ -1633,8 +1631,7 @@ mod tests {
                 let guid_ord = a.to_owned_guid().cmp(&b.to_owned_guid());
                 assert_eq!(
                     binary_ord, guid_ord,
-                    "Ordering mismatch at guids[{i}] vs guids[{j}]: BinaryGuid is {:?}, Guid is {:?}",
-                    binary_ord, guid_ord
+                    "Ordering mismatch at guids[{i}] vs guids[{j}]: BinaryGuid is {binary_ord:?}, Guid is {guid_ord:?}"
                 );
             }
         }
@@ -1683,7 +1680,7 @@ mod tests {
         let zero_bytes = ZERO_BINARY_GUID.as_bytes();
         assert_eq!(zero_bytes, &[0; 16]);
 
-        assert_eq!(format!("{}", ZERO_BINARY_GUID), "00000000-0000-0000-0000-000000000000");
+        assert_eq!(format!("{ZERO_BINARY_GUID}"), "00000000-0000-0000-0000-000000000000");
     }
 
     #[test]
@@ -1694,7 +1691,7 @@ mod tests {
 
         // Runtime verification - as_fields() is not const so we test at runtime
         assert_eq!(TEST_BINARY_GUID.as_fields(), TEST_GUID_FIELDS);
-        assert_eq!(format!("{}", TEST_BINARY_GUID), TEST_GUID_STRING_UPPER);
+        assert_eq!(format!("{TEST_BINARY_GUID}"), TEST_GUID_STRING_UPPER);
 
         // Verify that the const creation works by checking the underlying structure
         let runtime_guid =

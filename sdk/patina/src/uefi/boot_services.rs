@@ -3865,7 +3865,7 @@ mod tests {
     #[test]
     fn test_debug_output_should_not_crash() {
         let boot_services = boot_services!();
-        let debug_str = format!("{:?}", boot_services);
+        let debug_str = format!("{boot_services:?}");
         assert!(!debug_str.is_empty());
         assert!(debug_str.contains("StandardBootServices"));
     }

@@ -315,9 +315,7 @@ impl<'a> Iterator for PerformanceRecordIterator<'a> {
             let available = self.bytes.len();
             self.bytes = &[];
             return Some(Err(MmPerformanceError::RecordError(alloc::format!(
-                "Truncated record (needed {}, had {})",
-                rec_len,
-                available
+                "Truncated record (needed {rec_len}, had {available})"
             ))));
         }
 
@@ -326,7 +324,7 @@ impl<'a> Iterator for PerformanceRecordIterator<'a> {
             Ok(record) => record,
             Err(err) => {
                 self.bytes = &[];
-                return Some(Err(MmPerformanceError::RecordError(alloc::format!("Failed to parse record: {:?}", err))));
+                return Some(Err(MmPerformanceError::RecordError(alloc::format!("Failed to parse record: {err:?}"))));
             }
         };
 
@@ -377,23 +375,20 @@ fn process_mm_performance_records(
 
                 if let Err(e) = performance.add_generic_record(record) {
                     error_count += 1;
-                    log::error!("Performance: Failed adding MM record #{}: {:?}", record_count, e);
+                    log::error!("Performance: Failed adding MM record #{record_count}: {e:?}");
                 } else {
                     success_count += 1;
                 }
             }
             Err(e) => {
-                log::warn!("Performance: {}", e);
+                log::warn!("Performance: {e}");
                 continue;
             }
         }
     }
 
     log::debug!(
-        "Performance: MM record summary - total: {}, added: {}, failed: {}",
-        record_count,
-        success_count,
-        error_count
+        "Performance: MM record summary - total: {record_count}, added: {success_count}, failed: {error_count}"
     );
 
     Ok(())
@@ -410,7 +405,7 @@ pub extern "efiapi" fn fetch_and_add_mm_performance_records<B>(
     let _ = boot_services.close_event(event);
 
     if let Err(e) = process_mm_performance_records(&comm_service, &performance) {
-        log::error!("Performance: {}", e);
+        log::error!("Performance: {e}");
     }
 }
 

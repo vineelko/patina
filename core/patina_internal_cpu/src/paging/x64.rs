@@ -47,7 +47,7 @@ where
         let memory_attributes = attributes & MemoryAttributes::AccessAttributesMask;
 
         if attributes != (cache_attributes | memory_attributes) {
-            log::error!("Invalid cache attribute: {:#x}", attributes);
+            log::error!("Invalid cache attribute: {attributes:#x}");
             return Err(PtError::InvalidParameter);
         }
 

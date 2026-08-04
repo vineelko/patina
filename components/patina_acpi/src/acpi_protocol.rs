@@ -114,9 +114,7 @@ impl AcpiTableProtocol {
                     }
                     Err(e) => {
                         log::error!(
-                            "ACPI protocol: Install failed with error {:?} for table with signature: 0x{:08X}",
-                            e,
-                            signature,
+                            "ACPI protocol: Install failed with error {e:?} for table with signature: 0x{signature:08X}",
                         );
                         return e.into();
                     }
@@ -144,11 +142,11 @@ impl AcpiTableProtocol {
     extern "efiapi" fn uninstall_acpi_table_ext(_protocol: *const AcpiTableProtocol, table_key: usize) -> efi::Status {
         match STANDARD_ACPI_PROVIDER.uninstall_acpi_table(TableKey(table_key)) {
             Ok(()) => {
-                log::trace!("ACPI protocol: Successfully uninstalled table with key: {}", table_key);
+                log::trace!("ACPI protocol: Successfully uninstalled table with key: {table_key}");
                 efi::Status::SUCCESS
             }
             Err(e) => {
-                log::error!("ACPI protocol: Failed to uninstall table with key: {} - error: {:?}", table_key, e);
+                log::error!("ACPI protocol: Failed to uninstall table with key: {table_key} - error: {e:?}");
                 e.into()
             }
         }
@@ -221,7 +219,7 @@ impl AcpiGetProtocol {
                 efi::Status::SUCCESS
             }
             Err(e) => {
-                log::error!("ACPI protocol: Failed to get table at index {} with error: {:?}", index, e);
+                log::error!("ACPI protocol: Failed to get table at index {index} with error: {e:?}");
                 e.into()
             }
         }

@@ -235,7 +235,7 @@ mod tests {
             };
 
             if status != efi::Status::BUFFER_TOO_SMALL {
-                return Err(format!("Expected BUFFER_TOO_SMALL, got {:?}", status));
+                return Err(format!("Expected BUFFER_TOO_SMALL, got {status:?}"));
             }
 
             let descriptor_count = memory_map_size / mem::size_of::<efi::MemoryDescriptor>();
@@ -257,14 +257,14 @@ mod tests {
             };
 
             if status != efi::Status::SUCCESS {
-                return Err(format!("get_memory_map() failed: {:?}", status));
+                return Err(format!("get_memory_map() failed: {status:?}"));
             }
 
             if descriptor_size != mem::size_of::<efi::MemoryDescriptor>() {
-                return Err(format!("Unexpected descriptor size: {}", descriptor_size));
+                return Err(format!("Unexpected descriptor size: {descriptor_size}"));
             }
             if descriptor_version != efi::MEMORY_DESCRIPTOR_VERSION {
-                return Err(format!("Unexpected descriptor version: {}", descriptor_version));
+                return Err(format!("Unexpected descriptor version: {descriptor_version}"));
             }
 
             let actual_descriptor_count = memory_map_size / descriptor_size;
@@ -590,26 +590,26 @@ mod tests {
             if let Some(expected) = self.total_memory_mb
                 && total_memory_mb != expected
             {
-                return Err(format!("Expected {} MB total memory, got {} MB", expected, total_memory_mb));
+                return Err(format!("Expected {expected} MB total memory, got {total_memory_mb} MB"));
             }
 
             if let Some(expected) = self.conventional_memory_mb
                 && conventional_memory_mb != expected
             {
-                return Err(format!("Expected {} MB conventional memory, got {} MB", expected, conventional_memory_mb));
+                return Err(format!("Expected {expected} MB conventional memory, got {conventional_memory_mb} MB"));
             }
 
             if let Some(expected) = self.runtime_memory_mb
                 && runtime_memory_mb != expected
             {
-                return Err(format!("Expected {} MB runtime memory, got {} MB", expected, runtime_memory_mb));
+                return Err(format!("Expected {expected} MB runtime memory, got {runtime_memory_mb} MB"));
             }
 
             if let Some(ref expected_types) = self.expected_types {
                 let present_types: std::collections::BTreeSet<u32> = descriptors.iter().map(|d| d.r#type).collect();
                 for &expected_type in expected_types {
                     if !present_types.contains(&expected_type) {
-                        return Err(format!("Expected memory type 0x{:x} not found in memory map", expected_type));
+                        return Err(format!("Expected memory type 0x{expected_type:x} not found in memory map"));
                     }
                 }
             }
@@ -973,8 +973,7 @@ mod tests {
                         let mmio_count = descriptors.iter().filter(|d| d.r#type == efi::MEMORY_MAPPED_IO).count();
                         if mmio_count > 0 {
                             return Err(format!(
-                                "Non-runtime MMIO should not appear in UEFI memory map, but found {} MMIO descriptor(s)",
-                                mmio_count
+                                "Non-runtime MMIO should not appear in UEFI memory map, but found {mmio_count} MMIO descriptor(s)"
                             ));
                         }
 

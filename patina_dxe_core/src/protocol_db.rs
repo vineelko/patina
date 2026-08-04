@@ -665,8 +665,7 @@ impl SpinLockedProtocolDb {
                 panic!(
                     "Well-known handle installed at unexpected handle value. \
                      `init_protocol_db` must be called before any other protocol database operations. \
-                     Expected handle {:#x?}, got {:#x?}",
-                    target_handle, handle
+                     Expected handle {target_handle:#x?}, got {handle:#x?}"
                 );
             }
         }

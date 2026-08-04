@@ -350,7 +350,7 @@ impl fmt::Display for GuidEventRecordData {
         let apic_id = self.apic_id;
         let timestamp = self.timestamp;
         let guid = BinaryGuid::from_bytes(&self.guid);
-        write!(f, "progress_id={}, apic_id={}, timestamp={}, guid={}", progress_id, apic_id, timestamp, guid)
+        write!(f, "progress_id={progress_id}, apic_id={apic_id}, timestamp={timestamp}, guid={guid}")
     }
 }
 
@@ -392,7 +392,7 @@ impl fmt::Display for DynamicStringEventRecordData {
         let apic_id = self.apic_id;
         let timestamp = self.timestamp;
         let guid = BinaryGuid::from_bytes(&self.guid);
-        write!(f, "progress_id: 0x{:04X}, apic_id: {}, timestamp: {}, guid: {}", progress_id, apic_id, timestamp, guid)
+        write!(f, "progress_id: 0x{progress_id:04X}, apic_id: {apic_id}, timestamp: {timestamp}, guid: {guid}")
     }
 }
 
@@ -438,8 +438,7 @@ impl fmt::Display for DualGuidStringEventRecordData {
         let guid_2 = BinaryGuid::from_bytes(&self.guid_2);
         write!(
             f,
-            "progress_id: 0x{:04X}, apic_id: {}, timestamp: {}, guid_1: {}, guid_2: {}",
-            progress_id, apic_id, timestamp, guid_1, guid_2
+            "progress_id: 0x{progress_id:04X}, apic_id: {apic_id}, timestamp: {timestamp}, guid_1: {guid_1}, guid_2: {guid_2}"
         )
     }
 }
@@ -477,8 +476,7 @@ impl fmt::Display for GuidQwordEventRecordData {
         let qword = self.qword;
         write!(
             f,
-            "progress_id: 0x{:04X}, apic_id: {}, timestamp: {}, guid: {}, qword: 0x{:016X}",
-            progress_id, apic_id, timestamp, guid, qword
+            "progress_id: 0x{progress_id:04X}, apic_id: {apic_id}, timestamp: {timestamp}, guid: {guid}, qword: 0x{qword:016X}"
         )
     }
 }
@@ -525,8 +523,7 @@ impl fmt::Display for GuidQwordStringEventRecordData {
         let qword = self.qword;
         write!(
             f,
-            "progress_id: 0x{:04X}, apic_id: {}, timestamp: {}, guid: {}, qword: 0x{:016X}",
-            progress_id, apic_id, timestamp, guid, qword
+            "progress_id: 0x{progress_id:04X}, apic_id: {apic_id}, timestamp: {timestamp}, guid: {guid}, qword: 0x{qword:016X}"
         )
     }
 }
@@ -539,31 +536,31 @@ pub trait PerformanceRecordDetails {
 
 impl PerformanceRecordDetails for GuidEventRecordData {
     fn print_details(&self, record_number: usize) {
-        log::debug!("  Record #{}: {}", record_number, self);
+        log::debug!("  Record #{record_number}: {self}");
     }
 }
 
 impl PerformanceRecordDetails for DynamicStringEventRecordData {
     fn print_details(&self, record_number: usize) {
-        log::debug!("  Record #{}: {}", record_number, self);
+        log::debug!("  Record #{record_number}: {self}");
     }
 }
 
 impl PerformanceRecordDetails for DualGuidStringEventRecordData {
     fn print_details(&self, record_number: usize) {
-        log::debug!("  Record #{}: {}", record_number, self);
+        log::debug!("  Record #{record_number}: {self}");
     }
 }
 
 impl PerformanceRecordDetails for GuidQwordEventRecordData {
     fn print_details(&self, record_number: usize) {
-        log::debug!("  Record #{}: {}", record_number, self);
+        log::debug!("  Record #{record_number}: {self}");
     }
 }
 
 impl PerformanceRecordDetails for GuidQwordStringEventRecordData {
     fn print_details(&self, record_number: usize) {
-        log::debug!("  Record #{}: {}", record_number, self);
+        log::debug!("  Record #{record_number}: {self}");
     }
 }
 
@@ -584,7 +581,7 @@ pub fn print_record_details(record_type: u16, record_number: usize, data: &[u8])
                 record.print_details(record_number);
                 let string_data = DynamicStringEventRecordData::extract_string(data);
                 if !string_data.is_empty() {
-                    log::debug!("    String: \"{}\"", string_data);
+                    log::debug!("    String: \"{string_data}\"");
                 }
             }
         }
@@ -595,7 +592,7 @@ pub fn print_record_details(record_type: u16, record_number: usize, data: &[u8])
                 record.print_details(record_number);
                 let string_data = DualGuidStringEventRecordData::extract_string(data);
                 if !string_data.is_empty() {
-                    log::debug!("    String: \"{}\"", string_data);
+                    log::debug!("    String: \"{string_data}\"");
                 }
             }
         }
@@ -613,12 +610,12 @@ pub fn print_record_details(record_type: u16, record_number: usize, data: &[u8])
                 record.print_details(record_number);
                 let string_data = GuidQwordStringEventRecordData::extract_string(data);
                 if !string_data.is_empty() {
-                    log::debug!("    String: \"{}\"", string_data);
+                    log::debug!("    String: \"{string_data}\"");
                 }
             }
         }
         _ => {
-            log::debug!("  Record #{}: Unknown type 0x{:04X}", record_number, record_type);
+            log::debug!("  Record #{record_number}: Unknown type 0x{record_type:04X}");
         }
     }
 }
@@ -861,7 +858,7 @@ mod tests {
             guid: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10],
         };
 
-        let display_str = format!("{}", record);
+        let display_str = format!("{record}");
         assert!(display_str.contains("progress_id=4660"));
         assert!(display_str.contains("apic_id=42"));
         assert!(display_str.contains("timestamp=1000000"));
@@ -876,7 +873,7 @@ mod tests {
             guid: [0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20],
         };
 
-        let display_str = format!("{}", record);
+        let display_str = format!("{record}");
         assert!(display_str.contains("progress_id: 0x5678"));
         assert!(display_str.contains("apic_id: 99"));
         assert!(display_str.contains("timestamp: 2000000"));
@@ -930,7 +927,7 @@ mod tests {
             guid_2: [0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40],
         };
 
-        let display_str = format!("{}", record);
+        let display_str = format!("{record}");
         assert!(display_str.contains("progress_id: 0xABCD"));
         assert!(display_str.contains("apic_id: 123"));
         assert!(display_str.contains("timestamp: 3000000"));
@@ -965,7 +962,7 @@ mod tests {
             qword: 0x123456789ABCDEF0,
         };
 
-        let display_str = format!("{}", record);
+        let display_str = format!("{record}");
         assert!(display_str.contains("progress_id: 0xEF01"));
         assert!(display_str.contains("apic_id: 200"));
         assert!(display_str.contains("timestamp: 4000000"));
@@ -982,7 +979,7 @@ mod tests {
             qword: 0xFEDCBA9876543210,
         };
 
-        let display_str = format!("{}", record);
+        let display_str = format!("{record}");
         assert!(display_str.contains("progress_id: 0x2345"));
         assert!(display_str.contains("apic_id: 77"));
         assert!(display_str.contains("timestamp: 5000000"));

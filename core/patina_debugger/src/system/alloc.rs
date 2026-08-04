@@ -223,7 +223,7 @@ mod tests {
 
         let x = 5;
         let callback: Box<MonitorCommandFn> = Box::new(move |_args, out| {
-            let _ = writeln!(out, "Captured state: {}", x);
+            let _ = writeln!(out, "Captured state: {x}");
         });
         system_state.add_monitor_command(command, Some(description), callback);
 

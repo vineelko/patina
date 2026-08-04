@@ -153,7 +153,7 @@ where
 
         if hw_write {
             let result = self.hardware_port.write(data);
-            debug_assert!(result.is_ok(), "Failed to write to hardware port: {:?}", result);
+            debug_assert!(result.is_ok(), "Failed to write to hardware port: {result:?}");
         }
     }
 
@@ -177,7 +177,7 @@ where
             }
             // Drop the lock before logging
 
-            log::info!("Advanced logger buffer initialized. Address = {:#x}", address);
+            log::info!("Advanced logger buffer initialized. Address = {address:#x}");
 
             // The frequency may not be initialized, if not do so now.
             if current_frequency == 0 {

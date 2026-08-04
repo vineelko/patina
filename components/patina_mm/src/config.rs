@@ -138,12 +138,12 @@ impl CommunicateBuffer {
     /// Creates a new `CommunicateBuffer` with the given buffer and ID.
     pub fn new(mut buffer: Pin<&'static mut [u8]>, id: u8) -> Self {
         let length = buffer.len();
-        log::debug!(target: "mm_comm", "Creating new CommunicateBuffer: id={}, size=0x{:X}", id, length);
+        log::debug!(target: "mm_comm", "Creating new CommunicateBuffer: id={id}, size=0x{length:X}");
         buffer.fill(0);
 
         let ptr: NonNull<[u8]> = NonNull::from_mut(Pin::into_inner(buffer));
 
-        log::trace!(target: "mm_comm", "CommunicateBuffer {} created successfully at address {:p}", id, ptr);
+        log::trace!(target: "mm_comm", "CommunicateBuffer {id} created successfully at address {ptr:p}");
         Self {
             buffer: ptr,
             id,
@@ -181,7 +181,7 @@ impl CommunicateBuffer {
     /// - The buffer must be page (4k) aligned so paging attributes can be applied to it.
     /// - The buffer size must be sufficient to hold at least the MM communication header.
     pub unsafe fn from_raw_parts(buffer: *mut u8, size: usize, id: u8) -> Result<Self, CommunicateBufferStatus> {
-        log::trace!(target: "mm_comm", "Creating CommunicateBuffer from raw parts: id={}, ptr={:p}, size=0x{:X}", id, buffer, size);
+        log::trace!(target: "mm_comm", "Creating CommunicateBuffer from raw parts: id={id}, ptr={buffer:p}, size=0x{size:X}");
 
         if size < Self::MINIMUM_BUFFER_SIZE {
             log::error!(target: "mm_comm", "Buffer {} too small: size=0x{:X}, minimum=0x{:X}", id, size, Self::MINIMUM_BUFFER_SIZE);
@@ -189,7 +189,7 @@ impl CommunicateBuffer {
         }
 
         if buffer.is_null() {
-            log::error!(target: "mm_comm", "Buffer {} has null pointer", id);
+            log::error!(target: "mm_comm", "Buffer {id} has null pointer");
             return Err(CommunicateBufferStatus::NoBuffer);
         }
 
@@ -203,7 +203,7 @@ impl CommunicateBuffer {
             return Err(CommunicateBufferStatus::AddressValidationFailed);
         }
 
-        log::debug!(target: "mm_comm", "CommunicateBuffer {} validation passed, creating buffer", id);
+        log::debug!(target: "mm_comm", "CommunicateBuffer {id} validation passed, creating buffer");
         // SAFETY: Caller guarantees pointer validity per function safety contract
         unsafe { Ok(Self::new(Pin::new(core::slice::from_raw_parts_mut(buffer, size)), id)) }
     }
@@ -250,10 +250,7 @@ impl CommunicateBuffer {
 
         log::info!(
             target: "mm_comm",
-            "Creating CommunicateBuffer from firmware region: addr=0x{:X}, size=0x{:X}, id={}",
-            address,
-            size_bytes,
-            buffer_id
+            "Creating CommunicateBuffer from firmware region: addr=0x{address:X}, size=0x{size_bytes:X}, id={buffer_id}"
         );
 
         // SAFETY: Caller guarantees firmware memory region is valid and stable per the function safety contract
@@ -267,7 +264,7 @@ impl CommunicateBuffer {
 
             // SAFETY: Caller guarantees the status mailbox address is valid
             buffer.status_mailbox = NonNull::new(status_ptr);
-            log::info!(target: "mm_comm", "Buffer {} status mailbox configured at address 0x{:X}", buffer_id, status_addr);
+            log::info!(target: "mm_comm", "Buffer {buffer_id} status mailbox configured at address 0x{status_addr:X}");
         }
 
         Ok(buffer)
@@ -1148,7 +1145,7 @@ mod tests {
     #[test]
     fn test_mm_communication_configuration_display() {
         let default_config = MmCommunicationConfiguration::default();
-        let display_output = format!("{}", default_config);
+        let display_output = format!("{default_config}");
 
         let expected_lines = [
             "MM Communication Configuration:",
@@ -1162,9 +1159,7 @@ mod tests {
         for expected_line in &expected_lines {
             assert!(
                 display_output.contains(expected_line),
-                "Display output should contain: '{}'\nActual output:\n{}",
-                expected_line,
-                display_output
+                "Display output should contain: '{expected_line}'\nActual output:\n{display_output}"
             );
         }
 
@@ -1183,7 +1178,7 @@ mod tests {
             updatable_buffer_id: None,
         };
 
-        let populated_display = format!("{}", populated_config);
+        let populated_display = format!("{populated_config}");
 
         assert!(populated_display.contains("MM Communication Configuration:"));
         assert!(populated_display.contains("  ACPI Base: IO(0x1234)"));

@@ -231,7 +231,7 @@ fn test_real_component_invalid_guid_communication() {
             // This is the expected error when no handler is found
         }
         other => {
-            panic!("Expected CommBufferNotFound error, got: {:?}", other);
+            panic!("Expected CommBufferNotFound error, got: {other:?}");
         }
     }
 }
@@ -255,7 +255,7 @@ fn test_real_component_empty_data_validation() {
             // This is the expected error for invalid input
         }
         other => {
-            panic!("Expected InvalidDataBuffer error, got: {:?}", other);
+            panic!("Expected InvalidDataBuffer error, got: {other:?}");
         }
     }
 }

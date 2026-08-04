@@ -75,7 +75,7 @@ impl StackTrace {
     pub unsafe fn dump_with(mut stack_frame: StackFrame) -> StResult<()> {
         let mut i = 0;
 
-        log::warn!("Dumping stack trace with {}", stack_frame);
+        log::warn!("Dumping stack trace with {stack_frame}");
 
         log::warn!("      # Child-SP              Return Address         Call Site");
 
@@ -245,7 +245,7 @@ impl StackTrace {
     pub unsafe fn dump_with_fp_chain(_stack_frame: StackFrame) -> StResult<()> {
         cfg_if::cfg_if! {
             if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
-                log::warn!("Dumping stack trace with fp chain for {}", _stack_frame);
+                log::warn!("Dumping stack trace with fp chain for {_stack_frame}");
                 log::warn!("Use `addr2line -e <.debug file> -f -C <offset>` to resolve offset to source lines");
                 log::warn!("      # Child-SP              Return Address         Call Site");
 
@@ -272,7 +272,7 @@ impl StackTrace {
                     let prev_pc = unsafe { read_pointer64(fp + 8)? }; // deref lr
                     // SAFETY: See preceding safety comment — reading the saved fp from the same stack frame.
                     let prev_fp = unsafe { read_pointer64(fp)? };
-                    log::warn!("     {i:>2} {:016X}      {:016X}       {image_name}+{pc_rva:X}", fp, prev_pc);
+                    log::warn!("     {i:>2} {fp:016X}      {prev_pc:016X}       {image_name}+{pc_rva:X}");
 
                     if fp == prev_fp {
                         log::error!("FP didn't change. Possible stack corruption detected. Stopping stack trace.");
@@ -290,7 +290,7 @@ impl StackTrace {
                     i += 1;
 
                     if i > MAX_FRAME_COUNT {
-                        log::error!("Frame count exceeded {}. Possible stack corruption detected. Stopping stack trace.", MAX_FRAME_COUNT);
+                        log::error!("Frame count exceeded {MAX_FRAME_COUNT}. Possible stack corruption detected. Stopping stack trace.");
                         break;
                     }
                 }

@@ -935,7 +935,7 @@ mod tests {
     #[test]
     fn test_sata_display() {
         let sata = Sata::new(1, 0xFFFF, 0);
-        let display = std::format!("{}", sata);
+        let display = std::format!("{sata}");
         assert!(display.contains("Sata"));
     }
 
@@ -961,7 +961,7 @@ mod tests {
     #[test]
     fn test_nvme_display() {
         let nvme = NvmExpress::new(1, 0);
-        let display = std::format!("{}", nvme);
+        let display = std::format!("{nvme}");
         assert!(display.contains("NvmExpress"));
     }
 
@@ -998,7 +998,7 @@ mod tests {
     #[test]
     fn test_hard_drive_display() {
         let hd = HardDrive::new_gpt(1, 0, 0, [0; 16]);
-        let display = std::format!("{}", hd);
+        let display = std::format!("{hd}");
         assert!(display.contains("HD"));
     }
 
@@ -1074,7 +1074,7 @@ mod tests {
     #[test]
     fn test_file_path_display() {
         let fp = FilePath::new("\\EFI\\BOOT\\BOOTX64.EFI");
-        let display = std::format!("{}", fp);
+        let display = std::format!("{fp}");
         assert_eq!(display, "\\EFI\\BOOT\\BOOTX64.EFI");
     }
 

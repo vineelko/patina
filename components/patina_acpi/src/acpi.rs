@@ -217,7 +217,7 @@ where
         if let Some(fadt_table) = self.acpi_tables.lock().get_mut(&Self::FADT_KEY) {
             // SAFETY: We verify the table's signature before calling `install_facs`.
             let facs_addr = unsafe { facs_info.as_ref::<AcpiFacs>() } as *const AcpiFacs as u64;
-            log::trace!("Updating FADT with FACS address: 0x{:016X}", facs_addr);
+            log::trace!("Updating FADT with FACS address: 0x{facs_addr:016X}");
             // SAFETY: The struct maintains an invariant mapping between the FADT and `Self::FADT_KEY`.
             unsafe { fadt_table.as_mut::<AcpiFadt>().set_x_firmware_ctrl(facs_addr) };
             // SAFETY: The struct maintains an invariant mapping between the FADT and `Self::FADT_KEY`.
@@ -444,7 +444,7 @@ where
         // If not, it will be updated when the FACP is installed.
         if let Some(facp) = self.acpi_tables.lock().get_mut(&Self::FADT_KEY) {
             let dsdt_addr = dsdt_info.as_ptr() as u64;
-            log::trace!("Updating FADT with DSDT address: 0x{:016X}", dsdt_addr);
+            log::trace!("Updating FADT with DSDT address: 0x{dsdt_addr:016X}");
             // SAFETY: The struct maintains an invariant mapping between the FADT and `Self::FADT_KEY`.
             unsafe { facp.as_mut::<AcpiFadt>() }.inner.x_dsdt = dsdt_addr;
             facp.update_checksum()?;
@@ -472,7 +472,7 @@ where
 
         // Get the physical address of the table for the XSDT entry.
         let physical_addr = table_info.as_ptr() as u64;
-        log::trace!("Adding table entry to XSDT at address: 0x{:016X}", physical_addr);
+        log::trace!("Adding table entry to XSDT at address: 0x{physical_addr:016X}");
         self.add_entry_to_xsdt(physical_addr)?;
 
         // Since XSDT was modified, recalculate checksum for root tables.
@@ -642,7 +642,7 @@ where
             }
         }
 
-        log::trace!("Successfully deleted table with signature: 0x{:08X}", signature);
+        log::trace!("Successfully deleted table with signature: 0x{signature:08X}");
         Ok(())
     }
 
@@ -686,7 +686,7 @@ where
                 // Decrease XSDT length.
                 xsdt_data.set_length(xsdt_data.get_length()? - ACPI_XSDT_ENTRY_SIZE as u32);
             } else {
-                log::error!("Failed to remove table from XSDT: entry with address 0x{:016X} not found", table_address);
+                log::error!("Failed to remove table from XSDT: entry with address 0x{table_address:016X} not found");
                 return Err(AcpiError::XsdtEntryNotFound);
             }
         } else {

@@ -355,7 +355,7 @@ pub(crate) mod tests {
         // This test is filtered out, so it should not even show up in the results.
         assert!(!output.contains("test_that_fails"));
         // This test is not filtered out, but never run, so should log as such.
-        std::println!("{}", output);
+        std::println!("{output}");
         assert!(output.contains("event_triggered_test ... not triggered"));
     }
 }

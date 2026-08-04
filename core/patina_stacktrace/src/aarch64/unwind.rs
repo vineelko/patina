@@ -141,8 +141,7 @@ impl fmt::Display for UnwindInfo<'_> {
                 let cr_value = *cr as u8;
                 write!(
                     f,
-                    "UnwindInfo::PackedUnwindInfo {{ flag: 0x{:X}, func_start_rva: 0x{:X}, function_length: 0x{:X}, reg_f: 0x{:X}, reg_i: 0x{:X}, h: 0x{:X}, cr: 0x{:X}, frame_size: 0x{:X} }}",
-                    flag, func_start_rva, function_length, reg_f, reg_i, h, cr_value, frame_size
+                    "UnwindInfo::PackedUnwindInfo {{ flag: 0x{flag:X}, func_start_rva: 0x{func_start_rva:X}, function_length: 0x{function_length:X}, reg_f: 0x{reg_f:X}, reg_i: 0x{reg_i:X}, h: 0x{h:X}, cr: 0x{cr_value:X}, frame_size: 0x{frame_size:X} }}"
                 )
             }
             UnwindInfo::UnpackedUnwindInfo {
@@ -159,11 +158,10 @@ impl fmt::Display for UnwindInfo<'_> {
             } => {
                 write!(
                     f,
-                    "UnwindInfo::UnpackedUnwindInfo {{ xdata_rva: 0x{:X}, func_start_rva: 0x{:X}, function_length: 0x{:X}, vers: 0x{:X}, x: 0x{:X}, e: 0x{:X}, epilog_count: 0x{:X}, unwind_code_words: 0x{:X}, unwind_codes: ",
-                    xdata_rva, func_start_rva, function_length, vers, x, e, epilog_count, unwind_code_words,
+                    "UnwindInfo::UnpackedUnwindInfo {{ xdata_rva: 0x{xdata_rva:X}, func_start_rva: 0x{func_start_rva:X}, function_length: 0x{function_length:X}, vers: 0x{vers:X}, x: 0x{x:X}, e: 0x{e:X}, epilog_count: 0x{epilog_count:X}, unwind_code_words: 0x{unwind_code_words:X}, unwind_codes: ",
                 )?;
                 for byte in *unwind_codes {
-                    write!(f, "{:02X} ", byte)?;
+                    write!(f, "{byte:02X} ")?;
                 }
                 write!(f, "}}")
             }
@@ -425,7 +423,7 @@ impl fmt::Display for UnwindCode {
             UnwindCode::SaveFRegX(x, z) => {
                 write!(f, "SaveFRegX({}, {}) | str   d{},[sp,#-0x{:X}]!", x, z, 8 + x, (u32::from(*z) + 1u32) * 8u32)
             }
-            UnwindCode::AllocZ(size) => write!(f, "AllocZ({})", size),
+            UnwindCode::AllocZ(size) => write!(f, "AllocZ({size})"),
             UnwindCode::AllocL(size) => {
                 write!(f, "AllocL({}) | sub   sp,sp,#0x{:X}", size, *size * 16u32)
             }
@@ -445,10 +443,10 @@ impl fmt::Display for UnwindCode {
             UnwindCode::Reserved8 => write!(f, "Reserved8"),
             UnwindCode::Reserved9 => write!(f, "Reserved9"),
             UnwindCode::Reserved10 => write!(f, "Reserved10"),
-            UnwindCode::Reserved12(y) => write!(f, "Reserved12({})", y),
-            UnwindCode::Reserved13(y) => write!(f, "Reserved13({})", y),
-            UnwindCode::Reserved14(y) => write!(f, "Reserved14({})", y),
-            UnwindCode::Reserved15(y) => write!(f, "Reserved15({})", y),
+            UnwindCode::Reserved12(y) => write!(f, "Reserved12({y})"),
+            UnwindCode::Reserved13(y) => write!(f, "Reserved13({y})"),
+            UnwindCode::Reserved14(y) => write!(f, "Reserved14({y})"),
+            UnwindCode::Reserved15(y) => write!(f, "Reserved15({y})"),
             UnwindCode::Reserved16 => write!(f, "Reserved16"),
             UnwindCode::Reserved17 => write!(f, "Reserved17"),
             UnwindCode::Reserved18 => write!(f, "Reserved18"),
@@ -494,12 +492,12 @@ impl UnwindCode {
 
         let location_size = frame_size / 8 - u16::from(reg_save_size);
 
-        log::debug!("    > integer_save_size: 0x{:X}", integer_save_size); // debug
-        log::debug!("    > floating_point_save_size: 0x{:X}", floating_point_save_size); // debug
-        log::debug!("    > reg_save_size: 0x{:X}", reg_save_size); // debug
-        log::debug!("    > location_size: 0x{:X}", location_size); // debug
+        log::debug!("    > integer_save_size: 0x{integer_save_size:X}"); // debug
+        log::debug!("    > floating_point_save_size: 0x{floating_point_save_size:X}"); // debug
+        log::debug!("    > reg_save_size: 0x{reg_save_size:X}"); // debug
+        log::debug!("    > location_size: 0x{location_size:X}"); // debug
 
-        log::debug!("    > IN(packed): {}", stack_frame); // debug
+        log::debug!("    > IN(packed): {stack_frame}"); // debug
 
         if cr == FrameChainMode::ChainedWithPac {
             log::error!("   > PAC-sign return address encountered");
@@ -594,7 +592,7 @@ impl UnwindCode {
         prev_sp += u64::from(frame_size);
 
         let prev_stack_frame = StackFrame { sp: prev_sp, pc: prev_pc, ..*stack_frame };
-        log::debug!("    > OUT(packed): {}", prev_stack_frame); // debug
+        log::debug!("    > OUT(packed): {prev_stack_frame}"); // debug
         Ok(prev_stack_frame)
     }
 
@@ -619,7 +617,7 @@ impl UnwindCode {
             })
         };
 
-        log::debug!("    > IN(unpacked): {}", stack_frame); // debug
+        log::debug!("    > IN(unpacked): {stack_frame}"); // debug
 
         // The main unwind decode logic
         while i < unwind_codes.len() {
@@ -1019,7 +1017,7 @@ impl UnwindCode {
         }
 
         let prev_stack_frame = StackFrame { sp: prev_sp, pc: prev_pc, fp: prev_fp };
-        log::debug!("    > OUT(unpacked): {}", prev_stack_frame); // debug
+        log::debug!("    > OUT(unpacked): {prev_stack_frame}"); // debug
         Ok(prev_stack_frame)
     }
 }
