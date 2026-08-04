@@ -117,7 +117,6 @@ mod memory;
 mod system;
 mod transport;
 
-#[cfg(any(feature = "alloc", test))]
 extern crate alloc;
 
 pub use debugger::PatinaDebugger;
