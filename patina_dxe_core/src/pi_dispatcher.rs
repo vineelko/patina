@@ -213,7 +213,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
         }
 
         // Now create the EFI_SYSTEM_TABLE_POINTER structure
-        let system_table_pointer = system_table.as_mut_ptr() as *const _ as u64;
+        let system_table_pointer = system_table.as_mut_ptr().cast_const() as u64;
 
         // we need to align the the pointer to 4MB and near the top of memory
         let Ok(address) = crate::GCD.allocate_memory_space(
@@ -598,7 +598,7 @@ impl PendingFirmwareVolumeImage {
         //authentication status, so it is hard-coded to zero here. The primary security handlers for the main usage
         //scenarios (TPM measurement and UEFI Secure Boot) do not use it.
         let status = (security_protocol.file_authentication_state)(
-            core::ptr::from_ref(security_protocol) as *mut patina::pi::protocol::security::SecurityProtocol,
+            core::ptr::from_ref(security_protocol).cast_mut(),
             0,
             file_path.as_ptr() as *const _ as *mut efi::protocols::device_path::Protocol,
         );

@@ -1368,7 +1368,7 @@ impl BootServices for StandardBootServices {
         let status = unsafe {
             install_protocol_interface(
                 ptr::addr_of_mut!(handle),
-                core::ptr::from_ref(protocol) as *mut _,
+                core::ptr::from_ref(protocol).cast_mut(),
                 efi::NATIVE_INTERFACE,
                 interface,
             )
@@ -1398,7 +1398,7 @@ impl BootServices for StandardBootServices {
         // dereferenced by the implementation. `handle` validity is the caller's responsibility
         // as documented by the `unsafe` on this function.
         let status =
-            unsafe { uninstall_protocol_interface(handle, core::ptr::from_ref(protocol) as *mut _, interface) };
+            unsafe { uninstall_protocol_interface(handle, core::ptr::from_ref(protocol).cast_mut(), interface) };
         match status {
             status if status.is_error() => Err(status),
             _ => Ok(()),
@@ -1425,7 +1425,7 @@ impl BootServices for StandardBootServices {
         let status = unsafe {
             reinstall_protocol_interface(
                 handle,
-                core::ptr::from_ref(protocol) as *mut _,
+                core::ptr::from_ref(protocol).cast_mut(),
                 old_protocol_interface,
                 new_protocol_interface,
             )
@@ -1448,7 +1448,7 @@ impl BootServices for StandardBootServices {
         // implementation. `registration` is a local `MaybeUninit` whose address is valid for writes.
         let status = unsafe {
             register_protocol_notify(
-                core::ptr::from_ref(protocol) as *mut _,
+                core::ptr::from_ref(protocol).cast_mut(),
                 event,
                 registration.as_mut_ptr() as *mut _,
             )
@@ -1468,7 +1468,7 @@ impl BootServices for StandardBootServices {
         let locate_handle = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), locate_handle) };
 
         let protocol = match search_type {
-            HandleSearchType::ByProtocol(p) => core::ptr::from_ref(p) as *mut _,
+            HandleSearchType::ByProtocol(p) => core::ptr::from_ref(p).cast_mut(),
             _ => ptr::null_mut(),
         };
         let search_key = match search_type {
@@ -1532,7 +1532,7 @@ impl BootServices for StandardBootServices {
         // whose address is valid for writes. The returned `interface` pointer is the caller's
         // responsibility to use correctly, as documented by the `unsafe` on this function.
         let status =
-            unsafe { handle_protocol(handle, core::ptr::from_ref(protocol) as *mut _, ptr::addr_of_mut!(interface)) };
+            unsafe { handle_protocol(handle, core::ptr::from_ref(protocol).cast_mut(), ptr::addr_of_mut!(interface)) };
         match status {
             status if status.is_error() => Err(status),
             _ => Ok(interface),
@@ -1556,7 +1556,7 @@ impl BootServices for StandardBootServices {
         // the caller's responsibility as documented by the `unsafe` on this function. `device` is
         // a local variable whose address is valid for writes.
         let status = unsafe {
-            locate_device_path(core::ptr::from_ref(protocol) as *mut _, device_path, ptr::addr_of_mut!(device))
+            locate_device_path(core::ptr::from_ref(protocol).cast_mut(), device_path, ptr::addr_of_mut!(device))
         };
         match status {
             status if status.is_error() => Err(status),
@@ -1586,7 +1586,7 @@ impl BootServices for StandardBootServices {
         let status = unsafe {
             open_protocol(
                 handle,
-                core::ptr::from_ref(protocol) as *mut _,
+                core::ptr::from_ref(protocol).cast_mut(),
                 ptr::addr_of_mut!(interface),
                 agent_handle,
                 controller_handle,
@@ -1617,8 +1617,9 @@ impl BootServices for StandardBootServices {
         // SAFETY: `protocol` is a valid Rust reference cast to a pointer. `handle`,
         // `agent_handle`, and `controller_handle` are opaque handles validated internally
         // by the implementation; invalid handles result in an error status, not UB.
-        let status =
-            unsafe { close_protocol(handle, core::ptr::from_ref(protocol) as *mut _, agent_handle, controller_handle) };
+        let status = unsafe {
+            close_protocol(handle, core::ptr::from_ref(protocol).cast_mut(), agent_handle, controller_handle)
+        };
         match status {
             status if status.is_error() => Err(status),
             _ => Ok(()),
@@ -1651,7 +1652,7 @@ impl BootServices for StandardBootServices {
         let status = unsafe {
             open_protocol_information(
                 handle,
-                core::ptr::from_ref(protocol) as *mut _,
+                core::ptr::from_ref(protocol).cast_mut(),
                 ptr::addr_of_mut!(entry_buffer),
                 ptr::addr_of_mut!(entry_count),
             )
@@ -1777,7 +1778,7 @@ impl BootServices for StandardBootServices {
         let mut buffer = ptr::null_mut();
         let mut buffer_count = 0;
         let protocol = match search_type {
-            HandleSearchType::ByProtocol(p) => core::ptr::from_ref(p) as *mut _,
+            HandleSearchType::ByProtocol(p) => core::ptr::from_ref(p).cast_mut(),
             _ => ptr::null_mut(),
         };
         let search_key = match search_type {
@@ -1825,7 +1826,7 @@ impl BootServices for StandardBootServices {
         // is the caller's responsibility as documented by the `unsafe` on this function.
         // `interface` is a local variable whose address is valid for writes.
         let status = unsafe {
-            locate_protocol(core::ptr::from_ref(protocol) as *mut _, registration, ptr::addr_of_mut!(interface))
+            locate_protocol(core::ptr::from_ref(protocol).cast_mut(), registration, ptr::addr_of_mut!(interface))
         };
         match status {
             status if status.is_error() => Err(status),
@@ -2018,7 +2019,7 @@ impl BootServices for StandardBootServices {
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let copy_mem = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), copy_mem) };
         // SAFETY: caller must ensure that the source and destination are valid for length bytes.
-        unsafe { copy_mem(dest, src as *mut _, length) };
+        unsafe { copy_mem(dest, src.cast_mut(), length) };
     }
 
     fn set_mem(&self, buffer: &mut [u8], value: u8) {
@@ -2054,7 +2055,7 @@ impl BootServices for StandardBootServices {
             unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), install_configuration_table) };
         // SAFETY: The caller already passed the guid input as a valid Rust reference, table itself
         // is not dereferenced.
-        match unsafe { install_configuration_table(core::ptr::from_ref(guid) as *mut _, table) } {
+        match unsafe { install_configuration_table(core::ptr::from_ref(guid).cast_mut(), table) } {
             status if status.is_error() => Err(status),
             _ => Ok(()),
         }
@@ -2066,7 +2067,7 @@ impl BootServices for StandardBootServices {
         let calculate_crc32 = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), calculate_crc32) };
         // SAFETY: The caller is responsible for ensuring that `data` points to valid, readable
         // memory of at least `data_size` bytes.
-        match unsafe { calculate_crc32(data as *mut _, data_size, crc32.as_mut_ptr()) } {
+        match unsafe { calculate_crc32(data.cast_mut(), data_size, crc32.as_mut_ptr()) } {
             status if status.is_error() => Err(status),
             // SAFETY: If the call succeeded, crc32 has been initialized.
             _ => Ok(unsafe { crc32.assume_init() }),
@@ -2284,7 +2285,7 @@ mod tests {
 
             if let Some(notify_function) = notify_function {
                 // SAFETY: Test code - invoking the notify callback to verify it was registered correctly.
-                unsafe { notify_function(ptr::null_mut(), notify_context as *mut _) };
+                unsafe { notify_function(ptr::null_mut(), notify_context.cast_mut()) };
             }
             efi::Status::SUCCESS
         }
@@ -3394,8 +3395,7 @@ mod tests {
 
             static PROTOCOL_GUID: BinaryGuid = TestProtocol::PROTOCOL_GUID;
             #[allow(unused_allocation)]
-            let buff =
-                Box::new(std::ptr::from_ref::<efi::Guid>(PROTOCOL_GUID.as_efi_guid()) as *mut efi::Guid).into_mut_ptr();
+            let buff = Box::new(std::ptr::from_ref::<efi::Guid>(PROTOCOL_GUID.as_efi_guid()).cast_mut()).into_mut_ptr();
 
             // SAFETY: Test mock - writing protocol GUID buffer pointer and count to output parameters.
             unsafe {
@@ -3436,7 +3436,7 @@ mod tests {
             // SAFETY: Test mock - reading protocol GUID to verify locate_protocol request for TestProtocol.
             assert_eq!(unsafe { ptr::read(protocol_guid) }, TestProtocol::PROTOCOL_GUID);
             // SAFETY: Test mock - writing protocol interface pointer to output parameter.
-            unsafe { ptr::write(interface, &raw const PROTOCOL_INTERFACE as *mut u32 as *mut c_void) };
+            unsafe { ptr::write(interface, (&raw const PROTOCOL_INTERFACE).cast_mut() as *mut c_void) };
             efi::Status::SUCCESS
         }
 

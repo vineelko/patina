@@ -279,7 +279,7 @@ mod tests {
 
         // Box should leak with into_ptr
         // SAFETY: Test code - b_ptr is valid as it was just leaked from into_ptr above.
-        let mut b = unsafe { Box::from_raw(b_ptr as *mut i32) };
+        let mut b = unsafe { Box::from_raw(b_ptr.cast_mut()) };
         assert_eq!(&10, <Box<_> as AsRef<_>>::as_ref(&b));
 
         assert_eq!(b_ptr, CMutPtr::as_mut_ptr(&mut b));
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(ptr, mdb.into_ptr());
 
         // SAFETY: Test code - ptr is valid as it was just leaked from into_ptr above.
-        let mdb = ManuallyDrop::new(unsafe { Box::from_raw(ptr as *mut i32) });
+        let mdb = ManuallyDrop::new(unsafe { Box::from_raw(ptr.cast_mut()) });
         assert_eq!(ptr, mdb.into_mut_ptr());
 
         assert_eq!(ptr::null(), ManuallyDrop::new(()).as_ptr());

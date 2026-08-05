@@ -240,8 +240,8 @@ pub fn device_path_as_slice(
 /// assert!(result.is_none());
 /// ```
 pub unsafe fn remaining_device_path(a: NonNull<Protocol>, b: NonNull<Protocol>) -> Option<(NonNull<Protocol>, usize)> {
-    let mut a_ptr = a.as_ptr() as *const efi::protocols::device_path::Protocol;
-    let mut b_ptr = b.as_ptr() as *const efi::protocols::device_path::Protocol;
+    let mut a_ptr = a.as_ptr().cast_const();
+    let mut b_ptr = b.as_ptr().cast_const();
     let mut node_count = 0;
     loop {
         // SAFETY: Caller must ensure pointers are valid device_paths
@@ -252,7 +252,7 @@ pub unsafe fn remaining_device_path(a: NonNull<Protocol>, b: NonNull<Protocol>) 
         if unsafe { is_device_path_end(&raw const a_node) } {
             // SAFETY: b_ptr is derived from `b` which is non-null and points to a node
             // within the same well-formed device path, so it is non-null.
-            return Some((unsafe { NonNull::new_unchecked(b_ptr as *mut _) }, node_count));
+            return Some((unsafe { NonNull::new_unchecked(b_ptr.cast_mut()) }, node_count));
         }
 
         node_count += 1;

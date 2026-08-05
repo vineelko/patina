@@ -195,7 +195,7 @@ mod tests {
 
             assert_eq!(
                 // SAFETY: The passed in values are safe because they are constructed in this test case.
-                unsafe { install_configuration_table(&raw const guid as *mut _, table) },
+                unsafe { install_configuration_table((&raw const guid).cast_mut(), table) },
                 efi::Status::SUCCESS
             );
             assert_eq!(get_configuration_table(&guid).unwrap().as_ptr(), table);
@@ -210,7 +210,7 @@ mod tests {
 
             assert_eq!(
                 // SAFETY: The passed in values are safe because they are constructed in this test case.
-                unsafe { install_configuration_table(&raw const guid as *mut _, table) },
+                unsafe { install_configuration_table((&raw const guid).cast_mut(), table) },
                 efi::Status::SUCCESS
             );
 

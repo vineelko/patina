@@ -28,7 +28,7 @@ impl SimpleFile<'_> {
             (self.file.open)(
                 self.file,
                 core::ptr::addr_of_mut!(file_ptr),
-                filename.as_ptr() as *mut u16,
+                filename.as_ptr().cast_mut(),
                 mode,
                 attributes,
             )
@@ -73,7 +73,7 @@ impl SimpleFile<'_> {
         let status = unsafe {
             (self.file.get_info)(
                 self.file,
-                core::ptr::from_ref::<efi::Guid>(&efi::protocols::file::INFO_ID) as *mut efi::Guid,
+                core::ptr::from_ref::<efi::Guid>(&efi::protocols::file::INFO_ID).cast_mut(),
                 core::ptr::addr_of_mut!(info_size),
                 core::ptr::null_mut(),
             )
@@ -91,7 +91,7 @@ impl SimpleFile<'_> {
         let status = unsafe {
             (self.file.get_info)(
                 self.file,
-                core::ptr::from_ref::<efi::Guid>(&efi::protocols::file::INFO_ID) as *mut efi::Guid,
+                core::ptr::from_ref::<efi::Guid>(&efi::protocols::file::INFO_ID).cast_mut(),
                 core::ptr::addr_of_mut!(info_size),
                 file_info_buffer.as_mut_ptr() as *mut c_void,
             )

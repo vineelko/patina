@@ -133,7 +133,7 @@ pub(crate) unsafe extern "efiapi" fn create_performance_measurement_efiapi(
 
     let perf_id = match KnownPerfId::normalize_perf_id(
         identifier as u16,
-        caller_identifier as efi::Handle,
+        caller_identifier.cast_mut(),
         string.as_ref(),
         attribute,
     ) {

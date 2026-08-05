@@ -79,7 +79,7 @@ unsafe extern "efiapi" fn create_event_ex(
         return efi::Status::INVALID_PARAMETER;
     }
 
-    let notify_context = if notify_context.is_null() { None } else { Some(notify_context as *mut c_void) };
+    let notify_context = if notify_context.is_null() { None } else { Some(notify_context.cast_mut()) };
 
     match event_type {
         efi::EVT_SIGNAL_EXIT_BOOT_SERVICES | efi::EVT_SIGNAL_VIRTUAL_ADDRESS_CHANGE => {
@@ -661,7 +661,7 @@ mod tests {
 
             let mut test_wait = || {
                 // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
-                let status = unsafe { wait_for_event(1, events.as_ptr() as *mut efi::Event, &raw mut index) };
+                let status = unsafe { wait_for_event(1, events.as_ptr().cast_mut(), &raw mut index) };
                 assert_eq!(status, efi::Status::SUCCESS);
                 assert_eq!(index, 0);
             };
@@ -911,7 +911,7 @@ mod tests {
 
             // Test zero events
             // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
-            let status = unsafe { wait_for_event(0, events.as_ptr() as *mut efi::Event, &raw mut index) };
+            let status = unsafe { wait_for_event(0, events.as_ptr().cast_mut(), &raw mut index) };
             assert_eq!(status, efi::Status::INVALID_PARAMETER);
         });
     }
@@ -926,7 +926,7 @@ mod tests {
             CURRENT_TPL.store(efi::TPL_NOTIFY, Ordering::SeqCst);
 
             // SAFETY: Test code - all pointers are test-controlled and valid for the duration of the call.
-            let status = unsafe { wait_for_event(1, events.as_ptr() as *mut efi::Event, &raw mut index) };
+            let status = unsafe { wait_for_event(1, events.as_ptr().cast_mut(), &raw mut index) };
             assert_eq!(status, efi::Status::UNSUPPORTED);
 
             CURRENT_TPL.store(efi::TPL_APPLICATION, Ordering::SeqCst);

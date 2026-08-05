@@ -52,7 +52,7 @@ impl CallerIdentifier {
             // `validate_guid` performs basic validations but cannot guarantee safety.
             Some(CallerIdentifier::Guid(unsafe { *(ptr as *const efi::Guid) }))
         } else {
-            Some(CallerIdentifier::Handle(ptr as efi::Handle))
+            Some(CallerIdentifier::Handle(ptr.cast_mut()))
         }
     }
 

@@ -351,7 +351,7 @@ impl RuntimeServices for StandardRuntimeServices {
         let status = unsafe {
             set_variable(
                 name.as_mut_ptr(),
-                core::ptr::from_ref(namespace) as *mut _,
+                core::ptr::from_ref(namespace).cast_mut(),
                 attributes,
                 data.len(),
                 data.as_ptr() as *mut c_void,
@@ -389,7 +389,7 @@ impl RuntimeServices for StandardRuntimeServices {
         let status = unsafe {
             get_variable(
                 name.as_mut_ptr(),
-                core::ptr::from_ref(namespace) as *mut _,
+                core::ptr::from_ref(namespace).cast_mut(),
                 ptr::addr_of_mut!(attributes),
                 ptr::addr_of_mut!(data_size),
                 match data {

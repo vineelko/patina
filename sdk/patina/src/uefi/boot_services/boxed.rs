@@ -45,7 +45,7 @@ impl<'a, T, B: BootServices> BootServicesBox<'a, T, B> {
 
     /// Consumes the `BootServicesBox`, returning a raw pointer to the underlying data.
     pub fn into_raw(self) -> *const T {
-        self.ptr as *const T
+        self.ptr.cast_const()
     }
 
     /// Consumes the `BootServicesBox`, returning a mutable raw pointer to the underlying data.

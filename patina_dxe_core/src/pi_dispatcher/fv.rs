@@ -598,7 +598,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
             return efi::Status::INVALID_PARAMETER;
         }
 
-        let Some(protocol) = NonNull::new(this as *mut pi::protocol::firmware_volume::FirmwareVolumeProtocol) else {
+        let Some(protocol) = NonNull::new(this.cast_mut()) else {
             return efi::Status::INVALID_PARAMETER;
         };
 
@@ -640,7 +640,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
             return efi::Status::INVALID_PARAMETER;
         }
 
-        let Some(protocol) = NonNull::new(this as *mut pi::protocol::firmware_volume::FirmwareVolumeProtocol) else {
+        let Some(protocol) = NonNull::new(this.cast_mut()) else {
             return efi::Status::INVALID_PARAMETER;
         };
 
@@ -738,7 +738,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
             return efi::Status::INVALID_PARAMETER;
         }
 
-        let Some(protocol) = NonNull::new(this as *mut pi::protocol::firmware_volume::FirmwareVolumeProtocol) else {
+        let Some(protocol) = NonNull::new(this.cast_mut()) else {
             return efi::Status::INVALID_PARAMETER;
         };
 
@@ -832,7 +832,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
             return efi::Status::INVALID_PARAMETER;
         }
 
-        let Some(protocol) = NonNull::new(this as *mut pi::protocol::firmware_volume::FirmwareVolumeProtocol) else {
+        let Some(protocol) = NonNull::new(this.cast_mut()) else {
             return efi::Status::INVALID_PARAMETER;
         };
 

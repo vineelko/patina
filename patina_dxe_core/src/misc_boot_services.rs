@@ -444,7 +444,7 @@ mod tests {
             }
 
             let data = char16!("Hello");
-            let data_ptr = data.as_ptr() as *mut efi::Char16;
+            let data_ptr = data.as_ptr().cast_mut();
 
             // Test case 3: Set the watchdog timer with non-null data - should return NOT_READY
             // SAFETY: The unsafe block is required because r-efi declares set_watchdog_timer as an

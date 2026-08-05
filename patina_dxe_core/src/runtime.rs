@@ -273,7 +273,7 @@ mod tests {
                         .as_ref()
                         .unwrap();
                     assert_eq!(entry.handle as usize, count);
-                    assert_eq!(entry.link.back_link, prev as *mut _);
+                    assert_eq!(entry.link.back_link, prev.cast_mut());
                     count += 1;
                     protocol_link = entry.link.forward_link;
                     prev = &raw const entry.link;
@@ -300,7 +300,7 @@ mod tests {
                         .as_ref()
                         .unwrap();
                     assert_eq!(entry.handle as usize, count * 2);
-                    assert_eq!(entry.link.back_link, prev as *mut _);
+                    assert_eq!(entry.link.back_link, prev.cast_mut());
                     count += 1;
                     protocol_link = entry.link.forward_link;
                     prev = &raw const entry.link;
@@ -337,7 +337,7 @@ mod tests {
                         .as_ref()
                         .unwrap();
                     assert_eq!(entry.event as usize, count);
-                    assert_eq!(entry.link.back_link, prev as *mut _);
+                    assert_eq!(entry.link.back_link, prev.cast_mut());
                     count += 1;
                     protocol_link = entry.link.forward_link;
                     prev = &raw const entry.link;
@@ -364,7 +364,7 @@ mod tests {
                         .as_ref()
                         .unwrap();
                     assert_eq!(entry.event as usize, count * 2);
-                    assert_eq!(entry.link.back_link, prev as *mut _);
+                    assert_eq!(entry.link.back_link, prev.cast_mut());
                     count += 1;
                     protocol_link = entry.link.forward_link;
                     prev = &raw const entry.link;

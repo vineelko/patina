@@ -408,7 +408,7 @@ where
     }
 
     fn as_mut_ptr(&self) -> *mut Node<D> {
-        core::ptr::from_ref(self) as *mut _
+        core::ptr::from_ref(self).cast_mut()
     }
 }
 

@@ -1524,7 +1524,7 @@ fn authenticate_image(
     let mut security_status = efi::Status::SUCCESS;
     if let Some(security2) = security2_protocol {
         security_status = (security2.file_authentication)(
-            core::ptr::from_ref(security2) as *mut pi::protocol::security2::Security2Protocol,
+            core::ptr::from_ref(security2).cast_mut(),
             device_path_raw,
             image.as_ptr() as *const _ as *mut c_void,
             image.len(),
@@ -1533,14 +1533,14 @@ fn authenticate_image(
         if security_status == efi::Status::SUCCESS && from_fv {
             let security = security_protocol.expect("Security Arch must be installed if Security2 Arch is installed");
             security_status = (security.file_authentication_state)(
-                core::ptr::from_ref(security) as *mut pi::protocol::security::SecurityProtocol,
+                core::ptr::from_ref(security).cast_mut(),
                 authentication_status,
                 device_path_raw,
             );
         }
     } else if let Some(security) = security_protocol {
         security_status = (security.file_authentication_state)(
-            core::ptr::from_ref(security) as *mut pi::protocol::security::SecurityProtocol,
+            core::ptr::from_ref(security).cast_mut(),
             authentication_status,
             device_path_raw,
         );
