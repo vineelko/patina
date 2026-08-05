@@ -104,12 +104,12 @@ impl<T: ?Sized, B: BootServices> DerefMut for BootServicesBox<'_, T, B> {
 
 impl<T: ?Sized, B: BootServices> AsRef<T> for BootServicesBox<'_, T, B> {
     fn as_ref(&self) -> &T {
-        &**self
+        self
     }
 }
 
 impl<T: ?Sized, B: BootServices> AsMut<T> for BootServicesBox<'_, T, B> {
     fn as_mut(&mut self) -> &mut T {
-        &mut **self
+        self
     }
 }

@@ -188,7 +188,7 @@ impl Recorder {
         F: FnOnce(&mut BTreeMap<&'static str, TestRecord>) -> R,
     {
         let mut records = self.records.lock();
-        f(&mut *records)
+        f(&mut records)
     }
 
     /// Registers UEFI event callbacks to log the test results at specific points in the boot process.
