@@ -40,7 +40,7 @@ impl Service {
         let mut streams = Vec::new();
         let mut stream = TokenStream::new();
 
-        for tt in ts.into_iter() {
+        for tt in ts {
             if tt.to_string() == "," {
                 streams.push(stream);
                 stream = TokenStream::new();

@@ -411,7 +411,7 @@ impl<'a> IntoIterator for &'a HobList<'a> {
 #[cfg_attr(coverage, coverage(off))]
 impl fmt::Debug for HobList<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for hob in self.0.clone().into_iter() {
+        for hob in self.0.clone() {
             match hob {
                 Hob::Handoff(hob) => {
                     writelncrlf!(f, "PHASE HANDOFF INFORMATION TABLE (PHIT) HOB")?;

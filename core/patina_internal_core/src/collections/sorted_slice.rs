@@ -337,7 +337,7 @@ mod tests {
         }
         assert_eq!(None, iter.next());
 
-        for i in (&mut ss).into_iter() {
+        for i in &mut ss {
             *i += 1;
         }
     }
