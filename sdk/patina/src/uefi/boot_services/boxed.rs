@@ -31,7 +31,7 @@ impl<'a, T, B: BootServices> BootServicesBox<'a, T, B> {
         // SAFETY: ptr was just allocated with the exact size needed for T.
         // The pointer is valid and uninitialized, making ptr::write safe.
         unsafe { ptr::write(ptr, value) };
-        Self { boot_services, ptr }
+        Self { ptr, boot_services }
     }
 
     /// Create a `BootServicesBox` from the provided raw pointer
@@ -40,7 +40,7 @@ impl<'a, T, B: BootServices> BootServicesBox<'a, T, B> {
     /// ptr must be valid, and must be legal to call `boot_services::free_pool(ptr)`. The easiest way to guarantee this
     /// is to only use `from_raw` on pointers created by `BootServicesBox::into_raw`* functions.
     pub unsafe fn from_raw(ptr: *mut T, boot_services: &'a B) -> Self {
-        Self { boot_services, ptr }
+        Self { ptr, boot_services }
     }
 
     /// Consumes the `BootServicesBox`, returning a raw pointer to the underlying data.
@@ -72,7 +72,7 @@ impl<'a, T, B: BootServices> BootServicesBox<'a, [T], B> {
     pub unsafe fn from_raw_parts_mut(ptr: *mut T, len: usize, boot_services: &'a B) -> Self {
         // SAFETY: The caller guarantees that ptr and len are valid and that slice invariants are upheld.
         let ptr = unsafe { slice::from_raw_parts_mut(ptr, len) };
-        Self { boot_services, ptr }
+        Self { ptr, boot_services }
     }
 }
 
