@@ -13,9 +13,9 @@
 //!
 use crate::{
     __private_api,
-    alloc::vec::Vec,
     service::{Recorder, TestRecord},
 };
+use alloc::vec::Vec;
 
 use patina::component::{Storage, component};
 
@@ -142,16 +142,14 @@ impl TestRunner {
 #[cfg_attr(coverage, coverage(off))]
 pub(crate) mod tests {
     use super::*;
-    use crate::{
-        __private_api::TestCase,
-        alloc::{boxed::Box, format},
-    };
+    use crate::__private_api::TestCase;
     use core::mem::MaybeUninit;
     use patina::{
         BinaryGuid,
         component::{IntoComponent, Storage, params::Config},
         uefi::boot_services::StandardBootServices,
     };
+    use std::{boxed::Box, format};
 
     // A test function where we mock DxeComponentInterface to return what we want for the test.
     fn test_function(config: Config<i32>) -> crate::error::Result {
