@@ -20,15 +20,13 @@ use crate::pi::hob::{
     PhaseHandoffInformationTable, RESOURCE_DESCRIPTOR, RESOURCE_DESCRIPTOR2, ResourceDescriptor, ResourceDescriptorV2,
     UEFI_CAPSULE,
 };
+use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::c_void, mem, slice};
 
 use indoc::indoc;
 
 use crate::base::{align_down, align_up};
 use core::fmt;
-
-// Expectation is someone will provide alloc
-use alloc::{boxed::Box, vec::Vec};
 
 /// Represents a HOB list.
 ///
