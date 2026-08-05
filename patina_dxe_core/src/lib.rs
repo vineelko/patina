@@ -395,9 +395,10 @@ impl<P: PlatformInfo> Core<P> {
     ///
     /// Returns an `EfiError::AlreadyStarted` if the HOB list has already been set.
     fn set_hob_list(&self, hob_list: HobList<'static>) -> Result<&HobList<'static>> {
-        match self.hob_list.is_completed() {
-            true => Err(error::EfiError::AlreadyStarted),
-            false => Ok(self.hob_list.call_once(|| hob_list)),
+        if self.hob_list.is_completed() {
+            Err(error::EfiError::AlreadyStarted)
+        } else {
+            Ok(self.hob_list.call_once(|| hob_list))
         }
     }
 

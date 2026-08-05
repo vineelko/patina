@@ -336,11 +336,8 @@ unsafe impl<P: Param> Param for Option<P> {
         state: &'state Self::State,
         storage: UnsafeStorageCell<'storage>,
     ) -> Self::Item<'storage, 'state> {
-        match P::validate(state, storage) {
-            // SAFETY: P::validate returned true, so P::get_param is safe to call with this state and storage.
-            true => Some(unsafe { P::get_param(state, storage) }),
-            false => None,
-        }
+        // SAFETY: P::validate returned true, so P::get_param is safe to call with this state and storage.
+        if P::validate(state, storage) { Some(unsafe { P::get_param(state, storage) }) } else { None }
     }
 
     fn validate(_state: &Self::State, _storage: UnsafeStorageCell) -> bool {

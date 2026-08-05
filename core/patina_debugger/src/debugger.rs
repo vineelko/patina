@@ -206,12 +206,11 @@ impl<T: SerialIO> PatinaDebugger<T> {
         };
 
         let mut target = PatinaTarget::new(exception_info, &self.system_state);
-        let timeout = match debug.initial_breakpoint {
-            true => {
-                debug.initial_breakpoint = false;
-                self.initial_break_timeout
-            }
-            false => 0,
+        let timeout = if debug.initial_breakpoint {
+            debug.initial_breakpoint = false;
+            self.initial_break_timeout
+        } else {
+            0
         };
 
         // Either take the existing state machine, or start one if this is the first break.

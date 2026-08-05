@@ -145,9 +145,10 @@ impl ComponentDispatcher {
 
     /// Inserts a component at the given index.
     pub(crate) fn insert_component(&mut self, idx: usize, mut component: Box<dyn patina::component::Component>) {
-        match component.initialize(&mut self.storage) {
-            true => self.components.insert(idx, component),
-            false => self.rejected.push(component),
+        if component.initialize(&mut self.storage) {
+            self.components.insert(idx, component);
+        } else {
+            self.rejected.push(component);
         }
     }
 
