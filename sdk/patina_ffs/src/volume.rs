@@ -71,7 +71,7 @@ impl<'a> VolumeRef<'a> {
         }
 
         // SAFETY: buffer is large enough to contain the header.
-        let fv_header = unsafe { ptr::read_unaligned(buffer.as_ptr() as *const fv::Header) };
+        let fv_header = unsafe { ptr::read_unaligned(buffer.as_ptr().cast::<fv::Header>()) };
 
         // Signature must be ASCII '_FVH'
         if fv_header.signature != u32::from_le_bytes(*b"_FVH") {
@@ -133,7 +133,7 @@ impl<'a> VolumeRef<'a> {
                     .get(ext_header_offset..ext_header_offset + mem::size_of::<fv::ExtHeader>())
                     .ok_or(FirmwareFileSystemError::InvalidHeader)?;
                 // SAFETY: .get() above guarantees the slice contains a full ExtHeader.
-                let ext_header = unsafe { ptr::read_unaligned(ext_header_slice.as_ptr() as *const fv::ExtHeader) };
+                let ext_header = unsafe { ptr::read_unaligned(ext_header_slice.as_ptr().cast::<fv::ExtHeader>()) };
                 let ext_header_end = ext_header_offset + ext_header.ext_header_size as usize;
                 if ext_header_end > buffer.len() {
                     Err(FirmwareFileSystemError::InvalidHeader)?;
@@ -534,13 +534,13 @@ impl Volume {
         //Patch the initial header into the output buffer
         // SAFETY: fv_header is repr(C) so it is safe to treat as a byte array for serialization.
         let mut fv_buffer =
-            unsafe { from_raw_parts(&raw mut fv_header as *mut u8, mem::size_of_val(&fv_header)).to_vec() };
+            unsafe { from_raw_parts((&raw mut fv_header).cast::<u8>(), mem::size_of_val(&fv_header)).to_vec() };
 
         // add the block map
         for block in self.block_map.iter().chain(iter::once(&BlockMapEntry { num_blocks: 0, length: 0 })) {
             // SAFETY: block is repr(C) so it is safe to treat as a byte array for serialization.
             fv_buffer.extend_from_slice(unsafe {
-                from_raw_parts(block as *const BlockMapEntry as *const u8, mem::size_of_val(block))
+                from_raw_parts(core::ptr::from_ref::<BlockMapEntry>(block).cast::<u8>(), mem::size_of_val(block))
             });
         }
 
@@ -551,7 +551,11 @@ impl Volume {
             let offset = fv_buffer.len();
             // SAFETY: ext_header is repr(C) so it is safe to treat as a byte array.
             let mut ext_hdr_data = unsafe {
-                from_raw_parts(ext_header as *const fv::ExtHeader as *const u8, mem::size_of_val(ext_header)).to_vec()
+                from_raw_parts(
+                    core::ptr::from_ref::<fv::ExtHeader>(ext_header).cast::<u8>(),
+                    mem::size_of_val(ext_header),
+                )
+                .to_vec()
             };
             ext_hdr_data.extend(data);
 
@@ -670,7 +674,9 @@ impl Volume {
         fv_buffer
             .get_mut(..mem::size_of_val(&fv_header))
             .ok_or(FirmwareFileSystemError::InvalidHeader)?
-            .copy_from_slice(unsafe { from_raw_parts(&raw mut fv_header as *mut u8, mem::size_of_val(&fv_header)) });
+            .copy_from_slice(unsafe {
+                from_raw_parts((&raw mut fv_header).cast::<u8>(), mem::size_of_val(&fv_header))
+            });
 
         // verify the checksum
         debug_assert_eq!(
@@ -1040,7 +1046,7 @@ mod test {
 
         // bogus signature.
         let mut fv_bytes = fs::read(root.join("DXEFV.Fv"))?;
-        let fv_header = fv_bytes.as_mut_ptr() as *mut fv::Header;
+        let fv_header = fv_bytes.as_mut_ptr().cast::<fv::Header>();
         // SAFETY: Deliberately corrupting the FV header for test purposes.
         unsafe {
             (*fv_header).signature ^= 0xdeadbeef;
@@ -1049,7 +1055,7 @@ mod test {
 
         // bogus header_length.
         let mut fv_bytes = fs::read(root.join("DXEFV.Fv"))?;
-        let fv_header = fv_bytes.as_mut_ptr() as *mut fv::Header;
+        let fv_header = fv_bytes.as_mut_ptr().cast::<fv::Header>();
         // SAFETY: Deliberately corrupting the FV header for test purposes.
         unsafe {
             (*fv_header).header_length = 0;
@@ -1058,7 +1064,7 @@ mod test {
 
         // bogus checksum.
         let mut fv_bytes = fs::read(root.join("DXEFV.Fv"))?;
-        let fv_header = fv_bytes.as_mut_ptr() as *mut fv::Header;
+        let fv_header = fv_bytes.as_mut_ptr().cast::<fv::Header>();
         // SAFETY: Deliberately corrupting the FV header for test purposes.
         unsafe {
             (*fv_header).checksum ^= 0xbeef;
@@ -1067,7 +1073,7 @@ mod test {
 
         // bogus revision.
         let mut fv_bytes = fs::read(root.join("DXEFV.Fv"))?;
-        let fv_header = fv_bytes.as_mut_ptr() as *mut fv::Header;
+        let fv_header = fv_bytes.as_mut_ptr().cast::<fv::Header>();
         // SAFETY: Deliberately corrupting the FV header for test purposes.
         unsafe {
             (*fv_header).revision = 1;
@@ -1076,7 +1082,7 @@ mod test {
 
         // bogus filesystem guid.
         let mut fv_bytes = fs::read(root.join("DXEFV.Fv"))?;
-        let fv_header = fv_bytes.as_mut_ptr() as *mut fv::Header;
+        let fv_header = fv_bytes.as_mut_ptr().cast::<fv::Header>();
         //SAFETY: Deliberately corrupting the FV header for test purposes.
         unsafe {
             (*fv_header).file_system_guid = patina::BinaryGuid::from(efi::Guid::from_bytes(&[0xa5; 16]));
@@ -1085,7 +1091,7 @@ mod test {
 
         // bogus fv length.
         let mut fv_bytes = fs::read(root.join("DXEFV.Fv"))?;
-        let fv_header = fv_bytes.as_mut_ptr() as *mut fv::Header;
+        let fv_header = fv_bytes.as_mut_ptr().cast::<fv::Header>();
         // SAFETY: Deliberately corrupting the FV header for test purposes.
         unsafe {
             (*fv_header).fv_length = 0;
@@ -1094,7 +1100,7 @@ mod test {
 
         // bogus ext header offset.
         let mut fv_bytes = fs::read(root.join("DXEFV.Fv"))?;
-        let fv_header = fv_bytes.as_mut_ptr() as *mut fv::Header;
+        let fv_header = fv_bytes.as_mut_ptr().cast::<fv::Header>();
         // SAFETY: Deliberately corrupting the FV header for test purposes.
         unsafe {
             (*fv_header).fv_length = u64::from((*fv_header).ext_header_offset - 1);
@@ -1131,7 +1137,7 @@ mod test {
 
         // SAFETY: test case for checking pointer math here.
         unsafe {
-            assert_eq!(((*a_ptr).block_map).as_ptr(), a_ptr.offset(1) as *const fv::BlockMapEntry);
+            assert_eq!(((*a_ptr).block_map).as_ptr(), a_ptr.offset(1).cast::<fv::BlockMapEntry>());
         }
     }
 

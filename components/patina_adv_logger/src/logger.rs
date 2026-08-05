@@ -106,7 +106,7 @@ where
         debug_assert!(!physical_hob_list.is_null(), "Could not initialize adv logger due to null hob list.");
         let hob_list_info =
             // SAFETY: The caller must provide a valid physical HOB list pointer.
-            unsafe { (physical_hob_list as *const PhaseHandoffInformationTable).as_ref() }.ok_or_else(|| {
+            unsafe { physical_hob_list.cast::<PhaseHandoffInformationTable>().as_ref() }.ok_or_else(|| {
                 log::error!("Could not initialize adv logger due to null hob list.");
                 EfiError::InvalidParameter
             })?;
@@ -118,7 +118,7 @@ where
                 // SAFETY: The HOB will have a address of the log info
                 // immediately following the HOB header.
                 unsafe {
-                    let address: *const efi::PhysicalAddress = ptr::from_ref(data) as *const efi::PhysicalAddress;
+                    let address: *const efi::PhysicalAddress = ptr::from_ref(data).cast::<efi::PhysicalAddress>();
                     let log_info_addr = (*address) as efi::PhysicalAddress;
                     self.set_log_info_address(log_info_addr);
                 };
@@ -421,7 +421,7 @@ mod tests {
 
         const HOB_LEN: usize = size_of::<GuidHob>() + size_of::<efi::PhysicalAddress>();
         let hob_buff = Box::into_raw(Box::new([0_u8; HOB_LEN]));
-        let hob = hob_buff as *mut GuidHob;
+        let hob = hob_buff.cast::<GuidHob>();
 
         // SAFETY: We just allocated this memory so it's valid.
         unsafe {
@@ -435,7 +435,7 @@ mod tests {
         };
 
         // SAFETY: Space for the additional physical address was explicitly allocated.
-        let address: *mut efi::PhysicalAddress = unsafe { hob.add(1) } as *mut efi::PhysicalAddress;
+        let address: *mut efi::PhysicalAddress = unsafe { hob.add(1) }.cast::<efi::PhysicalAddress>();
         // SAFETY: There is space for this address, writing it out of the structure as the C implementation does.
         unsafe { (*address) = log_address };
         (log_address, hob_buff as *const c_void)

@@ -348,8 +348,8 @@ mod tests {
                     assert_eq!(TEST_HANDLE, interface.driver_binding_protocol.image_handle);
                     assert_eq!(TEST_HANDLE, interface.driver_binding_protocol.driver_binding_handle);
                     assert_eq!(
-                        BOOT_SERVICES as *const MockBootServices,
-                        interface.boot_services as *const MockBootServices
+                        std::ptr::from_ref::<MockBootServices>(BOOT_SERVICES),
+                        std::ptr::from_ref::<MockBootServices>(interface.boot_services)
                     );
 
                     true
@@ -391,8 +391,8 @@ mod tests {
                     assert_eq!(TEST_HANDLE, interface.driver_binding_protocol.image_handle);
                     assert_eq!(TEST_DRIVER_HANDLE, interface.driver_binding_protocol.driver_binding_handle);
                     assert_eq!(
-                        BOOT_SERVICES as *const MockBootServices,
-                        interface.boot_services as *const MockBootServices
+                        std::ptr::from_ref::<MockBootServices>(BOOT_SERVICES),
+                        std::ptr::from_ref::<MockBootServices>(interface.boot_services)
                     );
 
                     true
@@ -436,8 +436,8 @@ mod tests {
                     assert_eq!(TEST_HANDLE, interface.driver_binding_protocol.image_handle);
                     assert_eq!(TEST_DRIVER_HANDLE, interface.driver_binding_protocol.driver_binding_handle);
                     assert_eq!(
-                        BOOT_SERVICES as *const MockBootServices,
-                        interface.boot_services as *const MockBootServices
+                        std::ptr::from_ref::<MockBootServices>(BOOT_SERVICES),
+                        std::ptr::from_ref::<MockBootServices>(interface.boot_services)
                     );
 
                     true

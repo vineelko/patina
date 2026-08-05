@@ -82,7 +82,7 @@ impl Char8Str {
     pub const unsafe fn from_bytes_with_nul_unchecked(bytes: &[u8]) -> &Char8Str {
         // SAFETY: `Char8Str` is `#[repr(transparent)]` over `[u8]`, so `&[u8]` and `&Char8Str` share
         // the same layout. The caller upholds the value invariants.
-        unsafe { &*(bytes as *const [u8] as *const Char8Str) }
+        unsafe { &*(core::ptr::from_ref::<[u8]>(bytes) as *const Char8Str) }
     }
 
     /// Creates a `&Char8Str` from the bytes up to and including the first NUL, ignoring anything

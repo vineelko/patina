@@ -124,8 +124,9 @@ impl TestRecord {
                         EventType::NOTIFY_SIGNAL,
                         Tpl::CALLBACK,
                         Some(Self::disable_timer),
-                        NonNull::from_ref(Box::leak(Box::new((event, storage.boot_services().clone())))).as_ptr()
-                            as *mut core::ffi::c_void,
+                        NonNull::from_ref(Box::leak(Box::new((event, storage.boot_services().clone()))))
+                            .as_ptr()
+                            .cast::<core::ffi::c_void>(),
                         &EVENT_GROUP_READY_TO_BOOT,
                     )?;
 
@@ -166,7 +167,7 @@ impl TestRecord {
     extern "efiapi" fn disable_timer(rtb_event: patina::standard::efi::Event, context: *mut core::ffi::c_void) {
         // SAFETY: We set up the context pointer in `run_tests` to point to a valid tuple of (Event, StandardBootServices).
         let (timer_event, boot_services) =
-            unsafe { &mut *(context as *mut (patina::standard::efi::Event, StandardBootServices)) };
+            unsafe { &mut *context.cast::<(patina::standard::efi::Event, StandardBootServices)>() };
         let _ = boot_services.set_timer(*timer_event, EventTimerType::Cancel, 0);
         let _ = boot_services.close_event(rtb_event);
     }

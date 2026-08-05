@@ -282,7 +282,7 @@ mod tests {
     /// Helper to create a test protocol notify context without boot services
     fn create_test_context(updatable_buffer_id: u8) -> Box<ProtocolNotifyContext> {
         let mock_bs = Box::leak(Box::new([0u8; core::mem::size_of::<patina::standard::efi::BootServices>()]));
-        let bs_ptr = mock_bs.as_mut_ptr() as *mut patina::standard::efi::BootServices;
+        let bs_ptr = mock_bs.as_mut_ptr().cast::<patina::standard::efi::BootServices>();
         let bs = StandardBootServices::new(bs_ptr);
 
         Box::new(ProtocolNotifyContext {

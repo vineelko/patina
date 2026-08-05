@@ -792,7 +792,7 @@ mod tests {
                 protocols::core_install_protocol_interface(
                     None,
                     patina::pi::protocol::bds::PROTOCOL_GUID.into_inner(),
-                    protocol as *mut _ as *mut c_void,
+                    std::ptr::from_mut(protocol) as *mut c_void,
                 )
                 .unwrap();
 
@@ -866,7 +866,7 @@ mod tests {
                 protocols::core_install_protocol_interface(
                     None,
                     patina::pi::protocol::status_code::PROTOCOL_GUID.into_inner(),
-                    protocol as *mut _ as *mut c_void,
+                    std::ptr::from_mut(protocol) as *mut c_void,
                 )
                 .unwrap();
 

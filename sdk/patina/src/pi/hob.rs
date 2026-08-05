@@ -827,17 +827,17 @@ impl HobTrait for Hob<'_> {
     /// Returns a pointer to the HOB.
     fn as_ptr<T>(&self) -> *const T {
         match self {
-            Hob::Handoff(hob) => *hob as *const PhaseHandoffInformationTable as *const _,
-            Hob::MemoryAllocation(hob) => *hob as *const MemoryAllocation as *const _,
-            Hob::MemoryAllocationModule(hob) => *hob as *const MemoryAllocationModule as *const _,
-            Hob::Capsule(hob) => *hob as *const Capsule as *const _,
-            Hob::ResourceDescriptor(hob) => *hob as *const ResourceDescriptor as *const _,
-            Hob::GuidHob(hob, _) => *hob as *const GuidHob as *const _,
-            Hob::FirmwareVolume(hob) => *hob as *const FirmwareVolume as *const _,
-            Hob::FirmwareVolume2(hob) => *hob as *const FirmwareVolume2 as *const _,
-            Hob::FirmwareVolume3(hob) => *hob as *const FirmwareVolume3 as *const _,
-            Hob::Cpu(hob) => *hob as *const Cpu as *const _,
-            Hob::ResourceDescriptorV2(hob) => *hob as *const ResourceDescriptorV2 as *const _,
+            Hob::Handoff(hob) => core::ptr::from_ref::<PhaseHandoffInformationTable>(*hob) as *const _,
+            Hob::MemoryAllocation(hob) => core::ptr::from_ref::<MemoryAllocation>(*hob) as *const _,
+            Hob::MemoryAllocationModule(hob) => core::ptr::from_ref::<MemoryAllocationModule>(*hob) as *const _,
+            Hob::Capsule(hob) => core::ptr::from_ref::<Capsule>(*hob) as *const _,
+            Hob::ResourceDescriptor(hob) => core::ptr::from_ref::<ResourceDescriptor>(*hob) as *const _,
+            Hob::GuidHob(hob, _) => core::ptr::from_ref::<GuidHob>(*hob) as *const _,
+            Hob::FirmwareVolume(hob) => core::ptr::from_ref::<FirmwareVolume>(*hob) as *const _,
+            Hob::FirmwareVolume2(hob) => core::ptr::from_ref::<FirmwareVolume2>(*hob) as *const _,
+            Hob::FirmwareVolume3(hob) => core::ptr::from_ref::<FirmwareVolume3>(*hob) as *const _,
+            Hob::Cpu(hob) => core::ptr::from_ref::<Cpu>(*hob) as *const _,
+            Hob::ResourceDescriptorV2(hob) => core::ptr::from_ref::<ResourceDescriptorV2>(*hob) as *const _,
             Hob::Misc(hob) => *hob as *const u16 as *const _,
         }
     }

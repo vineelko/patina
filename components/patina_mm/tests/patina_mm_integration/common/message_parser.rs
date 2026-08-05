@@ -66,7 +66,8 @@ impl MmCommunicateHeader {
         }
 
         // SAFETY: MmCommunicateHeader is repr(C) with well-defined size and layout
-        let header_bytes = unsafe { core::slice::from_raw_parts(self as *const Self as *const u8, Self::SIZE) };
+        let header_bytes =
+            unsafe { core::slice::from_raw_parts(core::ptr::from_ref::<Self>(self).cast::<u8>(), Self::SIZE) };
         buffer[..Self::SIZE].copy_from_slice(header_bytes);
         Ok(())
     }
@@ -81,7 +82,7 @@ impl MmCommunicateHeader {
         let mut header = MmCommunicateHeader { header_guid: patina::BinaryGuid::ZERO, message_length: 0 };
 
         // SAFETY: MmCommunicateHeader is repr(C) with well-defined size and layout
-        let header_bytes = unsafe { core::slice::from_raw_parts_mut(&raw mut header as *mut u8, Self::SIZE) };
+        let header_bytes = unsafe { core::slice::from_raw_parts_mut((&raw mut header).cast::<u8>(), Self::SIZE) };
         header_bytes.copy_from_slice(&buffer[..Self::SIZE]);
         Ok(header)
     }

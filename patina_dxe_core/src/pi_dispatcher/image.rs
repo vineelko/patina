@@ -320,7 +320,7 @@ impl PrivateImageData {
         let handle = core_install_protocol_interface(
             None,
             efi::protocols::loaded_image::PROTOCOL_GUID,
-            self.image_info.as_ref() as *const efi::protocols::loaded_image::Protocol as *mut c_void,
+            core::ptr::from_ref::<efi::protocols::loaded_image::Protocol>(self.image_info.as_ref()) as *mut c_void,
         )?;
 
         core_install_protocol_interface(
@@ -361,7 +361,7 @@ impl PrivateImageData {
         if let Err(err) = core_uninstall_protocol_interface(
             handle,
             efi::protocols::loaded_image::PROTOCOL_GUID,
-            self.image_info.as_ref() as *const efi::protocols::loaded_image::Protocol as *mut c_void,
+            core::ptr::from_ref::<efi::protocols::loaded_image::Protocol>(self.image_info.as_ref()) as *mut c_void,
         ) && !matches!(err, EfiError::NotFound | EfiError::InvalidParameter)
         {
             log::warn!("Failed to uninstall loaded image protocol for handle {handle:?}: {err}");
@@ -574,7 +574,7 @@ impl ImageData {
             .expect("Did not find MemoryAllocationModule Hob for DxeCore. Use patina::guid::DXE_CORE_ID as FFS GUID.");
 
         let mut image_info = empty_image_info();
-        image_info.system_table = system_table as *mut _ as *mut efi::SystemTable;
+        image_info.system_table = core::ptr::from_mut(system_table) as *mut efi::SystemTable;
         image_info.image_base = dxe_core_hob.alloc_descriptor.memory_base_address as *mut c_void;
         image_info.image_size = dxe_core_hob.alloc_descriptor.memory_length;
 
@@ -603,7 +603,8 @@ impl ImageData {
         let handle = core_install_protocol_interface(
             Some(protocol_db::DXE_CORE_HANDLE),
             efi::protocols::loaded_image::PROTOCOL_GUID,
-            private_image_data.image_info.as_ref() as *const efi::protocols::loaded_image::Protocol as *mut c_void,
+            core::ptr::from_ref::<efi::protocols::loaded_image::Protocol>(private_image_data.image_info.as_ref())
+                as *mut c_void,
         )
         .unwrap_or_else(|err| panic!("Failed to install dxe core image handle: {err}"));
 
@@ -882,7 +883,7 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
                 let entry_point = private_info.entry_point;
 
                 // save a pointer to the yielder so that exit() can use it.
-                private_data.image_start_contexts.push(yielder as *const Yielder<_, _>);
+                private_data.image_start_contexts.push(core::ptr::from_ref::<Yielder<_, _>>(yielder));
 
                 // get a copy of the system table pointer to pass to the entry point.
                 let system_table = private_data.system_table;
@@ -1523,7 +1524,7 @@ fn authenticate_image(
     let mut security_status = efi::Status::SUCCESS;
     if let Some(security2) = security2_protocol {
         security_status = (security2.file_authentication)(
-            security2 as *const _ as *mut pi::protocol::security2::Security2Protocol,
+            core::ptr::from_ref(security2) as *mut pi::protocol::security2::Security2Protocol,
             device_path_raw,
             image.as_ptr() as *const _ as *mut c_void,
             image.len(),
@@ -1532,14 +1533,14 @@ fn authenticate_image(
         if security_status == efi::Status::SUCCESS && from_fv {
             let security = security_protocol.expect("Security Arch must be installed if Security2 Arch is installed");
             security_status = (security.file_authentication_state)(
-                security as *const _ as *mut pi::protocol::security::SecurityProtocol,
+                core::ptr::from_ref(security) as *mut pi::protocol::security::SecurityProtocol,
                 authentication_status,
                 device_path_raw,
             );
         }
     } else if let Some(security) = security_protocol {
         security_status = (security.file_authentication_state)(
-            security as *const _ as *mut pi::protocol::security::SecurityProtocol,
+            core::ptr::from_ref(security) as *mut pi::protocol::security::SecurityProtocol,
             authentication_status,
             device_path_raw,
         );

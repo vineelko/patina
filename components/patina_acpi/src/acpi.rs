@@ -216,7 +216,7 @@ where
         // Update the FADT's address pointer to the FACS.
         if let Some(fadt_table) = self.acpi_tables.lock().get_mut(&Self::FADT_KEY) {
             // SAFETY: We verify the table's signature before calling `install_facs`.
-            let facs_addr = unsafe { facs_info.as_ref::<AcpiFacs>() } as *const AcpiFacs as u64;
+            let facs_addr = core::ptr::from_ref::<AcpiFacs>(unsafe { facs_info.as_ref::<AcpiFacs>() }) as u64;
             log::trace!("Updating FADT with FACS address: 0x{facs_addr:016X}");
             // SAFETY: The struct maintains an invariant mapping between the FADT and `Self::FADT_KEY`.
             unsafe { fadt_table.as_mut::<AcpiFadt>().set_x_firmware_ctrl(facs_addr) };
@@ -317,7 +317,7 @@ where
     pub fn install_tables_from_hob(&self, acpi_hob: Hob<AcpiMemoryHob>) -> Result<(), AcpiError> {
         let xsdt_address = Self::get_xsdt_address_from_rsdp(acpi_hob.rsdp_address)?;
         let xsdt_ptr = xsdt_address as *const AcpiXsdt;
-        let xsdt_header = xsdt_ptr as *const AcpiTableHeader;
+        let xsdt_header = xsdt_ptr.cast::<AcpiTableHeader>();
 
         // SAFETY: `get_xsdt_address_from_rsdp` validated that the XSDT has a valid header.
         let xsdt_length = unsafe { AcpiTableHeader::read_length_from_ptr(xsdt_header) };
@@ -328,8 +328,8 @@ where
         // Create a safe slice of the XSDT entries for iteration.
         // SAFETY: The length specified by the HOB should be for a valid XSDT.
         let xsdt_entries_slice = unsafe {
-            let entries_start = (xsdt_ptr as *const u8).add(ACPI_HEADER_LEN);
-            slice::from_raw_parts(entries_start as *const u64, num_entries)
+            let entries_start = xsdt_ptr.cast::<u8>().add(ACPI_HEADER_LEN);
+            slice::from_raw_parts(entries_start.cast::<u64>(), num_entries)
         };
 
         for (i, addr_ptr) in xsdt_entries_slice.iter().enumerate().take(num_entries) {
@@ -717,7 +717,8 @@ where
         // SAFETY: We know the size and layout of the RSDP in memory.
         let rsdp_bytes = unsafe {
             slice::from_raw_parts_mut(
-                *self.rsdp.lock().as_mut().expect("RSDP should be initialized.") as *mut AcpiRsdp as *mut u8,
+                core::ptr::from_mut::<AcpiRsdp>(*self.rsdp.lock().as_mut().expect("RSDP should be initialized."))
+                    .cast::<u8>(),
                 mem::size_of::<AcpiRsdp>(),
             )
         };
@@ -747,7 +748,7 @@ where
             // Cast RSDP to raw pointer for boot services.
             // SAFETY: ACPI_TABLE_GUID is the correct spec-defined GUID for the RSDP.
             unsafe {
-                let rsdp_ptr = *rsdp as *mut AcpiRsdp as *mut c_void;
+                let rsdp_ptr = core::ptr::from_mut::<AcpiRsdp>(*rsdp).cast::<c_void>();
                 self.boot_services
                     .get()
                     .ok_or(AcpiError::ProviderNotInitialized)?

@@ -755,7 +755,7 @@ unsafe extern "efiapi" fn protocols_per_handle(
             let guids = slice::from_raw_parts_mut(guid_buffer, protocol_list.len());
             guids.copy_from_slice(&protocol_list);
 
-            let guid_ptrs: Vec<*mut efi::Guid> = guids.iter_mut().map(|x| x as *mut efi::Guid).collect();
+            let guid_ptrs: Vec<*mut efi::Guid> = guids.iter_mut().map(core::ptr::from_mut::<efi::Guid>).collect();
             slice::from_raw_parts_mut(protocol_buffer.read_unaligned(), protocol_list.len())
                 .copy_from_slice(&guid_ptrs);
             efi::Status::SUCCESS
@@ -886,7 +886,7 @@ pub fn core_locate_device_path(
     protocol: efi::Guid,
     device_path: NonNull<Protocol>,
 ) -> Result<(NonNull<Protocol>, efi::Handle), EfiError> {
-    let device_path_protocol_guid = &efi::protocols::device_path::PROTOCOL_GUID as *const _ as *mut efi::Guid;
+    let device_path_protocol_guid = core::ptr::from_ref(&efi::protocols::device_path::PROTOCOL_GUID) as *mut efi::Guid;
 
     let mut best_device: efi::Handle = core::ptr::null_mut();
     let mut best_match: isize = -1;

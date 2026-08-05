@@ -88,7 +88,7 @@ impl Char16Str {
     pub const unsafe fn from_units_with_nul_unchecked(units: &[u16]) -> &Char16Str {
         // SAFETY: `Char16Str` is `#[repr(transparent)]` over `[u16]`, so `&[u16]` and `&Char16Str`
         // share the same layout. The caller upholds the value invariants.
-        unsafe { &*(units as *const [u16] as *const Char16Str) }
+        unsafe { &*(core::ptr::from_ref::<[u16]>(units) as *const Char16Str) }
     }
 
     /// Creates a `&Char16Str` from the code units up to and including the first NUL, ignoring

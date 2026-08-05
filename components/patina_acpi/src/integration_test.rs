@@ -109,15 +109,16 @@ fn acpi_protocol_test(bs: StandardBootServices) -> patina_test::error::Result {
 
     // Install a dummy table using the ACPI Table Protocol.
     (table_protocol.install_table)(
-        table_protocol as *const AcpiTableProtocol,
-        &MockLargeTable {
+        core::ptr::from_ref::<AcpiTableProtocol>(table_protocol),
+        core::ptr::from_ref(&MockLargeTable {
             header: AcpiTableHeader {
                 signature: 0x12341234,
                 length: mem::size_of::<MockLargeTable>() as u32,
                 ..Default::default()
             },
             data: [2; 32],
-        } as *const _ as *const c_void,
+        })
+        .cast::<c_void>(),
         mem::size_of::<MockLargeTable>(),
         &raw mut table_key_buf,
     );
@@ -126,7 +127,7 @@ fn acpi_protocol_test(bs: StandardBootServices) -> patina_test::error::Result {
 
     // Verify the table can be retrieved.
     let mut table_buf = MockLargeTable::default();
-    let mut table_buf = &raw mut table_buf as *mut AcpiTableHeader;
+    let mut table_buf = (&raw mut table_buf).cast::<AcpiTableHeader>();
     let mut table_idx = 0;
     let mut get_supported_table_versions: u32 = 0;
     let mut get_table_key = 0;
@@ -164,7 +165,8 @@ fn acpi_protocol_test(bs: StandardBootServices) -> patina_test::error::Result {
     u_assert_eq!(large_table.data, [2; 32], "Data should match installed table.");
 
     // Verify the table can be uninstalled.
-    let uninstall_result = (table_protocol.uninstall_table)(table_protocol as *const AcpiTableProtocol, get_table_key);
+    let uninstall_result =
+        (table_protocol.uninstall_table)(core::ptr::from_ref::<AcpiTableProtocol>(table_protocol), get_table_key);
     u_assert_eq!(uninstall_result, efi::Status::SUCCESS, "Uninstall should succeed");
 
     Ok(())

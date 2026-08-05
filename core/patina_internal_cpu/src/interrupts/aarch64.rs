@@ -22,7 +22,7 @@ pub type ExceptionContextAArch64 = patina::standard::efi::protocols::debug_suppo
 
 impl super::EfiSystemContextFactory for ExceptionContextAArch64 {
     fn create_efi_system_context(&mut self) -> EfiSystemContext {
-        EfiSystemContext { system_context_aarch64: self as *mut _ }
+        EfiSystemContext { system_context_aarch64: core::ptr::from_mut(self) }
     }
 }
 

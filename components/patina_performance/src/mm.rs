@@ -64,7 +64,7 @@ impl SmmCommHeader {
             return Err(ParseError::BufferTooSmall { required: SMM_COMM_HEADER_SIZE, available: src.len() });
         }
         // SAFETY: The length is validated. SmmCommHeader is repr(C) and plain data.
-        let header = unsafe { &*(src.as_ptr() as *const SmmCommHeader) };
+        let header = unsafe { &*src.as_ptr().cast::<SmmCommHeader>() };
         let found_function_id = header.function_id.get();
         if found_function_id != expected_function_id {
             return Err(ParseError::InvalidFunctionId { expected: expected_function_id, found: found_function_id });

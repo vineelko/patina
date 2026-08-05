@@ -104,8 +104,8 @@ impl AArch64InterruptInitializer {
         // Convert raw GIC address pointers to appropriate types.
         // SAFETY: function safety requirements guarantee exclusive access to the GICR registers.
         let (gicd, gicr) = unsafe {
-            let gicd = UniqueMmioPointer::new(NonNull::new(gicd_base as _).ok_or(EfiError::InvalidParameter)?);
-            let gicr = NonNull::new(gicr_base as _).ok_or(EfiError::InvalidParameter)?;
+            let gicd = UniqueMmioPointer::new(NonNull::new(gicd_base.cast()).ok_or(EfiError::InvalidParameter)?);
+            let gicr = NonNull::new(gicr_base.cast()).ok_or(EfiError::InvalidParameter)?;
             (gicd, gicr)
         };
 

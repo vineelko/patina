@@ -73,7 +73,7 @@ impl SimpleFile<'_> {
         let status = unsafe {
             (self.file.get_info)(
                 self.file,
-                &efi::protocols::file::INFO_ID as *const efi::Guid as *mut efi::Guid,
+                core::ptr::from_ref::<efi::Guid>(&efi::protocols::file::INFO_ID) as *mut efi::Guid,
                 core::ptr::addr_of_mut!(info_size),
                 core::ptr::null_mut(),
             )
@@ -91,7 +91,7 @@ impl SimpleFile<'_> {
         let status = unsafe {
             (self.file.get_info)(
                 self.file,
-                &efi::protocols::file::INFO_ID as *const efi::Guid as *mut efi::Guid,
+                core::ptr::from_ref::<efi::Guid>(&efi::protocols::file::INFO_ID) as *mut efi::Guid,
                 core::ptr::addr_of_mut!(info_size),
                 file_info_buffer.as_mut_ptr() as *mut c_void,
             )

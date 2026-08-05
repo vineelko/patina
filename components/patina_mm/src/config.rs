@@ -408,11 +408,11 @@ impl CommunicateBuffer {
 
         // SAFETY: Buffer size validated, BinaryGuid is repr(transparent) over repr(C) efi::Guid at offset 0.
         // read_unaligned is used because the buffer may not be aligned to the type's requirements.
-        let memory_guid = unsafe { core::ptr::read_unaligned(header_slice.as_ptr() as *const patina::BinaryGuid) };
+        let memory_guid = unsafe { core::ptr::read_unaligned(header_slice.as_ptr().cast::<patina::BinaryGuid>()) };
 
         // SAFETY: Buffer size validated, usize at offset 16 after Guid.
         // read_unaligned is used because the buffer may not be aligned to usize requirements.
-        let memory_message_length = unsafe { core::ptr::read_unaligned(header_slice.as_ptr().add(16) as *const usize) };
+        let memory_message_length = unsafe { core::ptr::read_unaligned(header_slice.as_ptr().add(16).cast::<usize>()) };
 
         // Verify that thee recipient matches
         match self.private_recipient {

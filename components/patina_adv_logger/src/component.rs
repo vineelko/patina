@@ -72,7 +72,7 @@ where
 
         // SAFETY: `this` is null-checked above. The protocol struct is installed by Patina with
         //         `Box::leak`, so its alignment and validity are guaranteed.
-        let internal = unsafe { &*(this as *const AdvancedLoggerProtocolInternal<S>) };
+        let internal = unsafe { &*this.cast::<AdvancedLoggerProtocolInternal<S>>() };
 
         internal.adv_logger.log_write(error_level, None, data);
         efi::Status::SUCCESS

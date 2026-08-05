@@ -1301,8 +1301,9 @@ mod tests {
 
                 // SAFETY: Allocation was returned by fsb for this layout.
                 unsafe { fsb.dealloc(allocation, layout) };
-                let free_block_ptr = fsb.lock().list_heads[list_index(&layout).unwrap()].take().unwrap()
-                    as *mut BlockListNode as *mut u8;
+                let free_block_ptr = std::ptr::from_mut::<BlockListNode>(
+                    fsb.lock().list_heads[list_index(&layout).unwrap()].take().unwrap(),
+                ) as *mut u8;
                 assert_eq!(free_block_ptr, allocation);
 
                 let layout = Layout::from_size_align(0x20, 0x20).unwrap();
@@ -1311,8 +1312,9 @@ mod tests {
 
                 // SAFETY: Allocation was returned by fsb for this layout.
                 unsafe { fsb.dealloc(allocation, layout) };
-                let free_block_ptr = fsb.lock().list_heads[list_index(&layout).unwrap()].take().unwrap()
-                    as *mut BlockListNode as *mut u8;
+                let free_block_ptr = std::ptr::from_mut::<BlockListNode>(
+                    fsb.lock().list_heads[list_index(&layout).unwrap()].take().unwrap(),
+                ) as *mut u8;
                 assert_eq!(free_block_ptr, allocation);
             });
         });
@@ -1342,8 +1344,9 @@ mod tests {
 
                 // SAFETY: Allocation was returned by fsb for this layout.
                 unsafe { fsb.deallocate(allocation, layout) };
-                let free_block_ptr = fsb.lock().list_heads[list_index(&layout).unwrap()].take().unwrap()
-                    as *mut BlockListNode as *mut u8;
+                let free_block_ptr = std::ptr::from_mut::<BlockListNode>(
+                    fsb.lock().list_heads[list_index(&layout).unwrap()].take().unwrap(),
+                ) as *mut u8;
                 assert_eq!(free_block_ptr, allocation_ptr);
 
                 let layout = Layout::from_size_align(0x20, 0x20).unwrap();
@@ -1352,8 +1355,9 @@ mod tests {
 
                 // SAFETY: Allocation was returned by fsb for this layout.
                 unsafe { fsb.deallocate(allocation, layout) };
-                let free_block_ptr = fsb.lock().list_heads[list_index(&layout).unwrap()].take().unwrap()
-                    as *mut BlockListNode as *mut u8;
+                let free_block_ptr = std::ptr::from_mut::<BlockListNode>(
+                    fsb.lock().list_heads[list_index(&layout).unwrap()].take().unwrap(),
+                ) as *mut u8;
                 assert_eq!(free_block_ptr, allocation_ptr);
             });
         });

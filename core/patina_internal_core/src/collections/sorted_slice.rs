@@ -30,7 +30,10 @@ where
             // 2. The correct number of T elements that fit in the byte slice is calculated
             // 3. The lifetime 'a ensures the byte slice remains valid for the sorted slice's lifetime
             slice: unsafe {
-                slice::from_raw_parts_mut::<'a, T>(slice as *mut [u8] as *mut T, slice.len() / mem::size_of::<T>())
+                slice::from_raw_parts_mut::<'a, T>(
+                    core::ptr::from_mut::<[u8]>(slice).cast::<T>(),
+                    slice.len() / mem::size_of::<T>(),
+                )
             },
             item_count: 0,
         }
@@ -219,7 +222,7 @@ mod tests {
         let ss = SortedSlice::<'_, u32>::new(&mut mem);
 
         assert_eq!(0, ss.item_count);
-        assert_eq!(mem_ptr, ss.slice.as_ptr() as *const u8);
+        assert_eq!(mem_ptr, ss.slice.as_ptr().cast::<u8>());
         assert_eq!(MEM_SIZE / mem::size_of::<u32>(), ss.slice.len());
         assert_eq!(MEM_SIZE / mem::size_of::<u32>(), ss.capacity());
         assert_eq!(0, ss.len(), "The deref impl should only return the used part of the slice.");

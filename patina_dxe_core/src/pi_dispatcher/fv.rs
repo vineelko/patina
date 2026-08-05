@@ -894,7 +894,7 @@ pub fn device_path_bytes_for_fv_file(fv_handle: efi::Handle, file_name: efi::Gui
     let file_node = &FvPiWgDevicePath::new_file(file_name);
     concat_device_path_to_boxed_slice(
         fv_device_path as *mut _ as *const efi::protocols::device_path::Protocol,
-        file_node as *const _ as *const efi::protocols::device_path::Protocol,
+        core::ptr::from_ref(file_node) as *const efi::protocols::device_path::Protocol,
     )
 }
 
@@ -1081,8 +1081,9 @@ mod tests {
             /* Create an interface with No physical address and no private data - cover Error Conditions */
             let fv_interface_no_data = MockProtocolData::new_fv_protocol(None);
 
-            let fv_ptr_no_data =
-                fv_interface_no_data.as_ref() as *const pi::protocol::firmware_volume::FirmwareVolumeProtocol;
+            let fv_ptr_no_data = std::ptr::from_ref::<pi::protocol::firmware_volume::FirmwareVolumeProtocol>(
+                fv_interface_no_data.as_ref(),
+            );
 
             /* Create a Firmware Volume Block Interface with Invalid Physical Address */
             let fvb_intf_invalid = MockProtocolData::new_fvb_protocol(parent_handle);
@@ -1110,8 +1111,9 @@ mod tests {
                     None => core::ptr::null_mut(),
                 },
             });
-            let fvb_intf_data_n_mut =
-                fvb_intf_data_n.as_mut() as *mut pi::protocol::firmware_volume_block::FirmwareVolumeBlockProtocol;
+            let fvb_intf_data_n_mut = std::ptr::from_mut::<
+                pi::protocol::firmware_volume_block::FirmwareVolumeBlockProtocol,
+            >(fvb_intf_data_n.as_mut());
 
             // SAFETY: the following test code must uphold the safety expectations of the unsafe
             // functions it calls. It uses direct memory allocations to create buffers for testing FFI

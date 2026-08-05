@@ -55,7 +55,7 @@ where
         // Using MaybeUninit explicitly represents uninitialized memory.
         let uninit_buffer = unsafe {
             slice::from_raw_parts_mut::<'a, MaybeUninit<Node<D>>>(
-                slice as *mut [u8] as *mut MaybeUninit<Node<D>>,
+                core::ptr::from_mut::<[u8]>(slice).cast::<MaybeUninit<Node<D>>>(),
                 slice.len() / mem::size_of::<Node<D>>(),
             )
         };
@@ -68,7 +68,7 @@ where
         // SAFETY: All nodes have been initialized (though their data fields are uninitialized).
         // We can now safely convert from MaybeUninit<Node<D>> to Node<D>.
         let buffer =
-            unsafe { slice::from_raw_parts_mut(uninit_buffer.as_mut_ptr() as *mut Node<D>, uninit_buffer.len()) };
+            unsafe { slice::from_raw_parts_mut(uninit_buffer.as_mut_ptr().cast::<Node<D>>(), uninit_buffer.len()) };
 
         let storage = Storage { data: buffer, length: 0, available: Cell::default() };
 
@@ -214,7 +214,7 @@ where
         // 4. MaybeUninit<T> has the same size and alignment as T
         let uninit_buffer = unsafe {
             slice::from_raw_parts_mut::<'a, MaybeUninit<Node<D>>>(
-                slice as *mut [u8] as *mut MaybeUninit<Node<D>>,
+                core::ptr::from_mut::<[u8]>(slice).cast::<MaybeUninit<Node<D>>>(),
                 slice.len() / mem::size_of::<Node<D>>(),
             )
         };
@@ -230,7 +230,7 @@ where
         // SAFETY: All nodes have been initialized (though their data fields are uninitialized).
         // We can now safely convert from MaybeUninit<Node<D>> to Node<D>.
         let buffer =
-            unsafe { slice::from_raw_parts_mut(uninit_buffer.as_mut_ptr() as *mut Node<D>, uninit_buffer.len()) };
+            unsafe { slice::from_raw_parts_mut(uninit_buffer.as_mut_ptr().cast::<Node<D>>(), uninit_buffer.len()) };
 
         // When current capacity is 0, we just need to copy the data and build the available list
         if self.capacity() == 0 {
@@ -408,7 +408,7 @@ where
     }
 
     fn as_mut_ptr(&self) -> *mut Node<D> {
-        self as *const _ as *mut _
+        core::ptr::from_ref(self) as *mut _
     }
 }
 

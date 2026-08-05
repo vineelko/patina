@@ -143,14 +143,14 @@ impl SmbiosManager {
             .allocate_pages(table_pages, AllocationOptions::new().with_memory_type(EfiMemoryType::ACPIReclaimMemory))
             .map_err(|_| SmbiosError::AllocationFailed)?;
         let table_slice = table_allocation.into_raw_slice::<u8>();
-        let table_addr = table_slice as *mut u8 as u64;
+        let table_addr = table_slice.cast::<u8>() as u64;
 
         // Allocate entry point buffer (1 page is plenty)
         let ep_allocation = memory_manager
             .allocate_pages(1, AllocationOptions::new().with_memory_type(EfiMemoryType::ACPIReclaimMemory))
             .map_err(|_| SmbiosError::AllocationFailed)?;
         let ep_slice = ep_allocation.into_raw_slice::<u8>();
-        let ep_addr = ep_slice as *mut u8 as u64;
+        let ep_addr = ep_slice.cast::<u8>() as u64;
 
         *self.table_buffer_addr.borrow_mut() = Some(table_addr);
         *self.ep_buffer_addr.borrow_mut() = Some(ep_addr);

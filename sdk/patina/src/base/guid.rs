@@ -1084,7 +1084,7 @@ mod tests {
 
         let r_efi_ptr = &raw const r_efi_guid;
         let patina_ptr = match patina_guid {
-            Guid::Borrowed(guid) => guid as *const efi::Guid,
+            Guid::Borrowed(guid) => std::ptr::from_ref::<efi::Guid>(guid),
             Guid::Owned(_) => panic!("Expected Borrowed variant"),
         };
 

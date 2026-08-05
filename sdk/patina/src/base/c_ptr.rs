@@ -145,7 +145,7 @@ unsafe impl<'a, T> CPtr<'a> for &'a T {
 
     /// Returns a pointer to the underlying data.
     fn as_ptr(&self) -> *const Self::Type {
-        *self as *const _
+        core::ptr::from_ref(*self)
     }
 }
 // SAFETY: Memory layout and mutability are respected for these types.
@@ -158,7 +158,7 @@ unsafe impl<'a, T> CPtr<'a> for &'a mut T {
 
     /// Returns a pointer to the underlying data.
     fn as_ptr(&self) -> *const Self::Type {
-        *self as *const _
+        core::ptr::from_ref(*self)
     }
 }
 // SAFETY: Memory layout and mutability are respected for these types.
@@ -175,7 +175,7 @@ unsafe impl<T> CPtr<'_> for Box<T> {
     type Type = T;
 
     fn as_ptr(&self) -> *const Self::Type {
-        AsRef::as_ref(self) as *const _
+        core::ptr::from_ref(AsRef::as_ref(self))
     }
 }
 #[cfg(any(test, feature = "alloc"))]
@@ -260,8 +260,8 @@ mod tests {
         assert_eq!(ptr, (&foo).as_ptr());
         assert_eq!(ptr, (&mut foo).as_mut_ptr());
 
-        assert_eq!(ptr, (&foo).as_ref() as *const _);
-        assert_eq!(ptr, (&mut foo).as_mut() as *const _);
+        assert_eq!(ptr, std::ptr::from_ref((&foo).as_ref()));
+        assert_eq!(ptr, std::ptr::from_ref((&mut foo).as_mut()));
 
         assert_eq!(ptr, (&mut foo).into_ptr());
         let mut foo = 10;

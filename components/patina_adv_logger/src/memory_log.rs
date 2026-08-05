@@ -341,8 +341,8 @@ impl<'a> AdvLoggerInfoRef<'a> {
 
     pub fn as_ptr(&self) -> *const u8 {
         match *self {
-            AdvLoggerInfoRef::V5(info) => info as *const AdvLoggerInfoV5 as *const u8,
-            AdvLoggerInfoRef::V6(info) => info as *const AdvLoggerInfoV6 as *const u8,
+            AdvLoggerInfoRef::V5(info) => core::ptr::from_ref::<AdvLoggerInfoV5>(info).cast::<u8>(),
+            AdvLoggerInfoRef::V6(info) => core::ptr::from_ref::<AdvLoggerInfoV6>(info).cast::<u8>(),
         }
     }
 }

@@ -812,7 +812,7 @@ mod tests {
 
         let status_layout = Layout::from_size_align(core::mem::size_of::<MmCommBufferStatus>(), page_align).unwrap();
         // SAFETY: status_layout is a valid memory buffer allocated above.
-        let status_ptr = unsafe { alloc(status_layout) as *mut MmCommBufferStatus };
+        let status_ptr = unsafe { alloc(status_layout).cast::<MmCommBufferStatus>() };
         assert!(!status_ptr.is_null(), "Failed to allocate aligned status");
 
         // SAFETY: status_ptr points to a valid memory buffer allocated above.
@@ -869,7 +869,7 @@ mod tests {
         // SAFETY: Cleaning up memory allocated in the test.
         unsafe {
             dealloc(buffer_ptr, buffer_layout);
-            dealloc(status_ptr as *mut u8, status_layout);
+            dealloc(status_ptr.cast::<u8>(), status_layout);
         }
     }
 
@@ -893,7 +893,7 @@ mod tests {
 
         let status_layout = Layout::from_size_align(core::mem::size_of::<MmCommBufferStatus>(), page_align).unwrap();
         // SAFETY: status_layout is a valid memory buffer allocated above.
-        let status_ptr = unsafe { alloc(status_layout) as *mut MmCommBufferStatus };
+        let status_ptr = unsafe { alloc(status_layout).cast::<MmCommBufferStatus>() };
         assert!(!status_ptr.is_null(), "Failed to allocate aligned status");
 
         // SAFETY: status_ptr points to a valid memory buffer allocated above.
@@ -921,7 +921,7 @@ mod tests {
                 unsafe {
                     let ptr = comm_buffer.as_ptr();
                     let length_offset = 16;
-                    let length_ptr = ptr.add(length_offset) as *mut usize;
+                    let length_ptr = ptr.add(length_offset).cast::<usize>();
                     *length_ptr = huge_length;
                 }
 
@@ -937,7 +937,7 @@ mod tests {
         // SAFETY: Cleaning up memory allocated in the test.
         unsafe {
             dealloc(buffer_ptr, buffer_layout);
-            dealloc(status_ptr as *mut u8, status_layout);
+            dealloc(status_ptr.cast::<u8>(), status_layout);
         }
     }
 }

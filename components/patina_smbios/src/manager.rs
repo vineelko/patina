@@ -66,7 +66,7 @@ pub fn install_smbios_protocol(
         boot_services.install_protocol_interface_unchecked(
             None, // Let UEFI create a new handle
             &SmbiosProtocol::PROTOCOL_GUID,
-            interface as *mut _,
+            interface.cast(),
         )
     };
 

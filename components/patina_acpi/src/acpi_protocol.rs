@@ -80,7 +80,7 @@ impl AcpiTableProtocol {
 
         // The size of the allocated table buffer must be large enough to store the whole table.
         // SAFETY: `acpi_table_buffer` is checked non-null and large enough to read an AcpiTableHeader.
-        let table_header = unsafe { core::ptr::read_unaligned(acpi_table_buffer as *const AcpiTableHeader) };
+        let table_header = unsafe { core::ptr::read_unaligned(acpi_table_buffer.cast::<AcpiTableHeader>()) };
         let tbl_length = table_header.length as usize;
         if tbl_length != acpi_table_buffer_size {
             return efi::Status::INVALID_PARAMETER;
@@ -96,7 +96,7 @@ impl AcpiTableProtocol {
         if let Some(global_mm) = STANDARD_ACPI_PROVIDER.memory_manager.get() {
             // SAFETY: `acpi_table_buffer` has been validated as non-null and of sufficient size above.
             let acpi_table =
-                unsafe { AcpiTable::new_from_ptr(acpi_table_buffer as *const AcpiTableHeader, None, global_mm) };
+                unsafe { AcpiTable::new_from_ptr(acpi_table_buffer.cast::<AcpiTableHeader>(), None, global_mm) };
 
             if let Ok(table) = acpi_table {
                 let signature = table.signature();
@@ -282,7 +282,7 @@ mod tests {
         let mut table_key: usize = 0;
         let status = AcpiTableProtocol::install_acpi_table_ext(
             &AcpiTableProtocol::new(),
-            dummy_table.as_ptr() as *const c_void,
+            dummy_table.as_ptr().cast::<c_void>(),
             dummy_table.len(),
             &raw mut table_key,
         );
@@ -292,7 +292,7 @@ mod tests {
         let dummy_table: [u8; 8] = [0; 8];
         let status = AcpiTableProtocol::install_acpi_table_ext(
             &AcpiTableProtocol::new(),
-            dummy_table.as_ptr() as *const c_void,
+            dummy_table.as_ptr().cast::<c_void>(),
             dummy_table.len(),
             core::ptr::null_mut(),
         );
@@ -303,7 +303,7 @@ mod tests {
         let mut table_key: usize = 0;
         let status = AcpiTableProtocol::install_acpi_table_ext(
             &AcpiTableProtocol::new(),
-            dummy_table.as_ptr() as *const c_void,
+            dummy_table.as_ptr().cast::<c_void>(),
             16, // Incorrect length,
             &raw mut table_key,
         );
@@ -314,7 +314,7 @@ mod tests {
         let mut table_key: usize = 0;
         let status = AcpiTableProtocol::install_acpi_table_ext(
             &AcpiTableProtocol::new(),
-            dummy_table.as_ptr() as *const c_void,
+            dummy_table.as_ptr().cast::<c_void>(),
             dummy_table.len(),
             &raw mut table_key,
         );
@@ -345,7 +345,7 @@ mod tests {
         let mut table_key: usize = 0;
         let status = AcpiTableProtocol::install_acpi_table_ext(
             &AcpiTableProtocol::new(),
-            dummy_table.as_ptr() as *const c_void,
+            dummy_table.as_ptr().cast::<c_void>(),
             dummy_table.len(),
             &raw mut table_key,
         );

@@ -580,7 +580,7 @@ impl PageAllocation {
         // SAFETY: This function has sole ownership of the underlying memory, so
         //         the memory is safe from being converted into a Box multiple times,
         //         which would result in a double free.
-        unsafe { Box::from_raw_in(slice as *mut _, page_free) }
+        unsafe { Box::from_raw_in(core::ptr::from_mut(slice), page_free) }
     }
 
     /// Converts the allocation and leaks the memory as a mutable `T`.

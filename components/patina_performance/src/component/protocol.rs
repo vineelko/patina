@@ -121,7 +121,8 @@ pub(crate) unsafe extern "efiapi" fn create_performance_measurement_efiapi(
     attribute: PerfAttribute,
 ) -> efi::Status {
     // SAFETY: The caller ensures that `string` is a valid, NUL-terminated CHAR8 pointer (or NULL).
-    let string = unsafe { string.as_ref().map(|s| Char8Str::from_ptr((s as *const c_char).cast()).to_string()) };
+    let string =
+        unsafe { string.as_ref().map(|s| Char8Str::from_ptr(core::ptr::from_ref::<c_char>(s).cast()).to_string()) };
 
     // To conform with UEFI spec, `identifier` must be a u32 when passed in.
     // However, FPDT performance measurement IDs are always u16.

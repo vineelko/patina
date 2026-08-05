@@ -112,7 +112,7 @@ fn initialize_exception() -> Result<(), EfiError> {
     #[cfg(not(test))]
     {
         // SAFETY: We are using the address of a symbol defined in assembly as the stack pointer for EL0.
-        let mut sp_el0_reg = unsafe { &sp_el0_end as *const _ as u64 };
+        let mut sp_el0_reg = unsafe { core::ptr::from_ref(&sp_el0_end) as u64 };
         sp_el0_reg &= !0x0F;
         write_sysreg!(reg sp_el0, sp_el0_reg);
 
@@ -125,7 +125,7 @@ fn initialize_exception() -> Result<(), EfiError> {
 
         // Program VBar
         // SAFETY: We are using the address of the exception handlers as the vector base address.
-        let vec_base = unsafe { &exception_handlers_start as *const _ as u64 };
+        let vec_base = unsafe { core::ptr::from_ref(&exception_handlers_start) as u64 };
         // Arms write different EL-specific registers. Identical only when built against the host stub macros.
         #[allow(clippy::match_same_arms)]
         match current_el {

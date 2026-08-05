@@ -127,7 +127,7 @@ impl SmbiosProtocol {
         // Cast from protocol pointer to internal struct pointer is safe due to repr(C) layout:
         // SmbiosProtocolInternal has SmbiosProtocol as its first field, so a pointer to
         // SmbiosProtocol is also a valid pointer to the containing SmbiosProtocolInternal.
-        let internal = unsafe { &*(protocol as *const SmbiosProtocolInternal) };
+        let internal = unsafe { &*protocol.cast::<SmbiosProtocolInternal>() };
 
         let manager = match internal.manager.try_lock() {
             Ok(guard) => guard,
@@ -149,7 +149,7 @@ impl SmbiosProtocol {
             }
 
             // Scan for the string pool terminator (double null)
-            let base_ptr = record as *const u8;
+            let base_ptr = record.cast::<u8>();
 
             // Scan for double null terminator
             let mut consecutive_nulls = 0;
@@ -220,7 +220,7 @@ impl SmbiosProtocol {
         }
 
         // SAFETY: Protocol pointer validated as non-null and aligned. See add_ext for details on repr(C) cast.
-        let internal = unsafe { &*(protocol as *const SmbiosProtocolInternal) };
+        let internal = unsafe { &*protocol.cast::<SmbiosProtocolInternal>() };
         let manager = internal.manager.lock();
 
         // SAFETY: The pointers are checked for being null above and guaranteed valid by caller
@@ -261,7 +261,7 @@ impl SmbiosProtocol {
         }
 
         // SAFETY: Protocol pointer validated as non-null and aligned. See add_ext for details on repr(C) cast.
-        let internal = unsafe { &*(protocol as *const SmbiosProtocolInternal) };
+        let internal = unsafe { &*protocol.cast::<SmbiosProtocolInternal>() };
         let manager = internal.manager.lock();
 
         match manager.remove(smbios_handle) {
@@ -297,7 +297,7 @@ impl SmbiosProtocol {
         }
 
         // SAFETY: Protocol pointer validated as non-null and aligned. See add_ext for details on repr(C) cast.
-        let internal = unsafe { &*(protocol as *const SmbiosProtocolInternal) };
+        let internal = unsafe { &*protocol.cast::<SmbiosProtocolInternal>() };
 
         let found_handle = {
             let manager = internal.manager.lock();

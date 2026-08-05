@@ -204,7 +204,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
         // This includes installing the debug image info table and the system table pointer structure.
         if core_install_configuration_table(
             efi::DEBUG_IMAGE_INFO_TABLE_GUID,
-            self.debug_image_data.read().header() as *const _ as *mut c_void,
+            core::ptr::from_ref(self.debug_image_data.read().header()) as *mut c_void,
             system_table,
         )
         .is_err()
@@ -598,7 +598,7 @@ impl PendingFirmwareVolumeImage {
         //authentication status, so it is hard-coded to zero here. The primary security handlers for the main usage
         //scenarios (TPM measurement and UEFI Secure Boot) do not use it.
         let status = (security_protocol.file_authentication_state)(
-            security_protocol as *const _ as *mut patina::pi::protocol::security::SecurityProtocol,
+            core::ptr::from_ref(security_protocol) as *mut patina::pi::protocol::security::SecurityProtocol,
             0,
             file_path.as_ptr() as *const _ as *mut efi::protocols::device_path::Protocol,
         );

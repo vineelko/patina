@@ -41,7 +41,7 @@ impl TryFrom<Vec<u8>> for FirmwarePerformanceVariable {
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
         if value.len() == mem::size_of::<Self>() {
             // SAFETY: This is safe because the value for ADDRESS_VARIABLE_GUID is an address where a FirmwarePerformanceVariable is.
-            Ok(unsafe { ptr::read_unaligned(value.as_ptr() as *const FirmwarePerformanceVariable) })
+            Ok(unsafe { ptr::read_unaligned(value.as_ptr().cast::<FirmwarePerformanceVariable>()) })
         } else {
             Err(())
         }
