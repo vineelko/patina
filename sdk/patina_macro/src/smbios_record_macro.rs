@@ -79,7 +79,7 @@ impl Parse for SmbiosRecord {
 
                 if has_string_pool {
                     string_pool_count += 1;
-                    string_pool_field = field.ident.clone();
+                    string_pool_field.clone_from(&field.ident);
                 }
             }
         }
