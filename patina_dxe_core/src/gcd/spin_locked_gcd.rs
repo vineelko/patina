@@ -321,11 +321,13 @@ impl GCD {
     }
 }
 
+#[allow(clippy::missing_fields_in_debug)] // The function pointers are excluded from debug prints.
 impl core::fmt::Debug for GCD {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("GCD")
             .field("maximum_address", &self.maximum_address)
             .field("memory_blocks", &self.memory_blocks)
+            .field("prioritize_32_bit_memory", &self.prioritize_32_bit_memory)
             .finish()
     }
 }

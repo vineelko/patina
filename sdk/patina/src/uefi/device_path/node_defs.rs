@@ -735,6 +735,7 @@ impl parse_node::DevicePathNode for HardDrive {
 impl core::fmt::Debug for HardDrive {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("HardDrive")
+            .field("partition_signature", &self.partition_signature)
             .field("partition_number", &self.partition_number)
             .field("partition_start", &self.partition_start)
             .field("partition_size", &self.partition_size)
