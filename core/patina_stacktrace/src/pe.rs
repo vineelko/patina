@@ -113,7 +113,7 @@ impl PE<'_> {
                     // `rip` is still page-aligned and within that mapping.
                     let bytes = unsafe { core::slice::from_raw_parts(rip as *const u8, size_of_image as usize) };
 
-                    return Ok(Self { base_address: rip, size_of_image: size_of_image, image_name, bytes });
+                    return Ok(Self { base_address: rip, size_of_image, image_name, bytes });
                 }
             }
 
