@@ -41,7 +41,7 @@ pub fn read_memory<Arch: DebuggerArch>(address: u64, buffer: &mut [u8], unsafe_r
     let page_table = Arch::get_page_table()?;
 
     // Check that all of the pages are mapped before accessing the memory.
-    let len = if !unsafe_read { check_range_access::<Arch>(&page_table, address, buffer.len())? } else { buffer.len() };
+    let len = if unsafe_read { buffer.len() } else { check_range_access::<Arch>(&page_table, address, buffer.len())? };
 
     if len == 0 {
         return Err(());

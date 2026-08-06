@@ -809,11 +809,11 @@ pub trait BootServices {
                 registration.map_or(ptr::null_mut(), core::ptr::NonNull::as_ptr),
             )?
         };
-        if !interface_ptr.is_null() {
+        if interface_ptr.is_null() {
+            Ok(())
+        } else {
             log_debug_assert!("Marker protocol has no data; interface should be null {:?}", protocol_guid);
             Err(efi::Status::INVALID_PARAMETER)
-        } else {
-            Ok(())
         }
     }
 

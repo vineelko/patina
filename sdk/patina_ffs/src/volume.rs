@@ -1345,7 +1345,7 @@ mod test {
 
             let mismatch = &original_fv_bytes.iter().zip(&serialized_fv_bytes).enumerate().find_map(
                 |(offset, (expected, actual))| {
-                    if *expected != *actual { Some((offset, (*expected, *actual))) } else { None }
+                    if *expected == *actual { None } else { Some((offset, (*expected, *actual))) }
                 },
             );
 

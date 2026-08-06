@@ -144,14 +144,14 @@ where
         node.set_parent(None);
         node.set_left(None);
         let available_ptr = self.available.get();
-        if !available_ptr.is_null() {
+        if available_ptr.is_null() {
+            node.set_right(None);
+        } else {
             // SAFETY: available_ptr is non-null and points to the head of our free list,
             // which contains valid Node<D> pointers from self.data.
             let root = unsafe { &mut *available_ptr };
             node.set_right(Some(root));
             root.set_left(Some(node));
-        } else {
-            node.set_right(None);
         }
 
         self.available.set(node.as_mut_ptr());
@@ -279,7 +279,7 @@ where
             }
         }
 
-        let idx = if !self.available.get().is_null() { self.idx(self.available.get()) } else { self.len() };
+        let idx = if self.available.get().is_null() { self.len() } else { self.idx(self.available.get()) };
 
         if let Some(tail) = buffer.get(idx..) {
             Self::build_linked_list(tail);

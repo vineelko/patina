@@ -88,7 +88,7 @@ impl ServiceHolder {
     }
 
     fn get(&self) -> Option<&Service<dyn PerformanceManager>> {
-        if !self.initializing.load(Ordering::Acquire) { self.service.get() } else { None }
+        if self.initializing.load(Ordering::Acquire) { None } else { self.service.get() }
     }
 }
 

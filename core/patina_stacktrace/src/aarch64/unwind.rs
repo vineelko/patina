@@ -508,13 +508,13 @@ impl UnwindCode {
             // or registers to lave left.
             let mut intreg = 0;
             while intreg < (reg_i / 2) * 2 {
-                if !save_predec_done {
+                if save_predec_done {
+                    log::debug!("    > save_regp (x{}, x{}, 0x{:X})", intreg, intreg + 1, sav_slot * 8);
+                    sav_slot += 2;
+                } else {
                     log::debug!("    > save_regp_x (x{}, x{}, -0x{:X})", intreg, intreg + 1, reg_save_size * 8);
                     sav_slot += 2;
                     save_predec_done = true;
-                } else {
-                    log::debug!("    > save_regp (x{}, x{}, 0x{:X})", intreg, intreg + 1, sav_slot * 8);
-                    sav_slot += 2;
                 }
                 intreg += 2;
             }
@@ -538,13 +538,13 @@ impl UnwindCode {
                     // sav_slot += 1;
                 }
             } else if cr == FrameChainMode::UnchainedSavedLr {
-                if !save_predec_done {
+                if save_predec_done {
+                    log::debug!("    > save_reg (x{}, 0x{:X})", 11, sav_slot * 8);
+                    // sav_slot += 1;
+                } else {
                     log::debug!("    > save_reg_x (x{}, -0x{:X})", 11, reg_save_size * 8);
                     // sav_slot += 1;
                     // save_predec_done = true;
-                } else {
-                    log::debug!("    > save_reg (x{}, 0x{:X})", 11, sav_slot * 8);
-                    // sav_slot += 1;
                 }
             }
         }

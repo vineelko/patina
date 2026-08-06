@@ -43,7 +43,7 @@ unsafe extern "efiapi" fn create_event(
         return efi::Status::INVALID_PARAMETER;
     }
 
-    let notify_context = if !notify_context.is_null() { Some(notify_context) } else { None };
+    let notify_context = if notify_context.is_null() { None } else { Some(notify_context) };
 
     let (event_type, event_group) = match event_type {
         efi::EVT_SIGNAL_EXIT_BOOT_SERVICES => (efi::EVT_NOTIFY_SIGNAL, Some(efi::EVENT_GROUP_EXIT_BOOT_SERVICES)),
@@ -79,7 +79,7 @@ unsafe extern "efiapi" fn create_event_ex(
         return efi::Status::INVALID_PARAMETER;
     }
 
-    let notify_context = if !notify_context.is_null() { Some(notify_context as *mut c_void) } else { None };
+    let notify_context = if notify_context.is_null() { None } else { Some(notify_context as *mut c_void) };
 
     match event_type {
         efi::EVT_SIGNAL_EXIT_BOOT_SERVICES | efi::EVT_SIGNAL_VIRTUAL_ADDRESS_CHANGE => {
@@ -89,7 +89,7 @@ unsafe extern "efiapi" fn create_event_ex(
     }
 
     // SAFETY: caller must ensure that event_group is a valid pointer if not null.
-    let event_group = if !event_group.is_null() { Some(unsafe { event_group.read_unaligned() }) } else { None };
+    let event_group = if event_group.is_null() { None } else { Some(unsafe { event_group.read_unaligned() }) };
 
     match EVENT_DB.create_event(event_type, notify_tpl, notify_function, notify_context, event_group) {
         Ok(new_event) => {

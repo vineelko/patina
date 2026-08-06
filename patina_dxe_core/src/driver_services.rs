@@ -169,14 +169,14 @@ fn authenticate_connect(
             PROTOCOL_DB.locate_protocol(patina::pi::protocol::security2::PROTOCOL_GUID.into_inner())
         {
             let file_path = {
-                if !recursive {
+                if recursive {
+                    copy_device_path_to_boxed_slice(device_path)
+                } else {
                     if let Some(remaining_path) = remaining_device_path {
                         concat_device_path_to_boxed_slice(device_path, remaining_path.as_ptr())
                     } else {
                         copy_device_path_to_boxed_slice(device_path)
                     }
-                } else {
-                    copy_device_path_to_boxed_slice(device_path)
                 }
             };
 

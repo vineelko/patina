@@ -134,7 +134,9 @@ fn validate_component_impl_block(impl_block: ItemImpl) -> TokenStream {
     let alloc_name = quote::format_ident!("__alloc_component_{}", type_ident);
 
     // Just extract the parameter identifiers (not bounds) for putting them into turbofish
-    let turbofish = if !generics.params.is_empty() {
+    let turbofish = if generics.params.is_empty() {
+        quote!()
+    } else {
         let param_idents = generics.params.iter().map(|param| match param {
             syn::GenericParam::Type(type_param) => {
                 let ident = &type_param.ident;
@@ -150,8 +152,6 @@ fn validate_component_impl_block(impl_block: ItemImpl) -> TokenStream {
             }
         });
         quote!(::<#(#param_idents),*>)
-    } else {
-        quote!()
     };
 
     let entry_point_fn = quote!(#type_ident #turbofish :: entry_point);

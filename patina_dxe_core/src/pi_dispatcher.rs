@@ -847,18 +847,18 @@ impl DispatcherContext {
                             .filter(|s| s.section_type() == Some(ffs::section::Type::FirmwareVolumeImage))
                             .collect::<Vec<_>>();
 
-                        if !fv_sections.is_empty() {
+                        if fv_sections.is_empty() {
+                            log::warn!(
+                                "firmware volume image {:?} does not contain a firmware volume image section.",
+                                OwnedGuid::from(file_name)
+                            );
+                        } else {
                             self.pending_firmware_volume_images.push(PendingFirmwareVolumeImage {
                                 parent_fv_handle: handle,
                                 file_name,
                                 depex,
                                 fv_sections,
                             });
-                        } else {
-                            log::warn!(
-                                "firmware volume image {:?} does not contain a firmware volume image section.",
-                                OwnedGuid::from(file_name)
-                            );
                         }
                     }
                 }

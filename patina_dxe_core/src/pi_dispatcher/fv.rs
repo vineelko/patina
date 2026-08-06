@@ -567,7 +567,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
             num_bytes.write_unaligned(data.len());
         }
 
-        if data.len() != bytes_to_read { efi::Status::BAD_BUFFER_SIZE } else { efi::Status::SUCCESS }
+        if data.len() == bytes_to_read { efi::Status::SUCCESS } else { efi::Status::BAD_BUFFER_SIZE }
     }
 
     /// EFIAPI compliant FVB protocol Write method.

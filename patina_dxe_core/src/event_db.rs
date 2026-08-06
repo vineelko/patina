@@ -548,11 +548,10 @@ impl EventDb {
     fn consume_next_event_notify(&mut self, tpl_level: efi::Tpl) -> Option<EventNotification> {
         //if items at front of queue don't exist (e.g. due to close_event), silently pop them off.
         while let Some(item) = self.pending_notifies.first() {
-            if !self.events.contains_key(&(item.0.event as usize)) {
-                self.pending_notifies.pop_first();
-            } else {
+            if self.events.contains_key(&(item.0.event as usize)) {
                 break;
             }
+            self.pending_notifies.pop_first();
         }
         //if item at front of queue is not higher than desired efi::TPL, then return none
         //otherwise, pop it off, mark it un-signaled, and return it.
