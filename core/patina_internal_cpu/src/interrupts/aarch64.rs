@@ -32,7 +32,7 @@ impl super::EfiExceptionInfoDump for ExceptionContextAArch64 {
         // SAFETY: Called during exception handling with CPU context registers.
         // The exception context is considered valid to dump at this time.
         match unsafe { StackTrace::dump_with(stack_frame) } {
-            Ok(_) => (),
+            Ok(()) => (),
             Err(Error::ExceptionDirectoryNotFound { module }) => {
                 let no_name = "<no module>";
                 let image_name = module.unwrap_or(no_name);

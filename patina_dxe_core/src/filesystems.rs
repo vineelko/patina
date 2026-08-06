@@ -97,7 +97,7 @@ impl SimpleFile<'_> {
             )
         };
 
-        EfiError::status_to_result(status).map(|_| file_info_buffer)
+        EfiError::status_to_result(status).map(|()| file_info_buffer)
     }
 
     /// Returns the size of the file

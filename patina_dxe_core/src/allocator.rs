@@ -626,7 +626,7 @@ pub fn core_allocate_pool(pool_type: efi::MemoryType, size: usize) -> Result<*mu
         Ok(allocator) => {
             let mut buffer: *mut c_void = core::ptr::null_mut();
             // SAFETY: buffer is declared above, we pass the address which guarantees it is a valid pointer.
-            unsafe { allocator.allocate_pool(size, core::ptr::addr_of_mut!(buffer)).map(|_| buffer) }
+            unsafe { allocator.allocate_pool(size, core::ptr::addr_of_mut!(buffer)).map(|()| buffer) }
         }
         Err(err) => Err(err),
     }
@@ -643,7 +643,7 @@ pub fn core_allocate_pool(pool_type: efi::MemoryType, size: usize) -> Result<*mu
 unsafe extern "efiapi" fn free_pool(buffer: *mut c_void) -> efi::Status {
     // SAFETY: The caller is responsible for ensuring `buffer` points to a valid allocation.
     match unsafe { core_free_pool(buffer) } {
-        Ok(_) => efi::Status::SUCCESS,
+        Ok(()) => efi::Status::SUCCESS,
         Err(status) => status.into(),
     }
 }
@@ -783,7 +783,7 @@ pub fn memory_type_for_handle(handle: efi::Handle) -> Option<efi::MemoryType> {
 unsafe extern "efiapi" fn free_pages(memory: efi::PhysicalAddress, pages: usize) -> efi::Status {
     // SAFETY: The caller is responsible for ensuring `memory` is a valid, previously allocated address.
     match unsafe { core_free_pages(memory, pages) } {
-        Ok(_) => efi::Status::SUCCESS,
+        Ok(()) => efi::Status::SUCCESS,
         Err(status) => status.into(),
     }
 }

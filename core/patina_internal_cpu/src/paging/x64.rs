@@ -52,7 +52,7 @@ where
         }
 
         match apply_caching_attributes(address, size, cache_attributes, &mut self.mtrr) {
-            Ok(_) => self.paging.map_memory_region(address, size, attributes & MemoryAttributes::AccessAttributesMask),
+            Ok(()) => self.paging.map_memory_region(address, size, attributes & MemoryAttributes::AccessAttributesMask),
             Err(status) => Err(efierror_to_pterror(status)),
         }
     }
@@ -128,7 +128,7 @@ fn apply_caching_attributes<M: Mtrr>(
         if curr_attribute != cache_type {
             // cache attributes are not already set
             match mtrr.set_memory_attribute(base_address, length, cache_type) {
-                Ok(_) => {
+                Ok(()) => {
                     // now we need to program the APs with the update, if they are up
                     return Ok(());
                 }

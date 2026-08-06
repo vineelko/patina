@@ -198,7 +198,7 @@ fn fetch_mm_record_size(comm_service: &Service<dyn MmCommunication>) -> Result<u
     let mut size_req_buf = [0u8; mm::SMM_COMM_HEADER_SIZE];
     mm::GetRecordSize::new()
         .write_into(&mut size_req_buf)
-        .map_err(|_| MmPerformanceError::RecordError("Failed to write GetRecordSize request".into()))?;
+        .map_err(|()| MmPerformanceError::RecordError("Failed to write GetRecordSize request".into()))?;
 
     let size_resp_bytes = comm_service
         .communicate(1, &size_req_buf, mm::EFI_FIRMWARE_PERFORMANCE_GUID.as_guid())
@@ -227,7 +227,7 @@ fn fetch_mm_record_chunk(
 
     data_req
         .write_into(&mut data_req_buf)
-        .map_err(|_| MmPerformanceError::RecordError("Failed to write GetRecordDataByOffset request".into()))?;
+        .map_err(|()| MmPerformanceError::RecordError("Failed to write GetRecordDataByOffset request".into()))?;
 
     let data_resp_bytes = comm_service
         .communicate(1, &data_req_buf, mm::EFI_FIRMWARE_PERFORMANCE_GUID.as_guid())

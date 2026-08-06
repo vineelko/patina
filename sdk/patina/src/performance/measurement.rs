@@ -65,7 +65,7 @@ impl CallerIdentifier {
     pub fn perf_id_is_guid(perf_id: u16) -> bool {
         let perf_id = match KnownPerfId::try_from(perf_id) {
             Ok(id) => id,
-            Err(_) => return false,
+            Err(()) => return false,
         };
         matches!(
             perf_id,

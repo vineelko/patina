@@ -187,7 +187,7 @@ impl<T: ?Sized, B: TplController> TplMutex<T, B> {
     /// # Panics
     /// This call will panic if the mutex is already locked.
     pub fn lock(&self) -> TplMutexGuard<'_, T, B> {
-        self.try_lock().map_err(|_| "Re-entrant lock").unwrap()
+        self.try_lock().map_err(|()| "Re-entrant lock").unwrap()
     }
 
     /// Attempt to lock the mutex and return [TplMutexGuard] if the mutex was not locked.

@@ -96,7 +96,7 @@ extern "efiapi" fn flush_data_cache(
     }
 
     patina::arch::flush_data_cache(start, length, flush_type)
-        .map_or_else(core::convert::Into::into, |_| efi::Status::SUCCESS)
+        .map_or_else(core::convert::Into::into, |()| efi::Status::SUCCESS)
 }
 
 extern "efiapi" fn enable_interrupt(this: *const CpuArchProtocol) -> efi::Status {
@@ -218,7 +218,7 @@ extern "efiapi" fn set_memory_attributes(
     attributes: u64,
 ) -> efi::Status {
     match dxe_services::core_set_memory_space_attributes(base_address, length, attributes) {
-        Ok(_) => efi::Status::SUCCESS,
+        Ok(()) => efi::Status::SUCCESS,
         Err(status) => status.into(),
     }
 }

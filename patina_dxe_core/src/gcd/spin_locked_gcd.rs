@@ -401,7 +401,7 @@ impl GCD {
             GCD.memory_protection_policy
                 .apply_allocated_memory_protection_policy(attributes, GcdMemoryType::SystemMemory),
         ) {
-            Ok(_) | Err(EfiError::NotReady) => Ok(()),
+            Ok(()) | Err(EfiError::NotReady) => Ok(()),
             Err(err) => Err(err),
         }?;
 
@@ -422,7 +422,7 @@ impl GCD {
                 len - MEMORY_BLOCK_SLICE_SIZE,
                 MemoryProtectionPolicy::apply_free_memory_policy(attributes, GcdMemoryType::SystemMemory),
             ) {
-                Ok(_) | Err(EfiError::NotReady) => Ok(()),
+                Ok(()) | Err(EfiError::NotReady) => Ok(()),
                 Err(err) => Err(err),
             }?;
         }
@@ -2064,7 +2064,7 @@ impl SpinLockedGcd {
             // we might be freeing an entire image but the stack guard page is already unmapped.
             if paging_attrs & MemoryAttributes::ReadProtect == MemoryAttributes::ReadProtect {
                 match page_table.unmap_memory_region(base_address as u64, len as u64) {
-                    Ok(_) => {
+                    Ok(()) => {
                         log::trace!(
                             target: "paging",
                             "Memory region {base_address:#x?} of length {len:#x?} unmapped",
@@ -2137,7 +2137,7 @@ impl SpinLockedGcd {
             }
 
             match page_table.map_memory_region(base_address as u64, len as u64, paging_attrs) {
-                Ok(_) => {
+                Ok(()) => {
                     let new_cache_attributes = paging_attrs & MemoryAttributes::CacheAttributesMask;
                     let old_cache_attributes =
                         region_attributes.map(|attrs| attrs & MemoryAttributes::CacheAttributesMask);
@@ -2466,7 +2466,7 @@ impl SpinLockedGcd {
                     .memory_protection_policy
                     .apply_allocated_memory_protection_policy(gcd_desc.attributes, gcd_desc.memory_type);
                 match self.set_memory_space_attributes(stack_address as usize, stack_length as usize, attributes) {
-                    Ok(_) | Err(EfiError::NotReady) => (),
+                    Ok(()) | Err(EfiError::NotReady) => (),
                     Err(e) => {
                         log::error!(
                             "Could not set NX for memory address {:#X} for len {:#X} with error {:?}",
@@ -2483,7 +2483,7 @@ impl SpinLockedGcd {
                     UEFI_PAGE_SIZE,
                     MemoryProtectionPolicy::apply_image_stack_guard_policy(attributes),
                 ) {
-                    Ok(_) | Err(EfiError::NotReady) => (),
+                    Ok(()) | Err(EfiError::NotReady) => (),
                     Err(e) => {
                         log::error!(
                             "Could not set RP for memory address {:#X} for len {:#X} with error {:?}",
@@ -2560,7 +2560,7 @@ impl SpinLockedGcd {
         if result.is_ok() {
             if let Some(page_table) = &mut *self.page_table.lock() {
                 match page_table.unmap_memory_region(base_address as u64, len as u64) {
-                    Ok(_) => {}
+                    Ok(()) => {}
                     Err(status) => {
                         log::error!(
                             "Failed to unmap memory region {base_address:#x?} of length {len:#x?}. Status: {status:#x?} during
@@ -2618,7 +2618,7 @@ impl SpinLockedGcd {
                 attributes =
                     self.memory_protection_policy.apply_allocated_memory_protection_policy(attributes, memory_type);
                 match self.set_memory_space_attributes(*base_address, len, attributes) {
-                    Ok(_) => (),
+                    Ok(()) => (),
                     Err(EfiError::NotReady) => {
                         // this is expected if paging is not initialized yet. The GCD will still be updated, but
                         // the page table will not yet. When we initialize paging, the GCD will use the attributes
@@ -2765,7 +2765,7 @@ impl SpinLockedGcd {
         // to maintain compatibility with existing drivers, we preserve this poor paradigm.
         if attributes & (efi::CACHE_ATTRIBUTE_MASK | efi::MEMORY_ACCESS_MASK) != 0 {
             match self.set_paging_attributes(base_address, len, attributes) {
-                Ok(_) => {}
+                Ok(()) => {}
                 Err(EfiError::NotReady) => {
                     // before the page table is installed, we expect to get a return of NotReady. This means the GCD
                     // has been updated with the attributes, but the page table is not installed yet. In init_paging, the
@@ -2825,7 +2825,7 @@ impl SpinLockedGcd {
                 attributes,
                 desc.attributes,
             ) {
-                Ok(_) => {}
+                Ok(()) => {}
                 Err(EfiError::NotReady) => {
                     // before the page table is installed, we expect to get a return of NotReady. This means the GCD
                     // has been updated with the attributes, but the page table is not installed yet. In init_paging, the
@@ -3675,7 +3675,7 @@ mod tests {
             );
 
             match gcd.remove_memory_space(0, 10) {
-                Ok(_) => {
+                Ok(()) => {
                     let mb = copy_memory_block(&gcd)[0];
                     match mb {
                         MemoryBlock::Unallocated(md) => {

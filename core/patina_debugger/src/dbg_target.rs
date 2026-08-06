@@ -143,7 +143,7 @@ impl SingleThreadBase for PatinaTarget {
 
         match memory::read_memory::<SystemArch>(start_addr, data, self.disable_checks) {
             Ok(bytes_read) => Ok(bytes_read),
-            Err(_) => {
+            Err(()) => {
                 log::info!("Failed to read memory at 0x{:x} : 0x{:x}", start_addr, data.len());
                 Err(gdbstub::target::TargetError::NonFatal)
             }
@@ -156,8 +156,8 @@ impl SingleThreadBase for PatinaTarget {
         data: &[u8],
     ) -> TargetResult<(), Self> {
         match memory::write_memory::<SystemArch>(start_addr, data) {
-            Ok(_) => Ok(()),
-            Err(_) => {
+            Ok(()) => Ok(()),
+            Err(()) => {
                 log::info!("Failed to write memory at 0x{:x} : 0x{:x}", start_addr, data.len());
                 Err(gdbstub::target::TargetError::NonFatal)
             }
@@ -187,7 +187,7 @@ impl SingleRegisterAccess<()> for PatinaTarget {
             reg_id,
             buf,
         )
-        .map_err(|_| gdbstub::target::TargetError::NonFatal)
+        .map_err(|()| gdbstub::target::TargetError::NonFatal)
     }
 
     fn write_register(
@@ -201,7 +201,7 @@ impl SingleRegisterAccess<()> for PatinaTarget {
             reg_id,
             val,
         )
-        .map_err(|_| gdbstub::target::TargetError::NonFatal)
+        .map_err(|()| gdbstub::target::TargetError::NonFatal)
     }
 }
 

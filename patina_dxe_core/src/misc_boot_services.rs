@@ -223,7 +223,7 @@ pub extern "efiapi" fn exit_boot_services(_handle: efi::Handle, map_key: usize) 
     // Terminate the memory map
     // According to UEFI spec, in case of an incomplete or failed EBS call we must restore boot services memory allocation functionality
     match terminate_memory_map(map_key) {
-        Ok(_) => (),
+        Ok(()) => (),
         Err(err) => {
             log::error!("Failed to terminate memory map: {err}");
             GCD.unlock_memory_space();

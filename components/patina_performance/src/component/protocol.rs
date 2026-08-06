@@ -156,7 +156,7 @@ pub(crate) unsafe extern "efiapi" fn create_performance_measurement_efiapi(
     };
 
     match service.create_measurement(caller_identifier, guid, string.as_deref(), ticker, address, perf_id, attribute) {
-        Ok(_) => efi::Status::SUCCESS,
+        Ok(()) => efi::Status::SUCCESS,
         Err(Error::OutOfResources) => efi::Status::OUT_OF_RESOURCES,
         Err(Error::Efi(status_code)) => {
             log::error!(

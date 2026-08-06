@@ -701,7 +701,7 @@ mod tests {
         let mut loaded_image: Vec<u8> = vec![0; pe_info.size_of_image as usize];
         match load_image(&pe_info, edit_image, &mut loaded_image) {
             Err(error::Error::BufferTooShort(..)) => {}
-            Ok(_) => panic!("Expected BufferTooShort error"),
+            Ok(()) => panic!("Expected BufferTooShort error"),
             Err(e) => panic!("Expected BufferTooShort error, got {e:?}"),
         }
     }

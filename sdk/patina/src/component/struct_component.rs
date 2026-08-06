@@ -90,7 +90,7 @@ where
             super::type_name::normalized::<Self>()
         );
         log::info!("Dispatching {}", self.metadata.name());
-        self.func.run(&mut self.input, param_value).map(|_| true)
+        self.func.run(&mut self.input, param_value).map(|()| true)
     }
 
     /// Returns the metadata of the Component.

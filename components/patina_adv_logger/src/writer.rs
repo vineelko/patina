@@ -217,7 +217,7 @@ mod tests {
             let entry: LogEntry<'_> = LogEntry { level: 0, phase: 0, timestamp: 0, data: &data };
             let log_entry = writer.add_log_entry(entry);
             match log_entry {
-                Ok(_) => {}
+                Ok(()) => {}
                 Err(EfiError::OutOfResources) => {
                     assert!(writer.discarded_size() > 0);
                     assert!(entries > 0);

@@ -1224,7 +1224,7 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
                     buffer.len() as u64,
                     cache_attrs,
                 ) {
-                    Ok(_) => {
+                    Ok(()) => {
                         // success, keep going
                     }
                     Err(status) => {
@@ -1486,7 +1486,7 @@ fn get_file_buffer_from_load_protocol(
         )
     };
 
-    EfiError::status_to_result(status).map(|_| (file_buffer, handle))
+    EfiError::status_to_result(status).map(|()| (file_buffer, handle))
 }
 
 // authenticate the given image against the Security and Security2 Architectural Protocols

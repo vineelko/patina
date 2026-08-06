@@ -205,7 +205,7 @@ unsafe extern "efiapi" fn uninstall_protocol_interface(
     let caller_protocol = unsafe { protocol.read_unaligned() };
 
     core_uninstall_protocol_interface(handle, caller_protocol, interface)
-        .map_or_else(core::convert::Into::into, |_| efi::Status::SUCCESS)
+        .map_or_else(core::convert::Into::into, |()| efi::Status::SUCCESS)
 }
 
 // {2ED6CB57-3A78-4C39-9A2A-CA037841D286}
@@ -489,7 +489,7 @@ unsafe extern "efiapi" fn open_protocol(
             }
             return efi::Status::ALREADY_STARTED;
         }
-        Ok(_) | Err(EfiError::AlreadyStarted) => (),
+        Ok(()) | Err(EfiError::AlreadyStarted) => (),
         Err(err) => return err.into(),
     }
 
@@ -541,7 +541,7 @@ unsafe extern "efiapi" fn close_protocol(
     };
     match PROTOCOL_DB.remove_protocol_usage(handle, protocol_guid, Some(agent_handle), controller_handle, None) {
         Err(err) => err.into(),
-        Ok(_) => efi::Status::SUCCESS,
+        Ok(()) => efi::Status::SUCCESS,
     }
 }
 

@@ -161,7 +161,7 @@ where
         // from storage using the param_state that was initialized above.
         let param_value = unsafe { Func::Param::get_param(&param_state, storage) };
 
-        self.func.run(&mut Some(()), param_value).map(|_| true)
+        self.func.run(&mut Some(()), param_value).map(|()| true)
     }
 }
 

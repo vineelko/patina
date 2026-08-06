@@ -131,7 +131,7 @@ impl SmbiosProtocol {
 
         let manager = match internal.manager.try_lock() {
             Ok(guard) => guard,
-            Err(_) => {
+            Err(()) => {
                 debug_assert!(false, "[SMBIOS Add] ERROR: try_lock FAILED - mutex already locked!");
                 return efi::Status::DEVICE_ERROR;
             }

@@ -143,7 +143,7 @@ impl AcpiTableProtocol {
     /// Returns [`OUT_OF_RESOURCES`](efi::Status::OUT_OF_RESOURCES) if memory operations fail.
     extern "efiapi" fn uninstall_acpi_table_ext(_protocol: *const AcpiTableProtocol, table_key: usize) -> efi::Status {
         match STANDARD_ACPI_PROVIDER.uninstall_acpi_table(TableKey(table_key)) {
-            Ok(_) => {
+            Ok(()) => {
                 log::trace!("ACPI protocol: Successfully uninstalled table with key: {}", table_key);
                 efi::Status::SUCCESS
             }
@@ -249,7 +249,7 @@ impl AcpiGetProtocol {
         };
 
         match STANDARD_ACPI_PROVIDER.register_notify(register, rust_fn) {
-            Ok(_) => efi::Status::SUCCESS,
+            Ok(()) => efi::Status::SUCCESS,
             Err(err) => err.into(),
         }
     }

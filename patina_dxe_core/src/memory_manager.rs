@@ -82,7 +82,7 @@ impl MemoryManager for CoreMemoryManager {
         // SAFETY: The caller must ensure that the provided address is valid.
         let result = unsafe { core_free_pages(address as efi::PhysicalAddress, page_count) };
         match result {
-            Ok(_) => Ok(()),
+            Ok(()) => Ok(()),
             Err(EfiError::NotFound) => Err(MemoryError::InvalidAddress),
             Err(_) => Err(MemoryError::InternalError),
         }

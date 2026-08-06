@@ -103,7 +103,7 @@ fn benchmark_delete_function(c: &mut Criterion) {
             |bst| {
                 for i in &nums_shuffled {
                     match bst.delete(i.key()) {
-                        Ok(_) => {}
+                        Ok(()) => {}
                         Err(_) => {
                             std::println!("{}", nums.len());
                             std::println!("{nums:?}");

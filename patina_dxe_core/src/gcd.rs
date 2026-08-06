@@ -363,7 +363,7 @@ impl MemoryProtectionPolicy {
                         size,
                         descriptor.attributes & efi::CACHE_ATTRIBUTE_MASK,
                     ) {
-                        Ok(_) => {}
+                        Ok(()) => {}
                         Err(e) => {
                             log_debug_assert!(
                                 "Failed to map legacy bios region at {:#x?} of length {:#x?} with attributes {:#x?}. Status: {:#x?}",

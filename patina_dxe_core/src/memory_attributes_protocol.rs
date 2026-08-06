@@ -148,7 +148,7 @@ extern "efiapi" fn set_memory_attributes(
             (current_range.end - current_range.start),
             new_attributes,
         ) {
-            Ok(_) => {}
+            Ok(()) => {}
             Err(e) => {
                 log::error!(
                     "Failed to set memory attributes for range [{:#x}, {:#x}) in {}: {:?}",
@@ -222,7 +222,7 @@ extern "efiapi" fn clear_memory_attributes(
             (current_range.end - current_range.start),
             new_attributes,
         ) {
-            Ok(_) => {}
+            Ok(()) => {}
             Err(e) => {
                 log::error!(
                     "Failed to clear memory attributes for range [{:#x}, {:#x}) in {}: {:?}",
@@ -291,7 +291,7 @@ pub(crate) fn uninstall_memory_attributes_protocol() {
                     efi::protocols::memory_attribute::PROTOCOL_GUID,
                     interface,
                 ) {
-                    Ok(_) => {
+                    Ok(()) => {
                         log::info!("uninstalled MEMORY_ATTRIBUTES_PROTOCOL_GUID");
                     }
                     Err(e) => {

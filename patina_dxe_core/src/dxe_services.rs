@@ -93,7 +93,7 @@ extern "efiapi" fn free_memory_space(base_address: efi::PhysicalAddress, length:
     let result = GCD.free_memory_space(base_address as usize, length as usize);
 
     match result {
-        Ok(_) => efi::Status::SUCCESS,
+        Ok(()) => efi::Status::SUCCESS,
         Err(err) => efi::Status::from(err),
     }
 }
@@ -101,7 +101,7 @@ extern "efiapi" fn free_memory_space(base_address: efi::PhysicalAddress, length:
 extern "efiapi" fn remove_memory_space(base_address: efi::PhysicalAddress, length: u64) -> efi::Status {
     let result = GCD.remove_memory_space(base_address as usize, length as usize);
     match result {
-        Ok(_) => efi::Status::SUCCESS,
+        Ok(()) => efi::Status::SUCCESS,
         Err(err) => efi::Status::from(err),
     }
 }
@@ -137,7 +137,7 @@ extern "efiapi" fn set_memory_space_attributes(
     attributes: u64,
 ) -> efi::Status {
     match core_set_memory_space_attributes(base_address, length, attributes) {
-        Ok(_) => efi::Status::SUCCESS,
+        Ok(()) => efi::Status::SUCCESS,
         Err(err) => err.into(),
     }
 }
@@ -171,7 +171,7 @@ extern "efiapi" fn set_memory_space_capabilities(
 ) -> efi::Status {
     match core_set_memory_space_capabilities(base_address, length, capabilities) {
         Err(err) => err.into(),
-        Ok(_) => efi::Status::SUCCESS,
+        Ok(()) => efi::Status::SUCCESS,
     }
 }
 
@@ -287,7 +287,7 @@ extern "efiapi" fn free_io_space(base_address: efi::PhysicalAddress, length: u64
     let result = GCD.free_io_space(base_address as usize, length as usize);
 
     match result {
-        Ok(_) => efi::Status::SUCCESS,
+        Ok(()) => efi::Status::SUCCESS,
         Err(err) => efi::Status::from(err),
     }
 }
@@ -295,7 +295,7 @@ extern "efiapi" fn free_io_space(base_address: efi::PhysicalAddress, length: u64
 extern "efiapi" fn remove_io_space(base_address: efi::PhysicalAddress, length: u64) -> efi::Status {
     let result = GCD.remove_io_space(base_address as usize, length as usize);
     match result {
-        Ok(_) => efi::Status::SUCCESS,
+        Ok(()) => efi::Status::SUCCESS,
         Err(err) => efi::Status::from(err),
     }
 }
@@ -465,7 +465,7 @@ impl<P: PlatformInfo> Core<P> {
 
         match Self::instance().pi_dispatcher.schedule(firmware_volume_handle, &file_name) {
             Err(status) => status.into(),
-            Ok(_) => efi::Status::SUCCESS,
+            Ok(()) => efi::Status::SUCCESS,
         }
     }
 
@@ -478,7 +478,7 @@ impl<P: PlatformInfo> Core<P> {
 
         match Self::instance().pi_dispatcher.trust(firmware_volume_handle, &file_name) {
             Err(status) => status.into(),
-            Ok(_) => efi::Status::SUCCESS,
+            Ok(()) => efi::Status::SUCCESS,
         }
     }
 }
