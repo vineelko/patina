@@ -985,7 +985,7 @@ mod tests {
 
             // Generate some example HOBs
 
-            let _firmware_volume2 = gen_firmware_volume2();
+            let firmware_volume2 = gen_firmware_volume2();
             let _firmware_volume0 = gen_firmware_volume();
             let end_of_hob_list = gen_end_of_hoblist();
 
@@ -993,7 +993,7 @@ mod tests {
             let mut hoblist = HobList::new();
 
             // Push the example HOBs onto the HOB l
-            hoblist.push(Hob::FirmwareVolume2(&_firmware_volume2));
+            hoblist.push(Hob::FirmwareVolume2(&firmware_volume2));
             hoblist.push(Hob::Handoff(&end_of_hob_list));
 
             static CORE: MockCore = MockCore::new(CompositeSectionExtractor::new());

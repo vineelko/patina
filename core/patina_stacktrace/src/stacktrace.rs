@@ -241,6 +241,7 @@ impl StackTrace {
     /// ```
     #[cfg_attr(coverage, coverage(off))]
     #[inline(never)]
+    #[allow(clippy::used_underscore_binding)]
     pub unsafe fn dump_with_fp_chain(_stack_frame: StackFrame) -> StResult<()> {
         cfg_if::cfg_if! {
             if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {

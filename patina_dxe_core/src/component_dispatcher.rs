@@ -40,6 +40,7 @@ use alloc::{borrow::Cow, boxed::Box, vec::Vec};
 /// }
 /// ```
 #[cfg_attr(test, mockall::automock)]
+#[allow(clippy::used_underscore_binding)] // Allow underscore bindings to avoid unused variable warnings.
 pub trait ComponentInfo: Sized {
     /// A platform callback to register components with the core.
     #[inline(always)]

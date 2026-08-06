@@ -90,7 +90,7 @@ impl AcpiFadt {
 #[repr(C, packed)]
 #[derive(Default, Clone, Debug)]
 pub(crate) struct FadtData {
-    pub(crate) _firmware_ctrl: u32,
+    pub(crate) firmware_ctrl: u32,
     pub(crate) _dsdt: u32,
     pub(crate) _reserved0: u8,
 

@@ -201,14 +201,10 @@ impl DebuggerArch for X64Arch {
     fn memory_poke_test(address: u64) -> Result<(), ()> {
         POKE_TEST_MARKER.store(true, Ordering::SeqCst);
 
-        // Attempt to read the address to check if it is accessible.
-        // This will raise a page fault if the address is not accessible.
-
-        let _value: u64;
         // SAFETY: The safety of this is dubious and may cause a page fault, but
         // the exception handler will catch it and resolve it by stepping beyond
         // the exception.
-        unsafe { asm!("mov {}, [{}]", out(reg) _value, in(reg) address, options(nostack)) };
+        unsafe { asm!("mov {}, [{}]", out(reg) _, in(reg) address, options(nostack)) };
 
         // Check if the marker was cleared, indicating a page fault. Reset either way.
         if POKE_TEST_MARKER.swap(false, Ordering::SeqCst) { Ok(()) } else { Err(()) }

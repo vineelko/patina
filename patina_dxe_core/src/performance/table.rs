@@ -31,7 +31,7 @@ pub(crate) struct Fbpt {
     fbpt_address: usize,
     /// First value is the length when the table is not been reported and the second one is when the table is reported.
     /// Use `length()` or `length_mut()`. Do not use this field directly.
-    _length: (u32, AtomicPtr<u32>),
+    length: (u32, AtomicPtr<u32>),
     /// Buffer containing all the performance record.
     other_records: PerformanceRecordBuffer,
 }
@@ -44,7 +44,7 @@ impl Fbpt {
     pub const fn new() -> Self {
         Self {
             fbpt_address: 0,
-            _length: (Self::size_of_empty_table() as u32, AtomicPtr::new(ptr::null_mut())),
+            length: (Self::size_of_empty_table() as u32, AtomicPtr::new(ptr::null_mut())),
             other_records: PerformanceRecordBuffer::new(),
         }
     }
@@ -52,12 +52,12 @@ impl Fbpt {
     /// Return the size in bytes of the FBPT table.
     pub fn length(&self) -> &u32 {
         // SAFETY: `length` is a valid field in the FBPT structure.
-        unsafe { self._length.1.load(Ordering::Relaxed).as_ref() }.unwrap_or(&self._length.0)
+        unsafe { self.length.1.load(Ordering::Relaxed).as_ref() }.unwrap_or(&self.length.0)
     }
 
     fn length_mut(&mut self) -> &mut u32 {
         // SAFETY: `length` is a valid field in the FBPT structure.
-        unsafe { self._length.1.load(Ordering::Relaxed).as_mut() }.unwrap_or(&mut self._length.0)
+        unsafe { self.length.1.load(Ordering::Relaxed).as_mut() }.unwrap_or(&mut self.length.0)
     }
 
     const fn size_of_empty_table() -> usize {
@@ -113,7 +113,7 @@ impl Fbpt {
         debug_assert_eq!(Self::size_of_empty_table(), offset);
         self.other_records.report(buffer.get_mut(offset..).ok_or(Error::BufferTooSmall)?)?;
 
-        self._length.1.store(length_ptr, Ordering::Relaxed);
+        self.length.1.store(length_ptr, Ordering::Relaxed);
         Ok(self.fbpt_address)
     }
 }

@@ -221,7 +221,7 @@ where
             // SAFETY: The struct maintains an invariant mapping between the FADT and `Self::FADT_KEY`.
             unsafe { fadt_table.as_mut::<AcpiFadt>().set_x_firmware_ctrl(facs_addr) };
             // SAFETY: The struct maintains an invariant mapping between the FADT and `Self::FADT_KEY`.
-            unsafe { fadt_table.as_mut::<AcpiFadt>().inner._firmware_ctrl = facs_addr as u32 };
+            unsafe { fadt_table.as_mut::<AcpiFadt>().inner.firmware_ctrl = facs_addr as u32 };
             fadt_table.update_checksum()?;
         }
 
@@ -397,7 +397,7 @@ where
                 log::error!("Failed to install FADT: FACS address exceeds 32-bit limit");
                 return Err(AcpiError::FacsAddressExceeds32BitLimit);
             }
-            fadt.inner._firmware_ctrl = facs.as_ptr() as u32;
+            fadt.inner.firmware_ctrl = facs.as_ptr() as u32;
         }
 
         // If the DSDT is already installed, update the FACP's x_dsdt field.
@@ -613,7 +613,7 @@ where
 
                     // SAFETY: The FADT signature has been verified before calling `delete_table`.
                     // The struct maintains an invariant mapping between the FADT and `Self::FADT_KEY`.
-                    unsafe { fadt_table.as_mut::<AcpiFadt>() }.inner._firmware_ctrl = 0;
+                    unsafe { fadt_table.as_mut::<AcpiFadt>() }.inner.firmware_ctrl = 0;
                     fadt_table.update_checksum()?;
                 }
 

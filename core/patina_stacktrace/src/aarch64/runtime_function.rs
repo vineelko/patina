@@ -365,7 +365,7 @@ mod tests {
         let unwind = make_packed_unwind_info(function_length, 0x40, 1);
         let entries = [(0x100u32, unwind)];
         let image = build_pe_bytes(&entries, &[]);
-        let pe = PE { base_address: 0, _size_of_image: image.len() as u32, image_name: Some("image"), bytes: &image };
+        let pe = PE { base_address: 0, size_of_image: image.len() as u32, image_name: Some("image"), bytes: &image };
         let mut frame = StackFrame { pc: 0x100 + 0x20, ..StackFrame::default() };
 
         let runtime = RuntimeFunction::find_function(&pe, &mut frame).expect("runtime function");
@@ -381,7 +381,7 @@ mod tests {
         let curr_unwind = make_packed_unwind_info(0x40, 0x40, 1);
         let entries = [(0x0E0u32, prev_unwind), (0x120u32, curr_unwind)];
         let image = build_pe_bytes(&entries, &[]);
-        let pe = PE { base_address: 0, _size_of_image: image.len() as u32, image_name: Some("image"), bytes: &image };
+        let pe = PE { base_address: 0, size_of_image: image.len() as u32, image_name: Some("image"), bytes: &image };
         let mut frame = StackFrame { pc: 0x120, ..StackFrame::default() };
 
         let runtime = RuntimeFunction::find_function(&pe, &mut frame).expect("adjusted runtime function");
@@ -395,7 +395,7 @@ mod tests {
         let unwind = make_packed_unwind_info(0x40, 0x40, 1);
         let entries = [(0x100u32, unwind)];
         let image = build_pe_bytes(&entries, &[]);
-        let pe = PE { base_address: 0, _size_of_image: image.len() as u32, image_name: Some("image"), bytes: &image };
+        let pe = PE { base_address: 0, size_of_image: image.len() as u32, image_name: Some("image"), bytes: &image };
         let mut frame = StackFrame { pc: 0x200, ..StackFrame::default() };
 
         let err = RuntimeFunction::find_function(&pe, &mut frame).unwrap_err();
@@ -415,7 +415,7 @@ mod tests {
 
         let entries = [(0x180u32, xdata_rva)];
         let image = build_pe_bytes(&entries, &[(xdata_rva, &xdata)]);
-        let pe = PE { base_address: 0, _size_of_image: image.len() as u32, image_name: Some("image"), bytes: &image };
+        let pe = PE { base_address: 0, size_of_image: image.len() as u32, image_name: Some("image"), bytes: &image };
         let mut frame = StackFrame { pc: 0x180 + 0x10, ..StackFrame::default() };
 
         let runtime = RuntimeFunction::find_function(&pe, &mut frame).expect("runtime function with xdata");

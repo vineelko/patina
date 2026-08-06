@@ -99,8 +99,8 @@ where
     }
 
     /// One-time initialization of the Component. Should set [Access](super::metadata::Access) requirements.
-    fn initialize(&mut self, _storage: &mut Storage) -> bool {
-        match Func::Param::init_state(_storage, &mut self.metadata) {
+    fn initialize(&mut self, storage: &mut Storage) -> bool {
+        match Func::Param::init_state(storage, &mut self.metadata) {
             Ok(param_state) => {
                 self.param_state = Some(param_state);
                 true
