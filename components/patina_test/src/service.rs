@@ -18,7 +18,7 @@ use crate::{
     alloc::{boxed::Box, collections::BTreeMap, fmt::Display, string::String, vec::Vec},
 };
 
-use core::{ops::DerefMut, ptr::NonNull};
+use core::ptr::NonNull;
 
 use patina::{
     component::{Storage, service::IntoService},
@@ -187,7 +187,7 @@ impl Recorder {
         F: FnOnce(&mut BTreeMap<&'static str, TestRecord>) -> R,
     {
         let mut records = self.records.lock();
-        f(records.deref_mut())
+        f(&mut *records)
     }
 
     /// Registers UEFI event callbacks to log the test results at specific points in the boot process.

@@ -13,7 +13,6 @@ use core::{
     marker::PhantomData,
     mem::{self, ManuallyDrop},
     num::NonZeroUsize,
-    ops::Deref,
     ptr::{self, NonNull},
 };
 
@@ -226,7 +225,7 @@ unsafe impl<'a, R: CPtr<'a, Type = T>, T> CPtr<'a> for ManuallyDrop<R> {
     type Type = T;
 
     fn as_ptr(&self) -> *const Self::Type {
-        <R as CPtr>::as_ptr(self.deref())
+        <R as CPtr>::as_ptr(&**self)
     }
 }
 // SAFETY: Memory layout and mutability are respected for these types.

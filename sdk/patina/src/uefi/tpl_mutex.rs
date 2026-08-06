@@ -261,13 +261,13 @@ impl<T: ?Sized + fmt::Debug, B: TplController> fmt::Debug for TplMutex<T, B> {
 
 impl<T: ?Sized + fmt::Debug, B: TplController> fmt::Debug for TplMutexGuard<'_, T, B> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        Debug::fmt(self.deref(), f)
+        Debug::fmt(&**self, f)
     }
 }
 
 impl<T: ?Sized + fmt::Display, B: TplController> fmt::Display for TplMutexGuard<'_, T, B> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        Display::fmt(self.deref(), f)
+        Display::fmt(&**self, f)
     }
 }
 

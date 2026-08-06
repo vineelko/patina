@@ -198,6 +198,7 @@ where
     T: Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        #[allow(clippy::explicit_deref_methods)]
         f.debug_struct("MemoryBlockSlice").field("block_count", &self.item_count).field("slice", &self.deref()).finish()
     }
 }
