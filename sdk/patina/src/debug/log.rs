@@ -3,29 +3,31 @@
 //! ## Examples
 //!
 //! ```rust ignore
-//! use patina::debug::log::SerialLogger;
-//! use patina::peripheral::serial::SerialIO;
-//! use serial_writer::*;
+//! use patina::debug::log::{Format, SerialLogger};
+//! use patina::peripheral::serial::Terminal;
+//! use patina::peripheral::serial::uart::{Uart16550, UartPl011};
 //!
 //! let terminal_logger = SerialLogger::new(
 //!    Format::Standard,
 //!    &[("crate1::module", log::LevelFilter::Off)],
 //!    log::LevelFilter::Trace,
-//!    Terminal,
+//!    Terminal {},
 //! );
 //!
+//! // SAFETY: 0x3F8 is the standard COM1 I/O port, exclusively owned for the logger's lifetime.
 //! let uart_16550_logger = SerialLogger::new(
 //!    Format::Standard,
 //!    &[("crate1::module", log::LevelFilter::Off)],
 //!    log::LevelFilter::Trace,
-//!    Uart16550::new(Interface::Io(0x3F8)),
+//!    unsafe { Uart16550::new_io(0x3F8) },
 //! );
 //!
+//! // SAFETY: 0x3F8_0000 is a valid, exclusively-owned PL011 MMIO base address on this platform.
 //! let uart_pl011_logger = SerialLogger::new(
 //!    Format::Standard,
 //!    &[("crate1::module", log::LevelFilter::Off)],
 //!    log::LevelFilter::Trace,
-//!    UartPl011::new(0x3F8_0000),
+//!    unsafe { UartPl011::new(0x3F8_0000) },
 //! );
 //! ```
 //!

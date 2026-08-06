@@ -54,7 +54,7 @@ quote = { version = "1" }
 scroll = { version = "0.13", default-features = false, features = ["derive"]}
 spin = { version = "0.12" }
 syn = { version = "3" }
-uart_16550 = { version = "0.3.2" }
+uart_16550 = { version = "0.8" }
 corosensei = { version = "0.3.4", default-features = false }
 uuid = { version = "1.23", default-features = false }
 zerocopy = { version = "0.8" }
