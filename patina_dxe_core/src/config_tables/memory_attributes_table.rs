@@ -359,7 +359,7 @@ mod tests {
 
                 // Validate each of our runtime allocations exists in the MAT with expected values.
                 // We don't assume ordering; find by physical_start and number_of_pages.
-                for page in allocated_pages.iter() {
+                for page in &allocated_pages {
                     let expected_type = page.1.0;
                     let expected_physical_start = page.0;
                     let expected_number_of_pages = page.2 as u64;

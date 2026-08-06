@@ -929,7 +929,7 @@ mod fuzz_tests {
             random_numbers.shuffle(&mut rng);
 
             assert_eq!(random_numbers.len(), BST_MAX_SIZE);
-            for num in random_numbers.iter() {
+            for num in &random_numbers {
                 assert!(bst.add(*num).is_ok());
             }
 
@@ -963,7 +963,7 @@ mod fuzz_tests {
         random_numbers.shuffle(&mut rng);
 
         assert_eq!(random_numbers.len(), BST_MAX_SIZE);
-        for num in random_numbers.iter() {
+        for num in &random_numbers {
             assert!(bst.add(*num).is_ok());
         }
 
@@ -1000,7 +1000,7 @@ mod fuzz_tests {
         random_numbers.shuffle(&mut rng);
 
         assert_eq!(random_numbers.len(), BST_MAX_SIZE);
-        for num in random_numbers.iter() {
+        for num in &random_numbers {
             assert!(bst.add(*num).is_ok());
         }
 

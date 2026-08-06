@@ -77,7 +77,7 @@ impl HobConfig {
     /// invalid: `impl SomeTrait for MyStruct<T: Debug> {}`
     fn rhs_generics(&self) -> Generics {
         let mut generics = self.generics();
-        for param in generics.params.iter_mut() {
+        for param in &mut generics.params {
             if let syn::GenericParam::Type(param) = param {
                 param.bounds.clear();
             }

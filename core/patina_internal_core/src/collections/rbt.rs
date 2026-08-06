@@ -1872,7 +1872,7 @@ mod fuzz_tests {
             random_numbers.shuffle(&mut rng);
 
             assert_eq!(random_numbers.len(), RBT_MAX_SIZE - 1);
-            for num in random_numbers.iter() {
+            for num in &random_numbers {
                 assert!(rbt.add(*num).is_ok());
             }
             assert!(rbt.height() < 25);
@@ -1905,7 +1905,7 @@ mod fuzz_tests {
             random_numbers.shuffle(&mut rng);
 
             assert_eq!(random_numbers.len(), RBT_MAX_SIZE);
-            for num in random_numbers.iter() {
+            for num in &random_numbers {
                 assert!(rbt.add(*num).is_ok());
             }
 
@@ -1937,7 +1937,7 @@ mod fuzz_tests {
         random_numbers.shuffle(&mut rng);
 
         assert_eq!(random_numbers.len(), RBT_MAX_SIZE);
-        for num in random_numbers.iter() {
+        for num in &random_numbers {
             assert!(rbt.add(*num).is_ok());
         }
 

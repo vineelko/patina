@@ -892,7 +892,7 @@ mod tests {
                 // The alignment check should have prevented this allocation from being processed
                 let unaligned_relative = SIZE_32MB as u64 + 1;
                 let mut found_unaligned_region = false;
-                for desc in descriptors.iter() {
+                for desc in descriptors {
                     let desc_start = desc.physical_start;
                     let desc_end = desc_start + (desc.number_of_pages * UEFI_PAGE_SIZE as u64);
 

@@ -516,7 +516,7 @@ impl ProtocolDb {
     fn register_protocol_notify(&mut self, protocol: efi::Guid, event: efi::Event) -> Result<*mut c_void, EfiError> {
         // Modeling EDK2 behavior, enumerate handles *already* installed, not only future installs
         let mut fresh_handles = BTreeSet::new();
-        for (key, handle_data) in self.handles.iter() {
+        for (key, handle_data) in &self.handles {
             if handle_data.contains_key(&OrdGuid(protocol)) {
                 fresh_handles.insert(*key as efi::Handle);
             }
@@ -536,7 +536,7 @@ impl ProtocolDb {
     }
 
     fn unregister_protocol_notify_event(&mut self, event: efi::Event) {
-        for (_, v) in self.notifications.iter_mut() {
+        for v in self.notifications.values_mut() {
             v.retain(|x| x.event != event);
         }
     }
@@ -548,7 +548,7 @@ impl ProtocolDb {
     }
 
     fn next_handle_for_registration(&mut self, registration: *mut c_void) -> Option<efi::Handle> {
-        for (_, v) in self.notifications.iter_mut() {
+        for v in self.notifications.values_mut() {
             if let Some(index) = v.iter().position(|notify| notify.registration == registration)
                 && let Some(entry) = v.get_mut(index)
                 && let Some(handle) = entry.fresh_handles.pop_first()
@@ -657,7 +657,7 @@ impl SpinLockedProtocolDb {
             EFI_ACPI_MEMORY_NVS_ALLOCATOR_HANDLE,
         ];
 
-        for target_handle in well_known_handles.iter() {
+        for target_handle in well_known_handles {
             let (handle, _) = self
                 .install_protocol_interface(None, well_known_handle_guid, core::ptr::null_mut())
                 .expect("failed to install well-known handle");

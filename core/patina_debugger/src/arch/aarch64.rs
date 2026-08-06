@@ -338,7 +338,7 @@ impl Registers for Aarch64CoreRegs {
             }};
         }
 
-        for reg in self.regs.iter_mut() {
+        for reg in &mut self.regs {
             *reg = read!(u64);
         }
 

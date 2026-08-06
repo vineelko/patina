@@ -643,7 +643,7 @@ pub(crate) fn build_test_hob_list(mem_size: u64) -> *const c_void {
 
         //memory allocation HOBs.
         let mut address: u64 = resource_descriptor1.v1.physical_start;
-        for memory_type in [
+        for memory_type in &[
             efi::RESERVED_MEMORY_TYPE,
             efi::LOADER_CODE,
             efi::LOADER_DATA,
@@ -654,9 +654,7 @@ pub(crate) fn build_test_hob_list(mem_size: u64) -> *const c_void {
             efi::ACPI_RECLAIM_MEMORY,
             efi::ACPI_MEMORY_NVS,
             efi::PAL_CODE,
-        ]
-        .iter()
-        {
+        ] {
             let granularity = match *memory_type {
                 efi::RESERVED_MEMORY_TYPE
                 | efi::RUNTIME_SERVICES_CODE

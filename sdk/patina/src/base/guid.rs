@@ -455,7 +455,7 @@ impl<'a> Guid<'a> {
         add_hex(clk_seq_hi_res as u32, 2);
         add_hex(clk_seq_low as u32, 2);
 
-        for &byte in node.iter() {
+        for &byte in node {
             add_hex(byte as u32, 2);
         }
 

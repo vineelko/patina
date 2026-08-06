@@ -123,7 +123,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
     /// Displays drivers that were discovered but not dispatched.
     pub fn display_discovered_not_dispatched(&self) {
         // Summary report
-        for driver in self.dispatcher_context.lock().pending_drivers.iter() {
+        for driver in &self.dispatcher_context.lock().pending_drivers {
             log::warn!(
                 "Driver {} ({:?}) found but not dispatched.",
                 driver.name.as_deref().unwrap_or("Unnamed"),
@@ -137,7 +137,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
 
     fn detail_report(&self) {
         log::debug!("Begin Report of Drivers Not Dispatched:");
-        for driver in self.dispatcher_context.lock().pending_drivers.iter() {
+        for driver in &self.dispatcher_context.lock().pending_drivers {
             log::debug!(
                 "Driver {} ({:?}) found but not dispatched. Protocols present:",
                 driver.name.as_deref().unwrap_or("Unnamed"),
@@ -868,7 +868,7 @@ impl DispatcherContext {
     }
 
     fn schedule(&mut self, handle: efi::Handle, file: &efi::Guid) -> Result<(), EfiError> {
-        for driver in self.pending_drivers.iter_mut() {
+        for driver in &mut self.pending_drivers {
             if driver.firmware_volume_handle == handle
                 && OrdGuid(driver.file_name) == OrdGuid(*file)
                 && let Some(depex) = &mut driver.depex
@@ -882,7 +882,7 @@ impl DispatcherContext {
     }
 
     fn trust(&mut self, handle: efi::Handle, file: &efi::Guid) -> Result<(), EfiError> {
-        for driver in self.pending_drivers.iter_mut() {
+        for driver in &mut self.pending_drivers {
             if driver.firmware_volume_handle == handle && OrdGuid(driver.file_name) == OrdGuid(*file) {
                 driver.security_status = efi::Status::SUCCESS;
                 return Ok(());

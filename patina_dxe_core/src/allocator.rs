@@ -434,7 +434,7 @@ impl AllocatorMap {
     // Returns an iterator that checks all allocators by handle.
     fn find_memory_type_by_handle(&self, handle: efi::Handle) -> Option<efi::MemoryType> {
         // Check static allocators first, then dynamic allocators
-        for (alloc, mem_type) in STATIC_ALLOCATORS.iter() {
+        for (alloc, mem_type) in &STATIC_ALLOCATORS {
             if alloc.handle() == handle {
                 return Some(*mem_type);
             }
@@ -1005,7 +1005,7 @@ fn dump_memory_bin_stats() {
 #[cfg_attr(coverage, coverage(off))]
 fn dump_allocator_details() {
     log::trace!(target: "allocations", "Allocator page counts:");
-    for (alloc, _) in STATIC_ALLOCATORS.iter() {
+    for (alloc, _) in &STATIC_ALLOCATORS {
         let stats = alloc.stats();
         let reserved_free = uefi_size_to_pages!(stats.reserved_size - stats.reserved_used);
         let net_pages = stats.claimed_pages.saturating_sub(reserved_free);
@@ -2141,7 +2141,7 @@ mod tests {
             let allocators = ALLOCATORS.lock();
 
             // Verify that the memory allocation HOBs resulted in claimed pages in the allocator.
-            for memory_type in [
+            for memory_type in &[
                 efi::RESERVED_MEMORY_TYPE,
                 efi::LOADER_CODE,
                 efi::LOADER_DATA,
@@ -2152,9 +2152,7 @@ mod tests {
                 efi::ACPI_RECLAIM_MEMORY,
                 efi::ACPI_MEMORY_NVS,
                 efi::PAL_CODE,
-            ]
-            .iter()
-            {
+            ] {
                 let allocator = allocators
                     .get_allocator(*memory_type)
                     .unwrap_or_else(|| panic!("no allocator for type {:#x}", memory_type));

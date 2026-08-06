@@ -383,7 +383,7 @@ impl MemoryProtectionPolicy {
         // and the GCD will be in compatibility mode, so we don't care here
         let mut loader_mem_ranges = crate::allocator::get_memory_ranges_for_memory_type(efi::LOADER_CODE);
         loader_mem_ranges.extend(crate::allocator::get_memory_ranges_for_memory_type(efi::LOADER_DATA));
-        for range in loader_mem_ranges.iter() {
+        for range in &loader_mem_ranges {
             let mut addr = range.start;
             while addr < range.end {
                 let mut len = UEFI_PAGE_SIZE as u64;

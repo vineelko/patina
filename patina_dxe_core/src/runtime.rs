@@ -51,7 +51,7 @@ impl RuntimeData {
         unsafe {
             // Update the image links
             let mut prev: *mut _ = ptr::addr_of_mut!((*self.runtime_arch_ptr).image_head);
-            for entry in self.runtime_images.iter_mut() {
+            for entry in &mut self.runtime_images {
                 (*prev).forward_link = ptr::addr_of_mut!(entry.link);
                 entry.link.back_link = prev;
                 prev = ptr::addr_of_mut!(entry.link);
@@ -61,7 +61,7 @@ impl RuntimeData {
 
             // Update the event links
             let mut prev: *mut _ = ptr::addr_of_mut!((*self.runtime_arch_ptr).event_head);
-            for entry in self.runtime_events.iter_mut() {
+            for entry in &mut self.runtime_events {
                 (*prev).forward_link = ptr::addr_of_mut!(entry.link);
                 entry.link.back_link = prev;
                 prev = ptr::addr_of_mut!(entry.link);

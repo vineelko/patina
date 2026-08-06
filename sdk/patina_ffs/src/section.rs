@@ -503,7 +503,7 @@ impl Section {
     pub fn compose(&mut self, composer: &dyn SectionComposer) -> Result<(), FirmwareFileSystemError> {
         match &mut self.data {
             SectionData::Encapsulation(encapsulation) => {
-                for section in encapsulation.sub_sections.iter_mut() {
+                for section in &mut encapsulation.sub_sections {
                     section.compose(composer)?;
                 }
             }
@@ -570,7 +570,7 @@ impl Section {
         let mut sections: Vec<Section> =
             SectionIterator::new(&extracted_data).collect::<Result<Vec<_>, FirmwareFileSystemError>>()?;
 
-        for section in sections.iter_mut() {
+        for section in &mut sections {
             section.extract_with_depth(extractor, depth + 1)?;
         }
 

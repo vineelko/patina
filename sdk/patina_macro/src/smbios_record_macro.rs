@@ -74,7 +74,7 @@ impl Parse for SmbiosRecord {
         let mut string_pool_count = 0;
 
         if let Fields::Named(fields) = &item.fields {
-            for field in fields.named.iter() {
+            for field in &fields.named {
                 let has_string_pool = field.attrs.iter().any(|attr| attr.path().is_ident("string_pool"));
 
                 if has_string_pool {
@@ -130,7 +130,7 @@ pub(crate) fn smbios_record_derive(item: TokenStream) -> TokenStream {
     let mut structured_size_calc = quote! { core::mem::size_of::<SmbiosTableHeader>() };
 
     if let Fields::Named(fields) = &record.item.fields {
-        for field in fields.named.iter() {
+        for field in &fields.named {
             let field_name = field.ident.as_ref().unwrap();
             let field_ty = &field.ty;
 

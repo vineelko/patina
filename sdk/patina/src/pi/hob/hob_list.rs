@@ -361,7 +361,7 @@ impl<'a> HobList<'a> {
     /// }
     /// ```
     pub fn relocate_hobs(&mut self) {
-        for hob in self.0.iter_mut() {
+        for hob in &mut self.0 {
             match hob {
                 Hob::Handoff(hob) => *hob = Box::leak(Box::new(PhaseHandoffInformationTable::clone(hob))),
                 Hob::MemoryAllocation(hob) => *hob = Box::leak(Box::new(MemoryAllocation::clone(hob))),

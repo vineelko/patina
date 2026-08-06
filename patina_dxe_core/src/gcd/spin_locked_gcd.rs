@@ -178,7 +178,7 @@ const ATTRIBUTE_CONVERSION_TABLE: [GcdAttributeConversionEntry; 15] = [
 pub fn get_capabilities(gcd_mem_type: GcdMemoryType, attributes: u64) -> u64 {
     let mut capabilities = 0;
 
-    for conversion in ATTRIBUTE_CONVERSION_TABLE.iter() {
+    for conversion in &ATTRIBUTE_CONVERSION_TABLE {
         if conversion.attribute == 0 {
             break;
         }

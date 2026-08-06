@@ -484,8 +484,8 @@ pub unsafe fn core_disconnect_controller(
         // any).
         let mut driver_valid = false;
         let mut child_handles = Vec::new();
-        for (_guid, open_info) in controller_info.iter() {
-            for info in open_info.iter() {
+        for (_guid, open_info) in &controller_info {
+            for info in open_info {
                 if info.agent_handle == Some(driver_handle) {
                     if (info.attributes & efi::OPEN_PROTOCOL_BY_DRIVER) != 0 {
                         driver_valid = true;

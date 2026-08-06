@@ -1239,13 +1239,13 @@ mod tests {
             ];
 
             // Add different memory types
-            for (mem_type, base) in memory_types.iter() {
+            for (mem_type, base) in &memory_types {
                 let result = add_memory_space(*mem_type, *base, 0x10000, efi::MEMORY_WB);
                 assert_eq!(result, efi::Status::SUCCESS, "Should add memory space for type {mem_type:?}");
             }
 
             // Verify each memory type can be retrieved correctly
-            for (expected_type, base) in memory_types.iter() {
+            for (expected_type, base) in &memory_types {
                 let mut descriptor = core::mem::MaybeUninit::<dxe_services::MemorySpaceDescriptor>::uninit();
                 let result = get_memory_space_descriptor(*base, descriptor.as_mut_ptr());
 
@@ -1271,7 +1271,7 @@ mod tests {
             ];
 
             // Add memory spaces with different capabilities
-            for (base, capabilities) in capabilities_tests.iter() {
+            for (base, capabilities) in &capabilities_tests {
                 let result = add_memory_space(GcdMemoryType::SystemMemory, *base, 0x10000, *capabilities);
                 assert_eq!(
                     result,
@@ -1281,7 +1281,7 @@ mod tests {
             }
 
             // Verify capabilities are preserved (may have additional flags)
-            for (base, expected_capabilities) in capabilities_tests.iter() {
+            for (base, expected_capabilities) in &capabilities_tests {
                 let mut descriptor = core::mem::MaybeUninit::<dxe_services::MemorySpaceDescriptor>::uninit();
                 let result = get_memory_space_descriptor(*base, descriptor.as_mut_ptr());
 

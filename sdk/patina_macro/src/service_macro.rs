@@ -106,7 +106,7 @@ impl Service {
     /// Default type parameters are stripped since they are not allowed in impl blocks.
     fn lhs_generics(&self) -> Generics {
         let mut generics = self.generics();
-        for param in generics.params.iter_mut() {
+        for param in &mut generics.params {
             if let syn::GenericParam::Type(param) = param {
                 param.default = None;
             }
@@ -121,7 +121,7 @@ impl Service {
     /// invalid: `impl SomeTrait for MyStruct<T = i32> {}`
     fn rhs_generics(&self) -> Generics {
         let mut generics = self.generics();
-        for param in generics.params.iter_mut() {
+        for param in &mut generics.params {
             if let syn::GenericParam::Type(param) = param {
                 param.bounds.clear();
                 param.default = None;

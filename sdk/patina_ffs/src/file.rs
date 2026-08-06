@@ -510,7 +510,7 @@ impl File {
 
     /// Run the provided extractor over all sections in-place.
     pub fn extract(&mut self, extractor: &dyn SectionExtractor) -> Result<(), FirmwareFileSystemError> {
-        for section in self.sections.iter_mut() {
+        for section in &mut self.sections {
             section.extract(extractor)?;
         }
         Ok(())
@@ -582,7 +582,7 @@ impl File {
     /// file.compose(&Passthrough).unwrap();
     /// ```
     pub fn compose(&mut self, composer: &dyn SectionComposer) -> Result<(), FirmwareFileSystemError> {
-        for section in self.sections.iter_mut() {
+        for section in &mut self.sections {
             section.compose(composer)?;
         }
         Ok(())
@@ -653,7 +653,7 @@ impl TryFrom<(FileRef<'_>, &dyn SectionExtractor)> for File {
     fn try_from(src: (FileRef<'_>, &dyn SectionExtractor)) -> Result<Self, Self::Error> {
         let (src, extractor) = src;
         let mut sections = src.sections()?;
-        for section in sections.iter_mut() {
+        for section in &mut sections {
             section.extract(extractor)?;
         }
         Ok(Self {
