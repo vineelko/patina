@@ -80,7 +80,7 @@ impl<'a> SmbiosRecordsIter<'a> {
     }
 }
 
-impl<'a> Iterator for SmbiosRecordsIter<'a> {
+impl Iterator for SmbiosRecordsIter<'_> {
     type Item = (SmbiosTableHeader, Option<Handle>);
 
     fn next(&mut self) -> Option<Self::Item> {

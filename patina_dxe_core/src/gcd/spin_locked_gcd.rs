@@ -3030,7 +3030,7 @@ impl<'a> DescRangeIterator<'a> {
     }
 }
 
-impl<'a> Iterator for DescRangeIterator<'a> {
+impl Iterator for DescRangeIterator<'_> {
     type Item = Result<MemorySpaceDescriptor, EfiError>;
 
     fn next(&mut self) -> Option<Self::Item> {

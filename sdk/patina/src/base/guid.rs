@@ -361,7 +361,7 @@ impl<'a> PartialEq<Guid<'a>> for BinaryGuid {
     }
 }
 
-impl<'a> PartialEq<BinaryGuid> for Guid<'a> {
+impl PartialEq<BinaryGuid> for Guid<'_> {
     fn eq(&self, other: &BinaryGuid) -> bool {
         self.to_efi_guid() == other.0
     }

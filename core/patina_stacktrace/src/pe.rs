@@ -44,7 +44,7 @@ pub struct PE<'a> {
     pub(crate) bytes: &'a [u8],
 }
 
-impl<'a> fmt::Display for PE<'a> {
+impl fmt::Display for PE<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
