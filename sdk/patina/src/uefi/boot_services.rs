@@ -1219,7 +1219,7 @@ impl BootServices for StandardBootServices {
     ) -> Result<usize, efi::Status> {
         let mut memory_address = match alloc_type {
             AllocType::Address(address) | AllocType::MaxAddress(address) => address,
-            _ => 0,
+            AllocType::AnyPage => 0,
         };
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let allocate_pages = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), allocate_pages) };

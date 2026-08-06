@@ -579,7 +579,7 @@ impl Section {
                 encapsulation.sub_sections = sections;
                 encapsulation.extracted = true;
             }
-            _ => unreachable!(),
+            SectionData::Leaf(_) => unreachable!(),
         }
         Ok(())
     }

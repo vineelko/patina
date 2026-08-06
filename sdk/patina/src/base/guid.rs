@@ -716,7 +716,7 @@ mod tests {
                 assert_eq!(size_of::<efi::Guid>(), 16);
                 assert_eq!(guid.as_fields(), TEST_GUID_FIELDS);
             }
-            _ => panic!("Expected Owned variant"),
+            Guid::Borrowed(_) => panic!("Expected Owned variant"),
         }
 
         let bytes_from_patina = patina_guid_from_ref.as_bytes();
@@ -803,13 +803,13 @@ mod tests {
         let ref_guid = Guid::from_ref(&r_efi_guid);
         match ref_guid {
             Guid::Borrowed(_) => {}
-            _ => panic!("Expected Borrowed variant"),
+            Guid::Owned(_) => panic!("Expected Borrowed variant"),
         }
 
         let bytes_guid = OwnedGuid::from_string(TEST_GUID_STRING);
         match bytes_guid {
             Guid::Owned(_) => {}
-            _ => panic!("Expected Owned variant"),
+            Guid::Borrowed(_) => panic!("Expected Owned variant"),
         }
 
         assert_eq!(ref_guid.as_bytes(), bytes_guid.as_bytes());
@@ -846,7 +846,7 @@ mod tests {
             Guid::Borrowed(guid_ref) => {
                 assert_eq!(guid_ref.as_fields(), TEST_GUID_FIELDS);
             }
-            _ => panic!("Expected Borrowed variant"),
+            Guid::Owned(_) => panic!("Expected Borrowed variant"),
         }
     }
 
@@ -860,7 +860,7 @@ mod tests {
 
             match result.unwrap() {
                 Guid::Owned(_) => {}
-                _ => panic!("Expected Owned variant"),
+                Guid::Borrowed(_) => panic!("Expected Owned variant"),
             }
         }
     }
@@ -876,7 +876,9 @@ mod tests {
 
             match result.unwrap_err() {
                 GuidError::InvalidLength { .. } => {}
-                other => panic!("Expected InvalidLength error for: {}, got: {:?}", input, other),
+                other @ GuidError::InvalidHexCharacter { .. } => {
+                    panic!("Expected InvalidLength error for: {}, got: {:?}", input, other)
+                }
             }
         }
     }
@@ -902,7 +904,7 @@ mod tests {
 
             match result.unwrap_err() {
                 GuidError::InvalidHexCharacter { .. } => {}
-                _ => panic!("Expected InvalidHexCharacter error for: {}", input),
+                GuidError::InvalidLength { .. } => panic!("Expected InvalidHexCharacter error for: {}", input),
             }
         }
     }
@@ -1075,7 +1077,7 @@ mod tests {
 
         let patina_fields = match patina_guid {
             Guid::Borrowed(guid) => guid.as_fields(),
-            _ => panic!("Expected Borrowed variant"),
+            Guid::Owned(_) => panic!("Expected Borrowed variant"),
         };
         let r_efi_fields = r_efi_guid.as_fields();
 
@@ -1085,7 +1087,7 @@ mod tests {
         let r_efi_ptr = &raw const r_efi_guid;
         let patina_ptr = match patina_guid {
             Guid::Borrowed(guid) => guid as *const efi::Guid,
-            _ => panic!("Expected Borrowed variant"),
+            Guid::Owned(_) => panic!("Expected Borrowed variant"),
         };
 
         assert_eq!(r_efi_ptr as *const u8, patina_ptr as *const u8);
@@ -1113,7 +1115,7 @@ mod tests {
 
         let patina_fields = match patina_guid {
             Guid::Owned(ref guid) => guid.as_fields(),
-            _ => panic!("Expected Owned variant"),
+            Guid::Borrowed(_) => panic!("Expected Owned variant"),
         };
         let r_efi_fields = r_efi_guid.as_fields();
 
@@ -1122,7 +1124,7 @@ mod tests {
 
         let patina_as_efi = match &patina_guid {
             Guid::Owned(guid) => *guid,
-            _ => panic!("Expected Owned variant"),
+            Guid::Borrowed(_) => panic!("Expected Owned variant"),
         };
 
         assert_eq!(core::mem::size_of_val(&patina_as_efi), 16);
@@ -1153,11 +1155,11 @@ mod tests {
 
         let ref_fields = match from_ref_guid {
             Guid::Borrowed(guid) => guid.as_fields(),
-            _ => panic!("Expected Borrowed variant"),
+            Guid::Owned(_) => panic!("Expected Borrowed variant"),
         };
         let bytes_fields = match from_bytes_guid {
             Guid::Owned(ref guid) => guid.as_fields(),
-            _ => panic!("Expected Owned variant"),
+            Guid::Borrowed(_) => panic!("Expected Owned variant"),
         };
 
         assert_eq!(ref_fields, bytes_fields);
@@ -1165,11 +1167,11 @@ mod tests {
 
         let ref_c_guid = match from_ref_guid {
             Guid::Borrowed(guid) => guid,
-            _ => panic!("Expected Borrowed variant"),
+            Guid::Owned(_) => panic!("Expected Borrowed variant"),
         };
         let bytes_c_guid = match &from_bytes_guid {
             Guid::Owned(guid) => *guid,
-            _ => panic!("Expected Owned variant"),
+            Guid::Borrowed(_) => panic!("Expected Owned variant"),
         };
 
         assert_eq!(ref_c_guid.as_bytes(), bytes_c_guid.as_bytes());
@@ -1188,11 +1190,11 @@ mod tests {
 
         let ref_c_guid = match from_ref_guid {
             Guid::Borrowed(guid) => guid,
-            _ => panic!("Expected Borrowed variant"),
+            Guid::Owned(_) => panic!("Expected Borrowed variant"),
         };
         let bytes_c_guid = match &from_bytes_guid {
             Guid::Owned(guid) => *guid,
-            _ => panic!("Expected Owned variant"),
+            Guid::Borrowed(_) => panic!("Expected Owned variant"),
         };
 
         let ref_ptr = ref_c_guid as *const efi::Guid;
@@ -1255,7 +1257,7 @@ mod tests {
 
         match guid_from_bytes {
             Guid::Owned(_) => {}
-            _ => panic!("Expected Owned variant from from_bytes"),
+            Guid::Borrowed(_) => panic!("Expected Owned variant from from_bytes"),
         }
 
         // Verify the fields match expected values
@@ -1349,7 +1351,7 @@ mod tests {
         // Should create a borrowed Guid
         match guid_ref {
             Guid::Borrowed(_) => {}
-            _ => panic!("Expected Borrowed variant from as_guid()"),
+            Guid::Owned(_) => panic!("Expected Borrowed variant from as_guid()"),
         }
 
         // Should have same fields and display
@@ -1366,7 +1368,7 @@ mod tests {
         // Should create an owned Guid
         match owned_guid {
             Guid::Owned(_) => {}
-            _ => panic!("Expected Owned variant from to_owned_guid()"),
+            Guid::Borrowed(_) => panic!("Expected Owned variant from to_owned_guid()"),
         }
 
         // Should have same fields and display
@@ -1456,7 +1458,7 @@ mod tests {
         let guid_from_ref: Guid = (&binary_guid).into();
         match guid_from_ref {
             Guid::Borrowed(_) => {}
-            _ => panic!("Expected Borrowed variant from &BinaryGuid conversion"),
+            Guid::Owned(_) => panic!("Expected Borrowed variant from &BinaryGuid conversion"),
         }
 
         assert_eq!(guid_from_ref.as_fields(), binary_guid.as_fields());

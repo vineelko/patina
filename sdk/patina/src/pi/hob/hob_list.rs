@@ -784,7 +784,7 @@ mod tests {
                     assert_eq!(resource.v1.header.r#type, hob::RESOURCE_DESCRIPTOR2);
                     assert_eq!(resource.v1.resource_type, hob::EFI_RESOURCE_SYSTEM_MEMORY);
                 }
-                _ => {
+                Hob::Misc(_) => {
                     panic!("Unexpected hob type");
                 }
             }
@@ -844,7 +844,7 @@ mod tests {
                 Hob::Cpu(cpu) => {
                     assert_eq!(cpu.size_of_memory_space, 0);
                 }
-                _ => {
+                Hob::Misc(_) => {
                     panic!("Unexpected hob type");
                 }
             }

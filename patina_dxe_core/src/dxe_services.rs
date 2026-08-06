@@ -67,7 +67,7 @@ extern "efiapi" fn allocate_memory_space(
             let limit = unsafe { base_address.read_unaligned() };
             gcd::AllocateType::TopDown(Some(limit as usize))
         }
-        _ => return efi::Status::INVALID_PARAMETER,
+        dxe_services::GcdAllocateType::MaxAllocateType => return efi::Status::INVALID_PARAMETER,
     };
 
     let result = GCD.allocate_memory_space(
@@ -261,7 +261,7 @@ extern "efiapi" fn allocate_io_space(
             let limit = unsafe { base_address.read_unaligned() };
             gcd::AllocateType::TopDown(Some(limit as usize))
         }
-        _ => return efi::Status::INVALID_PARAMETER,
+        dxe_services::GcdAllocateType::MaxAllocateType => return efi::Status::INVALID_PARAMETER,
     };
 
     let result = GCD.allocate_io_space(

@@ -82,7 +82,7 @@ where
             match last.key().cmp(next.key()) {
                 core::cmp::Ordering::Equal => return Err(Error::AlreadyExists),
                 core::cmp::Ordering::Greater => return Err(Error::NotSorted),
-                _ => (),
+                core::cmp::Ordering::Less => (),
             }
         }
 

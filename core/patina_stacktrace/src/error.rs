@@ -148,7 +148,7 @@ impl Error {
             Error::UnwindCodeOutOfBounds { module, requested, available } => {
                 Error::UnwindCodeOutOfBounds { module: module.or(fallback), requested, available }
             }
-            other => other,
+            other @ Error::ImageNotFound { .. } => other,
         }
     }
 }

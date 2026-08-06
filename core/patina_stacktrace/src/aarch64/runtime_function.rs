@@ -335,7 +335,7 @@ mod tests {
                 assert_eq!(function_length, 0x40);
                 assert_eq!(frame_size, 0x80);
             }
-            other => panic!("unexpected unwind info variant: {other:?}"),
+            other @ UnwindInfo::UnpackedUnwindInfo { .. } => panic!("unexpected unwind info variant: {other:?}"),
         }
     }
 
@@ -427,7 +427,7 @@ mod tests {
                 assert_eq!(parsed_len, function_length);
                 assert_eq!(unwind_codes, &[0xAA, 0xBB, 0xCC, 0xDD]);
             }
-            other => panic!("unexpected variant: {other:?}"),
+            other @ UnwindInfo::PackedUnwindInfo { .. } => panic!("unexpected variant: {other:?}"),
         }
     }
 }

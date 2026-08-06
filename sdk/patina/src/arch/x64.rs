@@ -112,7 +112,7 @@ impl super::CacheMgmt for X64 {
                 asm_invd();
                 Ok(())
             }
-            _ => Err(EfiError::Unsupported),
+            CpuFlushType::EfiCpuFlushTypeWriteBack => Err(EfiError::Unsupported),
         }
     }
 
