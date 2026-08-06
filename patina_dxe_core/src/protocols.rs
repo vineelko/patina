@@ -490,9 +490,8 @@ unsafe extern "efiapi" fn open_protocol(
             }
             return efi::Status::ALREADY_STARTED;
         }
-        Err(EfiError::AlreadyStarted) => (),
+        Ok(_) | Err(EfiError::AlreadyStarted) => (),
         Err(err) => return err.into(),
-        Ok(_) => (),
     }
 
     let desired_interface = match PROTOCOL_DB.get_interface_for_handle(handle, protocol) {

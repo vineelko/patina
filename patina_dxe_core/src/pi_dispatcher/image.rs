@@ -919,6 +919,7 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
         drop(private_data);
 
         // switch stacks and execute the above defined coroutine to start the image.
+        #[allow(clippy::match_same_arms)] // TODO: clippy exception present unto the todo is resolved
         let status = match coroutine.resume(image_handle) {
             CoroutineResult::Yield(status) => status,
             // Note: `CoroutineResult::Return` is unexpected, since it would imply

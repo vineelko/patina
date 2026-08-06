@@ -639,6 +639,8 @@ impl Wcr {
 }
 
 fn read_dbg_wcr(index: usize) -> Wcr {
+    // Arms read different watchpoint registers. Identical only when built against the host stub macros.
+    #[allow(clippy::match_same_arms)]
     let value = match index {
         0 => read_sysreg!(dbgwcr0_el1),
         1 => read_sysreg!(dbgwcr1_el1),
@@ -651,6 +653,8 @@ fn read_dbg_wcr(index: usize) -> Wcr {
 
 fn write_dbg_wcr(index: usize, wcr: Wcr) {
     let value: u64 = wcr.into();
+    // Arms write different watchpoint registers. Identical only when built against the host stub macros.
+    #[allow(clippy::match_same_arms)]
     match index {
         0 => write_sysreg!(reg dbgwcr0_el1, value, "isb sy"),
         1 => write_sysreg!(reg dbgwcr1_el1, value, "isb sy"),
@@ -661,6 +665,8 @@ fn write_dbg_wcr(index: usize, wcr: Wcr) {
 }
 
 fn read_dbg_wvr(index: usize) -> u64 {
+    // Arms read different watchpoint registers. Identical only when built against the host stub macros.
+    #[allow(clippy::match_same_arms)]
     match index {
         0 => read_sysreg!(dbgwvr0_el1),
         1 => read_sysreg!(dbgwvr1_el1),
@@ -671,6 +677,8 @@ fn read_dbg_wvr(index: usize) -> u64 {
 }
 
 fn write_dbg_wvr(index: usize, value: u64) {
+    // Arms write different watchpoint registers. Identical only when built against the host stub macros.
+    #[allow(clippy::match_same_arms)]
     match index {
         0 => write_sysreg!(reg dbgwvr0_el1, value),
         1 => write_sysreg!(reg dbgwvr1_el1, value),

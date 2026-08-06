@@ -166,6 +166,7 @@ impl UnwindCode {
             let opcode = opcode_opinfo & 0xF;
             let opinfo = opcode_opinfo >> 4;
 
+            #[allow(clippy::match_same_arms)]
             match opcode {
                 0 => offset += 8, // PushNonVolatile
                 1 => {

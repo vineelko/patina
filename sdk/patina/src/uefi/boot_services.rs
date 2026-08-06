@@ -1218,8 +1218,7 @@ impl BootServices for StandardBootServices {
         nb_pages: usize,
     ) -> Result<usize, efi::Status> {
         let mut memory_address = match alloc_type {
-            AllocType::Address(address) => address,
-            AllocType::MaxAddress(address) => address,
+            AllocType::Address(address) | AllocType::MaxAddress(address) => address,
             _ => 0,
         };
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.

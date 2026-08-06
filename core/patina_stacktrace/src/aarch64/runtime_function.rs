@@ -95,6 +95,7 @@ impl<'a> RuntimeFunction<'a> {
 
                     let flag = unwind_info & 0x3;
 
+                    #[allow(clippy::match_same_arms)]
                     let function_length = match flag {
                         // Packed unwind data not used; remaining bits point to an
                         // `.xdata` record. The length of the function can only be

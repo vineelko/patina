@@ -25,6 +25,8 @@ pub enum GicVersion {
 #[allow(dead_code)]
 fn get_control_system_reg_enable() -> u64 {
     let current_el = get_current_el();
+    // Arms read different EL-specific registers. Identical only when built against the host stub macros.
+    #[allow(clippy::match_same_arms)]
     match current_el {
         AArch64El::EL2 => read_sysreg!(ICC_SRE_EL2),
         AArch64El::EL1 => read_sysreg!(ICC_SRE_EL1),
@@ -34,6 +36,8 @@ fn get_control_system_reg_enable() -> u64 {
 #[allow(dead_code)]
 fn set_control_system_reg_enable(icc_sre: u64) -> u64 {
     let current_el = get_current_el();
+    // Arms write different EL-specific registers. Identical only when built against the host stub macros.
+    #[allow(clippy::match_same_arms)]
     match current_el {
         AArch64El::EL2 => {
             write_sysreg!(reg ICC_SRE_EL2, icc_sre);

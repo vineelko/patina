@@ -126,8 +126,9 @@ impl From<EfiMemoryType> for efi::MemoryType {
             EfiMemoryType::PalCode => efi::PAL_CODE,
             EfiMemoryType::PersistentMemory => efi::PERSISTENT_MEMORY,
             EfiMemoryType::UnacceptedMemoryType => efi::UNACCEPTED_MEMORY_TYPE,
-            EfiMemoryType::OemMemoryType(custom_memory_type) => custom_memory_type.memory_type,
-            EfiMemoryType::OsMemoryType(custom_memory_type) => custom_memory_type.memory_type,
+            EfiMemoryType::OemMemoryType(custom_memory_type) | EfiMemoryType::OsMemoryType(custom_memory_type) => {
+                custom_memory_type.memory_type
+            }
         }
     }
 }

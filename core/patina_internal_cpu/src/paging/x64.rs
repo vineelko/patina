@@ -29,7 +29,6 @@ where
 
 fn efierror_to_pterror(efi_error: EfiError) -> PtError {
     match efi_error {
-        EfiError::InvalidParameter => PtError::InvalidParameter,
         EfiError::OutOfResources => PtError::OutOfResources,
         EfiError::NotFound => PtError::NoMapping,
         _ => PtError::InvalidParameter, // Default case for unsupported error codes
@@ -168,14 +167,13 @@ pub unsafe fn open_active_cpu_x64_paging<A: PageAllocator + 'static>(
 
 fn mtrr_err_to_efi_status(err: MtrrError) -> EfiError {
     match err {
-        MtrrError::MtrrNotSupported => EfiError::Unsupported,
-        MtrrError::VariableRangeMtrrExhausted => EfiError::OutOfResources,
-        MtrrError::FixedRangeMtrrBaseAddressNotAligned => EfiError::InvalidParameter,
-        MtrrError::FixedRangeMtrrLengthNotAligned => EfiError::InvalidParameter,
-        MtrrError::InvalidParameter => EfiError::InvalidParameter,
-        MtrrError::BufferTooSmall => EfiError::BufferTooSmall,
-        MtrrError::OutOfResources => EfiError::OutOfResources,
         MtrrError::AlreadyStarted => EfiError::AlreadyStarted,
+        MtrrError::BufferTooSmall => EfiError::BufferTooSmall,
+        MtrrError::FixedRangeMtrrBaseAddressNotAligned
+        | MtrrError::FixedRangeMtrrLengthNotAligned
+        | MtrrError::InvalidParameter => EfiError::InvalidParameter,
+        MtrrError::MtrrNotSupported => EfiError::Unsupported,
+        MtrrError::OutOfResources | MtrrError::VariableRangeMtrrExhausted => EfiError::OutOfResources,
     }
 }
 
