@@ -56,6 +56,7 @@ pub trait Interval: Clone + Ord {
     fn end(&self) -> u64;
 
     /// Merge two overlapping or adjacent intervals.
+    #[must_use]
     fn merge(&self, other: &Self) -> Self;
 
     /// Length of the interval.

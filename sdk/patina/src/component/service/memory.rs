@@ -333,6 +333,7 @@ impl AllocationOptions {
     /// Specifies the allocation strategy to use for the allocation. See [`PageAllocationStrategy`]
     /// for more details.
     #[inline(always)]
+    #[must_use]
     pub const fn with_strategy(mut self, allocation_strategy: PageAllocationStrategy) -> Self {
         self.allocation_strategy = allocation_strategy;
         self
@@ -343,6 +344,7 @@ impl AllocationOptions {
     ///
     /// Alignment will be ignored if the allocation strategy is [`PageAllocationStrategy::Address`].
     #[inline(always)]
+    #[must_use]
     pub const fn with_alignment(mut self, alignment: usize) -> Self {
         self.alignment = alignment;
         self
@@ -351,6 +353,7 @@ impl AllocationOptions {
     /// Specifies the memory type to use for the allocation. See [`EfiMemoryType`]
     /// for more details.
     #[inline(always)]
+    #[must_use]
     pub const fn with_memory_type(mut self, memory_type: EfiMemoryType) -> Self {
         self.memory_type = memory_type;
         self

@@ -64,6 +64,7 @@ where
     /// port itself spins until free instead of failing fast on contention. This guarantees lossless,
     /// uncorrupted output at the cost of a self deadlock hazard if the same core re-enters the
     /// logger while already writing a record (e.g. logging from a panic handler mid record).
+    #[must_use]
     pub fn with_blocking(mut self) -> Self {
         self.serial_port = self.serial_port.with_blocking();
         self.blocking = true;

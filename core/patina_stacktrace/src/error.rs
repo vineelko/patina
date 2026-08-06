@@ -131,6 +131,7 @@ pub type StResult<T> = Result<T, Error>;
 
 impl Error {
     /// Propagate the provided module name onto errors that carry optional module context.
+    #[must_use]
     pub fn with_module(self, fallback: Option<&'static str>) -> Self {
         match self {
             Error::OutOfBoundsRead { module, index } => Error::OutOfBoundsRead { module: module.or(fallback), index },

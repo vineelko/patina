@@ -41,6 +41,7 @@ impl PerformanceRecordHeader {
     }
 
     /// Convert the header to little-endian format.
+    #[must_use]
     pub fn to_le(self) -> Self {
         Self { record_type: self.record_type.to_le(), length: self.length, revision: self.revision }
     }

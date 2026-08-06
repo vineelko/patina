@@ -142,6 +142,7 @@ impl<T: SerialIO> PatinaDebugger<T> {
     /// Forces the debugger to be enabled, regardless of later configuration. This
     /// is used for development purposes and is not intended for production or
     /// standard use. If `False` is provided, this routine will not change the configuration.
+    #[must_use]
     pub const fn with_force_enable(mut self, enabled: bool) -> Self {
         if enabled {
             self.enabled = AtomicBool::new(true);
@@ -152,6 +153,7 @@ impl<T: SerialIO> PatinaDebugger<T> {
     /// Configures the logging policy for the debugger. See [`DebuggerLoggingPolicy`]
     /// for more information on the available policies. By default, the debugger
     /// will suspend logging while broken in.
+    #[must_use]
     pub const fn with_log_policy(mut self, policy: DebuggerLoggingPolicy) -> Self {
         self.log_policy = policy;
         self
@@ -159,12 +161,14 @@ impl<T: SerialIO> PatinaDebugger<T> {
 
     /// Enables the debugger to initialize the transport. This is typically only required if the transport is not shared
     /// with the logging device. Initializing the transport when it is shared may lead to unexpected behavior.
+    #[must_use]
     pub const fn with_transport_init(mut self) -> Self {
         self.transport_init = true;
         self
     }
 
     /// Customizes the exception types for which the debugger will be invoked.
+    #[must_use]
     pub const fn with_exception_types(mut self, exception_types: &'static [usize]) -> Self {
         self.exception_types = exception_types;
         self
@@ -173,6 +177,7 @@ impl<T: SerialIO> PatinaDebugger<T> {
     /// Configures the timeout for the initial breakpoint.
     ///
     /// `timeout_seconds` - Timeout specified in seconds. Zero indicates to wait indefinitely.
+    #[must_use]
     pub const fn with_timeout(mut self, timeout_seconds: u32) -> Self {
         self.initial_break_timeout = timeout_seconds;
         self
