@@ -55,7 +55,7 @@ impl SectionExtractor for BrotliSectionExtractor {
             let mut brotli_state = BrotliState::new(
                 HeapAllocator::<u8> { default_value: 0 },
                 HeapAllocator::<u32> { default_value: 0 },
-                HeapAllocator::<HuffmanCode> { default_value: Default::default() },
+                HeapAllocator::<HuffmanCode> { default_value: HuffmanCode::default() },
             );
             let in_data = data.get(16..).expect("brotli data follows 16-byte header");
             let mut out_data = vec![0u8; out_size as usize];

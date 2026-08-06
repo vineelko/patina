@@ -437,7 +437,7 @@ impl Default for MemorySpaceDescriptor {
             length: Default::default(),
             capabilities: Default::default(),
             attributes: Default::default(),
-            memory_type: Default::default(),
+            memory_type: GcdMemoryType::default(),
             image_handle: 0 as Handle,
             device_handle: 0 as Handle,
         }
@@ -449,7 +449,7 @@ impl Default for IoSpaceDescriptor {
         Self {
             base_address: Default::default(),
             length: Default::default(),
-            io_type: Default::default(),
+            io_type: GcdIoType::default(),
             image_handle: 0 as Handle,
             device_handle: 0 as Handle,
         }

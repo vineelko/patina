@@ -1606,7 +1606,7 @@ mod tests {
     };
     use core::{ffi::c_void, sync::atomic::AtomicBool};
     use patina::standard::efi::{
-        self,
+        self, Time,
         protocols::device_path::{End, Hardware, Media, TYPE_END, TYPE_HARDWARE, TYPE_MEDIA},
     };
     use patina::{
@@ -2325,9 +2325,9 @@ mod tests {
             size: core::mem::size_of::<efi::protocols::file::Info>() as u64,
             file_size: test_file.metadata().unwrap().len(),
             physical_size: test_file.metadata().unwrap().len(),
-            create_time: Default::default(),
-            last_access_time: Default::default(),
-            modification_time: Default::default(),
+            create_time: Time::default(),
+            last_access_time: Time::default(),
+            modification_time: Time::default(),
             attribute: 0,
             file_name: [0; 0],
         };
