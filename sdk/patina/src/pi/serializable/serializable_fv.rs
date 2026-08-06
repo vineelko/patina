@@ -85,7 +85,7 @@ impl From<FirmwareVolume<'_>> for FirmwareVolumeSerDe {
                 };
                 let file_name = format_guid(&file.name());
                 let file_length = file.size() as usize;
-                let file_attributes = file.attributes_raw() as u32;
+                let file_attributes = u32::from(file.attributes_raw());
                 let file_type =
                     file.file_type().map(|ft| format!("{:#x?}", ft)).unwrap_or_else(|| "Invalid".to_string());
                 let sections = file

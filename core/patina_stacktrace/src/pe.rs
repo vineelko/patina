@@ -166,7 +166,7 @@ impl PE<'_> {
             return None;
         }
 
-        let debug_data = page_base + debug_data_rva as u64;
+        let debug_data = page_base + u64::from(debug_data_rva);
 
         // Check the CodeView signature.
         // SAFETY: `debug_data` is within the caller-provided PE image and points to

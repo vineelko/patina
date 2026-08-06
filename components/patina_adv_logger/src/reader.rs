@@ -37,7 +37,7 @@ impl AdvancedLogReader<'static> {
         // SAFETY: The safety requirements for this function transfer to the function called here.
         let header = unsafe { AdvLoggerInfoRef::from_address(address)? };
         let data_size = header.log_buffer_size();
-        let data_start = (address + header.log_buffer_offset() as u64) as *const u8;
+        let data_start = (address + u64::from(header.log_buffer_offset())) as *const u8;
         // SAFETY: The caller must ensure that the memory is properly sized and initialized.
         let data = unsafe { slice::from_raw_parts(data_start, data_size as usize) };
 

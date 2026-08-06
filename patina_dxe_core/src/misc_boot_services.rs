@@ -91,13 +91,13 @@ extern "efiapi" fn stall(microseconds: usize) -> efi::Status {
         // SAFETY: metronome_ptr is guaranteed to be a valid pointer to the metronome protocol if it is Some.
         let metronome = unsafe { metronome_ptr.as_mut().expect("Metronome pointer should not be null.") };
         let ticks_100ns: u128 = (microseconds as u128) * 10;
-        let mut ticks = ticks_100ns / metronome.tick_period as u128;
-        while ticks > u32::MAX as u128 {
+        let mut ticks = ticks_100ns / u128::from(metronome.tick_period);
+        while ticks > u128::from(u32::MAX) {
             let status = (metronome.wait_for_tick)(metronome_ptr, u32::MAX);
             if status.is_error() {
                 log::warn!("metronome.wait_for_tick returned unexpected error {status}");
             }
-            ticks -= u32::MAX as u128;
+            ticks -= u128::from(u32::MAX);
         }
         if ticks != 0 {
             let status = (metronome.wait_for_tick)(metronome_ptr, ticks as u32);

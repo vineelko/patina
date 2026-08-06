@@ -76,7 +76,7 @@ impl SectionExtractor for BrotliSectionExtractor {
                     .try_into()
                     .map_err(|_| FirmwareFileSystemError::DataCorrupt)?,
             );
-            if out_size > DECOMPRESSION_MAX_MEMORY_LIMIT as u64 {
+            if out_size > u64::from(DECOMPRESSION_MAX_MEMORY_LIMIT) {
                 return Err(FirmwareFileSystemError::DataCorrupt);
             }
 
@@ -140,7 +140,7 @@ mod tests {
     fn test_brotli_extractor_out_size_exceeds_limit() {
         // Declare an uncompressed size larger than the 512MB decompression limit; the
         // extractor must reject it before attempting to allocate the output buffer.
-        let out_size = DECOMPRESSION_MAX_MEMORY_LIMIT as u64 + 1;
+        let out_size = u64::from(DECOMPRESSION_MAX_MEMORY_LIMIT) + 1;
         let section = create_brotli_section(&[0u8; 4], out_size);
         let extractor = BrotliSectionExtractor;
         let result = extractor.extract(&section);

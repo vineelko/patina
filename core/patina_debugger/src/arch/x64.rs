@@ -373,12 +373,12 @@ impl UefiArchRegs for X64CoreRegs {
         context.rip = self.rip;
         context.rflags = self.eflags;
 
-        context.cs = self.segments[0] as u64;
-        context.ss = self.segments[1] as u64;
-        context.ds = self.segments[2] as u64;
-        context.es = self.segments[3] as u64;
-        context.fs = self.segments[4] as u64;
-        context.gs = self.segments[5] as u64;
+        context.cs = u64::from(self.segments[0]);
+        context.ss = u64::from(self.segments[1]);
+        context.ds = u64::from(self.segments[2]);
+        context.es = u64::from(self.segments[3]);
+        context.fs = u64::from(self.segments[4]);
+        context.gs = u64::from(self.segments[5]);
 
         context.cr0 = self.control[0];
         context.cr2 = self.control[1];

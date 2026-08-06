@@ -471,7 +471,7 @@ pub fn init_gcd(physical_hob_list: *const c_void) {
                 memory_end = handoff.memory_top;
             }
             Hob::Cpu(cpu) => {
-                GCD.init(cpu.size_of_memory_space as u32, cpu.size_of_io_space as u32);
+                GCD.init(u32::from(cpu.size_of_memory_space), u32::from(cpu.size_of_io_space));
             }
             Hob::ResourceDescriptorV2(_) | Hob::ResourceDescriptor(_) => {
                 debug_assert!(
@@ -493,7 +493,7 @@ pub fn init_gcd(physical_hob_list: *const c_void) {
                     free_memory_attributes = cache_attributes.unwrap_or(DEFAULT_CACHE_ATTR);
                     free_memory_capabilities = spin_locked_gcd::get_capabilities(
                         GcdMemoryType::SystemMemory,
-                        res_desc.resource_attribute as u64,
+                        u64::from(res_desc.resource_attribute),
                     );
                 }
             }
@@ -681,7 +681,7 @@ pub fn add_hob_resource_descriptors_to_gcd(hob_list: &HobList) {
                         gcd_mem_type,
                         split_range.start as usize,
                         split_range.end.saturating_sub(split_range.start) as usize,
-                        spin_locked_gcd::get_capabilities(gcd_mem_type, resource_attributes as u64),
+                        spin_locked_gcd::get_capabilities(gcd_mem_type, u64::from(resource_attributes)),
                     )
                     .expect("Failed to add memory space to GCD");
                 }

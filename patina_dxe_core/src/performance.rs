@@ -424,7 +424,7 @@ impl CorePerformance {
                     log::error!("Performance: Could not find the guid for module handle: {module_handle:?}");
                     return Err(EfiError::InvalidParameter.into());
                 };
-                let load_image_count = self.loaded_image_count.load(Ordering::Relaxed) as u64;
+                let load_image_count = u64::from(self.loaded_image_count.load(Ordering::Relaxed));
                 self.add_fbpt_record(GuidQwordEventRecord::new(perf_id, 0, timestamp, guid, load_image_count))
             }
             KnownPerfId::ModuleDbStart

@@ -70,7 +70,7 @@ impl Char16Str {
                 return Err(StringError::InteriorNul { position });
             }
             if SURROGATE_RANGE.contains(&unit) {
-                return Err(StringError::NotUcs2 { position, value: unit as u32 });
+                return Err(StringError::NotUcs2 { position, value: u32::from(unit) });
             }
         }
 
@@ -215,7 +215,7 @@ impl Char16Str {
     /// built through an unchecked constructor and contains a surrogate code unit, that unit is mapped
     /// to [`char::REPLACEMENT_CHARACTER`] rather than panicking.
     pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
-        self.iter().map(|&unit| char::from_u32(unit as u32).unwrap_or(char::REPLACEMENT_CHARACTER))
+        self.iter().map(|&unit| char::from_u32(u32::from(unit)).unwrap_or(char::REPLACEMENT_CHARACTER))
     }
 }
 
@@ -476,7 +476,7 @@ impl From<&Char8Str> for Char16String {
     fn from(value: &Char8Str) -> Self {
         let mut units = Vec::with_capacity(value.len() + 1);
         for &byte in value.iter() {
-            units.push(byte as u16);
+            units.push(u16::from(byte));
         }
         units.push(0);
         Self(units)
@@ -728,7 +728,7 @@ impl<const N: usize> From<Char8Array<N>> for Char16Array<N> {
         // Note: The terminator and any trailing padding are already present due to zero-initialization.
         let mut out = [0u16; N];
         for (position, &byte) in src.iter().enumerate() {
-            out[position] = byte as u16;
+            out[position] = u16::from(byte);
         }
         Self(out)
     }

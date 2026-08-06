@@ -185,7 +185,7 @@ pub fn get_capabilities(gcd_mem_type: GcdMemoryType, attributes: u64) -> u64 {
 
         if (conversion.memory
             || (gcd_mem_type != GcdMemoryType::SystemMemory && gcd_mem_type != GcdMemoryType::MoreReliable))
-            && (attributes & (conversion.attribute as u64) != 0)
+            && (attributes & u64::from(conversion.attribute) != 0)
         {
             capabilities |= conversion.capability;
         }
@@ -2369,14 +2369,14 @@ impl SpinLockedGcd {
         for section in pe_info.sections {
             // each section starts at image_base + virtual_address, per PE/COFF spec.
             let section_base_address =
-                dxe_core_hob.alloc_descriptor.memory_base_address + (section.virtual_address as u64);
+                dxe_core_hob.alloc_descriptor.memory_base_address + u64::from(section.virtual_address);
             let (attributes, _) =
                 MemoryProtectionPolicy::apply_image_protection_policy(section.characteristics, &dxe_core_desc);
 
             // We need to use the virtual size for the section length, but
             // we cannot rely on this to be section aligned, as some compilers rely on the loader to align this
             let aligned_virtual_size = match align_up(section.virtual_size, pe_info.section_alignment) {
-                Ok(size) => size as u64,
+                Ok(size) => u64::from(size),
                 Err(_) => {
                     panic!(
                         "Failed to align section size {:#x?} with alignment {:#x?}",

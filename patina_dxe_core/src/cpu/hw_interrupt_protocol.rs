@@ -432,7 +432,7 @@ impl InterruptHandler for HwInterruptProtocolHandler {
             .unwrap_or_else(|| panic!("Failed to read lock in exception handler for interrupt ID 0x{:x}", raw_value));
 
         if let Some(handler) = *rw_handler {
-            handler(raw_value as u64, context);
+            handler(u64::from(raw_value), context);
         } else {
             GicCpuInterface::end_interrupt(int_id, InterruptGroup::Group1);
             log::error!("Unhandled Exception! 0x{:x}", exception_type);

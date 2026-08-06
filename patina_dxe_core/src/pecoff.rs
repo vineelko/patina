@@ -126,7 +126,7 @@ impl UefiPeInfo {
         pe.image_base_header_field_offset = TE_IMAGE_BASE_HEADER_FIELD_OFFSET;
         pe.header_type = HeaderType::Te(parsed_te.rva_offset);
         pe.entry_point_offset = parsed_te.header.entry_point as usize;
-        pe.image_type = parsed_te.header.subsystem as u16;
+        pe.image_type = u16::from(parsed_te.header.subsystem);
         pe.machine = parsed_te.header.machine;
         pe.section_alignment = 0;
         pe.size_of_headers = parsed_te.header.base_of_code as usize;

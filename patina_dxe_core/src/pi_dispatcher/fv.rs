@@ -205,7 +205,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         // its invariants - like not removing fv once installed - are upheld).
         let fv = unsafe { VolumeRef::new_from_address(physical_address)? };
 
-        Ok(fv.attributes() as fv::attributes::EfiFvAttributes)
+        Ok(fv::attributes::EfiFvAttributes::from(fv.attributes()))
     }
 
     /// Rust implementation of the FV protocol's read_file method.

@@ -415,7 +415,7 @@ impl TryFrom<&Char16Str> for Char8String {
         let mut bytes = Vec::with_capacity(value.len() + 1);
         for (position, &unit) in value.iter().enumerate() {
             if unit > 0xFF {
-                return Err(StringError::NotLatin1 { position, value: unit as u32 });
+                return Err(StringError::NotLatin1 { position, value: u32::from(unit) });
             }
             bytes.push(unit as u8);
         }
@@ -678,7 +678,7 @@ impl<const N: usize> TryFrom<Char16Array<N>> for Char8Array<N> {
         let mut out = [0u8; N];
         for (position, &unit) in src.iter().enumerate() {
             if unit > 0xFF {
-                return Err(StringError::NotLatin1 { position, value: unit as u32 });
+                return Err(StringError::NotLatin1 { position, value: u32::from(unit) });
             }
             out[position] = unit as u8;
         }

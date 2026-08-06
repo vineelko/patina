@@ -233,7 +233,7 @@ impl UnwindCode {
                     };
                     UnwindCode::AllocLarge { prolog_offset, size }
                 }
-                2 => UnwindCode::AllocSmall { prolog_offset, size: opinfo as u32 * 8 + 8 },
+                2 => UnwindCode::AllocSmall { prolog_offset, size: u32::from(opinfo) * 8 + 8 },
                 3 => UnwindCode::SetFP { prolog_offset, offset: frame_register_offset },
                 4 => {
                     let reg_offset = u32::from(bytes.read16_with(&mut offset)?) * 8;

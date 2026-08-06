@@ -368,7 +368,7 @@ impl MmHandler for ComputationHandler {
         // Simulate computational work by calculating checksums
         let mut checksum: u32 = 0;
         for &byte in data {
-            checksum = checksum.wrapping_add(byte as u32);
+            checksum = checksum.wrapping_add(u32::from(byte));
             checksum = checksum.wrapping_mul(17); // Simple hash function
         }
 

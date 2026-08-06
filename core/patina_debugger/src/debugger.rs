@@ -257,7 +257,7 @@ impl<T: SerialIO> PatinaDebugger<T> {
                 let frequency = timer.perf_frequency();
                 let initial_count = timer.cpu_count();
                 loop {
-                    if (timer.cpu_count() - initial_count) / frequency >= timeout as u64 {
+                    if (timer.cpu_count() - initial_count) / frequency >= u64::from(timeout) {
                         timeout_reached = true;
                         break;
                     }

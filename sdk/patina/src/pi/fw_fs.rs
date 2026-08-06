@@ -227,7 +227,7 @@ impl<'a> FirmwareVolume<'a> {
         }
 
         // fv_length: must be large enough to hold the header.
-        if fv_header.fv_length < fv_header.header_length as u64 {
+        if fv_header.fv_length < u64::from(fv_header.header_length) {
             Err(efi::Status::VOLUME_CORRUPTED)?;
         }
 
@@ -237,7 +237,7 @@ impl<'a> FirmwareVolume<'a> {
         }
 
         //ext_header_offset: must be inside the fv
-        if fv_header.ext_header_offset as u64 > fv_header.fv_length {
+        if u64::from(fv_header.ext_header_offset) > fv_header.fv_length {
             Err(efi::Status::VOLUME_CORRUPTED)?;
         }
 
@@ -455,7 +455,7 @@ impl<'a> File<'a> {
                 let mut size_vec = file_header.size.to_vec();
                 size_vec.push(0);
                 let size = u32::from_le_bytes(size_vec.try_into().unwrap());
-                (header_size, size as u64)
+                (header_size, u64::from(size))
             } else {
                 //extended header with 64-bit size
                 let extended_size_length = mem::size_of::<u64>();
@@ -566,7 +566,7 @@ impl<'a> File<'a> {
             (5, false) => 12,
             (6, false) => 15,
             (7, false) => 16,
-            (x @ 0..=7, true) => (17 + x) as u32,
+            (x @ 0..=7, true) => u32::from(17 + x),
             (_, _) => panic!("Invalid data_alignment!"),
         };
         if attributes & FfsRawAttribute::FIXED != 0 {
@@ -1237,7 +1237,7 @@ mod unit_tests {
         let fv_header = fv_bytes.as_mut_ptr() as *mut fv::Header;
         // SAFETY: Test intentionally corrupts FV header to validate error handling
         unsafe {
-            (*fv_header).fv_length = ((*fv_header).ext_header_offset - 1) as u64;
+            (*fv_header).fv_length = u64::from((*fv_header).ext_header_offset - 1);
         };
         assert_eq!(FirmwareVolume::new(&fv_bytes).unwrap_err(), efi::Status::VOLUME_CORRUPTED);
 

@@ -450,13 +450,13 @@ impl<'a> Guid<'a> {
 
         // Format each field as uppercase hex
         add_hex(time_low, 8);
-        add_hex(time_mid as u32, 4);
-        add_hex(time_hi_and_version as u32, 4);
-        add_hex(clk_seq_hi_res as u32, 2);
-        add_hex(clk_seq_low as u32, 2);
+        add_hex(u32::from(time_mid), 4);
+        add_hex(u32::from(time_hi_and_version), 4);
+        add_hex(u32::from(clk_seq_hi_res), 2);
+        add_hex(u32::from(clk_seq_low), 2);
 
         for &byte in node {
-            add_hex(byte as u32, 2);
+            add_hex(u32::from(byte), 2);
         }
 
         result
@@ -1580,7 +1580,7 @@ mod tests {
 
             fn write(&mut self, bytes: &[u8]) {
                 for &byte in bytes {
-                    self.state = self.state.wrapping_mul(31).wrapping_add(byte as u64);
+                    self.state = self.state.wrapping_mul(31).wrapping_add(u64::from(byte));
                 }
             }
         }

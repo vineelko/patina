@@ -858,7 +858,7 @@ mod tests {
                     (fid, 0) if fid == TEST_MM_COMM_FUNCTION_ID_SIZE => {
                         // size query
                         self.step.set(1);
-                        Ok(create_size_response!(TEST_PERFORMANCE_RECORD_LENGTH as u64))
+                        Ok(create_size_response!(u64::from(TEST_PERFORMANCE_RECORD_LENGTH)))
                     }
                     (fid, 1) if fid == TEST_MM_COMM_FUNCTION_ID_DATA => {
                         // data query

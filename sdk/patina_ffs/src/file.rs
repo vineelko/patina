@@ -203,7 +203,7 @@ impl<'a> FileRef<'a> {
             (5, false) => 12,
             (6, false) => 15,
             (7, false) => 16,
-            (x @ 0..=7, true) => (17 + x) as u32,
+            (x @ 0..=7, true) => u32::from(17 + x),
             (_, _) => panic!("Invalid data_alignment!"),
         };
         if attributes & ffs::attributes::raw::FIXED != 0 {

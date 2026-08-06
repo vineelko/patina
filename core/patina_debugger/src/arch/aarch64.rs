@@ -424,7 +424,7 @@ impl UefiArchRegs for Aarch64CoreRegs {
         context.sp = self.sp;
         context.elr = self.pc;
         context.fpsr = self.fpsr;
-        context.spsr = self.cpsr as u64;
+        context.spsr = u64::from(self.cpsr);
     }
 
     fn read_register_from_context(
@@ -557,7 +557,7 @@ impl UefiArchRegs for Aarch64CoreRegs {
                 write_field!(context.fpsr, u64);
             }
             Aarch64CoreRegId::Spsr => {
-                context.spsr = u32::from_le_bytes(buf.try_into().map_err(|_| ())?) as u64;
+                context.spsr = u64::from(u32::from_le_bytes(buf.try_into().map_err(|_| ())?));
             }
         }
 

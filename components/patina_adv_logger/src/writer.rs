@@ -47,7 +47,7 @@ impl AdvancedLogWriter {
         // SAFETY: The safety requirements for this function transfer to the function called here.
         let header = unsafe { AdvLoggerInfoRef::from_address(address)? };
         let data_size = header.log_buffer_size();
-        let data_start = (address + header.log_buffer_offset() as u64) as *mut u8;
+        let data_start = (address + u64::from(header.log_buffer_offset())) as *mut u8;
         // SAFETY: The caller must ensure that the memory is properly sized and initialized
         // per the safety contract of this function. from_address() validates the signature
         // and version in the header.
@@ -97,7 +97,7 @@ impl AdvancedLogWriter {
         // Get the total size of the long entry with the header, including the
         // alignment padding for 8 byte alignment.
         let data_offset = size_of::<AdvLoggerMessageEntry>() as u16;
-        let unaligned_size = data_offset as u32 + log_entry.data.len() as u32;
+        let unaligned_size = u32::from(data_offset) + log_entry.data.len() as u32;
         let message_size = align_up(unaligned_size, 8).unwrap() as u32;
 
         // try to swap in the updated value. if this grows beyond the buffer, fall out.

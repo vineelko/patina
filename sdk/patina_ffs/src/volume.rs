@@ -121,7 +121,7 @@ impl<'a> VolumeRef<'a> {
         }
 
         //ext_header_offset: must be inside the fv
-        if fv_header.ext_header_offset as u64 > fv_header.fv_length {
+        if u64::from(fv_header.ext_header_offset) > fv_header.fv_length {
             Err(FirmwareFileSystemError::InvalidHeader)?;
         }
 
@@ -1097,7 +1097,7 @@ mod test {
         let fv_header = fv_bytes.as_mut_ptr() as *mut fv::Header;
         // SAFETY: Deliberately corrupting the FV header for test purposes.
         unsafe {
-            (*fv_header).fv_length = ((*fv_header).ext_header_offset - 1) as u64;
+            (*fv_header).fv_length = u64::from((*fv_header).ext_header_offset - 1);
         };
         assert_eq!(VolumeRef::new(&fv_bytes).unwrap_err(), FirmwareFileSystemError::InvalidHeader);
 

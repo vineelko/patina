@@ -462,7 +462,7 @@ impl PrivateImageData {
     fn apply_image_memory_protections(&self) -> Result<(), EfiError> {
         for section in &self.pe_info.sections {
             // each section starts at image_base + virtual_address, per PE/COFF spec.
-            let section_base_addr = (self.image_info.image_base as u64) + (section.virtual_address as u64);
+            let section_base_addr = (self.image_info.image_base as u64) + u64::from(section.virtual_address);
 
             // we need to get the current attributes for this region and add our new attribute
             // if we can't find this range in the GCD, try the next one, but report the failure
@@ -477,7 +477,7 @@ impl PrivateImageData {
             // capabilities.
             let aligned_virtual_size =
                 if let Ok(virtual_size) = align_up(section.virtual_size, self.pe_info.section_alignment) {
-                    virtual_size as u64
+                    u64::from(virtual_size)
                 } else {
                     log_debug_assert!(
                         "Failed to align up section size {:#X} with alignment {:#X}",
@@ -2894,7 +2894,7 @@ mod tests {
             pe_info.section_alignment = CUSTOM_ALIGNMENT;
 
             let mut protocol = super::empty_image_info();
-            protocol.image_size = pe_info.size_of_image as u64;
+            protocol.image_size = u64::from(pe_info.size_of_image);
             protocol.image_code_type = efi::BOOT_SERVICES_CODE;
             protocol.image_data_type = efi::BOOT_SERVICES_DATA;
 

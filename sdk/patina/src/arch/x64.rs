@@ -42,7 +42,7 @@ pub fn rdtsc() -> u64 {
     let hi: u32;
     // SAFETY: `rdtsc` reads a CPU counter and does not violate memory safety.
     unsafe { core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem)) };
-    ((hi as u64) << 32) | lo as u64
+    (u64::from(hi) << 32) | u64::from(lo)
 }
 
 /// Returns the Current Privilege Level (CPL) from the CS selector.
@@ -143,7 +143,7 @@ impl super::Timer for X64 {
             // SAFETY: Calling cpuid does not violate memory safety
             let core::arch::x86_64::CpuidResult { eax, ebx, ecx, .. } = unsafe { core::arch::x86_64::__cpuid(0x15) };
             if eax != 0 && ebx != 0 && ecx != 0 {
-                return NonZeroU64::new((ecx as u64 * ebx as u64) / eax as u64);
+                return NonZeroU64::new((u64::from(ecx) * u64::from(ebx)) / u64::from(eax));
             }
         }
 
@@ -155,7 +155,7 @@ impl super::Timer for X64 {
             // SAFETY: Calling cpuid does not violate memory safety
             let core::arch::x86_64::CpuidResult { eax, .. } = unsafe { core::arch::x86_64::__cpuid(0x16) };
             if eax != 0 {
-                return NonZeroU64::new((eax * 1_000_000) as u64);
+                return NonZeroU64::new(u64::from(eax * 1_000_000));
             }
         }
 

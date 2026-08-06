@@ -289,7 +289,7 @@ impl<const N: usize, const B: usize> VirtQueue<N, B> {
             let i = (desc_idx as usize) % N;
             let len = self.desc.0[i].len as usize;
             out.push(self.buffers[i][..len].to_vec());
-            self.used.ring[pos] = VirtqUsedElem { id: desc_idx as u32, len: len as u32 };
+            self.used.ring[pos] = VirtqUsedElem { id: u32::from(desc_idx), len: len as u32 };
             fence(Ordering::SeqCst);
             self.used.idx = self.used.idx.wrapping_add(1);
         }
@@ -307,7 +307,7 @@ impl<const N: usize, const B: usize> VirtQueue<N, B> {
         let i = (desc_idx as usize) % N;
         let take = core::cmp::min(B, data.len());
         self.buffers[i][..take].copy_from_slice(&data[..take]);
-        self.used.ring[pos] = VirtqUsedElem { id: desc_idx as u32, len: take as u32 };
+        self.used.ring[pos] = VirtqUsedElem { id: u32::from(desc_idx), len: take as u32 };
         fence(Ordering::SeqCst);
         self.used.idx = self.used.idx.wrapping_add(1);
         fence(Ordering::SeqCst);

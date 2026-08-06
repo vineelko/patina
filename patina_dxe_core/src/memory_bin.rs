@@ -336,7 +336,7 @@ impl MemoryBinManager {
             top &= !(granularity - 1);
 
             stats.base_address = top;
-            stats.number_of_pages = entry.number_of_pages as u64;
+            stats.number_of_pages = u64::from(entry.number_of_pages);
             stats.information_index = index;
 
             log::info!(
@@ -487,7 +487,7 @@ impl MemoryBinManager {
 
         // Update peak tracking: if current exceeds previous peak, update for BDS
         if let Some(mti_entry) = self.memory_type_information.get_mut(info_idx)
-            && current > mti_entry.number_of_pages as u64
+            && current > u64::from(mti_entry.number_of_pages)
         {
             let prev_peak = mti_entry.number_of_pages;
             mti_entry.number_of_pages = current as u32;
@@ -957,7 +957,7 @@ mod tests {
     fn rt_range_size(pages: u32) -> u64 {
         let granularity = MemoryBinManager::granularity_for_type(efi::RUNTIME_SERVICES_DATA);
         // Enough for the pages plus one unit of granularity for alignment padding.
-        (pages as u64) * UEFI_PAGE_SIZE as u64 + granularity as u64
+        u64::from(pages) * UEFI_PAGE_SIZE as u64 + granularity as u64
     }
 
     /// Initializes a `MemoryBinManager` from the given memory type info at the given base address.
@@ -1089,7 +1089,7 @@ mod tests {
     #[test]
     fn test_memory_bin_peak_tracking() {
         let bin_pages: u32 = 8;
-        let alloc_pages = (bin_pages as u64).max(RT_GRAN_PAGES) + RT_GRAN_PAGES;
+        let alloc_pages = u64::from(bin_pages).max(RT_GRAN_PAGES) + RT_GRAN_PAGES;
 
         let info = [
             EFiMemoryTypeInformation { memory_type: efi::RUNTIME_SERVICES_DATA, number_of_pages: bin_pages },
