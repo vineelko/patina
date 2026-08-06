@@ -118,7 +118,7 @@ impl TestCase {
     }
 }
 
-/// A [ParamFunction] implementation for an on-system unit test.
+/// A [`ParamFunction`] implementation for an on-system unit test.
 ///
 /// note: Once we can unwind a panic, we can remove the `Result` return type in favor of () and wrap the function in a
 /// `catch_unwind` that maps the panic message to a Err(&'static str).

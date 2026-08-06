@@ -278,7 +278,7 @@ impl DebuggerArch for Aarch64Arch {
     }
 }
 
-/// AArch64 core registers
+/// `AArch64` core registers
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Aarch64CoreRegs {
     /// X0-X30 general purpose registers

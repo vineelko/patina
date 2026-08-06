@@ -154,7 +154,7 @@ impl AdvancedLogWriter {
     }
 
     /// Returns whether hardware port writing is enabled for the given level,
-    /// using an overridden hw_print_level bitmask.
+    /// using an overridden `hw_print_level` bitmask.
     pub fn hardware_write_enabled_with_mask(&self, level: u32, mask_override: u32) -> bool {
         !self.header.hw_port_disabled() && (level & mask_override != 0)
     }

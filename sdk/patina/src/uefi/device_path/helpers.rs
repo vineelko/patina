@@ -25,7 +25,7 @@ use crate::{
 /// representing the complete path from system root to device.
 ///
 /// Partial device paths start with other node types (e.g., Media type 4 for HD nodes,
-/// Messaging type 3 for NVMe without root) and must be expanded by matching against
+/// Messaging type 3 for `NVMe` without root) and must be expanded by matching against
 /// the current device topology before they can be used for many scenarios, including booting.
 ///
 /// # Arguments
@@ -53,7 +53,7 @@ pub fn is_partial_device_path(device_path: &DevicePath) -> bool {
 ///
 /// This function takes a partial (short-form) device path and finds the corresponding
 /// full device path by enumerating all device handles and matching against the partial
-/// path's identifying characteristics (e.g., partition GUID for HardDrive nodes).
+/// path's identifying characteristics (e.g., partition GUID for `HardDrive` nodes).
 ///
 /// If the input is already a full device path (starts with Hardware or ACPI node),
 /// it is returned unchanged.
@@ -71,7 +71,7 @@ pub fn is_partial_device_path(device_path: &DevicePath) -> bool {
 /// # Supported Partial Path Types
 ///
 /// Currently supports:
-/// - **HardDrive (Media type 4, subtype 1)**: Matches by partition signature and signature type
+/// - **`HardDrive` (Media type 4, subtype 1)**: Matches by partition signature and signature type
 ///
 /// Future enhancements may add support for:
 /// - FilePath-only paths (require filesystem enumeration)

@@ -106,7 +106,7 @@ pub struct AdvLogIterator<'a> {
 
 /// Iterator for an Advanced Logger memory buffer.
 impl<'a> AdvLogIterator<'a> {
-    /// Creates a new log iterator from a given AdvancedLogReader reference.
+    /// Creates a new log iterator from a given `AdvancedLogReader` reference.
     fn new(log: &'a AdvancedLogReader) -> Self {
         AdvLogIterator { log, offset: log.header.log_buffer_offset() as usize }
     }

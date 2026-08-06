@@ -230,7 +230,7 @@ impl VirtioMmio {
     }
 
     /// Notifies the device that new entries are available on `queue_index`.
-    /// Issues a SeqCst fence before the write so all prior queue updates are
+    /// Issues a `SeqCst` fence before the write so all prior queue updates are
     /// visible to the device.
     pub(super) fn notify(&mut self, queue_index: u32) {
         fence(Ordering::SeqCst);

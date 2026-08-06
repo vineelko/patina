@@ -1,6 +1,6 @@
 //! MM Communicator Integration Tests
 //!
-//! This test file focuses on testing the MmCommunicator component integration
+//! This test file focuses on testing the `MmCommunicator` component integration
 //! with its dependencies using the actual component entry point flow.
 //!
 //! ## Logging

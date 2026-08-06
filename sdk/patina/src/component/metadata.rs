@@ -169,7 +169,7 @@ impl fmt::Debug for Access {
     }
 }
 
-/// A type redefinition of [FixedBitSet] to allow a custom [Debug] implementation.
+/// A type redefinition of [`FixedBitSet`] to allow a custom [Debug] implementation.
 pub struct PrettyFixedBitSet<'a>(&'a FixedBitSet);
 
 impl fmt::Debug for PrettyFixedBitSet<'_> {

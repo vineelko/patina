@@ -30,7 +30,7 @@ pub type EfiStatusCodeType = u32;
 ///
 pub type EfiStatusCodeValue = u32;
 
-/// The definition of the status code extended data header. The data will follow HeaderSize bytes from the
+/// The definition of the status code extended data header. The data will follow `HeaderSize` bytes from the
 /// beginning of the structure and is Size bytes long.
 ///
 /// # Documentation

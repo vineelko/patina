@@ -47,7 +47,7 @@ impl AcpiTableProtocol {
 
     /// Installs an ACPI table into the XSDT.
     ///
-    /// This function generally matches the behavior of EFI_ACPI_TABLE_PROTOCOL.InstallAcpiTable() API in the UEFI spec 2.10
+    /// This function generally matches the behavior of `EFI_ACPI_TABLE_PROTOCOL.InstallAcpiTable()` API in the UEFI spec 2.10
     /// section 20.2. Refer to the UEFI spec description for details on input parameters.
     ///
     /// This implementation only supports ACPI 2.0+.
@@ -132,7 +132,7 @@ impl AcpiTableProtocol {
 
     /// Removes an ACPI table from the XSDT.
     ///
-    /// This function generally matches the behavior of EFI_ACPI_TABLE_PROTOCOL.UninstallAcpiTable() API in the UEFI spec 2.10
+    /// This function generally matches the behavior of `EFI_ACPI_TABLE_PROTOCOL.UninstallAcpiTable()` API in the UEFI spec 2.10
     /// section 20.2. Refer to the UEFI spec description for details on input parameters.
     ///
     /// This implementation only supports ACPI 2.0+.
@@ -181,7 +181,7 @@ impl AcpiGetProtocol {
 impl AcpiGetProtocol {
     /// Returns a requested ACPI table.
     ///
-    /// This function generally matches the behavior of EFI_ACPI_SDT_PROTOCOL.GetAcpiTable() API in the PI spec 1.8
+    /// This function generally matches the behavior of `EFI_ACPI_SDT_PROTOCOL.GetAcpiTable()` API in the PI spec 1.8
     /// section 9.1. Refer to the PI spec description for details on input parameters.
     ///
     /// This implementation only supports ACPI 2.0+.
@@ -229,7 +229,7 @@ impl AcpiGetProtocol {
 
     /// Register or unregister a callback when an ACPI table is installed.
     ///
-    /// This function generally matches the behavior of EFI_ACPI_SDT_PROTOCOL.RegisterNotify() API in the PI spec 1.8
+    /// This function generally matches the behavior of `EFI_ACPI_SDT_PROTOCOL.RegisterNotify()` API in the PI spec 1.8
     /// section 9.1. Refer to the PI spec description for details on input parameters.
     ///
     /// This implementation only supports ACPI 2.0+.

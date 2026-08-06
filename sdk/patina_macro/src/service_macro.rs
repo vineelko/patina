@@ -1,4 +1,4 @@
-//! A module containing Macro(s) implementation details for creating a IntoService implementation.
+//! A module containing Macro(s) implementation details for creating a `IntoService` implementation.
 //!
 //! ## License
 //!
@@ -153,7 +153,7 @@ impl Parse for Service {
     }
 }
 
-/// The testable version of the `service` macro that uses proc_macro2::Tokenstreams.
+/// The testable version of the `service` macro that uses `proc_macro2::Tokenstreams`.
 pub(crate) fn service2(item: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let service = match syn::parse2::<Service>(item) {
         Ok(service) => service,

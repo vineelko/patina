@@ -102,22 +102,22 @@ impl<P: PlatformInfo> FvProtocolData<P> {
 }
 
 impl<P: PlatformInfo> FvProtocolData<P> {
-    /// Creates a new [FvProtocolData] instance.
+    /// Creates a new [`FvProtocolData`] instance.
     pub const fn new() -> Self {
         Self { fv_metadata: BTreeMap::new(), _platform_info: core::marker::PhantomData }
     }
 
-    /// Creates a new [TplMutex] wrapping a new [FvProtocolData] instance.
+    /// Creates a new [`TplMutex`] wrapping a new [`FvProtocolData`] instance.
     pub const fn new_locked() -> tpl_mutex::TplMutex<Self> {
         tpl_mutex::TplMutex::new(efi::TPL_NOTIFY, Self::new(), "FvData")
     }
 
-    /// Returns a locked instance of the global [FvProtocolData].
+    /// Returns a locked instance of the global [`FvProtocolData`].
     fn instance<'a>() -> tpl_mutex::TplGuard<'a, Self> {
         Core::<P>::instance().pi_dispatcher.fv_data.lock()
     }
 
-    /// Rust implementation of the FVB protocol's get_attributes method.
+    /// Rust implementation of the FVB protocol's `get_attributes` method.
     fn fvb_get_attributes(
         &self,
         protocol: NonNull<pi::protocol::firmware_volume_block::FirmwareVolumeBlockProtocol>,
@@ -130,7 +130,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         Ok(fv.attributes())
     }
 
-    /// Rust implementation of the FVB protocol's get_physical_address method.
+    /// Rust implementation of the FVB protocol's `get_physical_address` method.
     fn fvb_get_physical_address(
         &self,
         protocol: NonNull<pi::protocol::firmware_volume_block::FirmwareVolumeBlockProtocol>,
@@ -140,7 +140,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         Ok(physical_address as efi::PhysicalAddress)
     }
 
-    /// Rust implementation of the FVB protocol's get_block_size method.
+    /// Rust implementation of the FVB protocol's `get_block_size` method.
     fn fvb_get_block_size(
         &self,
         protocol: NonNull<pi::protocol::firmware_volume_block::FirmwareVolumeBlockProtocol>,
@@ -194,7 +194,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         unsafe { Ok(slice::from_raw_parts(lba_start, bytes_to_read)) }
     }
 
-    /// Rust implementation of the FV protocol's get_volume_attributes method.
+    /// Rust implementation of the FV protocol's `get_volume_attributes` method.
     fn fv_get_volume_attributes(
         &self,
         protocol: NonNull<pi::protocol::firmware_volume::FirmwareVolumeProtocol>,
@@ -208,7 +208,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         Ok(fv::attributes::EfiFvAttributes::from(fv.attributes()))
     }
 
-    /// Rust implementation of the FV protocol's read_file method.
+    /// Rust implementation of the FV protocol's `read_file` method.
     fn fv_read_file(
         &self,
         protocol: NonNull<pi::protocol::firmware_volume::FirmwareVolumeProtocol>,
@@ -253,7 +253,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
             .ok_or(EfiError::NotFound)
     }
 
-    /// Rust implementation of the FV protocol's GetNextFile method.
+    /// Rust implementation of the FV protocol's `GetNextFile` method.
     fn fv_get_next_file(
         &self,
         protocol: NonNull<pi::protocol::firmware_volume::FirmwareVolumeProtocol>,
@@ -382,7 +382,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
     ///
     /// ## Safety
     ///
-    /// Caller must ensure that base_address points to a valid firmware volume.
+    /// Caller must ensure that `base_address` points to a valid firmware volume.
     pub unsafe fn install_firmware_volume(
         &mut self,
         base_address: u64,
@@ -415,7 +415,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
     ///
     /// ## Safety
     ///
-    /// Caller must ensure that base_address points to a valid firmware volume.
+    /// Caller must ensure that `base_address` points to a valid firmware volume.
     unsafe fn install_fv_device_path_protocol(
         &self,
         handle: Option<efi::Handle>,
@@ -447,7 +447,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
 // FV / FVB EFIAPI compliant protocol method implementations.
 #[cfg_attr(coverage, coverage(off))]
 impl<P: PlatformInfo> FvProtocolData<P> {
-    /// EFIAPI compliant FVB protocol GetAttributes method.
+    /// EFIAPI compliant FVB protocol `GetAttributes` method.
     extern "efiapi" fn fvb_get_attributes_efiapi(
         this: *mut pi::protocol::firmware_volume_block::FirmwareVolumeBlockProtocol,
         attributes: *mut fvb::attributes::EfiFvbAttributes2,
@@ -469,7 +469,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         efi::Status::SUCCESS
     }
 
-    /// EFIAPI compliant FVB protocol SetAttributes method.
+    /// EFIAPI compliant FVB protocol `SetAttributes` method.
     extern "efiapi" fn fvb_set_attributes_efiapi(
         _this: *mut pi::protocol::firmware_volume_block::FirmwareVolumeBlockProtocol,
         _attributes: *mut fvb::attributes::EfiFvbAttributes2,
@@ -477,7 +477,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         efi::Status::UNSUPPORTED
     }
 
-    /// EFIAPI compliant FVB protocol GetPhysicalAddress method.
+    /// EFIAPI compliant FVB protocol `GetPhysicalAddress` method.
     extern "efiapi" fn fvb_get_physical_address_efiapi(
         this: *mut pi::protocol::firmware_volume_block::FirmwareVolumeBlockProtocol,
         address: *mut efi::PhysicalAddress,
@@ -499,7 +499,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         efi::Status::SUCCESS
     }
 
-    /// EFIAPI compliant FVB protocol GetBlockSize method.
+    /// EFIAPI compliant FVB protocol `GetBlockSize` method.
     extern "efiapi" fn fvb_get_block_size_efiapi(
         this: *mut pi::protocol::firmware_volume_block::FirmwareVolumeBlockProtocol,
         lba: efi::Lba,
@@ -581,7 +581,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         efi::Status::UNSUPPORTED
     }
 
-    /// EFIAPI compliant FVB protocol EraseBlocks method.
+    /// EFIAPI compliant FVB protocol `EraseBlocks` method.
     extern "efiapi" fn fvb_erase_blocks_efiapi(
         _this: *mut pi::protocol::firmware_volume_block::FirmwareVolumeBlockProtocol,
         //... TODO: this should be variadic; however, variadic and eficall don't mix well presently.
@@ -589,7 +589,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         efi::Status::UNSUPPORTED
     }
 
-    /// EFIAPI compliant FV protocol GetVolumeAttributes method.
+    /// EFIAPI compliant FV protocol `GetVolumeAttributes` method.
     extern "efiapi" fn fv_get_volume_attributes_efiapi(
         this: *const pi::protocol::firmware_volume::FirmwareVolumeProtocol,
         fv_attributes: *mut fv::attributes::EfiFvAttributes,
@@ -613,7 +613,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         efi::Status::SUCCESS
     }
 
-    /// EFIAPI compliant FV protocol SetVolumeAttributes method.
+    /// EFIAPI compliant FV protocol `SetVolumeAttributes` method.
     extern "efiapi" fn fv_set_volume_attributes_efiapi(
         _this: *const pi::protocol::firmware_volume::FirmwareVolumeProtocol,
         _fv_attributes: *mut fv::attributes::EfiFvAttributes,
@@ -621,7 +621,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         efi::Status::UNSUPPORTED
     }
 
-    /// EFIAPI compliant FV protocol ReadFile method.
+    /// EFIAPI compliant FV protocol `ReadFile` method.
     extern "efiapi" fn fv_read_file_efiapi(
         this: *const pi::protocol::firmware_volume::FirmwareVolumeProtocol,
         name_guid: *const efi::Guid,
@@ -724,7 +724,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         status
     }
 
-    /// EFIAPI compliant FV protocol ReadSection method.
+    /// EFIAPI compliant FV protocol `ReadSection` method.
     extern "efiapi" fn fv_read_section_efiapi(
         this: *const pi::protocol::firmware_volume::FirmwareVolumeProtocol,
         name_guid: *const efi::Guid,
@@ -809,7 +809,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         if dest_buffer.len() < section_data.len() { efi::Status::WARN_BUFFER_TOO_SMALL } else { efi::Status::SUCCESS }
     }
 
-    /// EFIAPI compliant FV protocol WriteFile method.
+    /// EFIAPI compliant FV protocol `WriteFile` method.
     extern "efiapi" fn fv_write_file_efiapi(
         _this: *const pi::protocol::firmware_volume::FirmwareVolumeProtocol,
         _number_of_files: u32,
@@ -819,7 +819,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         efi::Status::UNSUPPORTED
     }
 
-    /// EFIAPI compliant FV protocol GetNextFile method.
+    /// EFIAPI compliant FV protocol `GetNextFile` method.
     extern "efiapi" fn fv_get_next_file_efiapi(
         this: *const pi::protocol::firmware_volume::FirmwareVolumeProtocol,
         key: *mut c_void,
@@ -868,7 +868,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         efi::Status::SUCCESS
     }
 
-    /// EFIAPI compliant FV protocol GetInfo method.
+    /// EFIAPI compliant FV protocol `GetInfo` method.
     extern "efiapi" fn fv_get_info_efiapi(
         _this: *const pi::protocol::firmware_volume::FirmwareVolumeProtocol,
         _information_type: *const efi::Guid,
@@ -878,7 +878,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         efi::Status::UNSUPPORTED
     }
 
-    /// EFIAPI compliant FV protocol SetInfo method.
+    /// EFIAPI compliant FV protocol `SetInfo` method.
     extern "efiapi" fn fv_set_info_efiapi(
         _this: *const pi::protocol::firmware_volume::FirmwareVolumeProtocol,
         _information_type: *const efi::Guid,

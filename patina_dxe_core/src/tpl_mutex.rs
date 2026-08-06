@@ -40,19 +40,19 @@ pub struct TplMutex<T: ?Sized> {
     inner: SharedTplMutex<T, CoreTplController>,
 }
 
-/// Wrapper for guarded data, which can be accessed by Deref or DerefMut on this object.
+/// Wrapper for guarded data, which can be accessed by Deref or `DerefMut` on this object.
 pub type TplGuard<'a, T> = TplMutexGuard<'a, T, CoreTplController>;
 
 impl<T> TplMutex<T> {
-    /// Instantiates a new TplMutex with the given TPL level, data object, and name string.
+    /// Instantiates a new `TplMutex` with the given TPL level, data object, and name string.
     pub const fn new(tpl_lock_level: efi::Tpl, data: T, name: &'static str) -> Self {
         Self { tpl_lock_level, name, inner: SharedTplMutex::new(CoreTplController, Tpl(tpl_lock_level), data) }
     }
 }
 
 impl<T: ?Sized> TplMutex<T> {
-    /// Lock the TplMutex and return a TplGuard object used to access the data. This will raise the system TPL level
-    /// to the level specified at TplMutex creation.
+    /// Lock the `TplMutex` and return a `TplGuard` object used to access the data. This will raise the system TPL level
+    /// to the level specified at `TplMutex` creation.
     ///
     /// # Panics
     ///
@@ -64,7 +64,7 @@ impl<T: ?Sized> TplMutex<T> {
         self.try_lock().unwrap_or_else(|| panic!("Re-entrant locks for {:?} not permitted.", self.name))
     }
 
-    /// Attempts to lock the TplMutex, and if successful, returns a guard object that can be used to access the data.
+    /// Attempts to lock the `TplMutex`, and if successful, returns a guard object that can be used to access the data.
     ///
     /// # Panics
     ///

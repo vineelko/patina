@@ -23,7 +23,7 @@ pub struct RuntimeFunction<'a> {
     /// End of the function RVA.
     pub end_rva: u32,
 
-    /// Packed unwind info in AArch64 (the second word of the `.pdata` section).
+    /// Packed unwind info in `AArch64` (the second word of the `.pdata` section).
     pub unwind_info: u32,
 }
 

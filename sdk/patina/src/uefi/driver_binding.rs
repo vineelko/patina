@@ -218,7 +218,7 @@ where
 }
 
 /// This struct is used to install and uninstall driver binding.
-/// If the UefiDriverBinding go out of scope and it wasn't install, the driver implementing [`DriverBinding`] will be drop.
+/// If the `UefiDriverBinding` go out of scope and it wasn't install, the driver implementing [`DriverBinding`] will be drop.
 /// If installed, the memory will be leaked and the driver binding will live indefinitely.
 pub enum UefiDriverBinding<T, U>
 where

@@ -49,7 +49,7 @@
 //! - **GCD Initialization Order**: `init_gcd()` adds the free memory range as system memory
 //!   before processing resource descriptor HOBs.
 //!
-//! ## Example: Using MemoryMapTestScenario
+//! ## Example: Using `MemoryMapTestScenario`
 //!
 //! ```rust
 //! use patina::BinaryGuid;
@@ -80,7 +80,7 @@
 //! scenario.run_test();
 //! ```
 //!
-//! ## Example: Using MemoryMapValidation
+//! ## Example: Using `MemoryMapValidation`
 //!
 //! The `MemoryMapValidation` helper provides structured validation for memory map tests:
 //!
@@ -202,7 +202,7 @@ mod tests {
         validations: Vec<ValidationFn>,
     }
 
-    /// Validation expectations that can be checked against the memory map returned by get_memory_map()
+    /// Validation expectations that can be checked against the memory map returned by `get_memory_map()`
     pub struct MemoryMapValidation {
         pub total_memory_mb: Option<u64>,
         pub expected_types: Option<Vec<u32>>,

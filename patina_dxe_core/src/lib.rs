@@ -258,14 +258,14 @@ type MockCore = Core<MockPlatformInfo>;
 
 /// Platform configured DXE Core responsible for the DXE phase of UEFI booting.
 ///
-/// This struct is generic over the [PlatformInfo] trait, which is used to provide platform-specific configuration to
-/// the core. The [PlatformInfo] trait is composed of multiple sub-traits that configure the different subsystems of
-/// the Patina DXE Core. Review the [PlatformInfo] trait documentation and each type alias within the trait for more
+/// This struct is generic over the [`PlatformInfo`] trait, which is used to provide platform-specific configuration to
+/// the core. The [`PlatformInfo`] trait is composed of multiple sub-traits that configure the different subsystems of
+/// the Patina DXE Core. Review the [`PlatformInfo`] trait documentation and each type alias within the trait for more
 /// information on the different configurations available to the platform.
 ///
-/// To properly use this struct, the platform must implement the [PlatformInfo] on a type and then create a static
+/// To properly use this struct, the platform must implement the [`PlatformInfo`] on a type and then create a static
 /// instance of the [Core] struct with the platform types as generic parameters (See example below). From there, simply
-/// call the [entry_point](Core::entry_point) method within the main function to start the DXE Core.
+/// call the [`entry_point`](Core::entry_point) method within the main function to start the DXE Core.
 ///
 /// ## Examples
 ///
@@ -315,7 +315,7 @@ type MockCore = Core<MockPlatformInfo>;
 /// static CORE: Core<ExamplePlatform> = Core::new(NullSectionExtractor);
 /// ```
 pub struct Core<P: PlatformInfo> {
-    /// A parsed and heap-allocated list of HOBs provided by [Self::entry_point].
+    /// A parsed and heap-allocated list of HOBs provided by [`Self::entry_point`].
     hob_list: Once<HobList<'static>>,
     /// The subsystem responsible for data management and dispatch of Patina components.
     component_dispatcher: TplMutex<ComponentDispatcher>,
@@ -325,7 +325,7 @@ pub struct Core<P: PlatformInfo> {
 
 #[cfg_attr(coverage, coverage(off))]
 impl<P: PlatformInfo> Core<P> {
-    /// Creates a new instance of the DXE Core in the NoAlloc phase.
+    /// Creates a new instance of the DXE Core in the `NoAlloc` phase.
     pub const fn new(section_extractor: P::Extractor) -> Self {
         Self {
             hob_list: Once::new(),

@@ -231,7 +231,7 @@ impl CommunicateBuffer {
     /// - The memory region is valid and accessible throughout buffer lifetime
     /// - The memory is not used by other components concurrently
     /// - The firmware has guaranteed the memory region is stable and properly mapped
-    /// - If provided, the status_mailbox_address points to a valid MmCommBufferStatus structure
+    /// - If provided, the `status_mailbox_address` points to a valid `MmCommBufferStatus` structure
     pub unsafe fn from_firmware_region(
         address: u64,
         size_bytes: usize,

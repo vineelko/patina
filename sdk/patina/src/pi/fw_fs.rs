@@ -135,7 +135,7 @@ impl SectionExtractor for NullSectionExtractor {
 /// firmware volume name GUID and extension header data. The extension header
 /// provides additional metadata beyond the standard firmware volume header.
 ///
-/// Based on the PI Specification Volume 3, Section 3.2.2 - EFI_FIRMWARE_VOLUME_EXT_HEADER.
+/// Based on the PI Specification Volume 3, Section 3.2.2 - `EFI_FIRMWARE_VOLUME_EXT_HEADER`.
 #[derive(Clone)]
 pub struct FirmwareVolumeExtHeader<'a> {
     header: fv::ExtHeader,
@@ -178,9 +178,9 @@ pub struct FirmwareVolume<'a> {
 }
 
 impl<'a> FirmwareVolume<'a> {
-    /// Instantiate a new FirmwareVolume.
+    /// Instantiate a new `FirmwareVolume`.
     ///
-    /// Contents of the FirmwareVolume will be cached in this instance.
+    /// Contents of the `FirmwareVolume` will be cached in this instance.
     pub fn new(buffer: &'a [u8]) -> Result<Self, efi::Status> {
         //buffer must be large enough to hold the header structure.
         if buffer.len() < mem::size_of::<fv::Header>() {
@@ -314,12 +314,12 @@ impl<'a> FirmwareVolume<'a> {
         Ok(Self { data: buffer, attributes: fv_header.attributes, block_map, ext_header, data_offset, erase_byte })
     }
 
-    /// Instantiate a new FirmwareVolume from a base address.
+    /// Instantiate a new `FirmwareVolume` from a base address.
     ///
     /// ## Safety
-    /// Caller must ensure that base_address is the address of the start of a firmware volume.
+    /// Caller must ensure that `base_address` is the address of the start of a firmware volume.
     ///
-    /// Contents of the FirmwareVolume will be cached in this instance.
+    /// Contents of the `FirmwareVolume` will be cached in this instance.
     pub unsafe fn new_from_address(base_address: u64) -> Result<Self, efi::Status> {
         // SAFETY: Caller guarantees that the base_address points to a valid FV and signature verified below
         let fv_header = unsafe { &*(base_address as *const fv::Header) };
@@ -351,7 +351,7 @@ impl<'a> FirmwareVolume<'a> {
         )
     }
 
-    /// returns the (linear block offset from FV base, block_size, remaining_blocks) given an LBA.
+    /// returns the (linear block offset from FV base, `block_size`, `remaining_blocks`) given an LBA.
     pub fn lba_info(&self, lba: u32) -> Result<(u32, u32, u32), efi::Status> {
         let block_map = self.block_map();
 
@@ -376,7 +376,7 @@ impl<'a> FirmwareVolume<'a> {
         Ok((offset + lba * block_size, block_size, remaining_blocks))
     }
 
-    /// Returns the attributes for the FirmwareVolume
+    /// Returns the attributes for the `FirmwareVolume`
     pub fn attributes(&self) -> EfiFvbAttributes2 {
         self.attributes
     }
@@ -847,7 +847,7 @@ impl Section {
         self.section_type
     }
 
-    /// Indicates whether this section is an encapsulation section (i.e. can be expended with a SectionExtractor).
+    /// Indicates whether this section is an encapsulation section (i.e. can be expended with a `SectionExtractor`).
     pub fn is_encapsulation(&self) -> bool {
         self.section_type() == Some(FfsSectionType::Compression)
             || self.section_type() == Some(FfsSectionType::GuidDefined)

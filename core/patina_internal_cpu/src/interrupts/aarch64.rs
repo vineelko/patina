@@ -1,4 +1,4 @@
-//! AArch64 Interrupt module
+//! `AArch64` Interrupt module
 //!
 //! ## License
 //!

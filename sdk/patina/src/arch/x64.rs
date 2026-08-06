@@ -15,7 +15,7 @@ pub(crate) struct X64;
 
 impl super::ArchSupport for X64 {}
 
-/// Cache writeback granule for x86_64, using 4 bytes following precedence set by Tianocore.
+/// Cache writeback granule for `x86_64`, using 4 bytes following precedence set by Tianocore.
 const CACHE_WRITEBACK_GRANULE: u32 = 4;
 
 /// Writes a byte to an x64 I/O port.

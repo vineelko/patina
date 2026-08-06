@@ -176,7 +176,7 @@ struct PrivateImageData {
 }
 
 impl PrivateImageData {
-    /// Creates a new PrivateImageData with an owned image buffer.
+    /// Creates a new `PrivateImageData` with an owned image buffer.
     fn new(mut image_info: efi::protocols::loaded_image::Protocol, pe_info: UefiPeInfo) -> Result<Self, EfiError> {
         let image_size = usize::try_from(image_info.image_size).map_err(|_| EfiError::LoadError)?;
         let section_alignment = usize::try_from(pe_info.section_alignment).map_err(|_| EfiError::LoadError)?;
@@ -214,7 +214,7 @@ impl PrivateImageData {
         Ok(image_data)
     }
 
-    /// Creates a new PrivateImageData with a borrowed image buffer.
+    /// Creates a new `PrivateImageData` with a borrowed image buffer.
     fn new_from_static_image(
         image_info: efi::protocols::loaded_image::Protocol,
         image_buffer: &'static [u8],
@@ -403,10 +403,10 @@ impl PrivateImageData {
 
     /// Sets both the file path and file name for this image.
     ///
-    /// The file name is a part of the loaded_image protocol, and is the remaining portion of the device path after
+    /// The file name is a part of the `loaded_image` protocol, and is the remaining portion of the device path after
     /// the parent handle's device path (if there is a valid parent handle).
     ///
-    /// The file path is the full device path for this image and is what is set for the loaded_image_device_path protocol.
+    /// The file path is the full device path for this image and is what is set for the `loaded_image_device_path` protocol.
     fn set_file_path(&mut self, file_path: NonNull<Protocol>) -> Result<(), EfiError> {
         let mut fp = file_path.as_ptr();
 
@@ -533,7 +533,7 @@ pub(super) struct ImageData {
 }
 
 impl ImageData {
-    /// Creates a new ImageData with default values.
+    /// Creates a new `ImageData` with default values.
     const fn new() -> Self {
         ImageData {
             system_table: core::ptr::null_mut(),
@@ -543,7 +543,7 @@ impl ImageData {
         }
     }
 
-    /// Creates a new TplMutex wrapping the ImageData.
+    /// Creates a new `TplMutex` wrapping the `ImageData`.
     pub(super) const fn new_locked() -> tpl_mutex::TplMutex<Self> {
         tpl_mutex::TplMutex::new(efi::TPL_NOTIFY, Self::new(), "ImageLock")
     }
@@ -649,7 +649,7 @@ impl ImageData {
 
     /// Returns the image metadata by its file path using simple file system or load file protocols.
     ///
-    /// Returns a tuple of (image buffer, from_fv, device handle, authentication status).
+    /// Returns a tuple of (image buffer, `from_fv`, device handle, authentication status).
     fn locate_image_metadata_by_file_path(
         boot_policy: bool,
         file_path: NonNull<Protocol>,
@@ -688,16 +688,16 @@ unsafe impl Send for ImageData {}
 
 impl<P: super::PlatformInfo> super::PiDispatcher<P> {
     /// Loads the image specified by the device path or slice.
-    /// * parent_image_handle - the handle of the image that is loading this one.
-    /// * file_path - optional device path describing where to load the image from.
+    /// * `parent_image_handle` - the handle of the image that is loading this one.
+    /// * `file_path` - optional device path describing where to load the image from.
     /// * image - optional slice containing the image data.
     ///
     /// One of `file_path` or `image` must be specified.
     /// returns the image handle of the freshly loaded image.
     ///
-    /// Returns Ok(efi::Handle) if the image was loaded successfully.
+    /// Returns `Ok(efi::Handle)` if the image was loaded successfully.
     /// returns Err(ImageStatus) if there was an error loading the issue. The enum value determines if the image was loaded
-    ///   with security violations, or not at all. See [ImageStatus] for details.
+    ///   with security violations, or not at all. See [`ImageStatus`] for details.
     pub fn load_image(
         &self,
         boot_policy: bool,
@@ -798,9 +798,9 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
         }
     }
 
-    /// Loads the image specified by the device_path or source_buffer argument.
+    /// Loads the image specified by the `device_path` or `source_buffer` argument.
     ///
-    /// See the EFI_BOOT_SERVICES::LoadImage() API definition in the UEFI spec for parameter
+    /// See the `EFI_BOOT_SERVICES::LoadImage()` API definition in the UEFI spec for parameter
     /// and usage details.
     ///
     /// # Safety
@@ -949,13 +949,13 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
     }
 
     /// Transfers control to the entry point of an image that was loaded by
-    /// load_image. See the EFI_BOOT_SERVICES::StartImage() API definition in
+    /// `load_image`. See the `EFI_BOOT_SERVICES::StartImage()` API definition in
     /// the UEFI spec for usage details.
     ///
-    /// * image_handle - handle of the image to be started.
-    /// * exit_data_size - pointer to receive the size, in bytes, of exit_data.
-    ///   if exit_data is null, this is parameter is ignored.
-    /// * exit_data - pointer to receive a data buffer with exit data, if any.
+    /// * `image_handle` - handle of the image to be started.
+    /// * `exit_data_size` - pointer to receive the size, in bytes, of `exit_data`.
+    ///   if `exit_data` is null, this is parameter is ignored.
+    /// * `exit_data` - pointer to receive a data buffer with exit data, if any.
     ///
     /// # Safety
     ///
@@ -1178,16 +1178,16 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
     }
 
     /// Terminates a loaded EFI image and returns control to boot services. See
-    /// the EFI_BOOT_SERVICES::Exit() API definition in the UEFI spec for usage
+    /// the `EFI_BOOT_SERVICES::Exit()` API definition in the UEFI spec for usage
     /// details.
     ///
     /// `image_handle` is validated against the private image data map; if not
     /// found, `INVALID_PARAMETER` is returned.
     ///
-    /// * image_handle - the handle of the currently running image.
-    /// * exit_status - the exit status for the image.
-    /// * exit_data_size - the size of the exit_data buffer, if exit_data is notnull.
-    /// * exit_data - optional buffer of data provided by the caller.
+    /// * `image_handle` - the handle of the currently running image.
+    /// * `exit_status` - the exit status for the image.
+    /// * `exit_data_size` - the size of the `exit_data` buffer, if `exit_data` is notnull.
+    /// * `exit_data` - optional buffer of data provided by the caller.
     ///
     /// # Safety
     ///

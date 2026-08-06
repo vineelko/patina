@@ -24,7 +24,7 @@ pub(crate) fn find_previous_table_address(runtime_services: &impl RuntimeService
         .ok()
 }
 
-/// Struct used to get the value from the FirmwarePerformanceVariable
+/// Struct used to get the value from the `FirmwarePerformanceVariable`
 #[repr(C)]
 pub(crate) struct FirmwarePerformanceVariable {
     boot_performance_table_pointer: usize,

@@ -36,7 +36,7 @@ impl EfiRuntimeServicesTable {
 
     /// Creates a new Runtime Services Table instance from the given raw pointer.
     /// # Safety
-    /// The pointer must be valid and point to a properly initialized efi::RuntimeServices structure.
+    /// The pointer must be valid and point to a properly initialized `efi::RuntimeServices` structure.
     pub unsafe fn from_raw_pointer(ptr: *mut efi::RuntimeServices) -> Self {
         Self { runtime_services: ptr }
     }
@@ -238,7 +238,7 @@ impl EfiBootServicesTable {
 
     /// Creates a new Boot Services Table instance from the given raw pointer.
     /// # Safety
-    /// The pointer must be valid and point to a properly initialized efi::BootServices structure.
+    /// The pointer must be valid and point to a properly initialized `efi::BootServices` structure.
     pub unsafe fn from_raw_pointer(ptr: *mut efi::BootServices) -> Self {
         Self { boot_services: ptr }
     }
@@ -714,7 +714,7 @@ impl EfiSystemTable {
     #[allow(dead_code)]
     /// Creates a new EFI System Table instance from the given raw pointer.
     /// # Safety
-    /// The pointer must be valid and point to a properly initialized efi::SystemTable structure.
+    /// The pointer must be valid and point to a properly initialized `efi::SystemTable` structure.
     pub unsafe fn from_raw_pointer(ptr: *mut efi::SystemTable) -> Self {
         // SAFETY: Caller guarantees ptr is a valid SystemTable pointer with initialized pointers
         // per the function safety contract.
@@ -771,8 +771,8 @@ impl EfiSystemTable {
     ///
     /// # Safety
     ///
-    /// The caller must ensure that the new table is has valid pointers for runtime_services and boot_services.
-    /// Boot services pointer may be null if the table is being updated for use after ExitBootServices.
+    /// The caller must ensure that the new table is has valid pointers for `runtime_services` and `boot_services`.
+    /// Boot services pointer may be null if the table is being updated for use after `ExitBootServices`.
     pub unsafe fn set_unchecked(&mut self, new_table: efi::SystemTable) {
         // SAFETY: caller must ensure that the new_table is valid.
         unsafe {
@@ -816,7 +816,7 @@ impl EfiSystemTable {
     ///
     /// # Safety
     ///
-    /// This should only be called after ExitBootServices has been invoked.
+    /// This should only be called after `ExitBootServices` has been invoked.
     pub unsafe fn clear_boot_time_services(&mut self) {
         let mut st = self.get();
 

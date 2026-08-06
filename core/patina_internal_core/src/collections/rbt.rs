@@ -30,7 +30,7 @@ where
     /// Creates a zero capacity red-black tree.
     ///
     /// This is useful for creating a tree at compile time and replacing the memory later. Use
-    /// [with_capacity](Self::with_capacity) to create a tree with a given slice of memory immediately. Otherwise use
+    /// [`with_capacity`](Self::with_capacity) to create a tree with a given slice of memory immediately. Otherwise use
     /// [expand](Self::expand) to replace the memory later.
     pub const fn new() -> Self {
         Rbt { storage: Storage::new(), root: Cell::new(core::ptr::null_mut()) }
@@ -76,9 +76,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [AlreadyExists](Error::AlreadyExists) if the value already exists in the tree.
+    /// Returns [`AlreadyExists`](Error::AlreadyExists) if the value already exists in the tree.
     ///
-    /// Returns [OutOfSpace](Error::OutOfSpace) if the storage is full.
+    /// Returns [`OutOfSpace`](Error::OutOfSpace) if the storage is full.
     ///
     pub fn add(&mut self, data: D) -> Result<usize> {
         let (idx, node) = self.storage.add(data)?;
@@ -157,7 +157,7 @@ where
     ///
     /// # Time Complexity
     ///
-    /// O(log n) for a balanced tree. Use [get_with_idx](Self::get_with_idx)
+    /// O(log n) for a balanced tree. Use [`get_with_idx`](Self::get_with_idx)
     /// if you know the index, as it is O(1).
     ///
     pub fn get(&self, key: &D::Key) -> Option<&D> {

@@ -135,11 +135,11 @@ pub(crate) struct FirmwareBasicBootPerfDataRecord {
     /// Timer value logged just prior to launching the currently loaded OS boot loader image.
     /// For non-UEFI compatible boots, the timer value logged will be just prior to the INT 19h handler invocation.
     pub os_loader_start_image_start: u64,
-    /// Timer value logged at the point when the OS loader calls the ExitBootServices function for UEFI compatible firmware.
+    /// Timer value logged at the point when the OS loader calls the `ExitBootServices` function for UEFI compatible firmware.
     /// For non-UEFI compatible boots, this field must be zero.
     pub exit_boot_services_entry: u64,
     /// Timer value logged at the point just prior to the OS loader gaining control back from the
-    /// ExitBootServices function for UEFI compatible firmware.
+    /// `ExitBootServices` function for UEFI compatible firmware.
     /// For non-UEFI compatible boots, this field must be zero.
     pub exit_boot_services_exit: u64,
 }
@@ -148,7 +148,7 @@ impl FirmwareBasicBootPerfDataRecord {
     const TYPE: u16 = 2;
     const REVISION: u8 = 2;
 
-    /// Create a new empty FirmwareBasicBootPerfDataRecord.
+    /// Create a new empty `FirmwareBasicBootPerfDataRecord`.
     pub const fn new() -> Self {
         Self {
             reset_end: 0,

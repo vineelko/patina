@@ -35,7 +35,7 @@ use core::{
 };
 
 /// Represents the FADT for ACPI 2.0+.
-/// Equivalent to EFI_ACPI_3_0_FIXED_ACPI_DESCRIPTION_TABLE.
+/// Equivalent to `EFI_ACPI_3_0_FIXED_ACPI_DESCRIPTION_TABLE`.
 #[repr(C, packed)]
 #[derive(Default)]
 pub(crate) struct AcpiFadt {
@@ -148,7 +148,7 @@ pub(crate) struct FadtData {
 }
 
 /// Represents an ACPI address space for ACPI 2.0+.
-/// Equivalent to EFI_ACPI_3_0_GENERIC_ADDRESS_STRUCTURE.
+/// Equivalent to `EFI_ACPI_3_0_GENERIC_ADDRESS_STRUCTURE`.
 #[repr(C, packed)]
 #[derive(Debug, Clone, Default, Copy)]
 pub struct GenericAddressStructure {
@@ -163,7 +163,7 @@ pub struct GenericAddressStructure {
 /// Note that the FACS does not have a standard ACPI header.
 /// The FACS is not present in the list of installed ACPI tables; instead, it is only accessible through the FADT's `x_firmware_ctrl` field.
 /// The FACS is always allocated in NVS, and is required to be 64B-aligned.
-/// Equivalent to EFI_ACPI_3_0_FIRMWARE_ACPI_CONTROL_STRUCTURE.
+/// Equivalent to `EFI_ACPI_3_0_FIRMWARE_ACPI_CONTROL_STRUCTURE`.
 #[repr(C, packed)]
 #[derive(Default, Clone)]
 pub struct AcpiFacs {
@@ -193,7 +193,7 @@ pub struct AcpiDsdt {
 /// Represents the RSDP for ACPI 2.0+.
 /// The RSDP is not a standard ACPI table and does not have a standard header.
 /// It is not present in the list of installed tables and is not directly accessible.
-/// Equivalent to EFI_ACPI_3_0_ROOT_SYSTEM_DESCRIPTION_POINTER.
+/// Equivalent to `EFI_ACPI_3_0_ROOT_SYSTEM_DESCRIPTION_POINTER`.
 #[repr(C, packed)]
 #[derive(Default)]
 pub struct AcpiRsdp {
@@ -277,7 +277,7 @@ impl AcpiXsdtMetadata {
 }
 
 /// Represents a standard ACPI header.
-/// Equivalent to EFI_ACPI_DESCRIPTION_HEADER.
+/// Equivalent to `EFI_ACPI_DESCRIPTION_HEADER`.
 #[repr(C, packed)]
 #[derive(Default, Clone, Debug)]
 pub struct AcpiTableHeader {
@@ -383,7 +383,7 @@ impl<T> Table<T> {
     /// ## Safety
     ///
     /// - Caller must ensure the provided table, `T`, has a C compatible layout (typically using `#[repr(C)]`).
-    /// - Caller must ensure that the table's first field is [AcpiTableHeader].
+    /// - Caller must ensure that the table's first field is [`AcpiTableHeader`].
     pub unsafe fn new(table: T) -> Result<Self, AcpiError> {
         let returned_table = Table { inner: ManuallyDrop::new(table) };
 
@@ -434,7 +434,7 @@ pub struct AcpiTable {
 }
 
 impl AcpiTable {
-    /// Creates a new AcpiTable from a given table.
+    /// Creates a new `AcpiTable` from a given table.
     ///
     /// For this function, the header `length` field must exactly equal `size_of::<T>()`. Because
     /// `table` is passed by value, only `size_of::<T>()` bytes are guaranteed to be available.
@@ -448,7 +448,7 @@ impl AcpiTable {
     /// ## Safety
     ///
     /// - Caller must ensure the provided table, `T`, has a C compatible layout (typically using `#[repr(C)]`).
-    /// - Caller must ensure that the table's first field is [AcpiTableHeader].
+    /// - Caller must ensure that the table's first field is [`AcpiTableHeader`].
     pub unsafe fn new<T: 'static>(table: T, mm: &Service<dyn MemoryManager>) -> Result<Self, AcpiError> {
         // When T is provided by value, enforce that the table length is equal to `size_of::<T>()`.
         // SAFETY: Caller guarantees T starts with an AcpiTableHeader and has a C-compatible layout.
@@ -467,7 +467,7 @@ impl AcpiTable {
         }
     }
 
-    /// Creates a new AcpiTable from a raw pointer.
+    /// Creates a new `AcpiTable` from a raw pointer.
     /// When created this way, the type of the table is unknown.
     ///
     /// ## Safety
@@ -576,7 +576,7 @@ impl AcpiTable {
         Ok(())
     }
 
-    /// Returns a reference to the entire AcpiTable.
+    /// Returns a reference to the entire `AcpiTable`.
     ///
     /// ## Safety
     ///
@@ -586,7 +586,7 @@ impl AcpiTable {
         unsafe { self.table.cast::<Table<T>>().as_ref().as_ref() }
     }
 
-    /// Returns a mutable reference to the entire AcpiTable.
+    /// Returns a mutable reference to the entire `AcpiTable`.
     ///
     /// ## Safety
     ///
@@ -596,12 +596,12 @@ impl AcpiTable {
         unsafe { self.table.cast::<Table<T>>().as_mut().as_mut() }
     }
 
-    /// Returns a pointer to the underlying AcpiTable.
+    /// Returns a pointer to the underlying `AcpiTable`.
     pub(crate) fn as_ptr(&self) -> *const AcpiTableHeader {
         self.table.as_ptr() as *const AcpiTableHeader
     }
 
-    /// Returns a mutable pointer to the underlying AcpiTable.
+    /// Returns a mutable pointer to the underlying `AcpiTable`.
     pub(crate) fn as_mut_ptr(&self) -> *mut AcpiTableHeader {
         self.table.as_ptr() as *mut AcpiTableHeader
     }

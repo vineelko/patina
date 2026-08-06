@@ -784,8 +784,8 @@ where
     /// Retrieves a table at a specific index in the list of installed tables.
     /// This is mostly to assist the C protocol.
     ///
-    /// This function includes a hack/assumption based on the ordering of the BTreeMap, in order to avoid storing values in a indexed list:
-    /// Since the BTreeMap is ordered by key value, and the key values are `usize`s under the hood,
+    /// This function includes a hack/assumption based on the ordering of the `BTreeMap`, in order to avoid storing values in a indexed list:
+    /// Since the `BTreeMap` is ordered by key value, and the key values are `usize`s under the hood,
     /// and we give out table keys in a monotonically increasing manner,
     /// tables are always sorted by order of installation.
     /// As such, BtreeMap.values[idx] is equivalent to indexing into a list of installed tables,

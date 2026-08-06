@@ -68,7 +68,7 @@ unsafe impl Sync for ExceptionInfo {}
 /// Patina Debugger
 ///
 /// This struct implements the Debugger trait for the Patina debugger. It wraps
-/// a SerialIO transport and manages the debugger in an internal struct.
+/// a `SerialIO` transport and manages the debugger in an internal struct.
 ///
 pub struct PatinaDebugger<T>
 where
@@ -96,7 +96,7 @@ where
     connection_timed_out: AtomicBool,
 }
 
-/// Safety: Send is safe by default for all but the gdb_buffer, but this is just a raw buffer and is safe to send between threads.
+/// Safety: Send is safe by default for all but the `gdb_buffer`, but this is just a raw buffer and is safe to send between threads.
 unsafe impl<T: SerialIO> Send for DebuggerInternal<'static, T> {}
 
 /// Internal Debugger State

@@ -139,7 +139,7 @@ impl<'a> HobList<'a> {
         self.0.len()
     }
 
-    /// Implements is_empty for Hoblist.
+    /// Implements `is_empty` for Hoblist.
     /// Returns true if the list is empty.
     ///
     /// # Example(s)
@@ -383,7 +383,7 @@ impl<'a> HobList<'a> {
     }
 }
 
-/// Implements IntoIterator for HobList.
+/// Implements `IntoIterator` for `HobList`.
 ///
 /// Defines how it will be converted to an iterator.
 impl<'a> IntoIterator for HobList<'a> {

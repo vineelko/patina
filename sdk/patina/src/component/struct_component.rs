@@ -4,7 +4,7 @@
 //! derive proc-macro to be used on the struct or enum to implement necessary traits and specify the entry point
 //! function for the component.
 //!
-//! A derive macro, [IntoComponent](crate::component::IntoComponent) is provided to automatically implement the
+//! A derive macro, [`IntoComponent`](crate::component::IntoComponent) is provided to automatically implement the
 //! necessary traits for a struct or enum to be used as a component. This trait expects that a default entry point
 //! function of `Self::entry_point` exists. This can be overridden with the `#[entry_point(path = path::to::function)]`
 //! attribute.

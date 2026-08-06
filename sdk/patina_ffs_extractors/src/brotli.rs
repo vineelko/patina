@@ -52,7 +52,7 @@ impl<T: Clone> alloc_no_stdlib::Allocator<T> for HeapAllocator<T> {
     fn free_cell(self: &mut HeapAllocator<T>, _data: Rebox<T>) {}
 }
 
-/// Provides decompression for Brotli GUIDed sections.
+/// Provides decompression for Brotli `GUIDed` sections.
 #[derive(Default, Clone, Copy)]
 pub struct BrotliSectionExtractor;
 

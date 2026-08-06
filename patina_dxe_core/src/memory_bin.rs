@@ -10,7 +10,7 @@
 //!    GUID HOB and optionally consuming a pre-allocated bin region from a Resource
 //!    Descriptor HOB produced by PEI.
 //!
-//! 2. GetMemoryMap "overlay": Post-processing the EFI memory map so that free
+//! 2. `GetMemoryMap` "overlay": Post-processing the EFI memory map so that free
 //!    (`EfiConventionalMemory`) pages within a bin region are reported as the bin's
 //!    memory type.
 //!
@@ -1700,8 +1700,8 @@ mod tests {
         assert!(size >= raw);
     }
 
-    /// Helper that builds a single-bin manager (RUNTIME_SERVICES_DATA) and returns the
-    /// (bin_base, bin_max, bin_size) for tests that need to construct entries relative
+    /// Helper that builds a single-bin manager (`RUNTIME_SERVICES_DATA`) and returns the
+    /// (`bin_base`, `bin_max`, `bin_size`) for tests that need to construct entries relative
     /// to the bin.
     fn single_bin_manager(pages: u32) -> (MemoryBinManager, efi::PhysicalAddress, efi::PhysicalAddress, u64) {
         let info = [

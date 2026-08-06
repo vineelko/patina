@@ -16,7 +16,7 @@ use core::{
 use super::BootServices;
 use crate::uefi::memory::EfiMemoryType;
 
-/// A boxed type to wrap a [BootServices] implementation
+/// A boxed type to wrap a [`BootServices`] implementation
 #[derive(Debug)]
 pub struct BootServicesBox<'a, T: ?Sized, B: BootServices + ?Sized> {
     ptr: *mut T,
@@ -24,7 +24,7 @@ pub struct BootServicesBox<'a, T: ?Sized, B: BootServices + ?Sized> {
 }
 
 impl<'a, T, B: BootServices> BootServicesBox<'a, T, B> {
-    /// Create a new BootServicesBox containing the provided value
+    /// Create a new `BootServicesBox` containing the provided value
     pub fn new(value: T, memory_type: EfiMemoryType, boot_services: &'a B) -> Self {
         let size = mem::size_of_val(&value);
         let ptr = boot_services.allocate_pool(memory_type, size).unwrap() as *mut T;
@@ -34,11 +34,11 @@ impl<'a, T, B: BootServices> BootServicesBox<'a, T, B> {
         Self { boot_services, ptr }
     }
 
-    /// Create a BootServicesBox from the provided raw pointer
+    /// Create a `BootServicesBox` from the provided raw pointer
     ///
     /// # Safety
-    /// ptr must be valid, and must be legal to call boot_services::free_pool(ptr). The easiest way to guarantee this
-    /// is to only use from_raw on pointers created by BootServicesBox::into_raw* functions.
+    /// ptr must be valid, and must be legal to call `boot_services::free_pool(ptr)`. The easiest way to guarantee this
+    /// is to only use `from_raw` on pointers created by `BootServicesBox::into_raw`* functions.
     pub unsafe fn from_raw(ptr: *mut T, boot_services: &'a B) -> Self {
         Self { boot_services, ptr }
     }

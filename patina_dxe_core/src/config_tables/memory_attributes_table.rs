@@ -40,7 +40,7 @@ impl MemoryAttributesTable {
     ///
     /// Install the Memory Attributes Table
     /// This function is intended to be called by the DXE Core to install the Memory Attributes Table for runtime memory
-    /// allocations/deallocations after ReadyToBoot has occurred. This function will be a no-op until after ReadyToBoot.
+    /// allocations/deallocations after `ReadyToBoot` has occurred. This function will be a no-op until after `ReadyToBoot`.
     /// Callers of the function are not expected to check return status as it is immaterial to the caller whether it
     /// succeeds or not and they will take no different action based on return status.
     ///

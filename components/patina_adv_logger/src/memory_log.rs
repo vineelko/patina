@@ -62,7 +62,7 @@ impl<'a> LogEntry<'a> {
     }
 }
 
-/// Implementation of the C struct ADVANCED_LOGGER_INFO for tracking in-memory
+/// Implementation of the C struct `ADVANCED_LOGGER_INFO` for tracking in-memory
 /// logging structure for Advanced Logger.
 #[derive(Debug)]
 #[repr(C)]
@@ -73,11 +73,11 @@ pub(crate) struct AdvLoggerInfoV5 {
     pub(crate) version: u16,
     /// Reserved for future
     reserved1: [u16; 3],
-    /// Offset from LoggerInfo to start of log, expected to be the size of this structure 8 byte aligned
+    /// Offset from `LoggerInfo` to start of log, expected to be the size of this structure 8 byte aligned
     pub(crate) log_buffer_offset: u32,
     /// Reserved for future
     reserved2: u32,
-    /// Offset from LoggerInfo to where to store next log entry.
+    /// Offset from `LoggerInfo` to where to store next log entry.
     pub(crate) log_current_offset: AtomicU32,
     /// Number of bytes of messages missed
     discarded_size: AtomicU32,
@@ -85,13 +85,13 @@ pub(crate) struct AdvLoggerInfoV5 {
     pub(crate) log_buffer_size: u32,
     /// Log in permanent RAM
     in_permanent_ram: bool,
-    /// After ExitBootServices
+    /// After `ExitBootServices`
     at_runtime: bool,
-    /// After VirtualAddressChange
+    /// After `VirtualAddressChange`
     gone_virtual: bool,
-    /// HdwPort initialized
+    /// `HdwPort` initialized
     hw_port_initialized: bool,
-    /// HdwPort is Disabled
+    /// `HdwPort` is Disabled
     hw_port_disabled: bool,
     /// Reserved for future
     reserved3: [bool; 3],
@@ -107,7 +107,7 @@ pub(crate) struct AdvLoggerInfoV5 {
     reserved4: u32,
 }
 
-/// Implementation of the ADVANCED_LOGGER_INFO V6 C struct.
+/// Implementation of the `ADVANCED_LOGGER_INFO` V6 C struct.
 #[derive(Debug)]
 #[repr(C)]
 pub(crate) struct AdvLoggerInfoV6 {
@@ -119,10 +119,10 @@ pub(crate) struct AdvLoggerInfoV6 {
 pub(crate) type AdvLoggerInfo = AdvLoggerInfoV6;
 
 impl AdvLoggerInfo {
-    /// Signature for the AdvLoggerInfo structure.
+    /// Signature for the `AdvLoggerInfo` structure.
     pub const SIGNATURE: u32 = 0x474F4C41; // "ALOG"
 
-    /// Version of the current AdvLoggerInfo structure.
+    /// Version of the current `AdvLoggerInfo` structure.
     pub const VERSION: u16 = ADV_LOGGER_INFO_VERSION_V6;
 
     pub fn new(
@@ -347,7 +347,7 @@ impl<'a> AdvLoggerInfoRef<'a> {
     }
 }
 
-/// Implementation of the C struct ADVANCED_LOGGER_MESSAGE_ENTRY_V2 for heading
+/// Implementation of the C struct `ADVANCED_LOGGER_MESSAGE_ENTRY_V2` for heading
 /// a memory log entry.
 #[repr(C)]
 #[repr(packed)]
@@ -372,15 +372,15 @@ pub(crate) struct AdvLoggerMessageEntry {
 }
 
 impl AdvLoggerMessageEntry {
-    /// Signature for the AdvLoggerMessageEntry structure.
+    /// Signature for the `AdvLoggerMessageEntry` structure.
     pub const SIGNATURE: u32 = 0x324D4C41; // ALM2
 
-    /// Major version of the AdvLoggerMessageEntry structure.
+    /// Major version of the `AdvLoggerMessageEntry` structure.
     pub const MAJOR_VERSION: u8 = 2;
-    /// Minor version of the AdvLoggerMessageEntry structure.
+    /// Minor version of the `AdvLoggerMessageEntry` structure.
     pub const MINOR_VERSION: u8 = 1;
 
-    /// Creates the structure of AdvLoggerMessageEntry.
+    /// Creates the structure of `AdvLoggerMessageEntry`.
     ///
     /// This routine is only used internally as creating this structure alone
     /// is not a defined operation. This is used for convenience of setting the
@@ -400,7 +400,7 @@ impl AdvLoggerMessageEntry {
         }
     }
 
-    /// Creates the structure of AdvLoggerMessageEntry from a [`LogEntry`].
+    /// Creates the structure of `AdvLoggerMessageEntry` from a [`LogEntry`].
     pub const fn from_log_entry(entry: &LogEntry) -> Self {
         Self::new(entry.phase, entry.level, entry.timestamp, entry.data.len() as u16)
     }

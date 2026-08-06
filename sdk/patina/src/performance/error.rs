@@ -33,7 +33,7 @@ pub enum Error {
     Efi(EfiError),
     /// Generic serialization error while encoding a performance record or table.
     Serialization,
-    /// A performance record exceeded the representable maximum size (u8::MAX bytes).
+    /// A performance record exceeded the representable maximum size (`u8::MAX` bytes).
     RecordTooLarge {
         /// The actual size of the record that exceeded the limit.
         size: usize,

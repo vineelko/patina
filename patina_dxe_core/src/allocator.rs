@@ -143,7 +143,7 @@ impl AllocationStatistics {
     }
 }
 
-/// The interface needeed for an allocator used by UefiAllocator.
+/// The interface needeed for an allocator used by `UefiAllocator`.
 pub trait PageAllocator {
     /// Allocates the given number of pages according to the allocation strategy.
     fn allocate_pages(
@@ -396,8 +396,8 @@ impl Debug for MemoryDescriptorSlice<'_> {
 /// Return a vector of the memory ranges owned by a particular allocator
 /// Returns an empty vector if the memory type is not found
 /// This function is used for compatibility mode code to set RWX attributes on memory ranges for Loader Code/Data,
-/// but it is not specific to compatibility mode, which is why it is marked as allow(dead_code) as opposed to behind
-/// the compatibility_mode_allowed feature flag. It is valid for other code to use this API in the absence of
+/// but it is not specific to compatibility mode, which is why it is marked as `allow(dead_code)` as opposed to behind
+/// the `compatibility_mode_allowed` feature flag. It is valid for other code to use this API in the absence of
 /// compatibility mode.
 pub(crate) fn get_memory_ranges_for_memory_type(memory_type: efi::MemoryType) -> Vec<Range<efi::PhysicalAddress>> {
     // Check static allocators first, then dynamic allocators
@@ -1260,7 +1260,7 @@ fn process_hob_allocations(hob_list: &HobList) {
 ///
 /// This routine sets the boot services routines for memory allocation and does initial configuration of the allocators.
 /// In particular, this includes reserving a block of pages for each allocator according to the configuration specified
-/// by the platform in the form of the MEMORY_TYPE_INFO HOB. This allows the platform to reserve blocks of memory for
+/// by the platform in the form of the `MEMORY_TYPE_INFO` HOB. This allows the platform to reserve blocks of memory for
 /// memory types that must be stable across S4 resume flows. By reserving additional space beyond what is required, the
 /// memory map reported to the OS can be stable even in the face of small variations in memory from boot-to-boot, which
 /// helps to avoid S4 failure due to memory map change.
@@ -1646,9 +1646,9 @@ mod tests {
     use patina::standard::efi;
 
     enum GcdInit {
-        /// Initializes a simple test GCD (via init_test_gcd()) with the given size.
+        /// Initializes a simple test GCD (via `init_test_gcd()`) with the given size.
         WithSize(usize),
-        /// Initializes a GCD with the given HOB list size (via build_test_hob_list()).
+        /// Initializes a GCD with the given HOB list size (via `build_test_hob_list()`).
         WithHobList(usize),
     }
 

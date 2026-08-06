@@ -211,7 +211,7 @@ pub struct MemoryAllocationHeader {
 /// memory allocations. The HOB consumer phase should be able to ignore these HOBs.
 /// The purpose of this HOB is to allow for the HOB producer phase to have a simple
 /// memory allocation mechanism within the HOB list. The size of the memory allocation
-/// is stipulated by the HobLength field in the generic HOB header.
+/// is stipulated by the `HobLength` field in the generic HOB header.
 ///
 pub type MemoryPool = HobHeader;
 
@@ -228,13 +228,13 @@ pub type MemoryPool = HobHeader;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PhaseHandoffInformationTable {
-    /// The HOB generic header. Header.HobType = EFI_HOB_TYPE_HANDOFF.
+    /// The HOB generic header. Header.HobType = `EFI_HOB_TYPE_HANDOFF`.
     ///
     pub header: HobHeader, // EFI_HOB_GENERIC_HEADER
 
     /// The version number pertaining to the PHIT HOB definition.
     /// This value is four bytes in length to provide an 8-byte aligned entry
-    /// when it is combined with the 4-byte BootMode.
+    /// when it is combined with the 4-byte `BootMode`.
     ///
     pub version: u32,
 
@@ -276,11 +276,11 @@ pub struct PhaseHandoffInformationTable {
 #[derive(Copy, Clone, Debug)]
 pub struct MemoryAllocation {
     // EFI_HOB_MEMORY_ALLOCATION
-    /// The HOB generic header. Header.HobType = EFI_HOB_TYPE_MEMORY_ALLOCATION.
+    /// The HOB generic header. Header.HobType = `EFI_HOB_TYPE_MEMORY_ALLOCATION`.
     ///
     pub header: HobHeader,
 
-    /// An instance of the EFI_HOB_MEMORY_ALLOCATION_HEADER that describes the
+    /// An instance of the `EFI_HOB_MEMORY_ALLOCATION_HEADER` that describes the
     /// various attributes of the logical memory allocation.
     ///
     pub alloc_descriptor: MemoryAllocationHeader,
@@ -302,7 +302,7 @@ pub struct MemoryAllocation {
 pub type MemoryAllocationStack = MemoryAllocation;
 
 // EFI_HOB_MEMORY_ALLOCATION_BSP_STORE
-/// Defines the location of the boot-strap processor (BSP) BSPStore register overflow store.
+/// Defines the location of the boot-strap processor (BSP) `BSPStore` register overflow store.
 ///
 /// This HOB is valid for the Itanium processor family only and describes the location
 /// of the BSP's backing store pointer store register overflow area. This information
@@ -320,11 +320,11 @@ pub type MemoryAllocationBspStore = MemoryAllocation;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct MemoryAllocationModule {
-    /// The HOB generic header. Header.HobType = EFI_HOB_TYPE_MEMORY_ALLOCATION.
+    /// The HOB generic header. Header.HobType = `EFI_HOB_TYPE_MEMORY_ALLOCATION`.
     ///
     pub header: HobHeader,
 
-    /// An instance of the EFI_HOB_MEMORY_ALLOCATION_HEADER that describes the
+    /// An instance of the `EFI_HOB_MEMORY_ALLOCATION_HEADER` that describes the
     /// various attributes of the logical memory allocation. The type field will be
     /// used for subsequent inclusion in the memory map.
     ///
@@ -512,7 +512,7 @@ pub const EFI_MEMORY_MORE_RELIABLE: u64 = 0x0000_0000_0001_0000;
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ResourceDescriptor {
     // EFI_HOB_RESOURCE_DESCRIPTOR
-    /// The HOB generic header. Header.HobType = EFI_HOB_TYPE_RESOURCE_DESCRIPTOR.
+    /// The HOB generic header. Header.HobType = `EFI_HOB_TYPE_RESOURCE_DESCRIPTOR`.
     ///
     pub header: HobHeader,
 
@@ -522,12 +522,12 @@ pub struct ResourceDescriptor {
     ///
     pub owner: crate::BinaryGuid,
 
-    /// Resource type enumeration as defined by EFI_RESOURCE_TYPE.
+    /// Resource type enumeration as defined by `EFI_RESOURCE_TYPE`.
     /// Identifies whether this resource is system memory, memory-mapped I/O,
     /// I/O ports, firmware device, or other platform-specific resource types.
     pub resource_type: u32,
 
-    /// Resource attributes as defined by EFI_RESOURCE_ATTRIBUTE_TYPE.
+    /// Resource attributes as defined by `EFI_RESOURCE_ATTRIBUTE_TYPE`.
     /// Includes information about cacheability, protection attributes,
     /// persistence, reliability, and other characteristics of the resource.
     pub resource_attribute: u32,
@@ -569,7 +569,7 @@ impl ResourceDescriptor {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ResourceDescriptorV2 {
     // EFI_HOB_RESOURCE_DESCRIPTOR
-    /// The HOB generic header. Header.HobType = EFI_HOB_TYPE_RESOURCE_DESCRIPTOR.
+    /// The HOB generic header. Header.HobType = `EFI_HOB_TYPE_RESOURCE_DESCRIPTOR`.
     ///
     pub v1: ResourceDescriptor,
 
@@ -594,7 +594,7 @@ impl From<ResourceDescriptor> for ResourceDescriptorV2 {
 #[derive(Copy, Clone, Debug)]
 pub struct GuidHob {
     // EFI_HOB_GUID_TYPE
-    /// The HOB generic header. Header.HobType = EFI_HOB_TYPE_GUID_EXTENSION.
+    /// The HOB generic header. Header.HobType = `EFI_HOB_TYPE_GUID_EXTENSION`.
     ///
     pub header: HobHeader,
 
@@ -618,7 +618,7 @@ pub struct GuidHob {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct FirmwareVolume {
     // EFI_HOB_FIRMWARE_VOLUME
-    /// The HOB generic header. Header.HobType = EFI_HOB_TYPE_FV.
+    /// The HOB generic header. Header.HobType = `EFI_HOB_TYPE_FV`.
     ///
     pub header: HobHeader,
 
@@ -644,7 +644,7 @@ pub struct FirmwareVolume {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct FirmwareVolume2 {
     // EFI_HOB_FIRMWARE_VOLUME2
-    /// The HOB generic header. Header.HobType = EFI_HOB_TYPE_FV2.
+    /// The HOB generic header. Header.HobType = `EFI_HOB_TYPE_FV2`.
     ///
     pub header: HobHeader,
 
@@ -673,14 +673,14 @@ pub struct FirmwareVolume2 {
 /// consumer phase will use these HOBs to discover drivers to execute and the hand-off
 /// into the HOB consumer phase will use this HOB to discover the location of the HOB
 /// consumer phase firmware file. The HOB consumer phase must provide appropriate
-/// authentication data reflecting AuthenticationStatus for clients accessing the
+/// authentication data reflecting `AuthenticationStatus` for clients accessing the
 /// corresponding firmware volumes.
 ///
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct FirmwareVolume3 {
     // EFI_HOB_FIRMWARE_VOLUME3
-    /// The HOB generic header. Header.HobType = EFI_HOB_TYPE_FV3.
+    /// The HOB generic header. Header.HobType = `EFI_HOB_TYPE_FV3`.
     ///
     pub header: HobHeader,
 
@@ -693,7 +693,7 @@ pub struct FirmwareVolume3 {
     pub length: u64,
 
     /// The authentication status. See Related Definitions of
-    /// EFI_PEI_GUIDED_SECTION_EXTRACTION_PPI.ExtractSection() for more information.
+    /// `EFI_PEI_GUIDED_SECTION_EXTRACTION_PPI.ExtractSection()` for more information.
     ///
     pub authentication_status: u32,
 
@@ -703,12 +703,12 @@ pub struct FirmwareVolume3 {
     pub extracted_fv: crate::standard::efi::Boolean,
 
     /// The name GUID of the firmware volume.
-    /// Valid only if IsExtractedFv is TRUE.
+    /// Valid only if `IsExtractedFv` is TRUE.
     ///
     pub fv_name: crate::BinaryGuid,
 
     /// The name GUID of the firmware file which contained this firmware volume.
-    /// Valid only if IsExtractedFv is TRUE.
+    /// Valid only if `IsExtractedFv` is TRUE.
     ///
     pub file_name: crate::BinaryGuid,
 }
@@ -724,7 +724,7 @@ pub struct FirmwareVolume3 {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Cpu {
     // EFI_HOB_CPU
-    /// The HOB generic header. Header.HobType = EFI_HOB_TYPE_CPU.
+    /// The HOB generic header. Header.HobType = `EFI_HOB_TYPE_CPU`.
     ///
     pub header: HobHeader,
 
@@ -744,16 +744,16 @@ pub struct Cpu {
 /// Details the location of coalesced UEFI capsule memory pages.
 ///
 /// Each UEFI capsule HOB details the location of a UEFI capsule. It includes a base
-/// address and length which is based upon memory blocks with a EFI_CAPSULE_HEADER and
+/// address and length which is based upon memory blocks with a `EFI_CAPSULE_HEADER` and
 /// the associated CapsuleImageSize-based payloads. These HOBs shall be created by the
-/// PEI PI firmware sometime after the UEFI UpdateCapsule service invocation with the
-/// CAPSULE_FLAGS_POPULATE_SYSTEM_TABLE flag set in the EFI_CAPSULE_HEADER.
+/// PEI PI firmware sometime after the UEFI `UpdateCapsule` service invocation with the
+/// `CAPSULE_FLAGS_POPULATE_SYSTEM_TABLE` flag set in the `EFI_CAPSULE_HEADER`.
 ///
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Capsule {
     // EFI_HOB_CAPSULE
-    /// The HOB generic header where Header.HobType = EFI_HOB_TYPE_UEFI_CAPSULE.
+    /// The HOB generic header where Header.HobType = `EFI_HOB_TYPE_UEFI_CAPSULE`.
     ///
     pub header: HobHeader,
 
@@ -1141,7 +1141,7 @@ pub(crate) mod tests {
 
     /// Generates a test GUID HOB in a contiguous heap buffer.
     ///
-    /// A GUID HOB is laid out as [GuidHob header | data bytes] contiguously in memory. The header's
+    /// A GUID HOB is laid out as [`GuidHob` header | data bytes] contiguously in memory. The header's
     /// `length` field covers both the struct and the trailing data. This function replicates that layout
     /// so `HobTrait::as_ptr()` + `size()` correctly spans the entire HOB.
     ///

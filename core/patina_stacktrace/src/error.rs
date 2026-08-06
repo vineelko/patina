@@ -1,4 +1,4 @@
-//! Error codes for the patina_stacktrace crate
+//! Error codes for the `patina_stacktrace` crate
 //!
 //! ## License
 //!
@@ -126,7 +126,7 @@ impl fmt::Display for Error {
     }
 }
 
-/// A specialized result type for the patina_stacktrace crate.
+/// A specialized result type for the `patina_stacktrace` crate.
 pub type StResult<T> = Result<T, Error>;
 
 impl Error {

@@ -142,7 +142,7 @@ struct MonitorCallback {
     /// from the default help listing.
     description: Option<&'static str>,
     /// The callback function that will be invoked when the command is executed.
-    /// See [MonitorCommandFn] for more details on the function signature.
+    /// See [`MonitorCommandFn`] for more details on the function signature.
     callback: Box<MonitorCommandFn>,
 }
 

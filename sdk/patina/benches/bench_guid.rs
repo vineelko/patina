@@ -1,7 +1,7 @@
 //! Benchmarks for GUID operations.
 //!
-//! This benchmark compares the performance of patina::Guid wrapper operations
-//! against patina::standard::efi::Guid operations to measure performance delta.
+//! This benchmark compares the performance of `patina::Guid` wrapper operations
+//! against `patina::standard::efi::Guid` operations to measure performance delta.
 //!
 //! ## Benchmark execution
 //!
@@ -25,10 +25,10 @@
 //!
 //! ## Benchmark Categories
 //!
-//! - **guid_creation**: Tests creation performance from r_efi references and string parsing
-//! - **guid_display**: Tests string formatting performance between wrapper and manual formatting
-//! - **guid_comparison**: Tests equality comparison performance for GUIDs that are equal and not equal
-//! - **guid_complex_operations**: Tests performance of combined create-and-format operations
+//! - **`guid_creation`**: Tests creation performance from `r_efi` references and string parsing
+//! - **`guid_display`**: Tests string formatting performance between wrapper and manual formatting
+//! - **`guid_comparison`**: Tests equality comparison performance for GUIDs that are equal and not equal
+//! - **`guid_complex_operations`**: Tests performance of combined create-and-format operations
 //!
 //! ## License
 //!

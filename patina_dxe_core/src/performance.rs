@@ -50,7 +50,7 @@ use hob::{HobPerformanceData, merge_hob_performance_buffer};
 use table::Fbpt;
 
 /// This is a temporary global reference for code that has not yet been converted to use the instanced
-/// core mechanisms. This should be removed once driver_services.rs is converted.
+/// core mechanisms. This should be removed once `driver_services.rs` is converted.
 pub(crate) static CORE_PERFORMANCE: Service<CorePerformance> = Service::new_uninit();
 
 /// Performance measurement service owned by the DXE Core.

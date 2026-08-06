@@ -17,11 +17,11 @@ use patina_ffs::{
 
 use crate::DECOMPRESSION_MAX_MEMORY_LIMIT;
 
-/// Sentinel uncompressed-size value in the `.lzma` (FORMAT_ALONE) header that indicates
+/// Sentinel uncompressed-size value in the `.lzma` (`FORMAT_ALONE`) header that indicates
 /// the uncompressed size is unknown.
 const LZMA_UNKNOWN_UNPACKED_SIZE_MAGIC_VALUE: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 
-/// Provides decompression for LZMA GUIDed sections.
+/// Provides decompression for LZMA `GUIDed` sections.
 #[derive(Default, Clone, Copy)]
 pub struct LzmaSectionExtractor;
 

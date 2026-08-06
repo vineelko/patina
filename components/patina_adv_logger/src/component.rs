@@ -49,7 +49,7 @@ impl<S> AdvancedLoggerComponent<S>
 where
     S: SerialIO + Send + 'static,
 {
-    /// Creates a new AdvancedLoggerComponent.
+    /// Creates a new `AdvancedLoggerComponent`.
     pub const fn new(adv_logger: &'static AdvancedLogger<S>) -> Self {
         Self { adv_logger }
     }
@@ -78,7 +78,7 @@ where
         efi::Status::SUCCESS
     }
 
-    /// Entry point to the AdvancedLoggerComponent.
+    /// Entry point to the `AdvancedLoggerComponent`.
     ///
     /// Installs the Advanced Logger Protocol for use by non-local components.
     ///

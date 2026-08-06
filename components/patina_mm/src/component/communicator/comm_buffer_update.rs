@@ -26,14 +26,14 @@ use alloc::boxed::Box;
 
 /// Context for the MM Comm Buffer Update Protocol notify callback
 ///
-/// This context is shared between the protocol callback and the communicate() method.
+/// This context is shared between the protocol callback and the `communicate()` method.
 /// When a protocol callback triggers, it stores the pending buffer update atomically.
-/// The next communicate() call will apply the pending update.
+/// The next `communicate()` call will apply the pending update.
 #[repr(C)]
 pub(super) struct ProtocolNotifyContext {
     pub(super) boot_services: StandardBootServices,
     pub(super) updatable_buffer_id: u8,
-    /// Pending buffer update - set by protocol callback, consumed by communicate()
+    /// Pending buffer update - set by protocol callback, consumed by `communicate()`
     pub(super) pending_buffer: AtomicPtr<CommunicateBuffer>,
     /// Flag indicating if a buffer update is pending
     pub(super) has_pending_update: AtomicBool,
@@ -89,7 +89,7 @@ pub(super) fn register_buffer_update_notify(
 /// Apply any pending buffer update if available
 ///
 /// This function checks if a pending buffer update is available (set by the protocol callback)
-/// and applies it if needed. It should be called from communicate() before processing
+/// and applies it if needed. It should be called from `communicate()` before processing
 /// the communication request.
 ///
 /// # Parameters
@@ -153,18 +153,18 @@ pub(super) fn apply_pending_buffer_update(
 ///
 /// This callback is triggered when the MM Communication Buffer Update Protocol is installed.
 /// It reads the protocol data, validates the communication buffer information, and stores
-/// the buffer update. The update will be applied by communicate().
+/// the buffer update. The update will be applied by `communicate()`.
 ///
 /// ## Coverage
 ///
-/// Note: register_buffer_update_notify() and protocol_notify_callback() are difficult to unit test because they
+/// Note: `register_buffer_update_notify()` and `protocol_notify_callback()` are difficult to unit test because they
 /// require:
 ///
 /// 1. UEFI boot services with working event creation and protocol notification services
 /// 2. A protocol database with functional protocol lookup
 /// 3. Raw pointer manipulation of protocol data
 ///
-/// ELements of the protocol update process are unit tested but the notification function as a whole is not.
+/// `ELements` of the protocol update process are unit tested but the notification function as a whole is not.
 #[cfg_attr(coverage, coverage(off))]
 extern "efiapi" fn protocol_notify_callback(_event: efi::Event, context: &'static ProtocolNotifyContext) {
     log::trace!(target: "mm_comm", "=== Protocol callback ENTRY ===");

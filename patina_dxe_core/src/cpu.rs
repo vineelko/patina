@@ -22,13 +22,13 @@ pub(crate) use perf_timer::PerfTimer;
 use efi_cpu::EfiCpu;
 use patina_internal_cpu::interrupts::Interrupts;
 
-/// A configuration struct containing the GIC bases (gic_d, gic_r) for AARCH64 systems.
+/// A configuration struct containing the GIC bases (`gic_d`, `gic_r`) for AARCH64 systems.
 ///
 /// ## Invariants
 ///
 /// - `self.0` (GIC Distributor Base) points to the GIC Distributor register space.
 /// - `self.1` (GIC Redistributor Base) points to the GIC Redistributor register space.
-/// - Access to these registers are exclusive to this GicBases instance.
+/// - Access to these registers are exclusive to this `GicBases` instance.
 ///
 /// ## Example
 ///
@@ -64,7 +64,7 @@ pub struct GicBases {
 }
 
 impl GicBases {
-    /// Creates a new instance of the GicBases struct with the provided GIC Distributor and Redistributor base addresses.
+    /// Creates a new instance of the `GicBases` struct with the provided GIC Distributor and Redistributor base addresses.
     ///
     /// ## Safety
     ///
@@ -72,9 +72,9 @@ impl GicBases {
     ///
     /// `gicr_base` must point to the GIC Redistributor register space.
     ///
-    /// Access to these registers are exclusive to this GicBases instance.
+    /// Access to these registers are exclusive to this `GicBases` instance.
     ///
-    /// Caller must guarantee that access to these registers is exclusive to this GicBases instance.
+    /// Caller must guarantee that access to these registers is exclusive to this `GicBases` instance.
     #[cfg_attr(coverage, coverage(off))]
     pub unsafe fn new(gicd_base: u64, gicr_base: u64) -> Self {
         GicBases { gicd: gicd_base, gicr: gicr_base }

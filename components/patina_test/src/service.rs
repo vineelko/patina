@@ -1,9 +1,9 @@
 //! Patina Testing Service
 //!
 //! This module defines the internal service used by the crate to register and execute tests marked with the
-//! `#[patina_test]` attribute. The [TestRunner](crate::component::TestRunner) component checks for the presence of
+//! `#[patina_test]` attribute. The [`TestRunner`](crate::component::TestRunner) component checks for the presence of
 //! the [Recorder] service, registering a new one if it does not. It then uses the Recorder service to register all
-//! discovered tests based on the filtered list each individual TestRunner is configured to run. The Recorder service
+//! discovered tests based on the filtered list each individual `TestRunner` is configured to run. The Recorder service
 //! is then responsible for executing the tests, recording their results, and logging the results at the appropriate
 //! time during the boot process.
 //!
@@ -48,7 +48,7 @@ pub(crate) struct TestRecord {
 
 #[allow(unused)]
 impl TestRecord {
-    /// Creates a new instance of TestRecord.
+    /// Creates a new instance of `TestRecord`.
     pub fn new(
         debug_mode: bool,
         test_case: &'static TestCase,
@@ -162,7 +162,7 @@ impl TestRecord {
     }
 
     #[cfg_attr(coverage, coverage(off))]
-    /// An EFIAPI compatible event callback to disable a timer event at ReadyToBoot
+    /// An EFIAPI compatible event callback to disable a timer event at `ReadyToBoot`
     extern "efiapi" fn disable_timer(rtb_event: patina::standard::efi::Event, context: *mut core::ffi::c_void) {
         // SAFETY: We set up the context pointer in `run_tests` to point to a valid tuple of (Event, StandardBootServices).
         let (timer_event, boot_services) =
@@ -230,7 +230,7 @@ impl Recorder {
         });
     }
 
-    /// Runs all tests that are triggered by the [TestTrigger::Manual] trigger if they have not been run before.
+    /// Runs all tests that are triggered by the [`TestTrigger::Manual`] trigger if they have not been run before.
     pub(crate) fn run_manual_tests(&self, storage: &mut Storage) {
         self.with_mut(|data| {
             data.values_mut()

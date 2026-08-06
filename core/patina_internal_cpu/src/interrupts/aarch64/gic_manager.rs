@@ -79,7 +79,7 @@ pub struct AArch64InterruptInitializer {
 }
 
 impl AArch64InterruptInitializer {
-    /// Create AArch64InterruptInitializer from register bases and initialize GICv3/4 hardware for use by the current
+    /// Create `AArch64InterruptInitializer` from register bases and initialize GICv3/4 hardware for use by the current
     /// cpu.
     ///
     /// * Enable affinity routing and non-secure group 1 interrupts.
@@ -92,7 +92,7 @@ impl AArch64InterruptInitializer {
     ///
     /// `gicr_base` must point to the GIC Redistributor register space.
     ///
-    /// Caller must guarantee that access to these registers is exclusive to this AArch64InterruptInitializer instance
+    /// Caller must guarantee that access to these registers is exclusive to this `AArch64InterruptInitializer` instance
     ///
     pub unsafe fn new(gicd_base: *mut u64, gicr_base: *mut u64) -> Result<Self, EfiError> {
         let gic_v = get_system_gic_version();

@@ -32,28 +32,28 @@ use crate::{GCD, gcd::spin_locked_gcd::PagingAllocator, pecoff};
 
 pub use spin_locked_gcd::{AllocateType, MapChangeType, SpinLockedGcd};
 
-/// The MemoryProtectionPolicy struct is the source of truth for Patina's memory protection rules.
+/// The `MemoryProtectionPolicy` struct is the source of truth for Patina's memory protection rules.
 /// All memory protection decisions in Patina are driven by functions in this struct to have one
 /// easily auditable location.
 ///
 /// All rules in this struct are associated functions (don't require an instantiation of the struct)
-/// except for the apply_default_allocated_memory_protection_policy function, because this relies on
-/// internal state. The GCD contains a MemoryProtectionPolicy instance to manage this state.
+/// except for the `apply_default_allocated_memory_protection_policy` function, because this relies on
+/// internal state. The GCD contains a `MemoryProtectionPolicy` instance to manage this state.
 pub(crate) struct MemoryProtectionPolicy {
-    /// The default attributes for memory allocations. This will be efi::MEMORY_XP unless
+    /// The default attributes for memory allocations. This will be `efi::MEMORY_XP` unless
     /// we have entered compatibility mode, in which case it is 0, e.g. no protection
     memory_allocation_default_attributes: Cell<u64>,
 }
 
 impl MemoryProtectionPolicy {
-    /// Create a new MemoryProtectionPolicy instance with default settings.
+    /// Create a new `MemoryProtectionPolicy` instance with default settings.
     pub(crate) const fn new() -> Self {
         Self { memory_allocation_default_attributes: Cell::new(efi::MEMORY_XP) }
     }
 
-    /// Rule: All memory allocations will have EFI_MEMORY_NX applied. If compatibility mode
+    /// Rule: All memory allocations will have `EFI_MEMORY_NX` applied. If compatibility mode
     /// has been activated, no protections will be applied.
-    /// System memory allocations will have EFI_MEMORY_WB applied. All other memory types
+    /// System memory allocations will have `EFI_MEMORY_WB` applied. All other memory types
     /// will preserve the cache attributes.
     ///
     /// Arguments
@@ -94,7 +94,7 @@ impl MemoryProtectionPolicy {
     }
 
     /// Rule: If we have Uncached memory, we must also apply NX to it.
-    /// In DXE, we should never be executing from UC memory. On AArch64, this is defined as
+    /// In DXE, we should never be executing from UC memory. On `AArch64`, this is defined as
     /// a programming error to have executable device memory (which UC maps to).
     ///
     /// Arguments
@@ -112,7 +112,7 @@ impl MemoryProtectionPolicy {
     }
 
     /// Rule: The Memory Attributes Table, per UEFI spec, may only have RO, XP, and Runtime set. Only
-    /// RuntimeServicesCode and RuntimeServicesData are reported in the MAT. RuntimeServicesCode memory consists
+    /// `RuntimeServicesCode` and `RuntimeServicesData` are reported in the MAT. `RuntimeServicesCode` memory consists
     /// of code sections, data sections, and potentially extra unused memory for padding.
     ///   - If a Runtime Services Code region has no attributes set, mark it as RO, XP, and Runtime. This will
     ///     prevent unused memory from being executed or written to.
@@ -185,18 +185,18 @@ impl MemoryProtectionPolicy {
         (attributes, capabilities)
     }
 
-    /// Rule: The EFI_MEMORY_MAP descriptor.attributes field is actually a capability field that must not have
+    /// Rule: The `EFI_MEMORY_MAP` descriptor.attributes field is actually a capability field that must not have
     /// access attributes in it; some OSes treat these as actually set attributes, not capabilities. The runtime
-    /// attribute is taken from the attributes, not the capabilities. Persistent memory must have EFI_MEMORY_NV set.
+    /// attribute is taken from the attributes, not the capabilities. Persistent memory must have `EFI_MEMORY_NV` set.
     /// Runtime services code and data must have the runtime attribute set.
     ///
     /// Arguments
-    /// * `attributes` - The memory attributes from the EFI_MEMORY_MAP descriptor
-    /// * `capabilities` - The memory capabilities from the EFI_MEMORY_MAP descriptor
+    /// * `attributes` - The memory attributes from the `EFI_MEMORY_MAP` descriptor
+    /// * `capabilities` - The memory capabilities from the `EFI_MEMORY_MAP` descriptor
     /// * `gcd_memory_type` - The GCD memory type for this region
     /// * `memory_type` - The UEFI memory type for this region
     ///
-    /// Use Case: This is called when building the EFI_MEMORY_MAP to ensure the attributes are correctly set.
+    /// Use Case: This is called when building the `EFI_MEMORY_MAP` to ensure the attributes are correctly set.
     pub(crate) fn apply_efi_memory_map_policy(
         attributes: u64,
         capabilities: u64,
@@ -220,10 +220,10 @@ impl MemoryProtectionPolicy {
     }
 
     /// Rule: All new memory should support all access capabilities and runtime. These are generally applicable, not
-    /// specific to any memory. All new memory is marked as EFI_MEMORY_RP to start with and will not be mapped until
-    /// SetMemorySpaceAttributes() is called to set the attributes. EFI_MEMORY_XP is also set to allow merging with
-    /// other free memory blocks. System memory is marked as EFI_MEMORY_WB by default. Other memory types are expected
-    /// to have their cache attributes set by set_memory_space_attributes().
+    /// specific to any memory. All new memory is marked as `EFI_MEMORY_RP` to start with and will not be mapped until
+    /// `SetMemorySpaceAttributes()` is called to set the attributes. `EFI_MEMORY_XP` is also set to allow merging with
+    /// other free memory blocks. System memory is marked as `EFI_MEMORY_WB` by default. Other memory types are expected
+    /// to have their cache attributes set by `set_memory_space_attributes()`.
     ///
     /// Arguments
     /// - * `capabilities` - The existing capabilities for the memory region
@@ -245,9 +245,9 @@ impl MemoryProtectionPolicy {
         }
     }
 
-    /// Rule: All free memory should be marked as EFI_MEMORY_RP and EFI_MEMORY_XP. System memory should be reset back
-    /// to EFI_MEMORY_WB as the default. Other memory types should preserve the existing cache attributes.
-    /// EFI_MEMORY_RP will cause the memory to be unmapped in the page table, but we still set EFI_MEMORY_XP to align
+    /// Rule: All free memory should be marked as `EFI_MEMORY_RP` and `EFI_MEMORY_XP`. System memory should be reset back
+    /// to `EFI_MEMORY_WB` as the default. Other memory types should preserve the existing cache attributes.
+    /// `EFI_MEMORY_RP` will cause the memory to be unmapped in the page table, but we still set `EFI_MEMORY_XP` to align
     /// with the originally added memory so that free memory can be coalesced into fewer blocks.
     ///
     /// Arguments
@@ -272,7 +272,7 @@ impl MemoryProtectionPolicy {
         (attributes & efi::CACHE_ATTRIBUTE_MASK) | efi::MEMORY_RP | efi::MEMORY_XP
     }
 
-    /// Rule: If the compatibility_mode_allowed feature flag is not set, we will fail to load
+    /// Rule: If the `compatibility_mode_allowed` feature flag is not set, we will fail to load
     /// the image that would crash the system with memory protections enabled
     ///
     /// Arguments
@@ -281,7 +281,7 @@ impl MemoryProtectionPolicy {
     /// * `filename` - The name of the image being loaded
     ///
     /// Use Case: This is called when the platform has not allowed compatibility mode and we are attempting to load
-    /// an EFI_APPLICATION that is not NX compatible.
+    /// an `EFI_APPLICATION` that is not NX compatible.
     #[cfg(not(feature = "compatibility_mode_allowed"))]
     pub(crate) fn activate_compatibility_mode(
         _gcd: &SpinLockedGcd,
@@ -296,7 +296,7 @@ impl MemoryProtectionPolicy {
         Err(EfiError::LoadError)
     }
 
-    /// Rule: If the platform allows compatibility mode, activate it when an EFI_APPLICATION without the NX_COMPAT flag
+    /// Rule: If the platform allows compatibility mode, activate it when an `EFI_APPLICATION` without the `NX_COMPAT` flag
     /// is loaded.
     /// This will:
     /// - Activate compatibility mode for the GCD lower layers
@@ -309,7 +309,7 @@ impl MemoryProtectionPolicy {
     /// * `filename` - The name of the image being loaded
     ///
     /// Use Case: This is called when the platform has allowed compatibility mode and we are attempting to load
-    /// an EFI_APPLICATION that is not NX compatible.
+    /// an `EFI_APPLICATION` that is not NX compatible.
     #[cfg(feature = "compatibility_mode_allowed")]
     pub(crate) fn activate_compatibility_mode(
         gcd: &SpinLockedGcd,
@@ -541,7 +541,7 @@ pub fn init_gcd(physical_hob_list: *const c_void) {
 /// This function installs the new Patina controlled page tables based
 /// on the HOB list provided. Note that coverage is disabled for the
 /// wrapper function because this simply wraps the actual implementation
-/// in the SpinLockedGcd struct, which is covered by unit tests.
+/// in the `SpinLockedGcd` struct, which is covered by unit tests.
 pub fn init_paging(hob_list: &HobList) {
     let page_allocator = PagingAllocator::new(&GCD);
     let page_table: Box<dyn PatinaPageTable> =
@@ -731,7 +731,7 @@ fn remove_range_overlap<T: PartialOrd + Copy>(a: &Range<T>, b: &Range<T>) -> [Op
 /// Parse Resource Descriptor HOB v2
 ///
 /// This function takes in a HOB and returns:
-/// - Some((Resource Descriptor, Some(cache_attributes))) if cache attributes are present
+/// - Some((Resource Descriptor, `Some(cache_attributes)`)) if cache attributes are present
 /// - Some((Resource Descriptor, None)) if no cache attributes are present
 /// - None if not a v2 resource descriptor HOB
 #[cfg(not(feature = "v1_resource_descriptor_support"))]

@@ -265,7 +265,7 @@ impl<const N: usize, const B: usize> VirtQueue<N, B> {
     }
 
     /// Publishes a descriptor index on the available ring with full
-    /// SeqCst ordering on either side of the index update.
+    /// `SeqCst` ordering on either side of the index update.
     fn publish_avail(&mut self, desc_idx: u16) {
         let avail_idx = self.avail.idx;
         let ring_pos = (avail_idx as usize) % N;

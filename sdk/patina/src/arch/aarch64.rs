@@ -1,4 +1,4 @@
-//! AArch64 Specific abstractions for Patina.
+//! `AArch64` Specific abstractions for Patina.
 //!
 //! ## License
 //!

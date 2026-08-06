@@ -200,13 +200,13 @@ impl<'a> VolumeRef<'a> {
         Ok(Self { data: buffer, fv_header, ext_header, block_map, content_offset })
     }
 
-    /// Instantiate a new FirmwareVolume from a base address.
+    /// Instantiate a new `FirmwareVolume` from a base address.
     ///
     /// ## Safety
     ///
-    /// Caller must ensure that base_address is the address of the start of a firmware volume.
-    /// Caller must ensure that the lifetime of the buffer at base_address is longer than the
-    /// returned VolumeRef.
+    /// Caller must ensure that `base_address` is the address of the start of a firmware volume.
+    /// Caller must ensure that the lifetime of the buffer at `base_address` is longer than the
+    /// returned `VolumeRef`.
     ///
     /// ## Examples
     ///
@@ -279,7 +279,7 @@ impl<'a> VolumeRef<'a> {
 
     /// Resolve information about a Logical Block Address (LBA).
     ///
-    /// Returns a tuple of (byte_offset_from_fv_start, block_size, remaining_blocks_in_region).
+    /// Returns a tuple of (`byte_offset_from_fv_start`, `block_size`, `remaining_blocks_in_region`).
     /// Errors if `lba` is out of range per the block map.
     ///
     /// ```rust no_run
@@ -440,7 +440,7 @@ pub struct Volume {
 impl Volume {
     /// Create a new empty Firmware Volume builder with the given block map.
     ///
-    /// Defaults to the FFSv3 filesystem GUID, no extended header, and unbounded capacity.
+    /// Defaults to the `FFSv3` filesystem GUID, no extended header, and unbounded capacity.
     pub fn new(block_map: Vec<BlockMapEntry>) -> Self {
         Self {
             file_system_guid: ffs::guid::EFI_FIRMWARE_FILE_SYSTEM3_GUID,
@@ -479,9 +479,9 @@ impl Volume {
     ///
     /// Produces a correct FV header (including checksum), inserts PAD files to
     /// satisfy file alignment and optional extended header placement, respects
-    /// filesystem capabilities (FFSv2 vs FFSv3), and pads to capacity when set.
+    /// filesystem capabilities (`FFSv2` vs `FFSv3`), and pads to capacity when set.
     /// Errors propagate from serializing files and sections or when constraints
-    /// are violated (e.g., file too large for FFSv2).
+    /// are violated (e.g., file too large for `FFSv2`).
     ///
     /// ## Examples
     ///

@@ -51,25 +51,25 @@ unsafe impl Sync for StandardBootServices {}
 unsafe impl Send for StandardBootServices {}
 
 impl StandardBootServices {
-    /// Create a new StandardBootServices with the provided [efi::BootServices].
+    /// Create a new `StandardBootServices` with the provided [`efi::BootServices`].
     pub fn new(efi_boot_services: *mut efi::BootServices) -> Self {
         let this = Self::new_uninit();
         this.init(efi_boot_services);
         this
     }
 
-    /// Create a new StandardBootServices that has not been initialized.
+    /// Create a new `StandardBootServices` that has not been initialized.
     pub const fn new_uninit() -> Self {
         StandardBootServices { efi_boot_services: Once::new() }
     }
 
-    /// Initialize the StandardBootServices.
+    /// Initialize the `StandardBootServices`.
     pub fn init(&self, efi_boot_services: *mut efi::BootServices) {
         // This struct never mutate the efi_boot_services.
         self.efi_boot_services.call_once(|| efi_boot_services);
     }
 
-    /// Return true if StandardBootServices is initialized.
+    /// Return true if `StandardBootServices` is initialized.
     pub fn is_init(&self) -> bool {
         self.efi_boot_services.is_completed()
     }
@@ -154,7 +154,7 @@ impl Debug for StandardBootServices {
     }
 }
 
-/// Functions that are available *before* a successful call to EFI_BOOT_SERVICES.ExitBootServices().
+/// Functions that are available *before* a successful call to `EFI_BOOT_SERVICES.ExitBootServices()`.
 #[cfg_attr(any(test, feature = "mockall"), automock)]
 #[allow(clippy::needless_lifetimes)] //https://github.com/rust-lang/rust-clippy/issues/6622
 pub trait BootServices {
@@ -189,7 +189,7 @@ pub trait BootServices {
     ///
     /// # Safety
     ///
-    /// When calling this method, you have to make sure that *notify_context* pointer is **null** or all of the following is true:
+    /// When calling this method, you have to make sure that *`notify_context`* pointer is **null** or all of the following is true:
     /// * The pointer must be properly aligned.
     /// * It must be "dereferenceable" into type `T`
     /// * It must remain a valid pointer for the lifetime of the event.
@@ -252,7 +252,7 @@ pub trait BootServices {
     ///
     /// [UEFI Spec Documentation: 7.1.3. EFI_BOOT_SERVICES.CloseEvent()](https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-closeevent)
     ///
-    /// [^note]: It is safe to call *close_event* in the notify function.
+    /// [^note]: It is safe to call *`close_event`* in the notify function.
     fn close_event(&self, event: efi::Event) -> Result<(), efi::Status>;
 
     /// Signals an event.
@@ -481,7 +481,7 @@ pub trait BootServices {
     /// Use [`BootServices::reinstall_protocol_interface`] when possible.
     ///
     /// # Safety
-    /// When calling this method, you have to make sure that if *new_protocol_interface* pointer is non-null, it is adhereing to
+    /// When calling this method, you have to make sure that if *`new_protocol_interface`* pointer is non-null, it is adhereing to
     /// the structure associated with the protocol.
     unsafe fn reinstall_protocol_interface_unchecked(
         &self,
@@ -563,7 +563,7 @@ pub trait BootServices {
     ///
     /// # Safety
     ///
-    /// caller must handle conversion of the output c_void to proper type appropriately.
+    /// caller must handle conversion of the output `c_void` to proper type appropriately.
     unsafe fn handle_protocol_unchecked(
         &self,
         handle: efi::Handle,
@@ -659,7 +659,7 @@ pub trait BootServices {
     ///
     /// # Safety
     ///
-    /// When calling this method, you have to make sure that if *agent_handle* pointer is non-null.
+    /// When calling this method, you have to make sure that if *`agent_handle`* pointer is non-null.
     unsafe fn open_protocol_unchecked(
         &self,
         handle: efi::Handle,
@@ -693,7 +693,7 @@ pub trait BootServices {
     ///
     /// # Safety
     ///
-    /// When calling this method, you have to make sure that *driver_image_handle*'s last entry is null per UEFI specification.
+    /// When calling this method, you have to make sure that *`driver_image_handle`*'s last entry is null per UEFI specification.
     ///
     /// This function assumes that all driver bindings managing the controller remain valid for the duration of this call.
     ///
@@ -1000,9 +1000,9 @@ pub trait BootServices {
     unsafe fn calculate_crc_32_unchecked(&self, data: *const c_void, data_size: usize) -> Result<u32, efi::Status>;
 }
 
-/// Clone implementation for MockBootServices that creates a new mock with default expectations.
-/// TplMutex owns its BootServices instance, so this Clone impl is needed when passing mocks.
-/// Sets up default expectations for raise_tpl and restore_tpl which are commonly used by TplMutex.
+/// Clone implementation for `MockBootServices` that creates a new mock with default expectations.
+/// `TplMutex` owns its `BootServices` instance, so this Clone impl is needed when passing mocks.
+/// Sets up default expectations for `raise_tpl` and `restore_tpl` which are commonly used by `TplMutex`.
 #[cfg(any(test, feature = "mockall"))]
 impl Clone for MockBootServices {
     fn clone(&self) -> Self {
@@ -1614,7 +1614,7 @@ impl BootServices for StandardBootServices {
     /// Not marked `unsafe` because `protocol` is a Rust reference and is therefore guaranteed
     /// to be valid. `handle` is an opaque handle validated internally by the implementation;
     /// an invalid handle results in an error status, not undefined behavior.
-    /// This is triggered by the fact that efi::Handle aliases to *mut c_void, but
+    /// This is triggered by the fact that `efi::Handle` aliases to *mut `c_void`, but
     /// it is an opaque handle used as a database key.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn open_protocol_information(
@@ -1691,7 +1691,7 @@ impl BootServices for StandardBootServices {
     ///   wrapped inside Rust types. Passing an invalid value does not by itself
     ///   cause undefined behavior; the firmware is expected to reject it by
     ///   returning an error status. The function is marked `unsafe` due to the
-    ///   underlying contract of core_disconnect_controller() implementation.
+    ///   underlying contract of `core_disconnect_controller()` implementation.
     unsafe fn disconnect_controller(
         &self,
         controller_handle: efi::Handle,
@@ -1722,7 +1722,7 @@ impl BootServices for StandardBootServices {
     /// implementation; an invalid handle results in an error status, not undefined behavior.
     /// The output pointers are derived from local variables.
     ///
-    /// This is triggered by the fact that efi::Event aliases to *mut c_void, but
+    /// This is triggered by the fact that `efi::Event` aliases to *mut `c_void`, but
     /// it is an opaque handle used as a database key.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn protocols_per_handle(
@@ -1890,7 +1890,7 @@ impl BootServices for StandardBootServices {
         }
     }
 
-    /// This is triggered by the fact that efi::Event aliases to *mut c_void, but
+    /// This is triggered by the fact that `efi::Event` aliases to *mut `c_void`, but
     /// it is an opaque handle used as a database key.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn unload_image(&self, image_handle: efi::Handle) -> Result<(), efi::Status> {

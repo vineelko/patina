@@ -30,9 +30,9 @@
 //! - Working with zerocopy parsing of binary data
 //! - Storing GUIDs in structures that will be cast from byte buffers
 //!
-//! Unlike the Guid types, BinaryGuid is designed for exact binary compatibility with
+//! Unlike the Guid types, `BinaryGuid` is designed for exact binary compatibility with
 //! C structures and does not provide as many ergonomic features as the more generic
-//! Guid and OwnedGuid types.
+//! Guid and `OwnedGuid` types.
 //!
 //! For example, a structure that has a GUID at offset zero would expect a binary layout of:
 //!
@@ -209,14 +209,14 @@ impl BinaryGuid {
     /// A constant representing a GUID with all zero bytes.
     pub const ZERO: BinaryGuid = BinaryGuid::from_string("00000000-0000-0000-0000-000000000000");
 
-    /// Create a BinaryGuid from individual GUID fields.
+    /// Create a `BinaryGuid` from individual GUID fields.
     ///
     /// This is a const function that can be used to create compile-time constants.
     pub const fn from_fields(d1: u32, d2: u16, d3: u16, d4: u8, d5: u8, d6: &[u8; 6]) -> Self {
         Self(efi::Guid::from_fields(d1, d2, d3, d4, d5, d6))
     }
 
-    /// Create a BinaryGuid from a 16-byte array.
+    /// Create a `BinaryGuid` from a 16-byte array.
     pub const fn from_bytes(bytes: &[u8; 16]) -> Self {
         Self(efi::Guid::from_bytes(bytes))
     }
@@ -229,7 +229,7 @@ impl BinaryGuid {
         }
     }
 
-    /// Create a new BinaryGuid from a string representation, panicking on invalid input.
+    /// Create a new `BinaryGuid` from a string representation, panicking on invalid input.
     pub const fn from_string(s: &str) -> BinaryGuid {
         match Self::try_from_string(s) {
             Ok(guid) => guid,
@@ -405,7 +405,7 @@ impl<'a> Guid<'a> {
     }
 
     /// Get the GUID fields as individual components for compatibility with the EFI GUID fields.
-    /// Returns: (time_low, time_mid, time_hi_and_version, clk_seq_hi_res, clk_seq_low, node)
+    /// Returns: (`time_low`, `time_mid`, `time_hi_and_version`, `clk_seq_hi_res`, `clk_seq_low`, node)
     pub fn as_fields(&self) -> (u32, u16, u16, u8, u8, &[u8; 6]) {
         match self {
             Self::Borrowed(guid) => guid.as_fields(),
@@ -413,10 +413,10 @@ impl<'a> Guid<'a> {
         }
     }
 
-    /// Convert this GUID to an crate::standard::efi::Guid for compatibility with code that directly
+    /// Convert this GUID to an `crate::standard::efi::Guid` for compatibility with code that directly
     /// interacts with that interface.
     ///
-    /// Creates a new crate::standard::efi::Guid with the same value.
+    /// Creates a new `crate::standard::efi::Guid` with the same value.
     pub fn to_efi_guid(&self) -> efi::Guid {
         match self {
             Self::Borrowed(guid) => **guid,
@@ -466,8 +466,8 @@ impl<'a> Guid<'a> {
 impl OwnedGuid {
     /// Create a new GUID from raw field values.
     ///
-    /// This constant method creates GUIDs using the standard GUID fields of time_low, time_mid,
-    /// time_hi_and_version, clk_seq_hi_res, clk_seq_low, and the 6-byte node array.
+    /// This constant method creates GUIDs using the standard GUID fields of `time_low`, `time_mid`,
+    /// `time_hi_and_version`, `clk_seq_hi_res`, `clk_seq_low`, and the 6-byte node array.
     pub const fn from_fields(
         time_low: u32,
         time_mid: u16,
@@ -485,7 +485,7 @@ impl OwnedGuid {
     /// This is useful for placeholder values and comparisons.
     pub const ZERO: OwnedGuid = Self::from_fields(0, 0, 0, 0, 0, [0; 6]);
 
-    /// Create a new OwnedGuid from a string representation.
+    /// Create a new `OwnedGuid` from a string representation.
     pub const fn try_from_string(s: &str) -> core::result::Result<OwnedGuid, GuidError> {
         match guid_from_str(s) {
             Ok(g) => Ok(OwnedGuid::Owned(g)),
@@ -493,7 +493,7 @@ impl OwnedGuid {
         }
     }
 
-    /// Creates a new OwnedGuid from a string representation, panicking on invalid input.
+    /// Creates a new `OwnedGuid` from a string representation, panicking on invalid input.
     pub const fn from_string(s: &str) -> OwnedGuid {
         match Self::try_from_string(s) {
             Ok(guid) => guid,

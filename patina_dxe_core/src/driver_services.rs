@@ -302,17 +302,17 @@ fn core_connect_single_controller(
 
 /// Connects a controller to drivers
 ///
-/// This function matches the behavior of EFI_BOOT_SERVICES.ConnectController() API in the UEFI spec 2.10 section
+/// This function matches the behavior of `EFI_BOOT_SERVICES.ConnectController()` API in the UEFI spec 2.10 section
 /// 7.3.12. Refer to the UEFI spec description for details on input parameters, behavior, and error return codes.
 ///
 /// # Safety
-/// This routine cannot hold the protocol db lock while executing DriverBinding->Supported()/Start() since
+/// This routine cannot hold the protocol db lock while executing `DriverBinding->Supported()/Start()` since
 /// they need to access protocol db services. That means this routine can't guarantee that driver bindings remain
 /// valid for the duration of its execution. For example, if a driver were be unloaded in a timer callback after
-/// returning true from Supported() before Start() is called, then the driver binding instance would be uninstalled or
-/// invalid and Start() would be an invalid function pointer when invoked. In general, the spec implicitly assumes
-/// that driver binding instances that are valid at the start of the call to ConnectController() must remain valid for
-/// the duration of the ConnectController() call. If this is not true, then behavior is undefined. This function is
+/// returning true from `Supported()` before `Start()` is called, then the driver binding instance would be uninstalled or
+/// invalid and `Start()` would be an invalid function pointer when invoked. In general, the spec implicitly assumes
+/// that driver binding instances that are valid at the start of the call to `ConnectController()` must remain valid for
+/// the duration of the `ConnectController()` call. If this is not true, then behavior is undefined. This function is
 /// marked unsafe for this reason.
 ///
 /// ## Example
@@ -347,15 +347,15 @@ pub unsafe fn core_connect_controller(
 /// table.
 ///
 ///  NOTE: This routine cannot hold the protocol db lock while executing
-///  DriverBinding->Supported()/Start() since they need to access protocol db
+///  `DriverBinding->Supported()/Start()` since they need to access protocol db
 ///  services. That means this routine can't guarantee that driver bindings
 ///  remain valid for the duration of its execution. For example, if a driver
-///  were be unloaded in a timer callback after returning true from Supported()
-///  before Start() is called, then the driver binding instance would be
-///  uninstalled or invalid and Start() would be an invalid function pointer
+///  were be unloaded in a timer callback after returning true from `Supported()`
+///  before `Start()` is called, then the driver binding instance would be
+///  uninstalled or invalid and `Start()` would be an invalid function pointer
 ///  when invoked. In general, the spec implicitly assumes that driver binding
-///  instances that are valid at the start of the call to ConnectController()
-///  must remain valid for the duration of the ConnectController() call. If this
+///  instances that are valid at the start of the call to `ConnectController()`
+///  must remain valid for the duration of the `ConnectController()` call. If this
 ///  is not true, then behavior is undefined. This function is marked unsafe for
 ///  this reason.
 ///
@@ -411,16 +411,16 @@ unsafe extern "efiapi" fn connect_controller(
 
 /// Disconnects drivers from a controller.
 ///
-/// This function matches the behavior of EFI_BOOT_SERVICES.DisconnectController() API in the UEFI spec 2.10 section
+/// This function matches the behavior of `EFI_BOOT_SERVICES.DisconnectController()` API in the UEFI spec 2.10 section
 /// 7.3.13. Refer to the UEFI spec description for details on input parameters, behavior, and error return codes.
 ///
 /// # Safety
-/// This routine cannot hold the protocol db lock while executing DriverBinding->Stop() since it needs to access
+/// This routine cannot hold the protocol db lock while executing `DriverBinding->Stop()` since it needs to access
 /// protocol db services. That means this routine can't guarantee that driver bindings remain valid for the duration
-/// of its execution. For example, if a driver were to be unloaded in a timer callback while Stop() is being called
-/// on another driver, the driver binding instance could become invalid and Stop() would be an invalid function
+/// of its execution. For example, if a driver were to be unloaded in a timer callback while `Stop()` is being called
+/// on another driver, the driver binding instance could become invalid and `Stop()` would be an invalid function
 /// pointer when invoked. In general, the spec implicitly assumes that driver binding instances that are valid at the
-/// start of the call to DisconnectController() must remain valid for the duration of the DisconnectController()
+/// start of the call to `DisconnectController()` must remain valid for the duration of the `DisconnectController()`
 /// call. If this is not true, then behavior is undefined. This function is marked unsafe for this reason.
 ///
 /// ## Example
@@ -572,15 +572,15 @@ pub unsafe fn core_disconnect_controller(
 /// services table.
 ///
 /// This routine cannot hold the protocol db lock while executing
-/// DriverBinding->Stop() since it needs to access protocol db services. That
+/// `DriverBinding->Stop()` since it needs to access protocol db services. That
 /// means this routine can't guarantee that driver bindings remain valid for the
 /// duration of its execution. For example, if a driver were to be unloaded in a
-/// timer callback while Stop() is being called on another driver, the driver
-/// binding instance could become invalid and Stop() would be an invalid
+/// timer callback while `Stop()` is being called on another driver, the driver
+/// binding instance could become invalid and `Stop()` would be an invalid
 /// function pointer when invoked. In general, the spec implicitly assumes that
 /// driver binding instances that are valid at the start of the call to
-/// DisconnectController() must remain valid for the duration of the
-/// DisconnectController() call. If this is not true, then behavior is
+/// `DisconnectController()` must remain valid for the duration of the
+/// `DisconnectController()` call. If this is not true, then behavior is
 /// undefined. This function is marked unsafe for this reason.
 ///
 /// # Safety
@@ -800,8 +800,8 @@ mod tests {
     }
 
     /// Installs a driver binding (using `stop_fn`) on a new driver handle, records that driver as
-    /// managing `controller_handle` through a BY_DRIVER open of `protocol`, and registers every handle
-    /// in `children` as a BY_CHILD_CONTROLLER child of that driver. Returns the new driver handle.
+    /// managing `controller_handle` through a `BY_DRIVER` open of `protocol`, and registers every handle
+    /// in `children` as a `BY_CHILD_CONTROLLER` child of that driver. Returns the new driver handle.
     ///
     /// `controller_handle` must already have `protocol` installed (a controller created with
     /// [`new_test_handle`] already has the device path protocol installed).

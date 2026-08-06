@@ -72,7 +72,7 @@ impl SmmCommHeader {
         Ok((*header, SMM_COMM_HEADER_SIZE))
     }
 
-    /// Get the return status as an efi::Status.
+    /// Get the return status as an `efi::Status`.
     pub fn return_status(&self) -> efi::Status {
         efi::Status::from_usize(self.return_status.get() as usize)
     }
@@ -132,7 +132,7 @@ impl GetRecordSize {
     }
 }
 
-/// MM communicate helper to get a BUFFER_SIZE of bytes at an offset.
+/// MM communicate helper to get a `BUFFER_SIZE` of bytes at an offset.
 #[derive(Debug, Copy, Clone)]
 pub struct GetRecordDataByOffset<const BUFFER_SIZE: usize = SMM_FETCH_CHUNK_BYTES> {
     pub return_status: efi::Status,

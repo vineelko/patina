@@ -15,9 +15,9 @@ use crate::{bit, performance::record::known::KnownPerfId};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(C)]
 pub enum PerfAttribute {
-    /// A PERF_START/PERF_START_EX record.
+    /// A `PERF_START/PERF_START_EX` record.
     PerfStartEntry,
-    /// A PERF_END/PERF_END_EX record.
+    /// A `PERF_END/PERF_END_EX` record.
     PerfEndEntry,
     /// A general performance record.
     PerfEntry,
@@ -59,9 +59,9 @@ impl CallerIdentifier {
     /// Checks if the `CallerIdentifier` is a GUID pointer.
     ///
     /// This is the case with newly-added performance IDs used for signaling events and callbacks
-    /// that were not backwards-compatible with the existing create_performance_measurement interface.
-    /// These ids are: PerfEvent, PerfEventSignalStart, PerfEventSignalEnd, PerfCallbackStart, PerfCallbackEnd,
-    /// PerfFunctionStart, PerfFunctionEnd, PerfInModuleStart, PerfInModuleEnd, PerfCrossModuleStart, PerfCrossModuleEnd.
+    /// that were not backwards-compatible with the existing `create_performance_measurement` interface.
+    /// These ids are: `PerfEvent`, `PerfEventSignalStart`, `PerfEventSignalEnd`, `PerfCallbackStart`, `PerfCallbackEnd`,
+    /// `PerfFunctionStart`, `PerfFunctionEnd`, `PerfInModuleStart`, `PerfInModuleEnd`, `PerfCrossModuleStart`, `PerfCrossModuleEnd`.
     pub fn perf_id_is_guid(perf_id: u16) -> bool {
         let perf_id = match KnownPerfId::try_from(perf_id) {
             Ok(id) => id,
@@ -253,7 +253,7 @@ mod tests {
         assert_eq!(combined, 7);
     }
 
-    /// Validates that each KnownPerfId maps to the FPDT record type expected by the EDK2
+    /// Validates that each `KnownPerfId` maps to the FPDT record type expected by the EDK2
     /// Dp.c parser (ShellPkg/DynamicCommand/DpDynamicCommand/Dp.c). A mismatch causes
     /// ASSERT(FALSE) in the C parser at runtime.
     #[test]

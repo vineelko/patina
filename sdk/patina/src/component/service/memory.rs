@@ -1,12 +1,12 @@
 //! Memory Related Service Defintions.
 //!
 //! This module contains traits and types for services related memory management
-//! and access for use in services. See [MemoryManager] for the primary interface.
+//! and access for use in services. See [`MemoryManager`] for the primary interface.
 //!
 //! ## Testing
 //!
-//! This module contains a std implementation of the [MemoryManager] trait called `StdMemoryManager` to enable testing.
-//! It provides a fully working implementation of the [MemoryManager] based off of the std global allocator.
+//! This module contains a std implementation of the [`MemoryManager`] trait called `StdMemoryManager` to enable testing.
+//! It provides a fully working implementation of the [`MemoryManager`] based off of the std global allocator.
 //!
 //! ```rust
 //! use patina::component::service::{ Service, memory::*};
@@ -415,7 +415,7 @@ struct UefiPage([u8; UEFI_PAGE_SIZE]);
 ///
 /// If this structure is dropped without being used, it will invoke a [`debug_assert`]
 /// which will panic in debug builds. This is to ensure there are no unnecessary
-/// memory allocations. If the debug_asserts are disabled, this will free the pages.
+/// memory allocations. If the `debug_asserts` are disabled, this will free the pages.
 ///
 #[must_use]
 pub struct PageAllocation {
@@ -435,7 +435,7 @@ impl PageAllocation {
     ///
     /// As the function interface does not take a pointer, and instead takes a usize
     /// representing the address, there is no pointer provenance metadata during
-    /// build by default. This function uses [with_exposed_provenance_mut] to allow
+    /// build by default. This function uses [`with_exposed_provenance_mut`] to allow
     /// the compiler / other tools to attempt to associate the address with the
     /// original pointer's provenance. It is imperative that the caller exposes the
     /// original pointer's provenance before passing the address to this function via
@@ -500,7 +500,7 @@ impl PageAllocation {
     }
 
     /// Consumes the allocation and returns the raw address which must be manually
-    /// freed using the [MemoryManager::free_pages] routine. If the caller fails
+    /// freed using the [`MemoryManager::free_pages`] routine. If the caller fails
     /// to free the memory, it will leak. The caller is responsible for assuring
     /// the type fits in the allocation before dereferencing. The memory will not
     /// be initialized and the caller is responsible ensuring the type is valid.
@@ -526,7 +526,7 @@ impl PageAllocation {
     }
 
     /// Consumes the allocation and returns the raw address as a slice of type `T`.
-    /// The slice must be manually freed using the [MemoryManager::free_pages] routine.
+    /// The slice must be manually freed using the [`MemoryManager::free_pages`] routine.
     /// If the caller fails to free the memory, it will leak. The memory will not
     /// be initialized and the caller is responsible ensuring the type is valid.
     /// The length of the slice is the number of bytes in the allocation divided
@@ -585,7 +585,7 @@ impl PageAllocation {
 
     /// Converts the allocation and leaks the memory as a mutable `T`.
     ///
-    /// This function is similar to [Box::leak] in terms of caller responsibility for memory
+    /// This function is similar to [`Box::leak`] in terms of caller responsibility for memory
     /// management. Dropping the returned reference will cause a memory leak.
     ///
     /// # Returns
@@ -610,7 +610,7 @@ impl PageAllocation {
 
     /// Converts the allocation and leaks the memory as a mutable slice of type `T`.
     ///
-    /// This function is similar to [Box::leak] in terms of caller responsibility for memory
+    /// This function is similar to [`Box::leak`] in terms of caller responsibility for memory
     /// management. Dropping the returned reference will cause a memory leak.
     #[must_use]
     pub fn leak_as_slice<'a, T: Default>(self) -> &'a mut [T] {
@@ -719,11 +719,11 @@ impl AccessType {
     /// Converts the EFI attributes to an `AccessType`. This will only check the
     /// access flags. Other flags will need to be checked separately.
     ///
-    /// If the ReadProtect flag is set, the page will be marked as NoAccess
+    /// If the `ReadProtect` flag is set, the page will be marked as `NoAccess`
     /// regardless of the presence of other flags. This is because Read Protect
     /// is a EFI construct that will just result in the page being marked invalid.
     /// However, this may have implications if callers are expecting to be able to
-    /// persist other flags through the "ReadProtect" transition. This is a intentional
+    /// persist other flags through the "`ReadProtect`" transition. This is a intentional
     /// decision and callers who wish to allow such transitions should manually
     /// convert the types.
     ///
@@ -770,7 +770,7 @@ impl CachingType {
     /// This function will return `None` if the attributes do not match any of
     /// the known caching types or it has conflicting attributes.
     ///
-    /// This function will not check for the type EFI_MEMORY_UCE as it is generally
+    /// This function will not check for the type `EFI_MEMORY_UCE` as it is generally
     /// unused.
     ///
     pub fn from_efi_attributes(attributes: u64) -> Option<CachingType> {
@@ -847,10 +847,10 @@ mod mock {
     };
 
     use super::*;
-    /// A fully working mock [MemoryManager] based off of the std global allocator.
+    /// A fully working mock [`MemoryManager`] based off of the std global allocator.
     ///
-    /// This mock [MemoryManager] implementation should be used when you expect allocations to succeed. If you wish to
-    /// create a mock that will fail, use `mockall` to create a mock implementation of [MemoryManager] with functions
+    /// This mock [`MemoryManager`] implementation should be used when you expect allocations to succeed. If you wish to
+    /// create a mock that will fail, use `mockall` to create a mock implementation of [`MemoryManager`] with functions
     /// that return errors that you specify.
     #[derive(Default)]
     pub struct StdMemoryManager {
@@ -882,7 +882,7 @@ mod mock {
         ///
         /// ## Safety
         /// Caller must ensure that the given address corresponds to a valid block of pages that was allocated with
-        /// [Self::allocate_pages]
+        /// [`Self::allocate_pages`]
         unsafe fn free_pages(&self, address: usize, page_count: usize) -> Result<(), MemoryError> {
             let ptr = address as *mut u8;
             let layout = Layout::from_size_align(page_count * UEFI_PAGE_SIZE, UEFI_PAGE_SIZE).unwrap();

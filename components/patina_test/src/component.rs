@@ -1,7 +1,7 @@
 //! Patina Test Test Runner Component
 //!
-//! This module provides the [TestRunner] component, which is responsible for discovering and registering tests marked
-//! with the `#[patina_test]` attribute for execution. See the [TestRunner] documentation for details on how to
+//! This module provides the [`TestRunner`] component, which is responsible for discovering and registering tests marked
+//! with the `#[patina_test]` attribute for execution. See the [`TestRunner`] documentation for details on how to
 //! configure and use the test runner. Multiple test runners can be registered to run different sets of tests with
 //! different configurations.
 //!
@@ -93,7 +93,7 @@ impl TestRunner {
 
     /// Attach a callback function that will be called on test failure.
     ///
-    /// fn(test_name: &'static str, fail_msg: &'static str)
+    /// `fn(test_name: &'static str, fail_msg: &'static str)`
     #[must_use]
     pub fn with_callback(mut self, callback: fn(&'static str, &'static str)) -> Self {
         self.fail_callback = Some(callback);

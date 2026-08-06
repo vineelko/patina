@@ -62,7 +62,7 @@ pub unsafe trait CPtr<'a>: Sized {
         this.as_ptr()
     }
 
-    /// Returns a [PtrMetadata] that maintains the underlying lifetime and type information.
+    /// Returns a [`PtrMetadata`] that maintains the underlying lifetime and type information.
     fn metadata(&self) -> PtrMetadata<'a, Self> {
         PtrMetadata { ptr_value: self.as_ptr() as usize, _container: PhantomData }
     }

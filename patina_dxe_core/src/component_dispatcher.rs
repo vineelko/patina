@@ -117,26 +117,26 @@ impl Default for ComponentDispatcher {
     }
 }
 
-/// SAFETY: The ComponentDispatcher is `Send` as all data stored within this structure is owned by it, and not shared.
+/// SAFETY: The `ComponentDispatcher` is `Send` as all data stored within this structure is owned by it, and not shared.
 unsafe impl Send for ComponentDispatcher {}
 
 impl ComponentDispatcher {
-    /// Creates a new locked ComponentDispatcher.
+    /// Creates a new locked `ComponentDispatcher`.
     ///
-    /// Uses TPL_APPLICATION so that component entry points can use boot services
+    /// Uses `TPL_APPLICATION` so that component entry points can use boot services
     /// that are restricted at higher TPL levels.
     #[inline(always)]
     pub(crate) const fn new_locked() -> TplMutex<Self> {
         TplMutex::new(efi::TPL_APPLICATION, Self::new(), "ComponentDispatcher")
     }
 
-    /// Creates a new ComponentDispatcher.
+    /// Creates a new `ComponentDispatcher`.
     #[inline(always)]
     pub(crate) const fn new() -> Self {
         Self { components: Vec::new(), rejected: Vec::new(), storage: Storage::new() }
     }
 
-    /// Applies the component information provided by the given type implementing [ComponentInfo].
+    /// Applies the component information provided by the given type implementing [`ComponentInfo`].
     pub(crate) fn apply_component_info<C: ComponentInfo>(&mut self) {
         C::configs(Add::new(self));
         C::services(Add::new(self));

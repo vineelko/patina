@@ -109,13 +109,13 @@ trait CacheMgmt {
     ///
     /// start             Physical address to start flushing from.
     /// length            Number of bytes to flush. Round up to chipset granularity.
-    /// flush_type        Specifies the type of flush operation to perform.
+    /// `flush_type`        Specifies the type of flush operation to perform.
     ///
     /// ## Errors
     ///
     /// Success       If cache was flushed
     /// Unsupported   If flush type is not supported.
-    /// DeviceError   If requested range could not be flushed.
+    /// `DeviceError`   If requested range could not be flushed.
     fn flush_data_cache(start: efi::PhysicalAddress, length: u64, flush_type: CpuFlushType) -> Result<(), EfiError>;
 
     /// Returns the cache writeback granule size in bytes.

@@ -34,7 +34,7 @@ struct AllocationInfo {
 ///
 /// Wraps a `PageAllocator` to provide additional UEFI-specific functionality:
 /// - Association of a particular [`efi::MemoryType`] with the allocator
-/// - A pool implementation that allows tracking the layout and memory_type of UEFI pool allocations.
+/// - A pool implementation that allows tracking the layout and `memory_type` of UEFI pool allocations.
 pub struct UefiAllocator<A>
 where
     A: PageAllocator + GlobalAlloc + Allocator + Display + Sync + Send,
@@ -192,7 +192,7 @@ where
     ///
     /// ## Safety
     /// Caller must ensure that the given address corresponds to a valid block of pages that was allocated with
-    /// [Self::allocate_pages]
+    /// [`Self::allocate_pages`]
     pub unsafe fn free_pages(&self, address: usize, pages: usize) -> Result<(), EfiError> {
         // SAFETY: address/pages must refer to a valid allocation from this allocator.
         unsafe { self.allocator.free_pages(address, pages) }

@@ -171,7 +171,7 @@ struct MonitorBuffer<'a, const N: usize> {
 }
 
 impl<'a, const N: usize> MonitorBuffer<'a, N> {
-    /// Creates a new BufferedWriter with the specified log level and writer.
+    /// Creates a new `BufferedWriter` with the specified log level and writer.
     const fn new(out: ConsoleOutput<'a>) -> Self {
         MonitorBuffer { buffer: [0; N], pos: 0, start_offset: 0, out }
     }

@@ -47,7 +47,7 @@ impl<'a> FileRef<'a> {
     ///
     /// Errors
     /// - [`FirmwareFileSystemError::InvalidHeader`]: malformed header or size.
-    /// - [`FirmwareFileSystemError::InvalidState`]: file state not DATA_VALID.
+    /// - [`FirmwareFileSystemError::InvalidState`]: file state not `DATA_VALID`.
     /// - [`FirmwareFileSystemError::DataCorrupt`]: data checksum mismatch.
     ///
     /// ## Examples

@@ -99,7 +99,7 @@ pub struct StateGuard<F: FnMut()> {
 }
 
 impl<F: FnMut()> StateGuard<F> {
-    /// Creates a new StateGuard with the specified cleanup function.
+    /// Creates a new `StateGuard` with the specified cleanup function.
     ///
     /// The cleanup function will be called when the guard is dropped, even if a panic occurs.
     pub fn new(cleanup: F) -> Self {
@@ -303,7 +303,7 @@ pub(crate) fn with_clean_global_lock<F: Fn() + std::panic::RefUnwindSafe>(f: F) 
 /// Allocates a chunk of memory of the specified size from the system allocator.
 ///
 /// The memory allocated will be 64Kb aligned to simplify alignment requirements such
-/// as AArch64 runtime memory.
+/// as `AArch64` runtime memory.
 ///
 /// ## Safety
 /// This function is intended for test code only. The caller must ensure that the size is valid

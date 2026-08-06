@@ -15,8 +15,8 @@ use patina_paging::{
     MemoryAttributes, PageTable, PagingType, PtError, page_allocator::PageAllocator, x64::X64PageTable,
 };
 
-/// The x86_64 paging implementation. It acts as a bridge between the EFI CPU
-/// Architecture Protocol and the x86_64 paging implementation.
+/// The `x86_64` paging implementation. It acts as a bridge between the EFI CPU
+/// Architecture Protocol and the `x86_64` paging implementation.
 #[derive(Debug)]
 pub struct EfiCpuPagingX64<P, M>
 where
@@ -35,7 +35,7 @@ fn efierror_to_pterror(efi_error: EfiError) -> PtError {
     }
 }
 
-/// The x86_64 paging implementation.
+/// The `x86_64` paging implementation.
 impl<P, M> PatinaPageTable for EfiCpuPagingX64<P, M>
 where
     P: PageTable,
@@ -140,7 +140,7 @@ fn apply_caching_attributes<M: Mtrr>(
     Ok(())
 }
 
-/// Create an x86_64 paging instance under the general PatinaPageTable trait.
+/// Create an `x86_64` paging instance under the general `PatinaPageTable` trait.
 #[cfg_attr(coverage, coverage(off))]
 pub fn create_cpu_x64_paging<A: PageAllocator + 'static>(
     page_allocator: A,
@@ -152,7 +152,7 @@ pub fn create_cpu_x64_paging<A: PageAllocator + 'static>(
     })
 }
 
-/// Open the active x86_64 page table wrapped in the PatinaPageTable trait.
+/// Open the active `x86_64` page table wrapped in the `PatinaPageTable` trait.
 ///
 /// ## Safety
 /// The caller must ensure no other entity is concurrently modifying the page tables.

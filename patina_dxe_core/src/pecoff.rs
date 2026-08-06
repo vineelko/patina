@@ -48,10 +48,10 @@ const IMAGE_REL_BASED_HIGHLOW: u16 = 3;
 // 64-bit value.
 const IMAGE_REL_BASED_DIR64: u16 = 10;
 
-/// PE/COFF Specification Machine Type for IMAGE_FILE_MACHINE_AMD64 images.
+/// PE/COFF Specification Machine Type for `IMAGE_FILE_MACHINE_AMD64` images.
 #[allow(dead_code)]
 pub const IMAGE_MACHINE_TYPE_X64: u16 = 0x8664;
-/// PE/COFF Specification Machine Type for IMAGE_FILE_MACHINE_ARM64 images.
+/// PE/COFF Specification Machine Type for `IMAGE_FILE_MACHINE_ARM64` images.
 #[allow(dead_code)]
 pub const IMAGE_MACHINE_TYPE_AARCH64: u16 = 0xAA64;
 
@@ -68,12 +68,12 @@ pub enum HeaderType {
 pub struct UefiPeInfo {
     /// Type of header (PE32 or TE)
     pub header_type: HeaderType,
-    /// Offset into an image header where the image_base address is located.
+    /// Offset into an image header where the `image_base` address is located.
     /// NOT the actual image base address.
     pub image_base_header_field_offset: usize,
     /// RVA offset of the entry point.
     pub entry_point_offset: usize,
-    /// The subsystem type (IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER \[0xB\], etc.).
+    /// The subsystem type (`IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER` \[0xB\], etc.).
     pub image_type: u16,
     /// The total length of the image.
     pub size_of_image: u32,
@@ -81,15 +81,15 @@ pub struct UefiPeInfo {
     pub section_alignment: u32,
     /// The total length of the image header.
     pub size_of_headers: usize,
-    /// The COFF machine type (IMAGE_FILE_MACHINE_*).
+    /// The COFF machine type (`IMAGE_FILE_MACHINE`_*).
     pub machine: u16,
     /// Structs representing the section table inside the image header.
     pub sections: Vec<goblin::pe::section_table::SectionTable>,
-    /// The filename, if present, from debug_data
+    /// The filename, if present, from `debug_data`
     pub filename: Option<String>,
     /// The relocation directory, if present.
     pub reloc_dir: Option<goblin::pe::data_directories::DataDirectory>,
-    /// Whether the NX_COMPAT DLL Characteristic flag is set
+    /// Whether the `NX_COMPAT` DLL Characteristic flag is set
     pub nx_compat: bool,
 }
 
@@ -245,7 +245,7 @@ impl UefiPeInfo {
 ///
 /// ## Panics
 ///
-/// Panics if the loaded_image buffer is not the same length as the image.
+/// Panics if the `loaded_image` buffer is not the same length as the image.
 pub fn load_image(pe_info: &UefiPeInfo, image: &[u8], loaded_image: &mut [u8]) -> error::Result<()> {
     loaded_image.fill(0);
 

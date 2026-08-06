@@ -1,4 +1,4 @@
-//! Build script for patina_dxe_core to verify toolchain configuration.
+//! Build script for `patina_dxe_core` to verify toolchain configuration.
 //!
 //! ## License
 //!

@@ -1,11 +1,11 @@
-/// Parses AArch64 unwind data from the `.pdata` and `.xdata` sections.
+/// Parses `AArch64` unwind data from the `.pdata` and `.xdata` sections.
 /// The main goal of this module is to calculate the appropriate stack-pointer
 /// offsets by undoing the operations performed by the prolog of a given
 /// function. These offsets are then used to identify the previous stack frame's
-/// stack pointer (SP) and instruction pointer (PC). Unlike x64, AArch64
+/// stack pointer (SP) and instruction pointer (PC). Unlike x64, `AArch64`
 /// requires more involved unwinding operations.
 ///
-/// Unwind info in AArch64 comes in two flavors:
+/// Unwind info in `AArch64` comes in two flavors:
 /// 1. Packed unwind info for canonical functions, encoded from 2-31 bits.
 /// 2. .xdata-based unpacked unwind info, where the RVA of .xdata is present in
 ///    0-31 bits.
@@ -284,7 +284,7 @@ impl<'a> UnwindInfo<'a> {
     /// Calculates the parameters for the previous stack frame.
     ///
     /// # Safety
-    /// The supplied `stack_frame` must originate from a real AArch64 stack frame whose
+    /// The supplied `stack_frame` must originate from a real `AArch64` stack frame whose
     /// recorded SP/FP/PC still identify readable memory governed by the current unwind
     /// metadata. Supplying incorrect register snapshots can lead to invalid pointer
     /// dereferences while decoding the caller state.

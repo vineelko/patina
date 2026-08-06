@@ -662,7 +662,7 @@ impl DispatcherContext {
         }));
     }
 
-    /// Check if a child FV has already been extracted. The FvNameGuid is optional per FDF spec; when it is
+    /// Check if a child FV has already been extracted. The `FvNameGuid` is optional per FDF spec; when it is
     /// not provided, the HOBs will have the zero GUID.
     fn has_pre_extracted_fv_hob(&self, file_name: efi::Guid, fv_name: Option<BinaryGuid>) -> bool {
         self.pre_extracted_fv_hobs.contains(&(file_name.into(), fv_name.unwrap_or(patina::BinaryGuid::ZERO)))

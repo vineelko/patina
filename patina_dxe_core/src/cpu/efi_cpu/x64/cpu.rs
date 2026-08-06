@@ -13,13 +13,13 @@ use patina::error::EfiError;
 
 /// Struct to implement X64 Cpu Init.
 ///
-/// This struct cannot be used directly. It replaces the `EfiCpu` struct when compiling for the x86_64 architecture.
+/// This struct cannot be used directly. It replaces the `EfiCpu` struct when compiling for the `x86_64` architecture.
 #[derive(Default)]
 pub struct EfiCpuX64;
 
 #[allow(dead_code)]
 impl EfiCpuX64 {
-    /// This function initializes the CPU for the x86_64 architecture.
+    /// This function initializes the CPU for the `x86_64` architecture.
     pub fn initialize(&mut self) -> Result<(), EfiError> {
         // Initialize floating point units
         self.initialize_fpu();

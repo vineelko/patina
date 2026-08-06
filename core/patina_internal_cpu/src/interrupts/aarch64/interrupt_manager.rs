@@ -31,13 +31,13 @@ cfg_if::cfg_if! {
         }
     }
 }
-/// AARCH64 Implementation of the InterruptManager.
+/// AARCH64 Implementation of the `InterruptManager`.
 #[derive(Default, Copy, Clone)]
 pub struct InterruptsAarch64 {}
 
 #[allow(dead_code)]
 impl InterruptsAarch64 {
-    /// Creates a new instance of the AARCH64 implementation of the InterruptManager.
+    /// Creates a new instance of the AARCH64 implementation of the `InterruptManager`.
     pub const fn new() -> Self {
         Self {}
     }

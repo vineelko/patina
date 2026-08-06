@@ -71,7 +71,7 @@ fn reload_monitor(args: &mut core::str::SplitWhitespace<'_>, out: &mut dyn core:
     }
 }
 
-/// Implements the "reload alloc_buffer" command. This command allocates a buffer of the specified size and
+/// Implements the "reload `alloc_buffer`" command. This command allocates a buffer of the specified size and
 /// returns the address of the buffer.
 fn allocate_buffer_command(args: &mut core::str::SplitWhitespace<'_>, out: &mut dyn core::fmt::Write) {
     // get the requested length of the prep buffer.

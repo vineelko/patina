@@ -1,4 +1,4 @@
-//! EFI_DEBUG_IMAGE_INFO_TABLE Support
+//! `EFI_DEBUG_IMAGE_INFO_TABLE` Support
 //!
 //! ## License
 //!
@@ -95,7 +95,7 @@ impl DebugImageInfoData {
         }
     }
 
-    /// Creates a new, empty Debug Image Info Table wrapped in a RwLock.
+    /// Creates a new, empty Debug Image Info Table wrapped in a `RwLock`.
     pub(super) const fn new_locked() -> RwLock<Self> {
         RwLock::new(Self::new())
     }

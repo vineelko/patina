@@ -1,7 +1,7 @@
 //! Management Mode (MM) Message Parser
 //!
 //! This module provides utilities for parsing and manipulating MM communication messages.
-//! It is intended for use in the patina_mm test framework to facilitate testing of MM
+//! It is intended for use in the `patina_mm` test framework to facilitate testing of MM
 //! communication scenarios.
 //!
 //! ## License
@@ -89,7 +89,7 @@ impl MmCommunicateHeader {
 
 /// A MM message parser
 ///
-/// Provides safe, bounds-checked parsing of MM Communication messages for the patina_mm
+/// Provides safe, bounds-checked parsing of MM Communication messages for the `patina_mm`
 /// test framework. This parser validates MM message structure and content without using
 /// unsafe operations, ensuring that test scenarios can safely examine and manipulate
 /// MM Communication buffers while testing the `CommunicateBuffer` and `MmCommunicator`

@@ -191,7 +191,7 @@ impl MmCommunicator {
     ///
     /// # Coverage
     ///
-    /// This function is marked with `#[coverage(off)]` because it requires StandardBootServices
+    /// This function is marked with `#[coverage(off)]` because it requires `StandardBootServices`
     /// which is not available in unit tests. It is tested through integration tests.
     #[cfg_attr(coverage, coverage(off))]
     fn entry_point(

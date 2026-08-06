@@ -95,13 +95,13 @@ impl Parse for SmbiosRecord {
     }
 }
 
-/// Generate the SmbiosRecordStructure trait implementation
+/// Generate the `SmbiosRecordStructure` trait implementation
 ///
-/// This macro generates a complete SmbiosRecordStructure implementation including:
-/// - RECORD_TYPE constant
-/// - to_bytes() serialization
-/// - validate() string length checking
-/// - string_pool() and string_pool_mut() accessors
+/// This macro generates a complete `SmbiosRecordStructure` implementation including:
+/// - `RECORD_TYPE` constant
+/// - `to_bytes()` serialization
+/// - `validate()` string length checking
+/// - `string_pool()` and `string_pool_mut()` accessors
 pub(crate) fn smbios_record_derive(item: TokenStream) -> TokenStream {
     let record = match syn::parse2::<SmbiosRecord>(item) {
         Ok(r) => r,

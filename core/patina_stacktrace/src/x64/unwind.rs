@@ -111,7 +111,7 @@ impl<'a> UnwindInfo<'a> {
 }
 
 /// `UnwindCode`
-/// Source: https://learn.microsoft.com/en-us/cpp/build/exception-handling-x64?view=msvc-170#struct-unwind_code
+/// Source: <https://learn.microsoft.com/en-us/cpp/build/exception-handling-x64?view=msvc-170#struct-unwind_code>
 #[allow(dead_code)] // Enum variants are used for testing the parsed bytes. Ignore their presence in release build
 #[derive(Debug)]
 enum UnwindCode {

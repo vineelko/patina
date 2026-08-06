@@ -40,7 +40,7 @@ pub enum FixedSizeBlockAllocatorError {
     /// Could not satisfy allocation request, and expansion failed.
     ///
     /// Specifies how much additional memory is required to be added to the allocator through
-    /// [FixedSizeBlockAllocator::expand()] in order to fulfill the attempted allocation.
+    /// [`FixedSizeBlockAllocator::expand()`] in order to fulfill the attempted allocation.
     OutOfMemory(usize),
     /// The provided layout was invalid.
     InvalidLayout,
@@ -125,7 +125,7 @@ pub struct FixedSizeBlockAllocator {
 }
 
 impl FixedSizeBlockAllocator {
-    /// Creates a new empty FixedSizeBlockAllocator
+    /// Creates a new empty `FixedSizeBlockAllocator`
     pub const fn new(memory_type: efi::MemoryType, page_allocation_granularity: usize) -> Self {
         const EMPTY: Option<&'static mut BlockListNode> = None;
         FixedSizeBlockAllocator {
@@ -156,7 +156,7 @@ impl FixedSizeBlockAllocator {
     /// ## Errors
     ///
     /// Returns [`FixedSizeBlockAllocatorError::InvalidExpansion`] if the new region is not larger than and aligned to
-    /// AllocatorListNode.
+    /// `AllocatorListNode`.
     pub fn expand(&mut self, new_region: NonNull<[u8]>) -> core::result::Result<(), FixedSizeBlockAllocatorError> {
         // Ensure we're expanding enough to fit a new allocator list node
         if new_region.len() <= size_of::<AllocatorListNode>() {
@@ -426,8 +426,8 @@ impl Display for FixedSizeBlockAllocator {
 /// A wrapper for [`FixedSizeBlockAllocator`] that allocates additional memory as needed from a GCD
 /// and provides Sync/Send via means of a spin mutex.
 ///
-/// Note: [SpinLockedFixedSizeBlockAllocator::alloc()] and [SpinLockedFixedSizeBlockAllocator::allocate()] will call
-/// alloc() twice when additional memory is required.
+/// Note: [`SpinLockedFixedSizeBlockAllocator::alloc()`] and [`SpinLockedFixedSizeBlockAllocator::allocate()`] will call
+/// `alloc()` twice when additional memory is required.
 pub struct SpinLockedFixedSizeBlockAllocator {
     /// The GCD instance that this allocator uses to allocate additional memory as needed.
     gcd: &'static SpinLockedGcd,
@@ -444,7 +444,7 @@ pub struct SpinLockedFixedSizeBlockAllocator {
 }
 
 impl SpinLockedFixedSizeBlockAllocator {
-    /// Creates a new empty FixedSizeBlockAllocator that will request memory from `gcd` as needed to satisfy
+    /// Creates a new empty `FixedSizeBlockAllocator` that will request memory from `gcd` as needed to satisfy
     /// requests.
     pub const fn new(
         gcd: &'static SpinLockedGcd,
@@ -546,7 +546,7 @@ impl SpinLockedFixedSizeBlockAllocator {
     ///
     /// ## Safety
     /// Caller must ensure that the given address corresponds to a valid block of pages that was allocated with
-    /// [Self::allocate_pages]
+    /// [`Self::allocate_pages`]
     pub unsafe fn free_pages(&self, address: usize, pages: usize) -> Result<(), EfiError> {
         self.lock().stats.page_free_calls += 1;
 
@@ -806,7 +806,7 @@ impl PageAllocator for SpinLockedFixedSizeBlockAllocator {
     /// ## Safety
     ///
     /// Caller must ensure that the given address corresponds to a valid block of pages that was allocated with
-    /// [Self::allocate_pages].
+    /// [`Self::allocate_pages`].
     unsafe fn free_pages(&self, address: usize, pages: usize) -> Result<(), EfiError> {
         // SAFETY: address/pages must refer to a valid allocation owned by this allocator
         // per the free_pages safety contract.

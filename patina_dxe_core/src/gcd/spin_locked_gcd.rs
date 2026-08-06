@@ -433,7 +433,7 @@ impl GCD {
     /// This service adds reserved memory, system memory, or memory-mapped I/O resources to the global coherency domain of the processor.
     ///
     /// # Safety
-    /// Since the first call with enough system memory will cause the creation of an array at `base_address` + [MEMORY_BLOCK_SLICE_SIZE].
+    /// Since the first call with enough system memory will cause the creation of an array at `base_address` + [`MEMORY_BLOCK_SLICE_SIZE`].
     /// The memory from `base_address` to `base_address+len` must be inside the valid address range of the program and not in use.
     ///
     /// # Documentation
@@ -2528,7 +2528,7 @@ impl SpinLockedGcd {
     /// This service adds reserved memory, system memory, or memory-mapped I/O resources to the global coherency domain of the processor.
     ///
     /// # Safety
-    /// Since the first call with enough system memory will cause the creation of an array at `base_address` + [MEMORY_BLOCK_SLICE_SIZE].
+    /// Since the first call with enough system memory will cause the creation of an array at `base_address` + [`MEMORY_BLOCK_SLICE_SIZE`].
     /// The memory from `base_address` to `base_address+len` must be inside the valid address range of the program and not in use.
     ///
     /// # Documentation
@@ -2720,7 +2720,7 @@ impl SpinLockedGcd {
     /// This service frees nonexistent memory, reserved memory, system memory, or memory-mapped I/O resources from the
     /// global coherency domain of the processor.
     ///
-    /// Ownership of the memory as indicated by the image_handle associated with the block is retained, which means that
+    /// Ownership of the memory as indicated by the `image_handle` associated with the block is retained, which means that
     /// it cannot be re-allocated except by the original owner or by requests targeting a specific address within the
     /// block (i.e. [`Self::allocate_memory_space`] with [`AllocateType::Address`]).
     ///
@@ -2955,7 +2955,7 @@ impl SpinLockedGcd {
         self.io.lock().allocate_io_space(allocate_type, io_type, alignment, len, image_handle, device_handle)
     }
 
-    /// Acquires lock and delegates to [`IoGCD::free_io_space]
+    /// Acquires lock and delegates to [`IoGCD::free_io_space`]
     pub fn free_io_space(&self, base_address: usize, len: usize) -> Result<(), EfiError> {
         self.io.lock().free_io_space(base_address, len)
     }

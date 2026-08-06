@@ -328,13 +328,13 @@ impl<'a> Iterator for Iter<'a> {
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct GuidEventRecordData {
-    /// ProgressID < 0x10 are reserved for core performance entries.
+    /// `ProgressID` < 0x10 are reserved for core performance entries.
     pub progress_id: u16,
     /// APIC ID for the processor in the system used as a timestamp clock source.
     pub apic_id: u32,
     /// 64-bit value (nanosecond) describing elapsed time since the most recent deassertion of processor reset.
     pub timestamp: u64,
-    /// If ProgressID < 0x10, GUID of the referenced module; otherwise, GUID of the module logging the event.
+    /// If `ProgressID` < 0x10, GUID of the referenced module; otherwise, GUID of the module logging the event.
     pub guid: [u8; 16],
 }
 
@@ -361,13 +361,13 @@ impl fmt::Display for GuidEventRecordData {
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct DynamicStringEventRecordData {
-    /// ProgressID < 0x10 are reserved for core performance entries.
+    /// `ProgressID` < 0x10 are reserved for core performance entries.
     pub progress_id: u16,
     /// APIC ID for the processor in the system used as a timestamp clock source.
     pub apic_id: u32,
     /// 64-bit value (nanosecond) describing elapsed time since the most recent deassertion of processor reset.
     pub timestamp: u64,
-    /// If ProgressID < 0x10, GUID of the referenced module; otherwise, GUID of the module logging the event.
+    /// If `ProgressID` < 0x10, GUID of the referenced module; otherwise, GUID of the module logging the event.
     pub guid: [u8; 16],
     // String data follows but is not a part of this fixed structure
 }
@@ -402,7 +402,7 @@ impl fmt::Display for DynamicStringEventRecordData {
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct DualGuidStringEventRecordData {
-    /// ProgressID < 0x10 are reserved for core performance entries.
+    /// `ProgressID` < 0x10 are reserved for core performance entries.
     pub progress_id: u16,
     /// APIC ID for the processor in the system used as a timestamp clock source.
     pub apic_id: u32,
@@ -450,13 +450,13 @@ impl fmt::Display for DualGuidStringEventRecordData {
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct GuidQwordEventRecordData {
-    /// ProgressID < 0x10 are reserved for core performance entries.
+    /// `ProgressID` < 0x10 are reserved for core performance entries.
     pub progress_id: u16,
     /// APIC ID for the processor in the system used as a timestamp clock source.
     pub apic_id: u32,
     /// 64-bit value (nanosecond) describing elapsed time since the most recent deassertion of processor reset.
     pub timestamp: u64,
-    /// If ProgressID < 0x10, GUID of the referenced module; otherwise, GUID of the module logging the event.
+    /// If `ProgressID` < 0x10, GUID of the referenced module; otherwise, GUID of the module logging the event.
     pub guid: [u8; 16],
     /// Event-specific QWORD value.
     pub qword: u64,
@@ -489,13 +489,13 @@ impl fmt::Display for GuidQwordEventRecordData {
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct GuidQwordStringEventRecordData {
-    /// ProgressID < 0x10 are reserved for core performance entries.
+    /// `ProgressID` < 0x10 are reserved for core performance entries.
     pub progress_id: u16,
     /// APIC ID for the processor in the system used as a timestamp clock source.
     pub apic_id: u32,
     /// 64-bit value (nanosecond) describing elapsed time since the most recent deassertion of processor reset.
     pub timestamp: u64,
-    /// If ProgressID < 0x10, GUID of the referenced module; otherwise, GUID of the module logging the event.
+    /// If `ProgressID` < 0x10, GUID of the referenced module; otherwise, GUID of the module logging the event.
     pub guid: [u8; 16],
     /// Event-specific QWORD value.
     pub qword: u64,

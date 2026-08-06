@@ -16,8 +16,8 @@ use syn::{FnArg, FnModifiers, ImplItem, ItemFn, ItemImpl, Pat, Type, TypePath, p
 /// This macro must be applied to impl blocks that define components. It does the following:
 /// 1. Extract the type name from the impl block
 /// 2. Verify an `entry_point` method exists
-/// 3. Validate the entry_point parameters for conflicts
-/// 4. Generate the IntoComponent trait implementation
+/// 3. Validate the `entry_point` parameters for conflicts
+/// 4. Generate the `IntoComponent` trait implementation
 ///
 /// ## Usage
 ///
@@ -57,7 +57,7 @@ pub(crate) fn component_entry_point(_attr: TokenStream, item: TokenStream) -> To
     }
 }
 
-/// Validates a component impl block and generates the IntoComponent implementation.
+/// Validates a component impl block and generates the `IntoComponent` implementation.
 fn validate_component_impl_block(impl_block: ItemImpl) -> TokenStream {
     // Extract the type name from the impl block
     let type_path = match &*impl_block.self_ty {
@@ -208,7 +208,7 @@ pub(crate) fn check_impl_method_has_self(func: &ItemFn) -> Result<(), TokenStrea
     }
 }
 
-/// Validates that a component's entry_point function doesn't have conflicting parameters.
+/// Validates that a component's `entry_point` function doesn't have conflicting parameters.
 // Note: Marked as dead code since it's only used by tests.
 #[allow(dead_code)]
 pub(crate) fn validate_component_params2(_attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -301,14 +301,14 @@ impl ParamType {
 /// Converts type paths to a consistent format that allows comparing
 /// qualified and unqualified paths. For example:
 /// - `Config` -> "Config"
-/// - `patina::component::Config` -> "patina::component::Config"
-/// - `crate::Config` -> "crate::Config"
+/// - `patina::component::Config` -> "`patina::component::Config`"
+/// - `crate::Config` -> "`crate::Config`"
 fn normalize_type_path(path: &syn::Path) -> String {
     let segments: Vec<String> = path.segments.iter().map(|seg| seg.ident.to_string()).collect();
     segments.join("::")
 }
 
-/// Extract the inner type from a generic type like Config<T> or ConfigMut<T>
+/// Extract the inner type from a generic type like Config<T> or `ConfigMut`<T>
 /// and return its normalized canonical representation.
 fn extract_generic_inner(path: &TypePath) -> Option<String> {
     if let Some(segment) = path.path.segments.last()
@@ -365,7 +365,7 @@ fn normalize_type(ty: &Type) -> String {
 /// Examples:
 /// - `Config` -> "Config"
 /// - `patina::component::Config` -> "Config"
-/// - `crate::something::ConfigMut` -> "ConfigMut"
+/// - `crate::something::ConfigMut` -> "`ConfigMut`"
 fn get_base_type_name(path: &syn::Path) -> Option<String> {
     path.segments.last().map(|seg| seg.ident.to_string())
 }
