@@ -68,10 +68,9 @@ pub fn core_install_configuration_table(
             if vendor_table.is_null() {
                 // trying to delete a non-existing table
                 return Err(EfiError::NotFound);
-            } else {
-                // adding a new table to an empty configuration table list
-                (vec![efi::ConfigurationTable { vendor_guid, vendor_table }], None)
             }
+            // adding a new table to an empty configuration table list
+            (vec![efi::ConfigurationTable { vendor_guid, vendor_table }], None)
         }
         existing_table_ptr => {
             // existing table is present. Make a copy of it as a Vec to process the updates.

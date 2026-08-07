@@ -73,9 +73,8 @@ impl SectionExtractor for BrotliSectionExtractor {
 
             if matches!(result, BrotliResult::ResultSuccess) {
                 return Ok(out_data.into_boxed_slice());
-            } else {
-                return Err(efi::Status::VOLUME_CORRUPTED);
             }
+            return Err(efi::Status::VOLUME_CORRUPTED);
         }
         Ok(Box::new([0u8; 0]))
     }

@@ -561,9 +561,8 @@ impl EventDb {
                 return None;
             } else if let Some(item) = self.pending_notifies.pop_first() {
                 return Some(item.0);
-            } else {
-                log::error!("Pending_notifies was empty, but it should have at least one item.");
             }
+            log::error!("Pending_notifies was empty, but it should have at least one item.");
         }
         None
     }

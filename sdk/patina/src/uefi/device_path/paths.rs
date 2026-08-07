@@ -321,9 +321,8 @@ impl Iterator for IterInstance<'_> {
             if node.header().r#type == DevicePathType::End as u8 {
                 item.get_or_insert(DevicePathBuf::new_empty()).append(EndEntire);
                 break;
-            } else {
-                item.get_or_insert(DevicePathBuf::new_empty()).append(node);
             }
+            item.get_or_insert(DevicePathBuf::new_empty()).append(node);
         }
         item
     }

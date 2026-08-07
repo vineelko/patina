@@ -157,9 +157,8 @@ fn check_paging_range<P: PatinaPageTable>(page_table: &P, start_address: u64, le
             // return an error.
             if page > start_address {
                 return Ok((page - start_address) as usize);
-            } else {
-                return Err(());
             }
+            return Err(());
         }
 
         // if this is the last page, return the full length

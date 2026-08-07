@@ -422,9 +422,8 @@ fn classify_param(ty: &Type) -> ParamType {
                 if base_name == "Storage" {
                     if type_ref.mutability.is_some() {
                         return ParamType::StorageMut;
-                    } else {
-                        return ParamType::Storage;
                     }
+                    return ParamType::Storage;
                 }
             }
             ParamType::Other

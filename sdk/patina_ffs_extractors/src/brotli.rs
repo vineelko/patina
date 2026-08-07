@@ -108,9 +108,8 @@ impl SectionExtractor for BrotliSectionExtractor {
 
             if matches!(result, BrotliResult::ResultSuccess) {
                 return Ok(out_data);
-            } else {
-                return Err(FirmwareFileSystemError::DataCorrupt);
             }
+            return Err(FirmwareFileSystemError::DataCorrupt);
         }
         Err(FirmwareFileSystemError::Unsupported)
     }

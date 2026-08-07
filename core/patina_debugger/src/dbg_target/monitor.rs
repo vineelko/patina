@@ -201,12 +201,11 @@ impl<const N: usize> Write for MonitorBuffer<'_, N> {
             if self.start_offset >= len {
                 self.start_offset -= len;
                 return Ok(());
-            } else {
-                // Adjust the data to skip the start offset.
-                data = data.get(self.start_offset..).ok_or(core::fmt::Error)?;
-                len = data.len();
-                self.start_offset = 0; // Reset start offset after using it.
             }
+            // Adjust the data to skip the start offset.
+            data = data.get(self.start_offset..).ok_or(core::fmt::Error)?;
+            len = data.len();
+            self.start_offset = 0; // Reset start offset after using it.
         }
 
         // buffer the message if it will fit.
