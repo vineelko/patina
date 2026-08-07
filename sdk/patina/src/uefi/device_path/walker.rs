@@ -9,8 +9,9 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 use crate::standard::efi::protocols::device_path::{End, Hardware, Media, Protocol};
-use alloc::{boxed::Box, format, string::String, vec, vec::Vec};
+use alloc::{boxed::Box, string::String, vec, vec::Vec};
 use core::{
+    fmt::Write,
     mem::size_of_val,
     ptr::{NonNull, slice_from_raw_parts},
     slice::from_raw_parts,
@@ -385,7 +386,7 @@ impl From<DevicePathWalker> for String {
                     if i > 0 {
                         result.push(',');
                     }
-                    result.push_str(&format!("0x{byte:02x}"));
+                    let _ = write!(result, "0x{byte:02x}");
                 }
                 result.push('/');
             }
