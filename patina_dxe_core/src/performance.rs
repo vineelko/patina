@@ -565,7 +565,7 @@ fn get_module_guid_from_handle(handle: efi::Handle) -> Result<BinaryGuid, efi::S
                     as *const BinaryGuid;
                 guid = ptr::read_unaligned(guid_ptr);
             }
-        };
+        }
     }
 
     Ok(guid)

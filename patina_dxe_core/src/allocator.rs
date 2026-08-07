@@ -1221,7 +1221,7 @@ fn process_hob_allocations(hob_list: &HobList) {
                 }
             }
             _ => continue,
-        };
+        }
     }
 
     // now that we've processed HOBs, lets allocate page 0 because we are going to use it for null pointer detection

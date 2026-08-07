@@ -711,7 +711,7 @@ fn call_bds() -> ! {
             }
         }
         Err(err) => log::error!("Unable to locate BDS arch protocol: {err}"),
-    };
+    }
 
     unreachable!("BDS arch protocol should be found and should never return.");
 }

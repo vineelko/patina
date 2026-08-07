@@ -372,7 +372,7 @@ impl Display for DevicePath {
                 && next.header().r#type != DevicePathType::End as u8
             {
                 f.write_char('/')?;
-            };
+            }
         }
 
         Ok(())

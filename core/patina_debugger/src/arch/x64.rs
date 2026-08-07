@@ -473,27 +473,25 @@ impl UefiArchRegs for X64CoreRegs {
         }
 
         match reg_id {
-            X64CoreRegId::Gpr(index) => {
-                match index {
-                    0 => write_field!(context.rax, u64),
-                    1 => write_field!(context.rbx, u64),
-                    2 => write_field!(context.rcx, u64),
-                    3 => write_field!(context.rdx, u64),
-                    4 => write_field!(context.rsi, u64),
-                    5 => write_field!(context.rdi, u64),
-                    6 => write_field!(context.rbp, u64),
-                    7 => write_field!(context.rsp, u64),
-                    8 => write_field!(context.r8, u64),
-                    9 => write_field!(context.r9, u64),
-                    10 => write_field!(context.r10, u64),
-                    11 => write_field!(context.r11, u64),
-                    12 => write_field!(context.r12, u64),
-                    13 => write_field!(context.r13, u64),
-                    14 => write_field!(context.r14, u64),
-                    15 => write_field!(context.r15, u64),
-                    _ => return Err(()),
-                };
-            }
+            X64CoreRegId::Gpr(index) => match index {
+                0 => write_field!(context.rax, u64),
+                1 => write_field!(context.rbx, u64),
+                2 => write_field!(context.rcx, u64),
+                3 => write_field!(context.rdx, u64),
+                4 => write_field!(context.rsi, u64),
+                5 => write_field!(context.rdi, u64),
+                6 => write_field!(context.rbp, u64),
+                7 => write_field!(context.rsp, u64),
+                8 => write_field!(context.r8, u64),
+                9 => write_field!(context.r9, u64),
+                10 => write_field!(context.r10, u64),
+                11 => write_field!(context.r11, u64),
+                12 => write_field!(context.r12, u64),
+                13 => write_field!(context.r13, u64),
+                14 => write_field!(context.r14, u64),
+                15 => write_field!(context.r15, u64),
+                _ => return Err(()),
+            },
             X64CoreRegId::Rip => context.rip = u64::from_le_bytes(buf.try_into().map_err(|_| ())?),
             X64CoreRegId::Eflags => context.rflags = u64::from_le_bytes(buf.try_into().map_err(|_| ())?),
             X64CoreRegId::Segment(index) => match index {

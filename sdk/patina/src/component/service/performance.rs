@@ -191,7 +191,7 @@ pub trait PerformanceManager: Send + Sync {
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
-    use alloc::string::{String, ToString};
+    use alloc::string::String;
     use alloc::vec::Vec;
     use std::sync::Mutex;
 

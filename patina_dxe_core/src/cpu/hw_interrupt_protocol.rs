@@ -493,7 +493,7 @@ impl HwInterruptProtocolHandler {
             if let Err(err) = self.aarch64_int.lock().enable_interrupt_source(interrupt_source as u64) {
                 return err.into();
             }
-        };
+        }
 
         efi::Status::SUCCESS
     }

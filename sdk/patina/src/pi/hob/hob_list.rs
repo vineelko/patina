@@ -378,7 +378,7 @@ impl<'a> HobList<'a> {
                 Hob::Cpu(hob) => *hob = Box::leak(Box::new(Cpu::clone(hob))),
                 Hob::ResourceDescriptorV2(hob) => *hob = Box::leak(Box::new(ResourceDescriptorV2::clone(hob))),
                 Hob::Misc(_) => (), // Data is owned in Misc (nothing to move),
-            };
+            }
         }
     }
 }

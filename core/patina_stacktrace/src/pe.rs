@@ -164,7 +164,7 @@ impl PE<'_> {
 
         if debug_data_rva == 0 || debug_data_size == 0 {
             return None;
-        };
+        }
 
         let debug_data = page_base + debug_data_rva as u64;
 

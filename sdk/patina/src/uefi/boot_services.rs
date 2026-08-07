@@ -461,7 +461,7 @@ pub trait BootServices {
         if mem::size_of::<T>() == 0 {
             old_protocol_interface_ptr = ptr::null_mut();
             new_protocol_interface_ptr = ptr::null_mut();
-        };
+        }
 
         // SAFETY: This is safe because ProtocolInterface provide the right guid for the interface.
         unsafe {
@@ -1287,7 +1287,7 @@ impl BootServices for StandardBootServices {
         } {
             s if s == efi::Status::BUFFER_TOO_SMALL => memory_map_size += 0x400, // add more space in case allocation makes the memory map bigger.
             _ => (),
-        };
+        }
 
         let buffer = self.allocate_pool(EfiMemoryType::BootServicesData, memory_map_size).map_err(|s| (s, 0))?;
 

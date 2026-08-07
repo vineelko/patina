@@ -464,7 +464,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
             Err(err) => return err.into(),
             // SAFETY: caller must provide a valid pointer to receive the attributes. It is null-checked above.
             Ok(fvb_attributes) => unsafe { attributes.write_unaligned(fvb_attributes) },
-        };
+        }
 
         efi::Status::SUCCESS
     }
@@ -494,7 +494,7 @@ impl<P: PlatformInfo> FvProtocolData<P> {
             Err(err) => return err.into(),
             // SAFETY: caller must provide a valid pointer to receive the address. It is null-checked above.
             Ok(physical_address) => unsafe { address.write_unaligned(physical_address) },
-        };
+        }
 
         efi::Status::SUCCESS
     }

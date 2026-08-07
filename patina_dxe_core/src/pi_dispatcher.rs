@@ -555,7 +555,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
         match PROTOCOL_DB.locate_handles(Some(firmware_volume_block::PROTOCOL_GUID.into_inner())) {
             Ok(fv_handles) => pd.add_fv_handles(fv_handles).expect("Error adding FV handles"),
             Err(_) => panic!("could not locate handles in protocol call back"),
-        };
+        }
     }
 }
 

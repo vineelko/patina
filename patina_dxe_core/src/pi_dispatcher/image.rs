@@ -1234,7 +1234,7 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
                             status
                         );
                     }
-                };
+                }
             }
         }
 

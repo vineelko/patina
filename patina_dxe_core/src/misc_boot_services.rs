@@ -215,7 +215,7 @@ pub extern "efiapi" fn exit_boot_services(_handle: efi::Handle, map_key: usize) 
             (timer_arch.set_timer_period)(timer_arch_ptr, 0);
         }
         Err(err) => log::error!("Unable to locate timer arch: {err}"),
-    };
+    }
 
     // Lock the memory space to prevent edits to the memory map after this point.
     GCD.lock_memory_space();
@@ -251,7 +251,7 @@ pub extern "efiapi" fn exit_boot_services(_handle: efi::Handle, map_key: usize) 
             );
         }
         Err(err) => log::error!("Unable to locate status code runtime protocol: {err}"),
-    };
+    }
 
     // Disable CPU interrupts
     interrupts::disable_interrupts();
@@ -275,7 +275,7 @@ pub extern "efiapi" fn exit_boot_services(_handle: efi::Handle, map_key: usize) 
             rt_arch_protocol.at_runtime.store(true, Ordering::SeqCst);
         }
         Err(err) => log::error!("Unable to locate runtime architectural protocol: {err}"),
-    };
+    }
 
     crate::runtime::finalize_runtime_support();
     log::info!("EBS completed successfully.");

@@ -1413,7 +1413,7 @@ mod tests {
                     match fsb.free_pages(0, pages) {
                         Err(EfiError::NotFound) => {}
                         _ => panic!("Expected NOT_FOUND"),
-                    };
+                    }
                 };
 
                 // SAFETY: allocation and page count come from allocate_pages in this test.

@@ -77,7 +77,7 @@ impl MultipleHobConsumer {
             // (1) Show off that if we only expect a single HOB, we can dereference it directly.
             Some(hob) => println!("  Hob2 exists with data: {:?}", *hob),
             None => println!("  Hob2 does not exist, continuing without it."),
-        };
+        }
 
         Ok(())
     }

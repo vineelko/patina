@@ -111,7 +111,7 @@ pub fn core_uninstall_protocol_interface(
                 return Err(EfiError::NotFound);
             }
         }
-    };
+    }
 
     //attempt to close all OPEN_BY_DRIVER usages.
     let mut usage_close_status = Ok(());
@@ -493,7 +493,7 @@ unsafe extern "efiapi" fn open_protocol(
         Err(EfiError::AlreadyStarted) => (),
         Err(err) => return err.into(),
         Ok(_) => (),
-    };
+    }
 
     let desired_interface = match PROTOCOL_DB.get_interface_for_handle(handle, protocol) {
         Err(err) => return err.into(),

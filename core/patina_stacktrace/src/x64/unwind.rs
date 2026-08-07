@@ -197,7 +197,7 @@ impl UnwindCode {
                 }
                 6..=10 => (), // These opcodes do not contribute to rsp offset
                 _ => panic!("Unexpected opcode"),
-            };
+            }
         }
         Ok(offset)
     }

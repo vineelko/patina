@@ -129,7 +129,7 @@ fn initialize_exception() -> Result<(), EfiError> {
         match current_el {
             AArch64El::EL2 => write_sysreg!(reg vbar_el2, vec_base, "isb sy"),
             AArch64El::EL1 => write_sysreg!(reg vbar_el1, vec_base, "isb sy"),
-        };
+        }
     }
 
     let fiq = get_fiq_state();

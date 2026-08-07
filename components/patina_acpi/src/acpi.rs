@@ -448,7 +448,7 @@ where
             // SAFETY: The struct maintains an invariant mapping between the FADT and `Self::FADT_KEY`.
             unsafe { facp.as_mut::<AcpiFadt>() }.inner.x_dsdt = dsdt_addr;
             facp.update_checksum()?;
-        };
+        }
 
         dsdt_info.update_checksum()?;
 

@@ -66,7 +66,7 @@ impl ext::monitor_cmd::MonitorCmd for PatinaTarget {
                 let _ = buf.write_str("External commands:\n");
                 if let Some(state) = self.system_state.try_lock() {
                     state.dump_monitor_commands(&mut buf);
-                };
+                }
             }
             Some("mod") => {
                 self.module_cmd(&mut tokens, &mut buf);

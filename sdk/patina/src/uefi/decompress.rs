@@ -691,7 +691,7 @@ impl Iterator for CodeIterator<'_> {
                 mask_idx += 1;
                 if decode_idx < NC {
                     break;
-                };
+                }
             }
         }
         //decode_idx the current symbol. Advance the bitstream by the bitlength of the current symbol.

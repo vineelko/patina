@@ -148,7 +148,7 @@ impl UefiPeInfo {
             // Parse the filename from the debug data if it exists.
             if let Some(codeview_data) = &parsed_te.debug_data.codeview_pdb70_debug_info {
                 pe.filename = UefiPeInfo::read_filename(codeview_data.filename)?;
-            };
+            }
 
             Ok(pe)
         } else {

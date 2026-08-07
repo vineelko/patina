@@ -656,7 +656,7 @@ pub fn add_hob_resource_descriptors_to_gcd(hob_list: &HobList) {
             _ => {
                 debug_assert!(false, "Unknown resource type in HOB");
             }
-        };
+        }
 
         if gcd_mem_type != GcdMemoryType::NonExistent {
             debug_assert!(res_desc.attributes_valid());
