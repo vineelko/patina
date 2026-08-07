@@ -464,6 +464,6 @@ mod tests {
         assert!(json.contains(r#"{"name":"test","pass":2,"fail":1,"err_msg":"Failure 1"}"#));
         assert!(json.contains(r#"{"name":"test_that_fails","pass":0,"fail":2,"err_msg":"Failure 2"}"#));
         assert!(json.starts_with('[') && json.ends_with(']'));
-        assert!(json.contains(","));
+        assert!(json.contains(','));
     }
 }

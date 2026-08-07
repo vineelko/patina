@@ -3166,7 +3166,7 @@ mod tests {
     // Test support function to generate device path bytes from a string representation.
     // This does not currently support all device path node types, only the ones I cared about for these tests.
     fn device_path_from_string(path: String) -> Box<[u8]> {
-        let path = path.replace("\\", "/").replace("0x", "");
+        let path = path.replace('\\', "/").replace("0x", "");
 
         let mut total = Vec::new();
         let mut current_path = String::new();

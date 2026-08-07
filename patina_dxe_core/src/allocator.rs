@@ -3151,6 +3151,6 @@ mod tests {
             })
         );
         // 3+2+2+2+2 + 4 pipes = 15 characters
-        assert!(result.contains("|"), "Expected pipe-separated format for attributes under the limit");
+        assert!(result.contains('|'), "Expected pipe-separated format for attributes under the limit");
     }
 }

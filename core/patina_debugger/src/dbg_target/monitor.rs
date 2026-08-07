@@ -51,7 +51,7 @@ impl ext::monitor_cmd::MonitorCmd for PatinaTarget {
 
         // Check for an offset modifier, and configure the monitor buffer accordingly.
         let cmd = match tokens.next() {
-            Some(token) if token.starts_with("O[") && token.ends_with("]") => {
+            Some(token) if token.starts_with("O[") && token.ends_with(']') => {
                 let offset_str = &token[2..token.len() - 1];
                 let offset: usize = offset_str.parse().ok().unwrap_or(0);
                 buf.set_start_offset(offset);
