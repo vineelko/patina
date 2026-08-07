@@ -389,7 +389,7 @@ impl<T> Table<T> {
 
         // Make sure all bytes are valid ASCII.
         // By spec, ACPI table signatures are length-4 ASCII strings (represented numerically as u32's).
-        let is_valid_ascii = returned_table.signature().to_le_bytes().iter().all(|b| b.is_ascii());
+        let is_valid_ascii = returned_table.signature().to_le_bytes().iter().all(u8::is_ascii);
         if !is_valid_ascii {
             return Err(AcpiError::InvalidTableFormat);
         }
@@ -659,7 +659,7 @@ mod tests {
         // SAFETY: The table length is correctly specified in the test header.
         let bytes = unsafe { acpi_table.as_bytes() };
         // Total sum must be zero mod 256.
-        let total: u8 = bytes.iter().copied().fold(0u8, |acc, b| acc.wrapping_add(b));
+        let total: u8 = bytes.iter().copied().fold(0u8, u8::wrapping_add);
         assert_eq!(total, 0, "entire table did not sum to zero");
     }
 

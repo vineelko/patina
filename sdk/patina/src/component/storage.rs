@@ -44,7 +44,7 @@ impl<V> SparseVec<V> {
     #[inline]
     /// Returns true if the [SparseVec] contains a value at the given index.
     pub fn contains(&self, index: usize) -> bool {
-        self.values.get(index).map(|v| v.is_some()).unwrap_or(false)
+        self.values.get(index).map(core::option::Option::is_some).unwrap_or(false)
     }
 
     #[inline]

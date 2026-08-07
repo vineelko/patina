@@ -646,7 +646,7 @@ impl GCD {
 
         Self::split_state_transition_at_idx(memory_blocks, idx, base_address, len, transition)
             .map(|_| ())
-            .map_err(|e| e.into())
+            .map_err(core::convert::Into::into)
     }
 
     #[cfg_attr(coverage, coverage(off))]

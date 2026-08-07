@@ -232,7 +232,7 @@ mod tests {
             self.calls.lock().unwrap().push(Recorded {
                 caller_guid: caller_identifier.as_guid().copied(),
                 guid: guid.copied(),
-                string: string.map(|s| s.to_string()),
+                string: string.map(std::string::ToString::to_string),
                 perf_id,
                 attribute,
             });

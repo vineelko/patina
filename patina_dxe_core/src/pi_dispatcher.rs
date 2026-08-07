@@ -291,7 +291,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
                 if depex_satisfied {
                     scheduled_driver_candidates.push(candidate)
                 } else {
-                    match candidate.depex.as_ref().map(|x| x.is_associated()) {
+                    match candidate.depex.as_ref().map(patina_internal_core::depex::Depex::is_associated) {
                         Some(Some(AssociatedDependency::Before(guid))) => {
                             dispatcher.associated_before.entry(OrdGuid(guid)).or_default().push(candidate)
                         }

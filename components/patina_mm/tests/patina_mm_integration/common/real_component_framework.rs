@@ -126,7 +126,7 @@ impl RealComponentMmTestFramework {
         let result = self.mm_communicator.communicate(0, data, guid.clone());
 
         log::debug!(target: "real_test_framework", "Real component communication result: {:?}",
-                   result.as_ref().map(|r| r.len()).map_err(|e| format!("{:?}", e)));
+                   result.as_ref().map(std::vec::Vec::len).map_err(|e| format!("{:?}", e)));
         result
     }
 }

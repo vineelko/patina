@@ -804,7 +804,10 @@ pub trait BootServices {
     ) -> Result<(), efi::Status> {
         //SAFETY: The generic Protocol ensure that the interfaces is the right type for the specified protocol.
         let interface_ptr = unsafe {
-            self.locate_protocol_unchecked(protocol_guid, registration.map_or(ptr::null_mut(), |r| r.as_ptr()))?
+            self.locate_protocol_unchecked(
+                protocol_guid,
+                registration.map_or(ptr::null_mut(), core::ptr::NonNull::as_ptr),
+            )?
         };
         if !interface_ptr.is_null() {
             log_debug_assert!("Marker protocol has no data; interface should be null {:?}", protocol_guid);
@@ -1670,7 +1673,7 @@ impl BootServices for StandardBootServices {
             driver_image_handles.push(ptr::null_mut());
             driver_image_handles.as_mut_ptr()
         };
-        let remaining_device_path = remaining_device_path.map_or(ptr::null_mut(), |p| p.as_ptr());
+        let remaining_device_path = remaining_device_path.map_or(ptr::null_mut(), core::ptr::NonNull::as_ptr);
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let connect_controller = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), connect_controller) };
         // SAFETY: The caller must ensure the function's safety contract.
@@ -1828,8 +1831,8 @@ impl BootServices for StandardBootServices {
     ) -> Result<efi::Handle, efi::Status> {
         let source_buffer_ptr =
             source_buffer.map_or(ptr::null_mut(), |buffer| buffer.as_ptr() as *const _ as *mut c_void);
-        let source_buffer_size = source_buffer.map_or(0, |buffer| buffer.len());
-        let device_path = device_path.map_or(ptr::null_mut(), |p| p.as_ptr());
+        let source_buffer_size = source_buffer.map_or(0, <[u8]>::len);
+        let device_path = device_path.map_or(ptr::null_mut(), core::ptr::NonNull::as_ptr);
         let mut image_handle = MaybeUninit::uninit();
         // SAFETY: See safety comment in create_event_unchecked for details on corner cases around external modifications.
         let load_image = unsafe { efi_boot_services_fn!(*self.as_mut_ptr(), load_image) };

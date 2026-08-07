@@ -213,7 +213,7 @@ unsafe impl<'a, R: CPtr<'a, Type = T>, T> CPtr<'a> for Option<R> {
     type Type = T;
 
     fn as_ptr(&self) -> *const Self::Type {
-        self.as_ref().map_or(ptr::null(), |p| p.as_ptr())
+        self.as_ref().map_or(ptr::null(), CPtr::as_ptr)
     }
 }
 // SAFETY: Memory layout and mutability are respected for these types.

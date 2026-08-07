@@ -669,7 +669,7 @@ pub fn add_hob_resource_descriptors_to_gcd(hob_list: &HobList) {
             for split_range in
                 remove_range_overlap(&mem_range, &(free_memory_start..(free_memory_start + free_memory_size)))
                     .into_iter()
-                    .take_while(|r| r.is_some())
+                    .take_while(core::option::Option::is_some)
                     .flatten()
             {
                 log::info!(

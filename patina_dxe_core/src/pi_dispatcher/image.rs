@@ -1497,7 +1497,7 @@ fn authenticate_image(
     from_fv: bool,
     authentication_status: u32,
 ) -> Result<(), EfiError> {
-    let device_path_raw = device_path.map_or(core::ptr::null_mut(), |p| p.as_ptr());
+    let device_path_raw = device_path.map_or(core::ptr::null_mut(), core::ptr::NonNull::as_ptr);
 
     // SAFETY: Checks locate_protocol return value to determine if pointer is valid. as_ref() is used for shared access
     // which will also check if the pointer is null before allowing access.

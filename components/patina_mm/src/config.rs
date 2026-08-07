@@ -766,7 +766,7 @@ mod tests {
 
         // Test that state verification works
         assert!(comm_buffer.get_header_guid().is_ok());
-        assert_eq!(comm_buffer.get_header_guid().unwrap().as_ref().map(|g| g.as_bytes()), Some(expected_bytes));
+        assert_eq!(comm_buffer.get_header_guid().unwrap().as_ref().map(patina::Guid::as_bytes), Some(expected_bytes));
     }
 
     #[test]
@@ -875,7 +875,7 @@ mod tests {
         let recipient_guid = Guid::try_from_string("12345678-1234-5678-90AB-CDEF01234567").unwrap();
         assert!(comm_buffer.set_message_info(recipient_guid.clone()).is_ok());
         assert_eq!(
-            comm_buffer.get_header_guid().unwrap().as_ref().map(|g| g.as_bytes()),
+            comm_buffer.get_header_guid().unwrap().as_ref().map(patina::Guid::as_bytes),
             Some(recipient_guid.as_bytes())
         );
 
@@ -889,7 +889,7 @@ mod tests {
         let recipient_guid2 = Guid::try_from_string("3210FEDC-ABCD-ABCD-1223-1234567890AB").unwrap();
         assert!(comm_buffer.set_message_info(recipient_guid2.clone()).is_ok());
         assert_eq!(
-            comm_buffer.get_header_guid().unwrap().as_ref().map(|g| g.as_bytes()),
+            comm_buffer.get_header_guid().unwrap().as_ref().map(patina::Guid::as_bytes),
             Some(recipient_guid2.as_bytes())
         );
 
@@ -997,7 +997,10 @@ mod tests {
         assert!(comm_buffer.set_message(test_message).is_ok());
 
         // Test that the getters pass consistency checks and return the expected values
-        assert_eq!(comm_buffer.get_header_guid().unwrap().as_ref().map(|g| g.as_bytes()), Some(test_guid.as_bytes()));
+        assert_eq!(
+            comm_buffer.get_header_guid().unwrap().as_ref().map(patina::Guid::as_bytes),
+            Some(test_guid.as_bytes())
+        );
         assert_eq!(comm_buffer.get_message_length().unwrap(), test_message.len());
         assert_eq!(comm_buffer.get_message().unwrap(), test_message.to_vec());
     }

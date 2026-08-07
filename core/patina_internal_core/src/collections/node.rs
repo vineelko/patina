@@ -237,7 +237,7 @@ where
             self.data = buffer;
             Self::build_linked_list(self.data);
             // if the buffer is empty, we set the available list to null as is expected
-            self.available.set(self.data.first().map(|n| n.as_mut_ptr()).unwrap_or_default());
+            self.available.set(self.data.first().map(NodeTrait::as_mut_ptr).unwrap_or_default());
             return;
         }
 

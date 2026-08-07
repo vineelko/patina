@@ -245,7 +245,7 @@ fn core_connect_single_controller(
             // SAFETY: driver_binding_interface is a clone of driver_candidates which is created above.
             // The pointer should be valid as long as driver_candidates is successfully allocated.
             let driver_binding = unsafe { &mut *(driver_binding_interface) };
-            let device_path = remaining_device_path.map_or(core::ptr::null_mut(), |p| p.as_ptr());
+            let device_path = remaining_device_path.map_or(core::ptr::null_mut(), core::ptr::NonNull::as_ptr);
 
             perf!(perf_driver_binding_support_begin, driver_binding.driver_binding_handle, controller_handle);
 
@@ -598,8 +598,8 @@ unsafe extern "efiapi" fn disconnect_controller(
         return efi::Status::INVALID_PARAMETER;
     }
 
-    let driver_image_handle = NonNull::new(driver_image_handle).map(|x| x.as_ptr());
-    let child_handle = NonNull::new(child_handle).map(|x| x.as_ptr());
+    let driver_image_handle = NonNull::new(driver_image_handle).map(core::ptr::NonNull::as_ptr);
+    let child_handle = NonNull::new(child_handle).map(core::ptr::NonNull::as_ptr);
     // SAFETY: handles are validated inside core_disconnect_controller. The
     // remaining safety requirement that driver bindings managing the controller
     // remain valid for the duration of the call is an implicit UEFI spec

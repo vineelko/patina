@@ -61,7 +61,7 @@ where
             return Err(Error::OutOfSpace);
         }
 
-        if !elements.is_sorted_by_key(|e| e.key()) {
+        if !elements.is_sorted_by_key(super::SliceKey::key) {
             return Err(Error::NotSorted);
         }
 

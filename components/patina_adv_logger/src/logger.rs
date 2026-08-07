@@ -201,7 +201,7 @@ where
     #[allow(dead_code)]
     pub(crate) fn get_log_address(&self) -> Option<efi::PhysicalAddress> {
         let log_guard = self.memory_log.read();
-        log_guard.as_ref().map(|log| log.get_address())
+        log_guard.as_ref().map(super::writer::AdvancedLogWriter::get_address)
     }
 
     fn refresh_log_info_address(&self) {

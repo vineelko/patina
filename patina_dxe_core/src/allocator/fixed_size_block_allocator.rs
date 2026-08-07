@@ -993,7 +993,7 @@ mod tests {
     fn test_construct_empty_fixed_size_block_allocator() {
         with_locked_state(|| {
             let fsb = FixedSizeBlockAllocator::new(efi::BOOT_SERVICES_DATA, DEFAULT_PAGE_ALLOCATION_GRANULARITY);
-            assert!(fsb.list_heads.iter().all(|x| x.is_none()));
+            assert!(fsb.list_heads.iter().all(std::option::Option::is_none));
             assert!(fsb.allocators.is_none());
         });
     }

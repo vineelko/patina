@@ -439,7 +439,7 @@ impl AllocatorMap {
                 return Some(*mem_type);
             }
         }
-        self.iter_dynamic().find(|x| x.handle() == handle).map(|x| x.memory_type())
+        self.iter_dynamic().find(|x| x.handle() == handle).map(uefi_allocator::UefiAllocator::memory_type)
     }
 
     // Retrieves an allocator for the given memory type, creating one if it doesn't already exist.

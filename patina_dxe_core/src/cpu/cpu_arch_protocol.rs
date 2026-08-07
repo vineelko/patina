@@ -97,7 +97,7 @@ extern "efiapi" fn flush_data_cache(
 
     patina::arch::flush_data_cache(start, length, flush_type)
         .map(|_| efi::Status::SUCCESS)
-        .unwrap_or_else(|err| err.into())
+        .unwrap_or_else(core::convert::Into::into)
 }
 
 extern "efiapi" fn enable_interrupt(this: *const CpuArchProtocol) -> efi::Status {
