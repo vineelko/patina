@@ -6,6 +6,8 @@ license.workspace = true
 edition.workspace = true
 readme = "README.md"
 description = "A pure rust implementation of the UEFI DXE Core."
+keywords.workspace = true
+categories.workspace = true
 
 [lints]
 workspace = true

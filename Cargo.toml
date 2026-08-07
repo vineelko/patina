@@ -8,6 +8,8 @@ license = "Apache-2.0"
 edition = "2024"
 rust-version = "1.90"
 repository = "https://github.com/OpenDevicePartnership/patina"
+keywords = ["uefi", "firmware", "edk2"]
+categories = ["embedded", "no-std", "hardware-support"]
 
 [workspace.dependencies]
 # alloc-no-stdlib is pinned to the 2.x because brotli-decompressor 5.0.3 (the latest release)
