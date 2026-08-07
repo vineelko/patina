@@ -257,10 +257,8 @@ impl ParamType {
             }
 
             // &mut Storage conflicts with Config<T> or ConfigMut<T>
-            (ParamType::StorageMut, ParamType::Config(_))
-            | (ParamType::Config(_), ParamType::StorageMut)
-            | (ParamType::StorageMut, ParamType::ConfigMut(_))
-            | (ParamType::ConfigMut(_), ParamType::StorageMut) => {
+            (ParamType::StorageMut, ParamType::Config(_) | ParamType::ConfigMut(_))
+            | (ParamType::Config(_) | ParamType::ConfigMut(_), ParamType::StorageMut) => {
                 Some("You cannot use &mut Storage together with Config<T> or ConfigMut<T> parameters.")
             }
 

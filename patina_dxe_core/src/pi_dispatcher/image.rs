@@ -1834,10 +1834,7 @@ mod tests {
             // Check for either load error or unsupported. On aarch64, goblin will parse
             // the resources section as well and fail due to the invalid directory table size,
             // returning unsupported.
-            assert!(matches!(
-                status,
-                Err(ImageStatus::LoadError(EfiError::LoadError)) | Err(ImageStatus::LoadError(EfiError::Unsupported))
-            ));
+            assert!(matches!(status, Err(ImageStatus::LoadError(EfiError::LoadError | EfiError::Unsupported))));
         });
     }
 

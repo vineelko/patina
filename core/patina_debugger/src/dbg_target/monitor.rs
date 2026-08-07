@@ -71,7 +71,7 @@ impl ext::monitor_cmd::MonitorCmd for PatinaTarget {
             Some("mod") => {
                 self.module_cmd(&mut tokens, &mut buf);
             }
-            Some("reboot") | Some("R") => {
+            Some("reboot" | "R") => {
                 self.reboot = true;
                 let _ = buf.write_str("System will reboot on continue.");
             }

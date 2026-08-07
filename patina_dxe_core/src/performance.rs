@@ -415,7 +415,7 @@ impl CorePerformance {
                 };
                 self.add_fbpt_record(GuidEventRecord::new(perf_id, 0, timestamp, guid))
             }
-            id @ KnownPerfId::ModuleLoadImageStart | id @ KnownPerfId::ModuleLoadImageEnd => {
+            id @ (KnownPerfId::ModuleLoadImageStart | KnownPerfId::ModuleLoadImageEnd) => {
                 if id == KnownPerfId::ModuleLoadImageStart {
                     self.loaded_image_count.fetch_add(1, Ordering::Relaxed);
                 }
