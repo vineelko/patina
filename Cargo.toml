@@ -83,7 +83,7 @@ redundant_feature_names = "allow"
 multiple_crate_versions = "allow"
 # Individual lints
 indexing_slicing = "deny"
-undocumented_unsafe_blocks = "warn"
+undocumented_unsafe_blocks = "deny"
 
 [workspace.lints.rust]
 # Set by cargo-llvm-cov during coverage runs. Declared here so gating
