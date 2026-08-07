@@ -898,7 +898,7 @@ pub fn core_locate_device_path(
 
     for handle in handles {
         let mut temp_device_path: *mut efi::protocols::device_path::Protocol = core::ptr::null_mut();
-        let temp_device_path_ptr: *mut *mut c_void = &mut temp_device_path as *mut _ as *mut *mut c_void;
+        let temp_device_path_ptr: *mut *mut c_void = &raw mut temp_device_path as *mut *mut c_void;
         // SAFETY: `handle` comes from `locate_handles` and is valid. `device_path_protocol_guid`
         // points to a valid static GUID. `temp_device_path_ptr` is derived from a local variable
         // and is valid for writes.

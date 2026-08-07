@@ -1266,7 +1266,7 @@ mod unit_tests {
 
         let a = A { foo: 0, bar: 0, baz: 0, block_map: [fv::BlockMapEntry { length: 0, num_blocks: 0 }; 0] };
 
-        let a_ptr = &a as *const A;
+        let a_ptr = &raw const a;
 
         // SAFETY: Test validates pointer offset calculation for zero-size array
         unsafe {

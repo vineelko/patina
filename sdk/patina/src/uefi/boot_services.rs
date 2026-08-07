@@ -3421,7 +3421,7 @@ mod tests {
             // SAFETY: Test mock - reading protocol GUID to verify locate_protocol request for TestProtocol.
             assert_eq!(unsafe { ptr::read(protocol_guid) }, TestProtocol::PROTOCOL_GUID);
             // SAFETY: Test mock - writing protocol interface pointer to output parameter.
-            unsafe { ptr::write(interface, &PROTOCOL_INTERFACE as *const u32 as *mut u32 as *mut c_void) };
+            unsafe { ptr::write(interface, &raw const PROTOCOL_INTERFACE as *mut u32 as *mut c_void) };
             efi::Status::SUCCESS
         }
 

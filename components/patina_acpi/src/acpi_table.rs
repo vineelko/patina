@@ -453,7 +453,7 @@ impl AcpiTable {
         // When T is provided by value, enforce that the table length is equal to `size_of::<T>()`.
         // SAFETY: Caller guarantees T starts with an AcpiTableHeader and has a C-compatible layout.
         let length =
-            unsafe { AcpiTableHeader::read_length_from_ptr(&table as *const T as *const AcpiTableHeader) } as usize;
+            unsafe { AcpiTableHeader::read_length_from_ptr(&raw const table as *const AcpiTableHeader) } as usize;
         if length != mem::size_of::<T>() {
             return Err(AcpiError::InvalidTableFormat);
         }

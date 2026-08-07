@@ -1082,7 +1082,7 @@ mod tests {
         assert_eq!(patina_fields, r_efi_fields);
         assert_eq!(patina_fields, TEST_GUID_FIELDS);
 
-        let r_efi_ptr = &r_efi_guid as *const r_efi_base::Guid;
+        let r_efi_ptr = &raw const r_efi_guid;
         let patina_ptr = match patina_guid {
             Guid::Borrowed(guid) => guid as *const efi::Guid,
             _ => panic!("Expected Borrowed variant"),
@@ -1128,12 +1128,12 @@ mod tests {
         assert_eq!(core::mem::size_of_val(&patina_as_efi), 16);
         assert_eq!(patina_as_efi.as_bytes(), r_efi_guid.as_bytes());
 
-        let patina_ptr = &patina_as_efi as *const efi::Guid;
+        let patina_ptr = &raw const patina_as_efi;
         // SAFETY: Both pointers reference valid GUID structures of known size (16 bytes).
         // The memory representation is being read to verify binary compatibility.
         unsafe {
             let patina_slice = core::slice::from_raw_parts(patina_ptr as *const u8, 16);
-            let r_efi_slice = core::slice::from_raw_parts(&r_efi_guid as *const _ as *const u8, 16);
+            let r_efi_slice = core::slice::from_raw_parts(&raw const r_efi_guid as *const u8, 16);
             assert_eq!(patina_slice, r_efi_slice);
         }
     }
@@ -1196,7 +1196,7 @@ mod tests {
         };
 
         let ref_ptr = ref_c_guid as *const efi::Guid;
-        let bytes_ptr = &bytes_c_guid as *const efi::Guid;
+        let bytes_ptr = &raw const bytes_c_guid;
 
         assert_eq!(ref_ptr as usize % align_of::<efi::Guid>(), 0);
         assert_eq!(bytes_ptr as usize % align_of::<efi::Guid>(), 0);
@@ -1228,7 +1228,7 @@ mod tests {
         // SAFETY: r_efi_ptr points to a valid crate::standard::Guid with a known size of 16 bytes.
         // The memory representation is being read to verify it matches the expected bytes.
         unsafe {
-            let r_efi_ptr = &r_efi_guid as *const r_efi_base::Guid;
+            let r_efi_ptr = &raw const r_efi_guid;
             let r_efi_slice = core::slice::from_raw_parts(r_efi_ptr as *const u8, 16);
             assert_eq!(r_efi_slice, expected_bytes);
         }
@@ -1281,8 +1281,8 @@ mod tests {
         let binary_guid = BinaryGuid(efi_guid);
 
         // Verify the memory layout is identical
-        let efi_ptr = &efi_guid as *const efi::Guid as *const u8;
-        let binary_ptr = &binary_guid as *const BinaryGuid as *const u8;
+        let efi_ptr = &raw const efi_guid as *const u8;
+        let binary_ptr = &raw const binary_guid as *const u8;
 
         // SAFETY: Both pointers point to valid GUID structures with repr(transparent) layout.
         // 16 bytes is being read to verify binary compatibility.
@@ -1743,8 +1743,8 @@ mod tests {
         //    BinaryGuid should have proper alignment for safe casting
         let binary_guid =
             BinaryGuid::from_fields(0x550e8400, 0xe29b, 0x41d4, 0xa7, 0x16, &[0x44, 0x66, 0x55, 0x44, 0x00, 0x00]);
-        let guid_ptr = &binary_guid as *const BinaryGuid;
-        let efi_guid_ptr = &binary_guid.0 as *const efi::Guid;
+        let guid_ptr = &raw const binary_guid;
+        let efi_guid_ptr = &raw const binary_guid.0;
 
         // Pointers should be identical
         assert_eq!(guid_ptr as *const u8, efi_guid_ptr as *const u8);
@@ -1758,8 +1758,8 @@ mod tests {
         // SAFETY: Both pointers reference valid GUID structures. \16 bytes from each to verify that
         // BinaryGuid maintains binary compatibility with crate::standard::efi::Guid.
         unsafe {
-            let efi_bytes = core::slice::from_raw_parts(&efi_guid as *const _ as *const u8, 16);
-            let binary_bytes = core::slice::from_raw_parts(&binary_guid_from_efi as *const _ as *const u8, 16);
+            let efi_bytes = core::slice::from_raw_parts(&raw const efi_guid as *const u8, 16);
+            let binary_bytes = core::slice::from_raw_parts(&raw const binary_guid_from_efi as *const u8, 16);
             assert_eq!(efi_bytes, binary_bytes);
         }
 
@@ -1830,7 +1830,7 @@ mod tests {
         assert_eq!(efi_guid_ref.as_fields(), TEST_GUID_FIELDS);
         assert_eq!(efi_guid_ref.as_bytes(), binary_guid.as_bytes());
 
-        let ptr1 = &binary_guid.0 as *const efi::Guid;
+        let ptr1 = &raw const binary_guid.0;
         let ptr2 = efi_guid_ref as *const efi::Guid;
         assert_eq!(ptr1, ptr2);
     }

@@ -86,9 +86,10 @@ pub fn expand_device_path<B: BootServices>(boot_services: &B, partial_path: &mut
     // This is more efficient than enumerating all handles manually.
     let mut device_path_ptr = partial_path as *mut DevicePath as *mut u8 as *mut efi::protocols::device_path::Protocol;
     // SAFETY: device_path_ptr points to a valid device path from partial_path.
-    let handle =
-        unsafe { boot_services.locate_device_path(&efi::protocols::device_path::PROTOCOL_GUID, &mut device_path_ptr) }
-            .map_err(EfiError::from)?;
+    let handle = unsafe {
+        boot_services.locate_device_path(&efi::protocols::device_path::PROTOCOL_GUID, &raw mut device_path_ptr)
+    }
+    .map_err(EfiError::from)?;
 
     // Get the full device path from the matched handle
     // SAFETY: handle_protocol is safe when the handle is valid (from locate_device_path)

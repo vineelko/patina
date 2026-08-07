@@ -1007,16 +1007,16 @@ mod tests {
     fn test_fv_functionality() {
         test_support::with_global_lock(|| {
             let mut fv_att: u64 = 0x1;
-            let fv_attributes: *mut fv::attributes::EfiFvAttributes = &mut fv_att;
+            let fv_attributes: *mut fv::attributes::EfiFvAttributes = &raw mut fv_att;
             let guid_invalid: efi::Guid = efi::Guid::from_fields(0, 0, 0, 0, 0, &[0, 0, 0, 0, 0, 0]);
-            let guid_ref_invalid_ref: *const efi::Guid = &guid_invalid;
+            let guid_ref_invalid_ref: *const efi::Guid = &raw const guid_invalid;
             let mut auth_valid_status: u32 = 1;
-            let auth_valid_p: *mut u32 = &mut auth_valid_status;
+            let auth_valid_p: *mut u32 = &raw mut auth_valid_status;
             let mut guid_valid: efi::Guid =
                 efi::Guid::from_fields(0x1fa1f39e, 0xfeff, 0x4aae, 0xbd, 0x7b, &[0x38, 0xa0, 0x70, 0xa3, 0xb6, 0x09]);
-            let guid_valid_ref: *mut efi::Guid = &mut guid_valid;
+            let guid_valid_ref: *mut efi::Guid = &raw mut guid_valid;
             let mut file_rd_attr: u32 = fvb::attributes::raw::fvb2::READ_STATUS;
-            let file_attributes: *mut fv::file::EfiFvFileAttributes = &mut file_rd_attr;
+            let file_attributes: *mut fv::file::EfiFvFileAttributes = &raw mut file_rd_attr;
 
             let mut file = File::open(test_collateral!("DXEFV.Fv")).unwrap();
             let mut fv: Vec<u8> = Vec::new();
@@ -1151,7 +1151,7 @@ mod tests {
                      * hence delcare and free up after use immediately
                      */
                     let mut len3 = 1000;
-                    let buffer_valid_size3: *mut usize = &mut len3;
+                    let buffer_valid_size3: *mut usize = &raw mut len3;
                     let layout3 = Layout::from_size_align(1001, 8).unwrap();
                     let buffer_valid3 = alloc(layout3) as *mut c_void;
 
@@ -1200,7 +1200,7 @@ mod tests {
                      * hence delcare and free up after use immediately
                      */
                     let mut len3 = 1000;
-                    let buffer_valid_size3: *mut usize = &mut len3;
+                    let buffer_valid_size3: *mut usize = &raw mut len3;
                     let layout3 = Layout::from_size_align(1001, 8).unwrap();
                     let buffer_valid3 = alloc(layout3) as *mut c_void;
 
@@ -1209,9 +1209,9 @@ mod tests {
                     }
 
                     let mut buffer_size_random: usize = 99;
-                    let buffer_size_random_ref: *mut usize = &mut buffer_size_random;
+                    let buffer_size_random_ref: *mut usize = &raw mut buffer_size_random;
                     let mut num_buffer_empty: usize = 0;
-                    let num_buffer_empty_ref: *mut usize = &mut num_buffer_empty;
+                    let num_buffer_empty_ref: *mut usize = &raw mut num_buffer_empty;
 
                     /* Handle the Null Case */
                     MockProtocolData::fvb_get_block_size_efiapi(
@@ -1262,12 +1262,9 @@ mod tests {
                     /* Handling Not Found Case */
                     let mut p_address: efi::PhysicalAddress = 0x12345;
 
-                    MockProtocolData::fvb_get_physical_address_efiapi(fvb_intf_data_n_mut, &mut p_address as *mut u64);
-                    MockProtocolData::fvb_get_physical_address_efiapi(
-                        fvb_intf_invalid_mutpro,
-                        &mut p_address as *mut u64,
-                    );
-                    MockProtocolData::fvb_get_physical_address_efiapi(fvb_ptr_mut_prot, &mut p_address as *mut u64);
+                    MockProtocolData::fvb_get_physical_address_efiapi(fvb_intf_data_n_mut, &raw mut p_address);
+                    MockProtocolData::fvb_get_physical_address_efiapi(fvb_intf_invalid_mutpro, &raw mut p_address);
+                    MockProtocolData::fvb_get_physical_address_efiapi(fvb_ptr_mut_prot, &raw mut p_address);
                     MockProtocolData::fvb_get_physical_address_efiapi(fvb_ptr_mut_prot, std::ptr::null_mut());
                 };
                 let fvb_test_write_file = || {
@@ -1287,7 +1284,7 @@ mod tests {
 
                 let fvb_test_write = || {
                     let mut len3 = 1000;
-                    let buffer_valid_size3: *mut usize = &mut len3;
+                    let buffer_valid_size3: *mut usize = &raw mut len3;
                     let layout3 = Layout::from_size_align(1001, 8).unwrap();
                     let buffer_valid3 = alloc(layout3) as *mut c_void;
 
@@ -1317,7 +1314,7 @@ mod tests {
 
                 let fvb_test_get_attributes = || {
                     let mut fvb_attributes: fvb::attributes::EfiFvbAttributes2 = 0x123456;
-                    let fvb_attributes_ref: *mut fvb::attributes::EfiFvbAttributes2 = &mut fvb_attributes;
+                    let fvb_attributes_ref: *mut fvb::attributes::EfiFvbAttributes2 = &raw mut fvb_attributes;
 
                     MockProtocolData::fvb_get_attributes_efiapi(fvb_ptr_mut_prot, std::ptr::null_mut());
                     MockProtocolData::fvb_get_attributes_efiapi(fvb_ptr_mut_prot, fvb_attributes_ref);
@@ -1330,13 +1327,13 @@ mod tests {
                      * hence delcare and free up after use immediately
                      */
                     let mut len3 = 1000;
-                    let buffer_valid_size3: *mut usize = &mut len3;
+                    let buffer_valid_size3: *mut usize = &raw mut len3;
                     let layout3 = Layout::from_size_align(1001, 8).unwrap();
                     let buffer_valid3 = alloc(layout3) as *mut c_void;
                     let mut file_type_read: fv::EfiFvFileType = 1;
-                    let file_type_read_ref: *mut fv::EfiFvFileType = &mut file_type_read;
+                    let file_type_read_ref: *mut fv::EfiFvFileType = &raw mut file_type_read;
                     let mut n_guid_mut: efi::Guid = efi::Guid::from_fields(0, 0, 0, 0, 0, &[0, 0, 0, 0, 0, 0]);
-                    let n_guid_ref_mut: *mut efi::Guid = &mut n_guid_mut;
+                    let n_guid_ref_mut: *mut efi::Guid = &raw mut n_guid_mut;
 
                     if buffer_valid3.is_null() {
                         panic!("Memory allocation failed!");
@@ -1383,7 +1380,7 @@ mod tests {
                     );
                     /*handle  fw_fs::FfsFileRawType::FFS_MIN case */
                     let mut file_type_read: fv::EfiFvFileType = ffs::file::raw::r#type::FFS_MIN;
-                    let file_type_read_ref1: *mut fv::EfiFvFileType = &mut file_type_read;
+                    let file_type_read_ref1: *mut fv::EfiFvFileType = &raw mut file_type_read;
 
                     MockProtocolData::fv_get_next_file_efiapi(
                         fv_ptr1,
@@ -1411,7 +1408,7 @@ mod tests {
                      * hence delcare and free up after use immediately
                      */
                     let mut len3 = 1000;
-                    let buffer_valid_size3: *mut usize = &mut len3;
+                    let buffer_valid_size3: *mut usize = &raw mut len3;
                     let layout3 = Layout::from_size_align(1001, 8).unwrap();
                     let mut buffer_valid3 = alloc(layout3) as *mut c_void;
 
@@ -1427,7 +1424,7 @@ mod tests {
                         0xba,
                         &[0xdd, 0xef, 0x00, 0x97, 0x49, 0x7c],
                     );
-                    let name_guid2: *mut efi::Guid = &mut gd2;
+                    let name_guid2: *mut efi::Guid = &raw mut gd2;
 
                     /* Cover the NULL Case, User Passing Invalid Parameter Case  */
                     MockProtocolData::fv_read_section_efiapi(
@@ -1445,7 +1442,7 @@ mod tests {
                         guid_ref_invalid_ref,
                         6,
                         10,
-                        &mut buffer_valid3 as *mut *mut c_void,
+                        &raw mut buffer_valid3,
                         buffer_valid_size3,
                         auth_valid_p,
                     );
@@ -1456,7 +1453,7 @@ mod tests {
                         guid_valid_ref,
                         6,
                         10,
-                        &mut buffer_valid3 as *mut *mut c_void,
+                        &raw mut buffer_valid3,
                         buffer_valid_size3,
                         auth_valid_p,
                     );
@@ -1466,7 +1463,7 @@ mod tests {
                         name_guid2,
                         6,
                         10,
-                        &mut buffer_valid3 as *mut *mut c_void,
+                        &raw mut buffer_valid3,
                         buffer_valid_size3,
                         auth_valid_p,
                     );
@@ -1477,7 +1474,7 @@ mod tests {
                         guid_ref_invalid_ref,
                         1,
                         1,
-                        &mut buffer_valid3 as *mut *mut c_void,
+                        &raw mut buffer_valid3,
                         buffer_valid_size3,
                         auth_valid_p,
                     );
@@ -1488,7 +1485,7 @@ mod tests {
                         guid_ref_invalid_ref,
                         1,
                         1,
-                        &mut buffer_valid3 as *mut *mut c_void,
+                        &raw mut buffer_valid3,
                         buffer_valid_size3,
                         auth_valid_p,
                     );
@@ -1501,11 +1498,11 @@ mod tests {
                      * hence delcare and free up after use immediately
                      */
                     let mut len3 = 1000;
-                    let buffer_valid_size3: *mut usize = &mut len3;
+                    let buffer_valid_size3: *mut usize = &raw mut len3;
                     let layout3 = Layout::from_size_align(1001, 8).unwrap();
                     let mut buffer_valid3 = alloc(layout3) as *mut c_void;
                     let mut found_type: u8 = ffs::file::raw::r#type::DRIVER;
-                    let found_type_ref: *mut fv::EfiFvFileType = &mut found_type;
+                    let found_type_ref: *mut fv::EfiFvFileType = &raw mut found_type;
 
                     if buffer_valid3.is_null() {
                         panic!("Memory allocation failed!");
@@ -1514,7 +1511,7 @@ mod tests {
                     MockProtocolData::fv_read_file_efiapi(
                         ptr::null(),
                         ptr::null(),
-                        &mut buffer_valid3 as *mut *mut c_void,
+                        &raw mut buffer_valid3,
                         std::ptr::null_mut(),
                         found_type_ref,
                         file_attributes,
@@ -1524,7 +1521,7 @@ mod tests {
                     MockProtocolData::fv_read_file_efiapi(
                         fv_ptr1,
                         guid_ref_invalid_ref,
-                        &mut buffer_valid3 as *mut *mut c_void,
+                        &raw mut buffer_valid3,
                         buffer_valid_size3,
                         found_type_ref,
                         file_attributes,
@@ -1533,7 +1530,7 @@ mod tests {
                     MockProtocolData::fv_read_file_efiapi(
                         fv_ptr1,
                         guid_valid_ref,
-                        &mut buffer_valid3 as *mut *mut c_void,
+                        &raw mut buffer_valid3,
                         buffer_valid_size3,
                         found_type_ref,
                         file_attributes,
@@ -1542,7 +1539,7 @@ mod tests {
                     MockProtocolData::fv_read_file_efiapi(
                         fv_ptr3_const,
                         guid_valid_ref,
-                        &mut buffer_valid3 as *mut *mut c_void,
+                        &raw mut buffer_valid3,
                         buffer_valid_size3,
                         found_type_ref,
                         file_attributes,
@@ -1551,7 +1548,7 @@ mod tests {
                     MockProtocolData::fv_read_file_efiapi(
                         fv_ptr_no_data,
                         guid_valid_ref,
-                        &mut buffer_valid3 as *mut *mut c_void,
+                        &raw mut buffer_valid3,
                         buffer_valid_size3,
                         found_type_ref,
                         file_attributes,
@@ -1567,11 +1564,11 @@ mod tests {
                         auth_valid_p,
                     );
                     let mut buffer_size_zero = 0usize;
-                    let buffer_size_zero_ptr: *mut usize = &mut buffer_size_zero;
+                    let buffer_size_zero_ptr: *mut usize = &raw mut buffer_size_zero;
                     let status = MockProtocolData::fv_read_file_efiapi(
                         fv_ptr1,
                         guid_valid_ref,
-                        &mut buffer_valid3 as *mut *mut c_void,
+                        &raw mut buffer_valid3,
                         buffer_size_zero_ptr,
                         found_type_ref,
                         file_attributes,
@@ -1638,9 +1635,9 @@ mod tests {
                 }
 
                 let mut len = 1000;
-                let buffer_size: *mut usize = &mut len;
+                let buffer_size: *mut usize = &raw mut len;
                 let mut authentication_status: u32 = 1;
-                let authentication_statusp: *mut u32 = &mut authentication_status;
+                let authentication_statusp: *mut u32 = &raw mut authentication_status;
                 let mut guid1: efi::Guid = efi::Guid::from_fields(
                     0x1fa1f39e,
                     0xfeff,
@@ -1649,14 +1646,14 @@ mod tests {
                     0x7b,
                     &[0x38, 0xa0, 0x70, 0xa3, 0xb6, 0x09],
                 );
-                let name_guid3: *mut efi::Guid = &mut guid1;
+                let name_guid3: *mut efi::Guid = &raw mut guid1;
 
                 MockProtocolData::fv_read_section_efiapi(
                     fv_ptr1,
                     name_guid3,
                     6,
                     10,
-                    &mut buffer as *mut *mut c_void,
+                    &raw mut buffer,
                     buffer_size,
                     authentication_statusp,
                 );
@@ -1716,7 +1713,7 @@ mod tests {
                     0x7b,
                     &[0x38, 0xa0, 0x70, 0xa3, 0xb6, 0x09],
                 );
-                let name_guid: *mut efi::Guid = &mut guid;
+                let name_guid: *mut efi::Guid = &raw mut guid;
 
                 // First, get the actual file size by passing null buffer
                 let mut actual_file_size: usize = 0;
@@ -1728,10 +1725,10 @@ mod tests {
                     fv_ptr1,
                     name_guid,
                     std::ptr::null_mut(),
-                    &mut actual_file_size,
-                    &mut found_type,
-                    &mut file_attributes,
-                    &mut auth_status,
+                    &raw mut actual_file_size,
+                    &raw mut found_type,
+                    &raw mut file_attributes,
+                    &raw mut auth_status,
                 );
                 assert_eq!(status, efi::Status::SUCCESS);
                 assert!(actual_file_size > 0, "File size should be greater than 0");
@@ -1750,11 +1747,11 @@ mod tests {
                 let status = MockProtocolData::fv_read_file_efiapi(
                     fv_ptr1,
                     name_guid,
-                    &mut buffer as *mut *mut c_void,
-                    &mut buffer_size,
-                    &mut found_type,
-                    &mut file_attributes,
-                    &mut auth_status,
+                    &raw mut buffer,
+                    &raw mut buffer_size,
+                    &raw mut found_type,
+                    &raw mut file_attributes,
+                    &raw mut auth_status,
                 );
 
                 // 1. Status should be WARN_BUFFER_TOO_SMALL
@@ -1787,11 +1784,11 @@ mod tests {
                 let status_zero = MockProtocolData::fv_read_file_efiapi(
                     fv_ptr1,
                     name_guid,
-                    &mut buffer_zero as *mut *mut c_void,
-                    &mut buffer_size_zero,
-                    &mut found_type,
-                    &mut file_attributes,
-                    &mut auth_status,
+                    &raw mut buffer_zero,
+                    &raw mut buffer_size_zero,
+                    &raw mut found_type,
+                    &raw mut file_attributes,
+                    &raw mut auth_status,
                 );
 
                 assert_eq!(
@@ -1846,7 +1843,7 @@ mod tests {
                     0xFE,
                     &[0xE3, 0xE7, 0x56, 0x33, 0x62, 0xA9],
                 );
-                let name_guid: *mut efi::Guid = &mut guid;
+                let name_guid: *mut efi::Guid = &raw mut guid;
 
                 // First get the actual file size by passing null buffer
                 let mut actual_section_size: usize = 0;
@@ -1858,8 +1855,8 @@ mod tests {
                     19,
                     0,
                     &mut std::ptr::null_mut() as *mut *mut c_void,
-                    &mut actual_section_size,
-                    &mut auth_status,
+                    &raw mut actual_section_size,
+                    &raw mut auth_status,
                 );
 
                 assert_eq!(status, efi::Status::SUCCESS);
@@ -1881,9 +1878,9 @@ mod tests {
                     name_guid,
                     19,
                     0,
-                    &mut buffer,
-                    &mut buffer_size,
-                    &mut auth_status,
+                    &raw mut buffer,
+                    &raw mut buffer_size,
+                    &raw mut auth_status,
                 );
 
                 // 1. Status should be SUCCESS

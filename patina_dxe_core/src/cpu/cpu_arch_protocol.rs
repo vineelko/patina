@@ -302,7 +302,7 @@ mod tests {
             let im: Service<dyn InterruptManager> = Service::mock(Box::new(MockInterruptManager::new()));
             let protocol = EfiCpuArchProtocolImpl::new(im);
 
-            let status = enable_interrupt(&protocol.protocol);
+            let status = enable_interrupt(&raw const protocol.protocol);
             assert_eq!(status, efi::Status::SUCCESS);
         });
     }
@@ -313,7 +313,7 @@ mod tests {
             let im: Service<dyn InterruptManager> = Service::mock(Box::new(MockInterruptManager::new()));
             let protocol = EfiCpuArchProtocolImpl::new(im);
 
-            let status = disable_interrupt(&protocol.protocol);
+            let status = disable_interrupt(&raw const protocol.protocol);
             assert_eq!(status, efi::Status::SUCCESS);
         });
     }
@@ -325,7 +325,7 @@ mod tests {
             let protocol = EfiCpuArchProtocolImpl::new(im);
 
             let mut state = false;
-            let status = get_interrupt_state(&protocol.protocol, &mut state as *mut bool);
+            let status = get_interrupt_state(&raw const protocol.protocol, &raw mut state);
             assert_eq!(status, efi::Status::SUCCESS);
         });
     }
@@ -344,7 +344,7 @@ mod tests {
 
             let protocol = EfiCpuArchProtocolImpl::new(im);
 
-            let status = register_interrupt_handler(&protocol.protocol, 0, mock_interrupt_handler);
+            let status = register_interrupt_handler(&raw const protocol.protocol, 0, mock_interrupt_handler);
             assert_eq!(status, efi::Status::SUCCESS);
 
             // Verify the case when `this` is null.
@@ -362,18 +362,17 @@ mod tests {
 
             let mut timer_value: u64 = 0;
             let mut timer_period: u64 = 0;
-            let status =
-                get_timer_value(&protocol.protocol, 0, &mut timer_value as *mut _, &mut timer_period as *mut _);
+            let status = get_timer_value(&raw const protocol.protocol, 0, &raw mut timer_value, &raw mut timer_period);
             assert_eq!(status, efi::Status::SUCCESS);
 
             // Verify the case when `this` is null.
-            let status = get_timer_value(core::ptr::null(), 0, &mut timer_value as *mut _, &mut timer_period as *mut _);
+            let status = get_timer_value(core::ptr::null(), 0, &raw mut timer_value, &raw mut timer_period);
             assert_eq!(status, efi::Status::INVALID_PARAMETER);
 
             // Null out-parameters should also be rejected.
-            let status = get_timer_value(&protocol.protocol, 0, core::ptr::null_mut(), &mut timer_period as *mut _);
+            let status = get_timer_value(&raw const protocol.protocol, 0, core::ptr::null_mut(), &raw mut timer_period);
             assert_eq!(status, efi::Status::INVALID_PARAMETER);
-            let status = get_timer_value(&protocol.protocol, 0, &mut timer_value as *mut _, core::ptr::null_mut());
+            let status = get_timer_value(&raw const protocol.protocol, 0, &raw mut timer_value, core::ptr::null_mut());
             assert_eq!(status, efi::Status::INVALID_PARAMETER);
         });
     }

@@ -133,13 +133,13 @@ impl DebugImageInfoData {
     /// Returns the current update status of the table header.
     fn update_status(&self) -> u32 {
         // SAFETY: This is a field owned by this struct and is valid for reads.
-        unsafe { ptr::read_volatile(&self.header.volatile_update_status) }
+        unsafe { ptr::read_volatile(&raw const self.header.volatile_update_status) }
     }
 
     /// Sets the update status of the table header.
     fn set_update_status(&mut self, status: u32) {
         // SAFETY: This is a field owned by this struct and is valid for writes.
-        unsafe { ptr::write_volatile(&mut self.header.volatile_update_status, status) }
+        unsafe { ptr::write_volatile(&raw mut self.header.volatile_update_status, status) }
     }
 
     /// Returns the current capacity of the table.

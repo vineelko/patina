@@ -203,7 +203,7 @@ pub fn init() {
 
     // SAFETY: We are constructing a well known GDT that maps all segments in a flat map
     unsafe {
-        core::arch::asm!("lgdt [{}]", in(reg) &gdtr, options(nostack, preserves_flags));
+        core::arch::asm!("lgdt [{}]", in(reg) &raw const gdtr, options(nostack, preserves_flags));
 
         // Reload CS via a far return
         core::arch::asm!(

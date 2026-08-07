@@ -365,7 +365,7 @@ mod tests {
                 (st.boot_services().get().calculate_crc32)(
                     BUFFER.as_ptr() as *mut c_void,
                     BUFFER.len(),
-                    &mut data_crc as *mut u32,
+                    &raw mut data_crc,
                 )
             };
             // Verify the function succeeded and CRC32 was calculated correctly for zero buffer
@@ -383,7 +383,7 @@ mod tests {
             // Test case 2: Zero data size - should return INVALID_PARAMETER
             // SAFETY: The passed in values are safe because they are constructed in this test case.
             let status = unsafe {
-                (st.boot_services().get().calculate_crc32)(BUFFER.as_ptr() as *mut c_void, 0, &mut data_crc as *mut u32)
+                (st.boot_services().get().calculate_crc32)(BUFFER.as_ptr() as *mut c_void, 0, &raw mut data_crc)
             };
             if status == efi::Status::INVALID_PARAMETER {
                 log::debug!("Zero data size correctly returned INVALID_PARAMETER");
@@ -394,11 +394,7 @@ mod tests {
             // Test case 3: Null data pointer - should return INVALID_PARAMETER
             // SAFETY: The passed in values are safe because they are constructed in this test case.
             let status = unsafe {
-                (st.boot_services().get().calculate_crc32)(
-                    core::ptr::null_mut(),
-                    BUFFER.len(),
-                    &mut data_crc as *mut u32,
-                )
+                (st.boot_services().get().calculate_crc32)(core::ptr::null_mut(), BUFFER.len(), &raw mut data_crc)
             };
             if status == efi::Status::INVALID_PARAMETER {
                 log::debug!("Null data pointer correctly returned INVALID_PARAMETER");
@@ -501,7 +497,7 @@ mod tests {
                 protocol::watchdog::WatchdogProtocol { register_handler, set_timer_period, get_timer_period };
             // SAFETY: The mock protocol lives for the duration of the test and the pointer is only used by the test.
             unsafe {
-                WATCHDOG_ARCH_PTR.init(&watchdog as *const _ as *mut c_void);
+                WATCHDOG_ARCH_PTR.init(&raw const watchdog as *mut c_void);
             };
             // Test case 5: Set watchdog timer with null data - should return SUCCESS (watchdog protocol available)
             // SAFETY: The unsafe block is required because r-efi declares set_watchdog_timer as an
@@ -569,7 +565,7 @@ mod tests {
 
             // SAFETY: The mock protocol lives for the duration of the test and the pointer is only used by the test.
             unsafe {
-                METRONOME_ARCH_PTR.init(&metronome as *const _ as *mut c_void);
+                METRONOME_ARCH_PTR.init(&raw const metronome as *mut c_void);
             }
 
             // Test case 4: Normal stall duration - should return SUCCESS (metronome protocol available)

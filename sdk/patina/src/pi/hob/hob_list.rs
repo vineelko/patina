@@ -682,7 +682,7 @@ mod tests {
         let write_header = |buf: &mut [u8], offset: usize, r#type: u16, length: u16| {
             let header = hob::HobHeader { r#type, length, reserved: 0 };
             // SAFETY: Test code - `HobHeader` is `repr(C)` plain data serialized into the test-allocated buffer.
-            let bytes = unsafe { from_raw_parts(&header as *const _ as *const u8, size_of::<hob::HobHeader>()) };
+            let bytes = unsafe { from_raw_parts(&raw const header as *const u8, size_of::<hob::HobHeader>()) };
             buf[offset..offset + bytes.len()].copy_from_slice(bytes);
         };
 
@@ -1081,7 +1081,7 @@ mod tests {
         let end_of_list = gen_end_of_hoblist();
 
         // SAFETY: The list is created in this test with a valid end-of-list marker
-        let size = unsafe { get_pi_hob_list_size(&end_of_list as *const _ as *const c_void) };
+        let size = unsafe { get_pi_hob_list_size(&raw const end_of_list as *const c_void) };
 
         assert_eq!(size, size_of::<PhaseHandoffInformationTable>());
     }
@@ -1104,26 +1104,20 @@ mod tests {
         // Add a capsule HOB
         // SAFETY: Creating a byte slice from a struct for test purposes.
         let capsule_bytes =
-            unsafe { core::slice::from_raw_parts(&capsule as *const Capsule as *const u8, size_of::<Capsule>()) };
+            unsafe { core::slice::from_raw_parts(&raw const capsule as *const u8, size_of::<Capsule>()) };
         buffer.extend_from_slice(capsule_bytes);
 
         // Add a firmware volume HOB
         // SAFETY: Creating a byte slice from a struct for test purposes.
         let fv_bytes = unsafe {
-            core::slice::from_raw_parts(
-                &firmware_volume as *const FirmwareVolume as *const u8,
-                size_of::<FirmwareVolume>(),
-            )
+            core::slice::from_raw_parts(&raw const firmware_volume as *const u8, size_of::<FirmwareVolume>())
         };
         buffer.extend_from_slice(fv_bytes);
 
         // Add an end-of-list HOB
         // SAFETY: Creating a byte slice from a struct for test purposes.
         let end_bytes = unsafe {
-            core::slice::from_raw_parts(
-                &end_of_list as *const PhaseHandoffInformationTable as *const u8,
-                size_of::<PhaseHandoffInformationTable>(),
-            )
+            core::slice::from_raw_parts(&raw const end_of_list as *const u8, size_of::<PhaseHandoffInformationTable>())
         };
         buffer.extend_from_slice(end_bytes);
 
@@ -1152,32 +1146,21 @@ mod tests {
         let mut buffer = Vec::new();
 
         // SAFETY: Creating a byte slice from a struct for test purposes.
+        buffer.extend_from_slice(unsafe { core::slice::from_raw_parts(&raw const cpu as *const u8, size_of::<Cpu>()) });
+
+        // SAFETY: Creating a byte slice from a struct for test purposes.
         buffer.extend_from_slice(unsafe {
-            core::slice::from_raw_parts(&cpu as *const Cpu as *const u8, size_of::<Cpu>())
+            core::slice::from_raw_parts(&raw const resource as *const u8, size_of::<ResourceDescriptor>())
         });
 
         // SAFETY: Creating a byte slice from a struct for test purposes.
         buffer.extend_from_slice(unsafe {
-            core::slice::from_raw_parts(
-                &resource as *const ResourceDescriptor as *const u8,
-                size_of::<ResourceDescriptor>(),
-            )
+            core::slice::from_raw_parts(&raw const memory_alloc as *const u8, size_of::<MemoryAllocation>())
         });
 
         // SAFETY: Creating a byte slice from a struct for test purposes.
         buffer.extend_from_slice(unsafe {
-            core::slice::from_raw_parts(
-                &memory_alloc as *const MemoryAllocation as *const u8,
-                size_of::<MemoryAllocation>(),
-            )
-        });
-
-        // SAFETY: Creating a byte slice from a struct for test purposes.
-        buffer.extend_from_slice(unsafe {
-            core::slice::from_raw_parts(
-                &end_of_list as *const PhaseHandoffInformationTable as *const u8,
-                size_of::<PhaseHandoffInformationTable>(),
-            )
+            core::slice::from_raw_parts(&raw const end_of_list as *const u8, size_of::<PhaseHandoffInformationTable>())
         });
 
         // SAFETY: The list is created in this test with headers and an end-of-list marker that should be valid

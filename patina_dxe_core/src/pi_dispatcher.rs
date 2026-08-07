@@ -244,7 +244,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
             let crc32 =
                 crc32fast::hash(alloc::slice::from_raw_parts(ptr as *const u8, size_of::<efi::SystemTablePointer>()));
 
-            core::ptr::write_volatile(&mut (*ptr).crc32, crc32);
+            core::ptr::write_volatile(&raw mut (*ptr).crc32, crc32);
         }
 
         patina_debugger::add_monitor_command(
@@ -780,7 +780,7 @@ impl DispatcherContext {
                             // of the struct
                             filename_nodes_buf.extend_from_slice(unsafe {
                                 core::slice::from_raw_parts(
-                                    &filename_node as *const _ as *const u8,
+                                    &raw const filename_node as *const u8,
                                     core::mem::size_of::<efi::protocols::device_path::Protocol>(),
                                 )
                             });
@@ -792,7 +792,7 @@ impl DispatcherContext {
                             // size of the struct
                             filename_nodes_buf.extend_from_slice(unsafe {
                                 core::slice::from_raw_parts(
-                                    &filename_end_node as *const _ as *const u8,
+                                    &raw const filename_end_node as *const u8,
                                     core::mem::size_of::<efi::protocols::device_path::Protocol>(),
                                 )
                             });
@@ -1431,7 +1431,7 @@ mod tests {
                 .install_protocol_interface(
                     None,
                     patina::pi::protocol::security::PROTOCOL_GUID.into_inner(),
-                    &security_protocol as *const _ as *mut _,
+                    &raw const security_protocol as *mut _,
                 )
                 .unwrap();
             // SAFETY: fv is leaked to ensure it is not freed and remains valid for the duration of the program.

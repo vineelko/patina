@@ -498,7 +498,7 @@ mod tests {
         // Since protocol is at offset 0, any properly aligned SmbiosProtocolInternal pointer
         // is also a properly aligned SmbiosProtocol pointer (and vice versa when protocol is first field)
         let protocol = SmbiosProtocol::new(3, 9);
-        let protocol_ptr = &protocol as *const SmbiosProtocol;
+        let protocol_ptr = &raw const protocol;
         let protocol_addr = protocol_ptr as usize;
 
         // This pointer should be valid for casting to SmbiosProtocolInternal alignment

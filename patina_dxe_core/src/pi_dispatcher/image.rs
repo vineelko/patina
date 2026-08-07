@@ -1376,13 +1376,13 @@ fn get_file_buffer_from_fw(file_path: NonNull<Protocol>) -> Result<(Vec<u8>, efi
 
     // Read image from the firmware file
     let mut buffer: *mut u8 = core::ptr::null_mut();
-    let buffer_ptr: *mut *mut c_void = &mut buffer as *mut _ as *mut *mut c_void;
+    let buffer_ptr: *mut *mut c_void = &raw mut buffer as *mut *mut c_void;
     let mut buffer_size = 0;
     let mut authentication_status = 0;
     let authentication_status_ptr = &mut authentication_status;
     let status = (fw_vol.read_section)(
         fw_vol,
-        &fv_name_guid,
+        &raw const fv_name_guid,
         PE32,
         0, // Instance
         buffer_ptr,
@@ -1891,7 +1891,7 @@ mod tests {
                 .install_protocol_interface(
                     None,
                     pi::protocol::security::PROTOCOL_GUID.into_inner(),
-                    &security_protocol as *const _ as *mut _,
+                    &raw const security_protocol as *mut _,
                 )
                 .unwrap();
 
@@ -1941,7 +1941,7 @@ mod tests {
                 .install_protocol_interface(
                     None,
                     pi::protocol::security::PROTOCOL_GUID.into_inner(),
-                    &security_protocol as *const _ as *mut _,
+                    &raw const security_protocol as *mut _,
                 )
                 .unwrap();
 
@@ -1970,7 +1970,7 @@ mod tests {
                 .install_protocol_interface(
                     None,
                     pi::protocol::security2::PROTOCOL_GUID.into_inner(),
-                    &security2_protocol as *const _ as *mut _,
+                    &raw const security2_protocol as *mut _,
                 )
                 .unwrap();
 
@@ -2020,7 +2020,7 @@ mod tests {
                 .install_protocol_interface(
                     None,
                     pi::protocol::security2::PROTOCOL_GUID.into_inner(),
-                    &security2_protocol as *const _ as *mut _,
+                    &raw const security2_protocol as *mut _,
                 )
                 .unwrap();
 
@@ -2072,7 +2072,7 @@ mod tests {
                 .install_protocol_interface(
                     None,
                     pi::protocol::security2::PROTOCOL_GUID.into_inner(),
-                    &security2_protocol as *const _ as *mut _,
+                    &raw const security2_protocol as *mut _,
                 )
                 .unwrap();
 
@@ -2117,7 +2117,7 @@ mod tests {
                 .install_protocol_interface(
                     None,
                     pi::protocol::security2::PROTOCOL_GUID.into_inner(),
-                    &security2_protocol as *const _ as *mut _,
+                    &raw const security2_protocol as *mut _,
                 )
                 .unwrap();
 
@@ -3368,15 +3368,12 @@ mod tests {
         let mut hobs = Vec::new();
         // SAFETY: Taking a byte view of a stack-allocated HOB struct for serialization into the test HOB list.
         hobs.extend_from_slice(unsafe {
-            core::slice::from_raw_parts(
-                &ma_hob as *const MemoryAllocationModule as *const u8,
-                core::mem::size_of::<MemoryAllocationModule>(),
-            )
+            core::slice::from_raw_parts(&raw const ma_hob as *const u8, core::mem::size_of::<MemoryAllocationModule>())
         });
         // SAFETY: Taking a byte view of a stack-allocated HOB header for serialization into the test HOB list.
         hobs.extend_from_slice(unsafe {
             core::slice::from_raw_parts(
-                &end_hob as *const patina::pi::hob::HobHeader as *const u8,
+                &raw const end_hob as *const u8,
                 core::mem::size_of::<patina::pi::hob::HobHeader>(),
             )
         });

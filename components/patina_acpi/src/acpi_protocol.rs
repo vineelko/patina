@@ -286,7 +286,7 @@ mod tests {
             &AcpiTableProtocol::new(),
             dummy_table.as_ptr() as *const c_void,
             dummy_table.len(),
-            &mut table_key as *mut usize,
+            &raw mut table_key,
         );
         assert_eq!(status, efi::Status::INVALID_PARAMETER);
 
@@ -307,7 +307,7 @@ mod tests {
             &AcpiTableProtocol::new(),
             dummy_table.as_ptr() as *const c_void,
             16, // Incorrect length,
-            &mut table_key as *mut usize,
+            &raw mut table_key,
         );
         assert_eq!(status, efi::Status::INVALID_PARAMETER);
 
@@ -318,7 +318,7 @@ mod tests {
             &AcpiTableProtocol::new(),
             dummy_table.as_ptr() as *const c_void,
             dummy_table.len(),
-            &mut table_key as *mut usize,
+            &raw mut table_key,
         );
         assert_eq!(status, efi::Status::INVALID_PARAMETER);
 
@@ -349,7 +349,7 @@ mod tests {
             &AcpiTableProtocol::new(),
             dummy_table.as_ptr() as *const c_void,
             dummy_table.len(),
-            &mut table_key as *mut usize,
+            &raw mut table_key,
         );
         assert_eq!(status, efi::Status::NOT_STARTED);
     }

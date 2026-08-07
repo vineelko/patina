@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn test_validate_guid_caller_identifier() {
         let valid_guid = efi::Guid::from_bytes(&[1; 16]);
-        let valid_guid_ptr = &valid_guid as *const efi::Guid as *const c_void;
+        let valid_guid_ptr = &raw const valid_guid as *const c_void;
 
         #[allow(clippy::manual_dangling_ptr)]
         let invalid_guid_ptr = 0x1_usize as *const c_void; // Misaligned pointer.

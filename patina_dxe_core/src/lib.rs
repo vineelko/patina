@@ -686,7 +686,7 @@ fn call_bds() -> ! {
                     EFI_PROGRESS_CODE,
                     EFI_SOFTWARE_DXE_CORE | EFI_SW_DXE_CORE_PC_HANDOFF_TO_NEXT,
                     0,
-                    &dxe_core_guid,
+                    &raw const dxe_core_guid,
                     ptr::null(),
                 );
             } else {

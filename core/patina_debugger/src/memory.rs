@@ -293,7 +293,7 @@ mod tests {
             Ok(mock_page_table)
         });
 
-        let address = &data as *const _ as u64;
+        let address = &raw const data as u64;
         let result = read_memory::<MockMemDebuggerArch>(address, &mut buffer, false);
         assert!(result.expect("Failed to read memory.") == buffer.len());
         assert_eq!(buffer, data);
@@ -335,7 +335,7 @@ mod tests {
             Ok(mock_page_table)
         });
 
-        let address = &data as *const _ as u64;
+        let address = &raw const data as u64;
         let result = write_memory::<MockMemDebuggerArch>(address, &buffer);
         assert!(result.is_ok());
         assert_eq!(buffer, data);

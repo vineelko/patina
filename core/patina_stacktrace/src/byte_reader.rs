@@ -182,7 +182,7 @@ mod tests {
     #[test]
     fn read_pointer64_reads_value() {
         let value: u64 = 0x0123_4567_89AB_CDEF;
-        let ptr = &value as *const u64 as u64;
+        let ptr = &raw const value as u64;
         // SAFETY: Test creates a valid pointer from a stack variable that remains live for the duration of this call.
         assert_eq!(unsafe { read_pointer64(ptr).unwrap() }, value);
     }

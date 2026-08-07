@@ -161,7 +161,7 @@ impl DebuggerArch for X64Arch {
                 unsafe {
                     asm!(
                         "sgdt [{}]",
-                        in(reg) &mut gdtr,
+                        in(reg) &raw mut gdtr,
                         options(nostack, preserves_flags)
                     );
                 }

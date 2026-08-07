@@ -248,7 +248,7 @@ pub unsafe fn remaining_device_path(a: NonNull<Protocol>, b: NonNull<Protocol>) 
 
         // SAFETY: a_node is a valid device path node structure obtained from valid device path pointer. The
         // caller is responsible for upholding the function safety contract.
-        if unsafe { is_device_path_end(&a_node) } {
+        if unsafe { is_device_path_end(&raw const a_node) } {
             // SAFETY: b_ptr is derived from `b` which is non-null and points to a node
             // within the same well-formed device path, so it is non-null.
             return Some((unsafe { NonNull::new_unchecked(b_ptr as *mut _) }, node_count));
@@ -375,7 +375,7 @@ impl From<DevicePathWalker> for String {
         let mut result = String::new();
         for node in device_path_walker {
             // SAFETY: node.header is a valid device path node structure from the iterator
-            if unsafe { is_device_path_end(&node.header) } {
+            if unsafe { is_device_path_end(&raw const node.header) } {
                 break;
             }
             result.push_str(protocol_to_subtype_str(node.header));

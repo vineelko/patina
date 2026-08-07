@@ -1061,7 +1061,7 @@ mod tests {
     #[test]
     fn test_page_free_mismatched_address_should_assert() {
         let mut value: u8 = 5;
-        let data = NonNull::new(&mut value).unwrap();
+        let data = NonNull::new(&raw mut value).unwrap();
         let pf = PageFree {
             // SAFETY: Intentionally using a bad address for testing panic behavior.
             blob: unsafe { data.add(0x1000) },
@@ -1076,7 +1076,7 @@ mod tests {
     #[test]
     fn test_page_free_should_bubble_update_page_dealloc_error() {
         let mut value: u8 = 5;
-        let blob = NonNull::new(&mut value).unwrap();
+        let blob = NonNull::new(&raw mut value).unwrap();
         let mut mock = MockMemoryManager::new();
         mock.expect_free_pages().returning(|_, _| Err(MemoryError::InvalidAddress));
         let pf = PageFree { blob, page_count: 1, memory_manager: Box::leak(Box::new(mock)) };
