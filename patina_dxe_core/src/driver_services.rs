@@ -2123,6 +2123,6 @@ mod tests {
 
             assert!(boot_services.connect_controller as usize == connect_controller as *const () as usize);
             assert!(boot_services.disconnect_controller as usize == disconnect_controller as *const () as usize);
-        })
+        });
     }
 }

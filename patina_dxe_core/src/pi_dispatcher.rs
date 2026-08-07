@@ -289,14 +289,14 @@ impl<P: PlatformInfo> PiDispatcher<P> {
                 };
 
                 if depex_satisfied {
-                    scheduled_driver_candidates.push(candidate)
+                    scheduled_driver_candidates.push(candidate);
                 } else {
                     match candidate.depex.as_ref().map(patina_internal_core::depex::Depex::is_associated) {
                         Some(Some(AssociatedDependency::Before(guid))) => {
-                            dispatcher.associated_before.entry(OrdGuid(guid)).or_default().push(candidate)
+                            dispatcher.associated_before.entry(OrdGuid(guid)).or_default().push(candidate);
                         }
                         Some(Some(AssociatedDependency::After(guid))) => {
-                            dispatcher.associated_after.entry(OrdGuid(guid)).or_default().push(candidate)
+                            dispatcher.associated_after.entry(OrdGuid(guid)).or_default().push(candidate);
                         }
                         _ => dispatcher.pending_drivers.push(candidate),
                     }
@@ -440,7 +440,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
                         }
                     }
                 } else {
-                    dispatcher.pending_firmware_volume_images.push(candidate)
+                    dispatcher.pending_firmware_volume_images.push(candidate);
                 }
             }
         }
@@ -1067,7 +1067,7 @@ mod tests {
                     .expect("Failed to add FV handle");
             });
             assert!(result.is_err());
-        })
+        });
     }
 
     #[test]
@@ -1291,7 +1291,7 @@ mod tests {
             CORE.pi_dispatcher.dispatcher_context.lock().executing = true;
             let result = CORE.pi_dispatcher.dispatcher();
             assert_eq!(result, Err(EfiError::AlreadyStarted));
-        })
+        });
     }
 
     #[test]
@@ -1303,7 +1303,7 @@ mod tests {
 
             let result = CORE.pi_dispatcher.dispatcher();
             assert_eq!(result, Err(EfiError::NotFound));
-        })
+        });
     }
 
     #[test]
@@ -1442,7 +1442,7 @@ mod tests {
             CORE.pi_dispatcher.dispatcher().unwrap();
 
             assert!(SECURITY_CALL_EXECUTED.load(core::sync::atomic::Ordering::SeqCst));
-        })
+        });
     }
 
     #[test]

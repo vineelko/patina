@@ -654,7 +654,7 @@ impl TryFrom<(FileRef<'_>, &dyn SectionExtractor)> for File {
         let (src, extractor) = src;
         let mut sections = src.sections()?;
         for section in sections.iter_mut() {
-            section.extract(extractor)?
+            section.extract(extractor)?;
         }
         Ok(Self {
             name: src.name(),

@@ -432,7 +432,7 @@ mod tests {
                     header: HobHeader { r#type: GUID_EXTENSION, length: HOB_LEN as u16, reserved: 0 },
                     name: memory_log::ADV_LOGGER_HOB_GUID,
                 },
-            )
+            );
         };
 
         // SAFETY: Space for the additional physical address was explicitly allocated.

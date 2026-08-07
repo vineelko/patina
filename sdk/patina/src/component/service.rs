@@ -475,7 +475,7 @@ mod tests {
 
         storage.add_service(SomeStruct { x: 1 });
         let s3 = storage.get_service::<SomeStruct>().unwrap();
-        assert_eq!(1, s3.x)
+        assert_eq!(1, s3.x);
     }
 
     #[test]

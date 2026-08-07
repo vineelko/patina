@@ -74,7 +74,7 @@ pub fn interrupts_enabled() -> bool {
 
 /// Causes the current architecture's CPU to enter a low power state until the next interrupt.
 pub fn enable_interrupts_and_sleep() {
-    <Arch as Interrupts>::enable_interrupts_and_sleep()
+    <Arch as Interrupts>::enable_interrupts_and_sleep();
 }
 
 /// Executes a closure with CPU interrupts disabled, interrupts will be restored to their

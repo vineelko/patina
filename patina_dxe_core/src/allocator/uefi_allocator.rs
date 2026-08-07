@@ -383,7 +383,7 @@ mod tests {
                     let allocation_info = &*allocation_info;
                     assert_eq!(allocation_info.signature, POOL_SIG);
                     assert_eq!(allocation_info.memory_type, efi::RUNTIME_SERVICES_DATA);
-                    assert_eq!(allocation_info.layout, layout)
+                    assert_eq!(allocation_info.layout, layout);
                 }
             });
         });
@@ -585,7 +585,7 @@ mod tests {
                 // SAFETY: ua.alloc/ua.dealloc are used with a valid layout in tests.
                 unsafe {
                     let a = ua.alloc(layout);
-                    ua.dealloc(a, layout)
+                    ua.dealloc(a, layout);
                 }
 
                 // SAFETY: ua.alloc returned non-null for this test allocation.

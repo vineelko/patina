@@ -816,7 +816,7 @@ mod tests {
             descriptors
                 .iter()
                 .any(|x| x.base_address == free_memory_start && x.memory_type == GcdMemoryType::SystemMemory)
-        )
+        );
     }
 
     fn add_resource_descriptors_should_add_resource_descriptors(hob_list: &HobList, mem_base: u64) {

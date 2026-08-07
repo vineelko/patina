@@ -562,7 +562,7 @@ where
 
             // Update the RSDP with the new XSDT address.
             if let Some(ref mut rsdp) = *self.rsdp.lock() {
-                rsdp.xsdt_address = xsdt_addr
+                rsdp.xsdt_address = xsdt_addr;
             }
 
             // Point to the newly allocated data.

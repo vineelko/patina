@@ -839,7 +839,7 @@ impl PageAllocator for SpinLockedFixedSizeBlockAllocator {
 
     #[cfg(test)]
     fn reset(&self) {
-        Self::reset(self)
+        Self::reset(self);
     }
 }
 

@@ -92,7 +92,7 @@ impl Service {
                 let ref_service: &'static #service = leaked;
                 let any: &'static dyn core::any::Any = #alloc_name::boxed::Box::leak(#alloc_name::boxed::Box::new(ref_service));
                 Self::register_service::<#service>(storage, any);
-            })
+            });
         }
         tokens
     }

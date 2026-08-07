@@ -3173,7 +3173,7 @@ mod tests {
             let gcd = GCD::new(48);
             assert_eq!(2_usize.pow(48), gcd.maximum_address);
             assert_eq!(gcd.memory_blocks.capacity(), 0);
-            assert_eq!(0, gcd.memory_descriptor_count())
+            assert_eq!(0, gcd.memory_descriptor_count());
         });
     }
 

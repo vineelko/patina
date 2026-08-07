@@ -690,7 +690,7 @@ fn call_bds() -> ! {
                     ptr::null(),
                 );
             } else {
-                log::error!("status_code protocol pointer is NULL")
+                log::error!("status_code protocol pointer is NULL");
             }
         }
         Err(err) => log::error!("Unable to locate status code runtime protocol: {err}"),
@@ -707,7 +707,7 @@ fn call_bds() -> ! {
                     (bds_protocol_ptr.as_ref().entry)(bds_protocol_ptr.as_ptr());
                 }
             } else {
-                log::error!("bds protocol pointer is NULL")
+                log::error!("bds protocol pointer is NULL");
             }
         }
         Err(err) => log::error!("Unable to locate BDS arch protocol: {err}"),
@@ -774,7 +774,7 @@ mod tests {
                 test_support::init_test_protocol_db();
             }
 
-            f()
+            f();
         })
     }
 
@@ -782,7 +782,7 @@ mod tests {
     fn test_mock_call_bds_valid_non_null() {
         static BDS_CALLED: AtomicBool = AtomicBool::new(false);
         extern "efiapi" fn mock_bds(_this: *mut patina::pi::protocol::bds::BdsProtocol) {
-            BDS_CALLED.store(true, core::sync::atomic::Ordering::Relaxed)
+            BDS_CALLED.store(true, core::sync::atomic::Ordering::Relaxed);
         }
 
         assert!(
@@ -805,7 +805,7 @@ mod tests {
             })
         );
 
-        assert!(BDS_CALLED.load(core::sync::atomic::Ordering::Relaxed))
+        assert!(BDS_CALLED.load(core::sync::atomic::Ordering::Relaxed));
     }
 
     #[test]
@@ -879,7 +879,7 @@ mod tests {
             })
         );
 
-        assert!(STATUS_CODE_CALLED.load(core::sync::atomic::Ordering::Relaxed))
+        assert!(STATUS_CODE_CALLED.load(core::sync::atomic::Ordering::Relaxed));
     }
 
     #[test]

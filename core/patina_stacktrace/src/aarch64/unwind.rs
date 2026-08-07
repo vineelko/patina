@@ -516,7 +516,7 @@ impl UnwindCode {
                     log::debug!("    > save_regp (x{}, x{}, 0x{:X})", intreg, intreg + 1, sav_slot * 8);
                     sav_slot += 2;
                 }
-                intreg += 2
+                intreg += 2;
             }
 
             // Address the remaining possible cases:

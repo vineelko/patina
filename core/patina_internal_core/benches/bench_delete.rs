@@ -262,7 +262,7 @@ fn benchmark_delete_function(c: &mut Criterion) {
         );
     });
 
-    group.finish()
+    group.finish();
 }
 
 criterion_group!(benches, benchmark_delete_function);

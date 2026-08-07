@@ -696,7 +696,7 @@ mod tests {
             let wait_time = 500u64;
             let result = set_timer(event, 1 /* TimerDelay::Relative */, wait_time);
             assert_eq!(result, efi::Status::SUCCESS);
-        })
+        });
     }
 
     #[test]

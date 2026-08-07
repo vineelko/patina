@@ -244,14 +244,14 @@ mod tests {
             match i {
                 _ if i == 0 => assert_eq!((GuidEventRecord::TYPE, GuidEventRecord::REVISION), actual),
                 _ if i == 1 => {
-                    assert_eq!((DynamicStringEventRecord::TYPE, DynamicStringEventRecord::REVISION), actual)
+                    assert_eq!((DynamicStringEventRecord::TYPE, DynamicStringEventRecord::REVISION), actual);
                 }
                 _ if i == 2 => {
-                    assert_eq!((DualGuidStringEventRecord::TYPE, DualGuidStringEventRecord::REVISION), actual)
+                    assert_eq!((DualGuidStringEventRecord::TYPE, DualGuidStringEventRecord::REVISION), actual);
                 }
                 _ if i == 3 => assert_eq!((GuidQwordEventRecord::TYPE, GuidQwordEventRecord::REVISION), actual),
                 _ if i == 4 => {
-                    assert_eq!((GuidQwordStringEventRecord::TYPE, GuidQwordStringEventRecord::REVISION), actual)
+                    assert_eq!((GuidQwordStringEventRecord::TYPE, GuidQwordStringEventRecord::REVISION), actual);
                 }
                 _ => unreachable!(),
             }

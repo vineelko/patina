@@ -992,6 +992,6 @@ mod tests {
                 table.clear_boot_time_services();
                 assert_eq!((*table.system_table).boot_services, core::ptr::null_mut());
             };
-        })
+        });
     }
 }

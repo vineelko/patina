@@ -908,7 +908,7 @@ mod tests {
     fn new_should_create_protocol_db() {
         with_locked_state(|| {
             static SPIN_LOCKED_PROTOCOL_DB: SpinLockedProtocolDb = SpinLockedProtocolDb::new();
-            assert_eq!(SPIN_LOCKED_PROTOCOL_DB.lock().handles.len(), 0)
+            assert_eq!(SPIN_LOCKED_PROTOCOL_DB.lock().handles.len(), 0);
         });
     }
 

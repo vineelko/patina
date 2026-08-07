@@ -149,7 +149,7 @@ impl DebugImageInfoData {
 
     /// Sets the update-in-progress flag.
     fn set_update_in_progress(&mut self) {
-        self.set_update_status(self.update_status() | efi::DEBUG_IMAGE_INFO_UPDATE_IN_PROGRESS)
+        self.set_update_status(self.update_status() | efi::DEBUG_IMAGE_INFO_UPDATE_IN_PROGRESS);
     }
 
     fn clear_update_in_progress(&mut self) {
@@ -158,7 +158,7 @@ impl DebugImageInfoData {
 
     /// Sets the table-modified flag.
     fn set_modified(&mut self) {
-        self.set_update_status(self.update_status() | efi::DEBUG_IMAGE_INFO_TABLE_MODIFIED)
+        self.set_update_status(self.update_status() | efi::DEBUG_IMAGE_INFO_TABLE_MODIFIED);
     }
 
     /// Allows for safe modification of the table while managing update flags.

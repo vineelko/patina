@@ -346,7 +346,7 @@ mod tests {
         }
 
         for hob in &hobs {
-            assert!([5, 10].contains(&hob.unused))
+            assert!([5, 10].contains(&hob.unused));
         }
     }
 

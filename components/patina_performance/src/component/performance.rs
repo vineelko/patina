@@ -160,7 +160,7 @@ impl Performance {
                     timer.cpu_count_start(),
                     timer.cpu_count_end(),
                 )),
-            )?
+            )?;
         };
 
         Ok(())

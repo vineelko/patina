@@ -193,7 +193,7 @@ impl Depex {
                 }
                 Opcode::Push(guid, present) => {
                     if *present {
-                        stack.push(true)
+                        stack.push(true);
                     } else {
                         if let Some(guid) = guid_from_uuid(guid)
                             && protocols.contains(&guid)

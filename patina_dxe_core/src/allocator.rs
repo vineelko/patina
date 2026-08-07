@@ -1718,7 +1718,7 @@ mod tests {
             assert!(bs.free_pool == free_pool);
             assert!(bs.copy_mem == copy_mem);
             assert!(bs.get_memory_map == get_memory_map);
-        })
+        });
     }
 
     #[test]
@@ -1776,7 +1776,7 @@ mod tests {
 
             let (nvs_base, nvs_max) = find_bin_range(&bins, efi::ACPI_MEMORY_NVS);
             assert_eq!((nvs_max - nvs_base + 1), 0x300 * 0x1000, "ACPI_MEMORY_NVS bin size mismatch");
-        })
+        });
     }
 
     #[test]
@@ -1984,7 +1984,7 @@ mod tests {
                 rt_data_before,
                 "RUNTIME_SERVICES_DATA had no matching HOB and must not be seeded",
             );
-        })
+        });
     }
 
     #[test]
@@ -2016,7 +2016,7 @@ mod tests {
 
             let bm = MEMORY_BIN_MANAGER.lock();
             assert_eq!(bm.current_pages_for_type(efi::ACPI_MEMORY_NVS), 0);
-        })
+        });
     }
 
     #[test]
@@ -2050,7 +2050,7 @@ mod tests {
             // This should fail to set attributes on the stack because the address
             // is not in the GCD, but should continue processing without panicking
             process_hob_allocations(&hob_list);
-        })
+        });
     }
 
     #[test]
@@ -2105,7 +2105,7 @@ mod tests {
             assert_eq!(desc.base_address, fv_base as u64);
             assert_eq!(desc.length, fv_len as u64);
             assert_eq!(desc.image_handle, protocol_db::DXE_CORE_HANDLE);
-        })
+        });
     }
 
     #[test]
@@ -2197,7 +2197,7 @@ mod tests {
             assert_eq!(mmio_desc.base_address, 0x10002000);
             assert_eq!(mmio_desc.length, 0x1000000 - 0x2000);
             assert_eq!(mmio_desc.image_handle, INVALID_HANDLE);
-        })
+        });
     }
 
     #[test]
@@ -2603,7 +2603,7 @@ mod tests {
                 },
                 efi::Status::SUCCESS
             );
-        })
+        });
     }
 
     #[test]
@@ -2811,7 +2811,7 @@ mod tests {
                 )
             };
             assert_eq!(status, efi::Status::INVALID_PARAMETER);
-        })
+        });
     }
 
     #[test]

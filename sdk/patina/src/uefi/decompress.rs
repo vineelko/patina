@@ -514,7 +514,7 @@ impl<'a> CodeIterator<'a> {
         }
 
         for (idx, w) in weight.iter_mut().enumerate().skip(table_bits + 1) {
-            *w = 1 << (16 - idx)
+            *w = 1 << (16 - idx);
         }
 
         // zero unused table entries.

@@ -112,7 +112,7 @@ impl<'a> HobList<'a> {
         let mut size_of_hobs = 0;
 
         for hob in self.iter() {
-            size_of_hobs += hob.size()
+            size_of_hobs += hob.size();
         }
 
         size_of_hobs

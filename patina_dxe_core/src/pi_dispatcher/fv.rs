@@ -1905,6 +1905,6 @@ mod tests {
                 assert!(all_ff_remaining, "Remaining buffer beyond section size should remain unchanged (all 0xFE)");
             }
         })
-        .unwrap()
+        .unwrap();
     }
 }

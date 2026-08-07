@@ -55,7 +55,7 @@ impl MemoryAttributesTable {
     ///
     pub fn install() {
         if POST_RTB.is_completed() {
-            core_install_memory_attributes_table()
+            core_install_memory_attributes_table();
         }
     }
 }

@@ -258,7 +258,7 @@ impl PatinaPageTable for MockPageTableWrapper {
         old_cache_attributes: MemoryAttributes,
         new_cache_attributes: MemoryAttributes,
     ) {
-        self.inner.borrow().handle_cacheability_change(address, size, old_cache_attributes, new_cache_attributes)
+        self.inner.borrow().handle_cacheability_change(address, size, old_cache_attributes, new_cache_attributes);
     }
 }
 

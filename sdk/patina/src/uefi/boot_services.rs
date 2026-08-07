@@ -2168,7 +2168,7 @@ mod tests {
         let boot_services = boot_services!(create_event = efi_create_event);
 
         extern "efiapi" fn notify_callback(_e: efi::Event, ctx: Box<i32>) {
-            assert_eq!(10, *ctx)
+            assert_eq!(10, *ctx);
         }
 
         extern "efiapi" fn efi_create_event(
@@ -2245,7 +2245,7 @@ mod tests {
         let boot_services = boot_services!(create_event_ex = efi_create_event_ex);
 
         extern "efiapi" fn notify_callback(_e: efi::Event, ctx: Box<i32>) {
-            assert_eq!(10, *ctx)
+            assert_eq!(10, *ctx);
         }
 
         extern "efiapi" fn efi_create_event_ex(
@@ -3137,7 +3137,7 @@ mod tests {
             boot_services.open_protocol::<TestProtocol>(1_usize as _, 2_usize as _, 3_usize as _, 4).unwrap()
         };
 
-        assert_eq!(12, interface.0)
+        assert_eq!(12, interface.0);
     }
 
     #[test]
@@ -3164,7 +3164,7 @@ mod tests {
 
         // SAFETY: Test code - calling open_protocol for zero-sized TestProtocolEmpty.
         _ = unsafe { boot_services.open_protocol::<TestProtocolEmpty>(1_usize as _, 2_usize as _, 3_usize as _, 4) }
-            .unwrap()
+            .unwrap();
     }
 
     #[test]
@@ -3238,7 +3238,7 @@ mod tests {
             // SAFETY: Test mock - writing entry buffer pointer and count to output parameters.
             unsafe {
                 ptr::write(entry_buffer, buff);
-                ptr::write(entry_count, 1)
+                ptr::write(entry_count, 1);
             };
 
             efi::Status::SUCCESS
@@ -3695,7 +3695,7 @@ mod tests {
     #[should_panic = "Boot services function set_watchdog_timer is not initialized."]
     fn test_set_watchdog_timer_not_init() {
         let boot_services = boot_services!();
-        _ = boot_services.set_watchdog_timer(0)
+        _ = boot_services.set_watchdog_timer(0);
     }
 
     #[test]
@@ -3854,7 +3854,7 @@ mod tests {
             unsafe {
                 assert_eq!(ptr::addr_of!(BUFFER) as usize, buffer_ptr as usize);
                 assert_eq!(BUFFER.len(), buffer_size);
-                ptr::write(crc, 10)
+                ptr::write(crc, 10);
             }
             efi::Status::SUCCESS
         }

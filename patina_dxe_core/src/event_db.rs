@@ -879,7 +879,7 @@ mod tests {
     fn new_should_create_event_db() {
         with_locked_state(|| {
             static SPIN_LOCKED_EVENT_DB: SpinLockedEventDb = SpinLockedEventDb::new();
-            assert_eq!(SPIN_LOCKED_EVENT_DB.lock().events.len(), 0)
+            assert_eq!(SPIN_LOCKED_EVENT_DB.lock().events.len(), 0);
         });
     }
 
@@ -1247,7 +1247,7 @@ mod tests {
             for (group_item, queue_item) in iter::zip(group_events.iter().rev(), queue.iter()) {
                 assert_eq!(group_item, &queue_item.0.event);
             }
-        })
+        });
     }
 
     #[test]

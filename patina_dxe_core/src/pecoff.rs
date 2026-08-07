@@ -267,7 +267,7 @@ pub fn load_image(pe_info: &UefiPeInfo, image: &[u8], loaded_image: &mut [u8]) -
         let src = image
             .get((section.pointer_to_raw_data as usize)..(section.pointer_to_raw_data as usize + size as usize))
             .ok_or(error::Error::BufferTooShort(size as usize, "image"))?;
-        dst.copy_from_slice(src)
+        dst.copy_from_slice(src);
     }
     Ok(())
 }
@@ -935,7 +935,7 @@ mod tests {
 
         // Invalidate virtual size, backflow to size_of_raw_data
         image_info.sections[RELOC_DIR_ENTRY_INDEX].virtual_size = 0;
-        assert!(load_resource_section(&image_info, image).is_ok())
+        assert!(load_resource_section(&image_info, image).is_ok());
     }
 
     #[test]

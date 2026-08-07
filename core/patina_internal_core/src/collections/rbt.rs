@@ -1760,7 +1760,7 @@ mod tests {
         while let Some(cur) = current {
             assert_eq!(cur, &val);
             current = rbt.next(*cur);
-            val += 1
+            val += 1;
         }
 
         val -= 1;
