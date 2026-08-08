@@ -8,6 +8,7 @@
 //!
 use crate::peripheral::serial::{SerialIO, shared::SharedSerial};
 use core::marker::Send;
+use spin::Mutex;
 
 use super::Format;
 
@@ -25,6 +26,11 @@ where
     target_filters: &'a [(&'a str, log::LevelFilter)],
     max_level: log::LevelFilter,
     format: Format,
+    /// When `true`, [`write_lock`](Self::write_lock) is engaged to serialize each record.
+    blocking: bool,
+    /// Serializes an entire record so the multiple `write_str` fragments of a single message
+    /// cannot interleave with another core's message. Only taken when `blocking` is set.
+    write_lock: Mutex<()>,
 }
 
 impl<'a, S> Logger<'a, S>
@@ -32,13 +38,41 @@ where
     S: SerialIO + Send,
 {
     /// Creates a new logger instance.
+    ///
+    /// Serial acquisition is non-blocking by default: on contention a write fails fast rather
+    /// than waiting. Call [`Logger::with_blocking`] to switch to blocking (lossless) output.
     pub const fn new(
         format: Format,
         target_filters: &'a [(&'a str, log::LevelFilter)],
         max_level: log::LevelFilter,
         serial_port: S,
     ) -> Self {
-        Self { serial_port: SharedSerial::new(serial_port), target_filters, max_level, format }
+        Self {
+            serial_port: SharedSerial::new(serial_port),
+            target_filters,
+            max_level,
+            format,
+            blocking: false,
+            write_lock: Mutex::new(()),
+        }
+    }
+
+    /// Switches the logger to blocking (spinning) serial acquisition, consuming and returning `self`.
+    ///
+    /// In blocking mode, each record is written under a logger-level lock so concurrent cores
+    /// cannot interleave the individual `write_str` fragments of a single message, and the serial
+    /// port itself spins until free instead of failing fast on contention. This guarantees lossless,
+    /// uncorrupted output at the cost of a self deadlock hazard if the same core re-enters the
+    /// logger while already writing a record (e.g. logging from a panic handler mid record).
+    pub fn with_blocking(self) -> Self {
+        Self {
+            serial_port: self.serial_port.into_blocking(),
+            target_filters: self.target_filters,
+            max_level: self.max_level,
+            format: self.format,
+            blocking: true,
+            write_lock: Mutex::new(()),
+        }
     }
 }
 
@@ -59,6 +93,9 @@ where
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
             let mut writer = LogWriter { serial_port: &self.serial_port };
+            // In blocking mode, hold the logger-level lock for the whole record so concurrent
+            // cores cannot interleave the multiple `write_str` fragments of a single message.
+            let _guard = self.blocking.then(|| self.write_lock.lock());
             self.format.write(&mut writer, record);
         }
     }
@@ -148,5 +185,16 @@ mod tests {
         let args = format_args!("should be filtered out");
         logger.log(&log::Record::builder().args(args).level(Level::Info).target("test").build());
         logger.flush();
+    }
+
+    #[test]
+    fn test_serial_logger_blocking_writes_intact_record() {
+        let (mock, buffer) = recording_serial();
+        let logger = Logger::new(Format::Standard, &[], LevelFilter::Trace, mock).with_blocking();
+        assert!(logger.blocking);
+
+        let args = format_args!("hello");
+        logger.log(&log::Record::builder().args(args).level(Level::Info).target("test").build());
+        assert_eq!(String::from_utf8(buffer.lock().clone()).expect("valid utf8"), "INFO - hello\r\n");
     }
 }
