@@ -1095,83 +1095,82 @@ fn process_hob_allocations(hob_list: &HobList) {
                 }
 
                 let address = desc.memory_base_address;
-                match GCD.get_memory_descriptor_for_address(address, |d, _| d.memory_type != GcdMemoryType::NonExistent)
+
+                if let Ok(gcd_desc) =
+                    GCD.get_memory_descriptor_for_address(address, |d, _| d.memory_type != GcdMemoryType::NonExistent)
                 {
                     // we found the region in the GCD, so we can allocate it
-                    Ok(gcd_desc) => {
-                        if gcd_desc.base_address == desc.memory_base_address
-                            && gcd_desc.length == desc.memory_length
-                            && gcd_desc.image_handle != INVALID_HANDLE
-                        {
-                            // check to see if a duplicate HOB has already added this allocation
-                            log::trace!(
-                                "Duplicate allocation HOB at {:#x?} of length {:#x?}. Skipping allocation.",
-                                desc.memory_base_address,
-                                desc.memory_length
-                            );
-                            continue;
-                        }
-                        let alloc_res = match gcd_desc.memory_type {
-                            // if this is system memory, we use core_allocate_pages to allocate it
-                            // so that we can track the allocation in the allocator
-                            GcdMemoryType::SystemMemory => core_allocate_pages(
-                                efi::ALLOCATE_ADDRESS,
-                                desc.memory_type,
-                                uefi_size_to_pages!(desc.memory_length as usize),
-                                address,
-                                None,
-                            ),
-                            GcdMemoryType::NonExistent | GcdMemoryType::Unaccepted => {
-                                // we can't allocate memory in a non-existent or unaccepted memory type
-                                log::error!(
-                                    "Memory Allocation HOB specifies a non-existent or unaccepted memory type: {:#x?}. Cannot allocate memory.",
-                                    desc.memory_type
-                                );
-                                continue;
-                            }
-                            // for all other memory types, we can allocate it directly in the GCD
-                            // because they are not managed by the allocators
-                            _ => GCD
-                                .allocate_memory_space(
-                                    AllocationStrategy::Address(desc.memory_base_address as usize),
-                                    gcd_desc.memory_type,
-                                    0,
-                                    desc.memory_length as usize,
-                                    protocol_db::DXE_CORE_HANDLE,
-                                    None,
-                                )
-                                .map(|address| address as efi::PhysicalAddress),
-                        };
-
-                        if let Err(err) = alloc_res {
-                            if err == EfiError::NotFound && desc.name != patina::BinaryGuid::ZERO {
-                                // Guided Memory Allocation Hobs are typically MemoryAllocationModule or
-                                // MemoryAllocationStack HOBs which have corresponding non-guided allocation HOBs
-                                // associated with them; they are rejected as duplicates if we attempt to log them.
-                                // Only log trace messages for these.
-                                log::trace!(
-                                    "Failed to allocate memory space for memory allocation HOB at {:#x?} of length {:#x?}. Error: {:x?}",
-                                    desc.memory_base_address,
-                                    desc.memory_length,
-                                    err
-                                );
-                            } else {
-                                log::error!(
-                                    "Failed to allocate memory space for memory allocation HOB at {:#x?} of length {:#x?}. Error: {:x?}",
-                                    desc.memory_base_address,
-                                    desc.memory_length,
-                                    err
-                                );
-                            }
-                            continue;
-                        }
-                    }
-                    Err(_) => {
-                        log::error!(
-                            "Failed to get memory descriptor for address {address:#x?} in GCD specified in Memory Allocation HOB:\n{hob:#x?}. Cannot allocate memory."
+                    if gcd_desc.base_address == desc.memory_base_address
+                        && gcd_desc.length == desc.memory_length
+                        && gcd_desc.image_handle != INVALID_HANDLE
+                    {
+                        // check to see if a duplicate HOB has already added this allocation
+                        log::trace!(
+                            "Duplicate allocation HOB at {:#x?} of length {:#x?}. Skipping allocation.",
+                            desc.memory_base_address,
+                            desc.memory_length
                         );
                         continue;
                     }
+                    let alloc_res = match gcd_desc.memory_type {
+                        // if this is system memory, we use core_allocate_pages to allocate it
+                        // so that we can track the allocation in the allocator
+                        GcdMemoryType::SystemMemory => core_allocate_pages(
+                            efi::ALLOCATE_ADDRESS,
+                            desc.memory_type,
+                            uefi_size_to_pages!(desc.memory_length as usize),
+                            address,
+                            None,
+                        ),
+                        GcdMemoryType::NonExistent | GcdMemoryType::Unaccepted => {
+                            // we can't allocate memory in a non-existent or unaccepted memory type
+                            log::error!(
+                                "Memory Allocation HOB specifies a non-existent or unaccepted memory type: {:#x?}. Cannot allocate memory.",
+                                desc.memory_type
+                            );
+                            continue;
+                        }
+                        // for all other memory types, we can allocate it directly in the GCD
+                        // because they are not managed by the allocators
+                        _ => GCD
+                            .allocate_memory_space(
+                                AllocationStrategy::Address(desc.memory_base_address as usize),
+                                gcd_desc.memory_type,
+                                0,
+                                desc.memory_length as usize,
+                                protocol_db::DXE_CORE_HANDLE,
+                                None,
+                            )
+                            .map(|address| address as efi::PhysicalAddress),
+                    };
+
+                    if let Err(err) = alloc_res {
+                        if err == EfiError::NotFound && desc.name != patina::BinaryGuid::ZERO {
+                            // Guided Memory Allocation Hobs are typically MemoryAllocationModule or
+                            // MemoryAllocationStack HOBs which have corresponding non-guided allocation HOBs
+                            // associated with them; they are rejected as duplicates if we attempt to log them.
+                            // Only log trace messages for these.
+                            log::trace!(
+                                "Failed to allocate memory space for memory allocation HOB at {:#x?} of length {:#x?}. Error: {:x?}",
+                                desc.memory_base_address,
+                                desc.memory_length,
+                                err
+                            );
+                        } else {
+                            log::error!(
+                                "Failed to allocate memory space for memory allocation HOB at {:#x?} of length {:#x?}. Error: {:x?}",
+                                desc.memory_base_address,
+                                desc.memory_length,
+                                err
+                            );
+                        }
+                        continue;
+                    }
+                } else {
+                    log::error!(
+                        "Failed to get memory descriptor for address {address:#x?} in GCD specified in Memory Allocation HOB:\n{hob:#x?}. Cannot allocate memory."
+                    );
+                    continue;
                 }
             }
             Hob::FirmwareVolume(hob::FirmwareVolume { header: _, base_address, length })
