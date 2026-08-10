@@ -204,7 +204,7 @@ mod tests {
     fn create_fill_check_test() {
         let mut buff_box = Box::new([0_u64; 0x2000]);
         let buffer = buff_box.as_mut();
-        let address = buffer as *mut u64 as PhysicalAddress;
+        let address = buffer.as_mut_ptr() as PhysicalAddress;
         let len = buffer.len() as u32;
 
         // SAFETY: We just allocated this memory so it's valid.
@@ -247,7 +247,7 @@ mod tests {
     fn adopt_buffer_test() {
         let buff_box = Box::new([0_u8; 0x10000]);
         let buffer = buff_box.as_ref();
-        let address = buffer as *const u8 as PhysicalAddress;
+        let address = buffer.as_ptr() as PhysicalAddress;
         let len = buffer.len() as u32;
 
         // SAFETY: We just allocated this memory so it's valid.
