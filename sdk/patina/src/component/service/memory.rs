@@ -1369,11 +1369,9 @@ mod tests {
             let boxed_slice = pa.leak_as_slice::<MyStruct>();
             assert_eq!(boxed_slice.len(), UEFI_PAGE_SIZE / size_of::<MyStruct>());
 
-            let mut i = 0;
-            boxed_slice.iter().for_each(|item| {
+            for (i, item) in boxed_slice.iter().enumerate() {
                 assert_eq!(item.value(), i, "Default value of MyStruct should be {i}");
-                i += 1;
-            });
+            }
         }
         assert_eq!(
             DROP_COUNT.load(std::sync::atomic::Ordering::SeqCst),
