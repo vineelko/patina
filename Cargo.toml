@@ -72,22 +72,111 @@ serde_yaml = { version = "0.9" }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 
 [workspace.lints.clippy]
+###########################
+# Clippy Groups
+###########################
 cargo = { level = "warn", priority = -1 }
-# cargo - redundant_feature_names violation:
-#  `the "_support" suffix in the feature name "v1_resource_descriptor_support" is redundant`
-# This is allowed until the v1_resource_descriptor_support feature is drropped.
-redundant_feature_names = "allow"
-# cargo - multiple_crate_versions violation:
-#  `multiple versions for dependency `bitflags`: 1.3.2, 2.13.1 `
-# This is allowed until the uart_16550 crate is updated to v0.6+ which removes the bitflags v1 dependency.
-multiple_crate_versions = "allow"
 complexity = { level = "warn", priority = -1 }
 correctness = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
 perf = { level = "warn", priority = -1 }
 style = { level = "warn", priority = -1 }
 suspicious = { level = "warn", priority = -1 }
-# Individual lints
+
+###########################
+# Individual Lint Overrides
+###########################
+# cargo::redundant_feature_names violation - Fixes:
+#     `the "_support" suffix in the feature name "v1_resource_descriptor_support" is redundant`
+#   This is allowed until the v1_resource_descriptor_support feature is dropped.
+redundant_feature_names = "allow"
+# cargo::multiple_crate_versions violation:
+#  `multiple versions for dependency `bitflags`: 1.3.2, 2.13.1 `
+# This is allowed until the uart_16550 crate is updated to v0.6+ which removes the bitflags v1 dependency.
+multiple_crate_versions = "allow"
+# pedantic::cast_possible_truncation - Temporarily allowed until all cases are updated (each fix needs a lot of
+#                                      attention) to determine if the truncation is intentional and safe or not.
+cast_possible_truncation = "allow"
+# pedantic::cast_possible_wrap - Higher priority. Temporarily allowed until each instance is reviewed. About 20
+#                                instances currently in the codebase.
+cast_possible_wrap = "allow"
+# pedantic::cast_precision_loss - Higher priority. Temporarily allowed until each instance is reviewed. About 9
+#                                 instances currently in the codebase.
+cast_precision_loss = "allow"
+# pedantic::cast_ptr_alignment - Higher priority. Temporarily allowed until each instance is reviewed.
+cast_ptr_alignment = "allow"
+# pedantic::cast_sign_loss - Higher priority. Temporarily allowed until each instance is reviewed.
+#                            About 15 instances currently in the codebase.
+cast_sign_loss = "allow"
+# pedantic::elidable_lifetime_names - Allowed because the automock macro cannot handle anonymous lifetimes in traits.
+elidable_lifetime_names = "allow"
+# pedantic::inline_always - Temporarily allowed until each instance is evaluated to determine if the inline is
+#                           necessary or not.
+inline_always = "allow"
+# pedantic::items_after_statements - Temporarily allowed until all cases are updated.
+items_after_statements = "allow"
+# pedantic::iter_without_into_iter - Temporarily allowed until all cases are updated.
+iter_without_into_iter = "allow"
+# pedantic::large_stack_arrays - Higher priority. Temporarily allowed until each instance is reviewed. About 33
+#                                instances currently in the codebase.
+large_stack_arrays = "allow"
+# pedantic::manual_let_else - Temporarily allowed until all cases are updated.
+manual_let_else = "allow"
+# pedantic::match_wild_err_arm - Temporarily allowed until further review of each instance is completed to determine
+#                                if the wildcard arm is appropriate or not.
+match_wild_err_arm = "allow"
+# pedantic::missing_errors_doc - Temporarily allowed until all cases are updated (each fix needs a lot of attention).
+missing_errors_doc = "allow"
+# pedantic::missing_panics_doc - Temporarily allowed until all cases are updated. Each fix needs a lot of attention to
+#                                (1) determine if the panic is intentional and safe or not, and (2) write appropriate
+#                                documentation for the panic scenario.
+missing_panics_doc = "allow"
+# pedantic::must_use_candidate - Allowed due to the number of instances, a degree of subjectivity in determining if
+#                                a function should be marked must_use, and the potential for breaking public APIs.
+must_use_candidate = "allow"
+# pedantic::needless_continue - Temporarily allowed until each instance is updated to determine the best
+#                               approach for each case.
+needless_continue = "allow"
+# pedantic::needless_pass_by_value - Temporarily allowed due to the number of instances that need updated in existing
+#                                    code. Each update needs to be carefully reviewed.
+needless_pass_by_value = "allow"
+# pedantic::ptr_as_ptr - Temporarily allowed until all instances are fixed. Remaining instances in pre-existing code
+#                        code need further inspection.
+ptr_as_ptr = "allow"
+# pedantic::pub_underscore_fields - Temporarily allowed until each instance is reviewed.
+pub_underscore_fields = "allow"
+# pedantic::ref_option_ref - All occurrences are currently related to automock. Revisit to determine if this should
+#                            stay allowed.
+ref_option_ref = "allow"
+# pedantic::should_panic_without_expect - Temporarily allowed until each instance is updated to have a custom panic
+#                                         message.
+should_panic_without_expect = "allow"
+# pedantic::similar_names - Allowed due to substantial impact to public APIs and relatively low risk of confusion.
+similar_names = "allow"
+# pedantic::struct_field_names - Temporarily allowed due to a substantial impact to public APIs.
+struct_field_names = "allow"
+# pedantic::too_many_lines - Temporarily allowed until all cases are updated (each fix needs a lot of attention) since
+#                            large functions (> 100 lines) may need additional refactoring in surrounding code.
+too_many_lines = "allow"
+# pedantic::trivially_copy_pass_by_ref - Higher priority. Temporarily allowed until each instance is reviewed.
+#                                        About 17 instances currently in the codebase.
+trivially_copy_pass_by_ref = "allow"
+# pedantic::unnecessary_box_returns - Temporarily allowed until each instance is reviewed. Impact on APIs for each
+#                                     case needs to be assessed.
+unnecessary_box_returns = "allow"
+# pedantic::unnecessary_wraps - In most cases this is probably fine, but each case needs to be reviewed to determine
+#                               the impact on the API.
+unnecessary_wraps = "allow"
+# pedantic::unreadable_literal - Temporarily allowed until all cases are updated. Simple changes but thousands of
+#                                instances to fix.
+unreadable_literal = "allow"
+# pedantic::unused_self - Temporarily allowed until each instance is reviewed.
+unused_self = "allow"
+# pedantic::verbose_bit_mask - Allowed due to project preference for flexibility in how to represent operations.
+verbose_bit_mask = "allow"
+# restriction::indexing_slicing - Denied to prevent panics resulting from out-of-bounds indexing.
 indexing_slicing = "deny"
+# restriction::undocumented_unsafe_blocks - Denied to ensure all unsafe blocks are documented with SAFETY comments.
 undocumented_unsafe_blocks = "deny"
 
 [workspace.lints.rust]
