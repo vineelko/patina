@@ -1270,7 +1270,7 @@ mod unit_tests {
 
         // SAFETY: Test validates pointer offset calculation for zero-size array
         unsafe {
-            assert_eq!((*a_ptr).block_map.as_ptr(), a_ptr.offset(1) as *const fv::BlockMapEntry);
+            assert_eq!((*a_ptr).block_map.as_ptr(), a_ptr.add(1) as *const fv::BlockMapEntry);
         }
     }
 

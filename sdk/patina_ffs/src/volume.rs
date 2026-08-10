@@ -1137,7 +1137,7 @@ mod test {
 
         // SAFETY: test case for checking pointer math here.
         unsafe {
-            assert_eq!(((*a_ptr).block_map).as_ptr(), a_ptr.offset(1).cast::<fv::BlockMapEntry>());
+            assert_eq!(((*a_ptr).block_map).as_ptr(), a_ptr.add(1).cast::<fv::BlockMapEntry>());
         }
     }
 
