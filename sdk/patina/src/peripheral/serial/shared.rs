@@ -20,7 +20,7 @@ use crate::{arch::with_interrupts_disabled, base::error::EfiError, peripheral::s
 pub struct SharedSerial<T: SerialIO> {
     serial: Mutex<T>,
     /// When `true`, acquisition blocks (spins) until the port is free instead of failing
-    /// fast on contention. See [`SharedSerial::into_blocking`].
+    /// fast on contention. See [`SharedSerial::with_blocking`].
     blocking: bool,
 }
 
@@ -28,7 +28,7 @@ impl<T: SerialIO> SharedSerial<T> {
     /// Creates a new shared serial port wrapper.
     ///
     /// Acquisition is non-blocking: if the port is already held, the operation returns
-    /// [`EfiError::DeviceError`] rather than waiting. Use [`SharedSerial::into_blocking`] for
+    /// [`EfiError::DeviceError`] rather than waiting. Use [`SharedSerial::with_blocking`] for
     /// lossless output under contention.
     pub const fn new(serial: T) -> Self {
         SharedSerial { serial: Mutex::new(serial), blocking: false }
@@ -41,8 +41,9 @@ impl<T: SerialIO> SharedSerial<T> {
     /// under multi-core contention, at the cost of reintroducing a self-deadlock hazard if the
     /// same core re-enters the port while already holding it (e.g. logging from a panic handler
     /// mid-write). Prefer [`SharedSerial::new`] unless you specifically need lossless output.
-    pub fn into_blocking(self) -> Self {
-        SharedSerial { serial: self.serial, blocking: true }
+    pub fn with_blocking(mut self) -> Self {
+        self.blocking = true;
+        self
     }
 
     /// Acquire the underlying serial port, honoring the configured blocking behavior.
