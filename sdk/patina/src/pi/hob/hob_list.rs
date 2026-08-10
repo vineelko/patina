@@ -571,6 +571,8 @@ mod tests {
         let ptr = c_array_ptr as *mut u8;
         // SAFETY: Caller is responsible for ensuring the pointer and length are valid per the function contract.
         unsafe {
+            #[allow(clippy::same_length_and_capacity)]
+            // TODO: Remove this once the clippy lint is fixed in the future.
             drop(Vec::from_raw_parts(ptr, len, len));
         }
     }
