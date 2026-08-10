@@ -133,6 +133,7 @@ mod tests {
     use alloc::{string::String, sync::Arc, vec::Vec};
     use log::{Level, LevelFilter, Log, Metadata};
     use spin::Mutex;
+    use std::thread;
 
     fn metadata(level: Level, target: &str) -> Metadata<'_> {
         Metadata::builder().level(level).target(target).build()
@@ -196,5 +197,48 @@ mod tests {
         let args = format_args!("hello");
         logger.log(&log::Record::builder().args(args).level(Level::Info).target("test").build());
         assert_eq!(String::from_utf8(buffer.lock().clone()).expect("valid utf8"), "INFO - hello\r\n");
+    }
+
+    #[test]
+    #[ignore = "Stress test: spawns threads and logs many records; run explicitly with --ignored."]
+    fn test_serial_logger_blocking_concurrent_records_not_interleaved() {
+        // Each record is emitted as several `write_str` fragments (level, separator, message,
+        // terminator). In blocking mode the logger-level `write_lock` must hold for the whole
+        // record so two threads writing concurrently cannot interleave those fragments. We log
+        // two distinct messages from two threads and assert every rendered record is intact -
+        // i.e. the stream is a sequence of whole "A" or "B" records, never a garbled mix.
+        const ITERATIONS: usize = 500;
+
+        let (mock, buffer) = recording_serial();
+        let logger = Logger::new(Format::Standard, &[], LevelFilter::Trace, mock).with_blocking();
+
+        thread::scope(|scope| {
+            for message in ["aaaa", "bbbb"] {
+                let logger = &logger;
+                scope.spawn(move || {
+                    for _ in 0..ITERATIONS {
+                        logger.log(
+                            &log::Record::builder()
+                                .args(format_args!("{message}"))
+                                .level(Level::Info)
+                                .target("test")
+                                .build(),
+                        );
+                    }
+                });
+            }
+        });
+
+        let output = String::from_utf8(buffer.lock().clone()).expect("valid utf8");
+        let (mut a_count, mut b_count) = (0usize, 0usize);
+        for record in output.split_terminator("\r\n") {
+            match record {
+                "INFO - aaaa" => a_count += 1,
+                "INFO - bbbb" => b_count += 1,
+                garbled => panic!("interleaved/garbled record observed: {garbled:?}"),
+            }
+        }
+        assert_eq!(a_count, ITERATIONS, "missing or corrupted 'aaaa' records");
+        assert_eq!(b_count, ITERATIONS, "missing or corrupted 'bbbb' records");
     }
 }
