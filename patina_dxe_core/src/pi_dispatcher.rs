@@ -803,9 +803,9 @@ impl DispatcherContext {
 
                             let full_path_bytes =
                                 concat_device_path_to_boxed_slice(fv_device_path, filename_device_path);
-                            let full_device_path_for_file = full_path_bytes
-                                .map(|full_path| Box::into_raw(full_path) as *mut efi::protocols::device_path::Protocol)
-                                .unwrap_or(fv_device_path);
+                            let full_device_path_for_file = full_path_bytes.map_or(fv_device_path, |full_path| {
+                                Box::into_raw(full_path) as *mut efi::protocols::device_path::Protocol
+                            });
 
                             self.pending_drivers.push(PendingDriver {
                                 file_name,

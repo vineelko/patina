@@ -1217,8 +1217,7 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
             if image.pe_info.image_type == EFI_IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER {
                 let cache_attrs =
                     dxe_services::core_get_memory_space_descriptor(buffer.as_ptr() as efi::PhysicalAddress)
-                        .map(|desc| desc.attributes & efi::CACHE_ATTRIBUTE_MASK)
-                        .unwrap_or(DEFAULT_CACHE_ATTR);
+                        .map_or(DEFAULT_CACHE_ATTR, |desc| desc.attributes & efi::CACHE_ATTRIBUTE_MASK);
 
                 match core_set_memory_space_attributes(
                     buffer.as_ptr() as efi::PhysicalAddress,

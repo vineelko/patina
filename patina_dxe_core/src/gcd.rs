@@ -434,8 +434,7 @@ impl MemoryProtectionPolicy {
             .get_memory_descriptor_for_address(image_base_page as u64, |d, _| {
                 d.memory_type != GcdMemoryType::NonExistent
             })
-            .map(|desc| desc.attributes & efi::CACHE_ATTRIBUTE_MASK)
-            .unwrap_or(patina::DEFAULT_CACHE_ATTR);
+            .map_or(patina::DEFAULT_CACHE_ATTR, |desc| desc.attributes & efi::CACHE_ATTRIBUTE_MASK);
         if gcd
             .set_memory_space_attributes(image_base_page, patina::uefi_pages_to_size!(image_num_pages), stripped_attrs)
             .is_err()

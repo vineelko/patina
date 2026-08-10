@@ -205,8 +205,7 @@ unsafe extern "efiapi" fn uninstall_protocol_interface(
     let caller_protocol = unsafe { protocol.read_unaligned() };
 
     core_uninstall_protocol_interface(handle, caller_protocol, interface)
-        .map(|_| efi::Status::SUCCESS)
-        .unwrap_or_else(core::convert::Into::into)
+        .map_or_else(core::convert::Into::into, |_| efi::Status::SUCCESS)
 }
 
 // {2ED6CB57-3A78-4C39-9A2A-CA037841D286}

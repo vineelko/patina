@@ -81,8 +81,7 @@ where
                 .target_filters
                 .iter()
                 .find(|(name, _)| metadata.target().starts_with(name))
-                .map(|(_, level)| level)
-                .unwrap_or(&self.max_level)
+                .map_or(&self.max_level, |(_, level)| level)
     }
 
     fn log(&self, record: &log::Record) {

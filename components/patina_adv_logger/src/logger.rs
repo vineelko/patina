@@ -231,13 +231,13 @@ where
     S: SerialIO + Send,
 {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        let max_level = self.target_filter(metadata.target()).map(|f| f.log_level).unwrap_or(self.max_level);
+        let max_level = self.target_filter(metadata.target()).map_or(self.max_level, |f| f.log_level);
         metadata.level().to_level_filter() <= max_level
     }
 
     fn log(&self, record: &log::Record) {
         let filter = self.target_filter(record.target());
-        let max_level = filter.map(|f| f.log_level).unwrap_or(self.max_level);
+        let max_level = filter.map_or(self.max_level, |f| f.log_level);
 
         if record.metadata().level().to_level_filter() <= max_level {
             let level = log_level_to_debug_level(record.metadata().level());

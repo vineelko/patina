@@ -252,10 +252,8 @@ impl ComponentDispatcher {
             let max_name_len = not_dispatched.map(|c| c.metadata().name().len()).max().unwrap_or(name_len);
 
             let not_dispatched = self.components.iter().chain(&self.rejected);
-            let max_param_len = not_dispatched
-                .map(|c| c.metadata().error_message().map(|s| s.len()).unwrap_or(0))
-                .max()
-                .unwrap_or(param_len);
+            let max_param_len =
+                not_dispatched.map(|c| c.metadata().error_message().map_or(0, |s| s.len())).max().unwrap_or(param_len);
 
             log::warn!("Components not dispatched:");
             log::warn!("{:-<max_name_len$} {:-<max_param_len$}", "", "");
