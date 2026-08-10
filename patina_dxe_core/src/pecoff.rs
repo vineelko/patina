@@ -206,6 +206,8 @@ impl UefiPeInfo {
         let filename_end = bytes.iter().position(|&c| c == b'\0').unwrap_or(bytes.len());
         let mut filename = String::from_utf8_lossy(bytes.get(..filename_end).unwrap_or(bytes)).into_owned();
 
+        #[allow(clippy::case_sensitive_file_extension_comparisons)]
+        // TODO: Determine whether case insensitivity is required here.
         if filename.ends_with(".pdb") || filename.ends_with(".dll") {
             filename.truncate(filename.len() - 4);
         }
