@@ -19,7 +19,9 @@ use patina::pi::{list_entry, protocol::runtime};
 
 struct RuntimeData {
     runtime_arch_ptr: *mut runtime::RuntimeProtocol,
+    #[allow(clippy::linkedlist)]
     runtime_images: LinkedList<runtime::ImageEntry, &'static crate::allocator::UefiAllocatorWithFsb>,
+    #[allow(clippy::linkedlist)]
     runtime_events: LinkedList<runtime::EventEntry, &'static crate::allocator::UefiAllocatorWithFsb>,
 }
 
