@@ -921,6 +921,13 @@ pub struct HobIter<'a> {
     _a: PhantomData<&'a ()>,
 }
 
+impl<'a> Hob<'a> {
+    /// Returns an iterator over this HOB and the remaining HOBs in the list.
+    pub fn iter(&self) -> HobIter<'a> {
+        <&Self as IntoIterator>::into_iter(self)
+    }
+}
+
 impl<'a> IntoIterator for &Hob<'a> {
     type Item = Hob<'a>;
 
