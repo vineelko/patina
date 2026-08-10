@@ -864,20 +864,18 @@ unsafe extern "efiapi" fn locate_protocol(
             // SAFETY: Caller must ensure that interface is a valid pointer. It is checked for null above.
             Ok(i_face) => unsafe { interface.write_unaligned(i_face) },
         }
+    } else if let Some(handle) = PROTOCOL_DB.next_handle_for_registration(registration) {
+        let protocol_guid = {
+            // SAFETY: Caller must ensure that protocol is a valid pointer. It is checked for null above.
+            unsafe { protocol.read_unaligned() }
+        };
+        let i_face = PROTOCOL_DB
+            .get_interface_for_handle(handle, protocol_guid)
+            .expect("Protocol should exist on handle if it is returned for registration key.");
+        // SAFETY: Caller must ensure that interface is a valid pointer. It is checked for null above.
+        unsafe { interface.write_unaligned(i_face) };
     } else {
-        if let Some(handle) = PROTOCOL_DB.next_handle_for_registration(registration) {
-            let protocol_guid = {
-                // SAFETY: Caller must ensure that protocol is a valid pointer. It is checked for null above.
-                unsafe { protocol.read_unaligned() }
-            };
-            let i_face = PROTOCOL_DB
-                .get_interface_for_handle(handle, protocol_guid)
-                .expect("Protocol should exist on handle if it is returned for registration key.");
-            // SAFETY: Caller must ensure that interface is a valid pointer. It is checked for null above.
-            unsafe { interface.write_unaligned(i_face) };
-        } else {
-            return efi::Status::NOT_FOUND;
-        }
+        return efi::Status::NOT_FOUND;
     }
     efi::Status::SUCCESS
 }

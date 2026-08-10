@@ -75,18 +75,16 @@ fn reload_monitor(args: &mut core::str::SplitWhitespace<'_>, out: &mut dyn core:
 /// returns the address of the buffer.
 fn allocate_buffer_command(args: &mut core::str::SplitWhitespace<'_>, out: &mut dyn core::fmt::Write) {
     // get the requested length of the prep buffer.
-    let buffer_size = match args.next() {
-        Some(size_str) => match size_str.parse::<usize>() {
-            Ok(size) => size,
-            Err(_) => {
-                let _ = writelncrlf!(out, "Invalid buffer size");
-                return;
-            }
-        },
-        None => {
-            let _ = writelncrlf!(out, "Usage: reload alloc_buffer <size>");
+    let buffer_size = if let Some(size_str) = args.next() {
+        if let Ok(size) = size_str.parse::<usize>() {
+            size
+        } else {
+            let _ = writelncrlf!(out, "Invalid buffer size");
             return;
         }
+    } else {
+        let _ = writelncrlf!(out, "Usage: reload alloc_buffer <size>");
+        return;
     };
 
     if buffer_size == 0 {
@@ -110,32 +108,28 @@ fn allocate_buffer_command(args: &mut core::str::SplitWhitespace<'_>, out: &mut 
 /// Implements the "reload load" command. This command loads the core image from the specified address and size.
 fn load_command(args: &mut core::str::SplitWhitespace<'_>, out: &mut dyn core::fmt::Write) {
     // get the address prep buffer.
-    let address = match args.next() {
-        Some(addr_str) => match addr_str.parse::<usize>() {
-            Ok(addr) => addr,
-            Err(_) => {
-                let _ = writelncrlf!(out, "Invalid address");
-                return;
-            }
-        },
-        None => {
-            let _ = writelncrlf!(out, "No address provided");
+    let address = if let Some(addr_str) = args.next() {
+        if let Ok(addr) = addr_str.parse::<usize>() {
+            addr
+        } else {
+            let _ = writelncrlf!(out, "Invalid address");
             return;
         }
+    } else {
+        let _ = writelncrlf!(out, "No address provided");
+        return;
     };
 
-    let size = match args.next() {
-        Some(size_str) => match size_str.parse::<usize>() {
-            Ok(size) => size,
-            Err(_) => {
-                let _ = writelncrlf!(out, "Invalid size");
-                return;
-            }
-        },
-        None => {
-            let _ = writelncrlf!(out, "No size provided");
+    let size = if let Some(size_str) = args.next() {
+        if let Ok(size) = size_str.parse::<usize>() {
+            size
+        } else {
+            let _ = writelncrlf!(out, "Invalid size");
             return;
         }
+    } else {
+        let _ = writelncrlf!(out, "No size provided");
+        return;
     };
 
     if address == 0 || size == 0 {

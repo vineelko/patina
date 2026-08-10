@@ -86,7 +86,7 @@ impl From<FirmwareVolume<'_>> for FirmwareVolumeSerDe {
                 let file_name = format_guid(&file.name());
                 let file_length = file.size() as usize;
                 let file_attributes = u32::from(file.attributes_raw());
-                let file_type = file.file_type().map(|ft| format!("{ft:#x?}")).unwrap_or_else(|| "Invalid".to_string());
+                let file_type = file.file_type().map_or_else(|| "Invalid".to_string(), |ft| format!("{ft:#x?}"));
                 let sections = file
                     .section_iter()
                     .filter_map(|section| {
@@ -95,10 +95,8 @@ impl From<FirmwareVolume<'_>> for FirmwareVolumeSerDe {
                             return None;
                         };
                         let section_length = section.section_size();
-                        let section_type_str = section
-                            .section_type()
-                            .map(|st| format!("{st:#x?}"))
-                            .unwrap_or_else(|| "Invalid".to_string());
+                        let section_type_str =
+                            section.section_type().map_or_else(|| "Invalid".to_string(), |st| format!("{st:#x?}"));
                         let section_compression_type = match section.meta_data() {
                             SectionMetaData::Compression(compression) => match compression.compression_type {
                                 NOT_COMPRESSED => "uncompressed".to_string(),

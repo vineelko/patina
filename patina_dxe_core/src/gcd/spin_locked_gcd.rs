@@ -246,57 +246,53 @@ impl PageAllocator for PagingAllocator<'_> {
                 protocol_db::EFI_BOOT_SERVICES_DATA_ALLOCATOR_HANDLE,
                 None,
             );
-            match res {
-                Ok(root_page) => Ok(root_page as u64),
-                Err(_) => {
-                    // if we failed, try again with normal allocation
-                    log::error!(
-                        "Failed to allocate root page for the page table page pool, retrying with normal allocation"
-                    );
+            if let Ok(root_page) = res {
+                Ok(root_page as u64)
+            } else {
+                // if we failed, try again with normal allocation
+                log::error!(
+                    "Failed to allocate root page for the page table page pool, retrying with normal allocation"
+                );
 
-                    match self.gcd.memory.lock().allocate_memory_space(
-                        DEFAULT_ALLOCATION_STRATEGY,
-                        GcdMemoryType::SystemMemory,
-                        UEFI_PAGE_SHIFT,
-                        uefi_pages_to_size!(len),
-                        protocol_db::EFI_BOOT_SERVICES_DATA_ALLOCATOR_HANDLE,
-                        None,
-                    ) {
-                        Ok(root_page) => Ok(root_page as u64),
-                        Err(e) => {
-                            // okay we are good and dead now
-                            panic!("Failed to allocate root page for the page table page pool: {e}");
-                        }
+                match self.gcd.memory.lock().allocate_memory_space(
+                    DEFAULT_ALLOCATION_STRATEGY,
+                    GcdMemoryType::SystemMemory,
+                    UEFI_PAGE_SHIFT,
+                    uefi_pages_to_size!(len),
+                    protocol_db::EFI_BOOT_SERVICES_DATA_ALLOCATOR_HANDLE,
+                    None,
+                ) {
+                    Ok(root_page) => Ok(root_page as u64),
+                    Err(e) => {
+                        // okay we are good and dead now
+                        panic!("Failed to allocate root page for the page table page pool: {e}");
                     }
                 }
             }
+        } else if let Some(page) = self.page_pool.pop() {
+            Ok(page)
         } else {
-            match self.page_pool.pop() {
-                Some(page) => Ok(page),
-                None => {
-                    // allocate 512 pages at a time
-                    let len = PAGE_POOL_CAPACITY;
+            // allocate 512 pages at a time
+            let len = PAGE_POOL_CAPACITY;
 
-                    // we only allocate here, not map. The page table is self-mapped, so we don't have to identity
-                    // map them. This function is called with the page table lock held, so we cannot do that
-                    match self.gcd.memory.lock().allocate_memory_space(
-                        DEFAULT_ALLOCATION_STRATEGY,
-                        GcdMemoryType::SystemMemory,
-                        UEFI_PAGE_SHIFT,
-                        uefi_pages_to_size!(len),
-                        protocol_db::EFI_BOOT_SERVICES_DATA_ALLOCATOR_HANDLE,
-                        None,
-                    ) {
-                        Ok(addr) => {
-                            for i in 0..len {
-                                self.page_pool.push(addr as u64 + ((i * UEFI_PAGE_SIZE) as u64));
-                            }
-                            self.page_pool.pop().ok_or(PtError::OutOfResources)
-                        }
-                        Err(e) => {
-                            panic!("Failed to allocate pages for the page table page pool {e}");
-                        }
+            // we only allocate here, not map. The page table is self-mapped, so we don't have to identity
+            // map them. This function is called with the page table lock held, so we cannot do that
+            match self.gcd.memory.lock().allocate_memory_space(
+                DEFAULT_ALLOCATION_STRATEGY,
+                GcdMemoryType::SystemMemory,
+                UEFI_PAGE_SHIFT,
+                uefi_pages_to_size!(len),
+                protocol_db::EFI_BOOT_SERVICES_DATA_ALLOCATOR_HANDLE,
+                None,
+            ) {
+                Ok(addr) => {
+                    for i in 0..len {
+                        self.page_pool.push(addr as u64 + ((i * UEFI_PAGE_SIZE) as u64));
                     }
+                    self.page_pool.pop().ok_or(PtError::OutOfResources)
+                }
+                Err(e) => {
+                    panic!("Failed to allocate pages for the page table page pool {e}");
                 }
             }
         }
@@ -1814,7 +1810,7 @@ impl IoGCD {
         ensure!(buffer.capacity() >= self.io_descriptor_count(), EfiError::InvalidParameter);
         ensure!(buffer.is_empty(), EfiError::InvalidParameter);
 
-        log::trace!(target: "allocations", "[{}] Enter\n", function!(), );
+        log::trace!(target: "allocations", "[{}] Enter\n", function!());
 
         if self.io_blocks.capacity() == 0 {
             self.init_io_blocks()?;
@@ -3446,7 +3442,7 @@ mod tests {
                         MemoryBlock::Unallocated(md) => {
                             assert_eq!(100, md.base_address);
                             assert_eq!(10, md.length);
-                            assert_eq!(efi::MEMORY_RUNTIME | efi::MEMORY_ACCESS_MASK | 123, md.capabilities);
+                            assert_eq!(efi::MEMORY_RUNTIME | efi::MEMORY_ACCESS_MASK | 0x007b, md.capabilities);
                             // SAFETY: Test-controlled addresses and sizes are used with the GCD initialized by create_gcd or get_memory.
                             assert_eq!(0, md.image_handle as usize);
                             assert_eq!(0, md.device_handle as usize);

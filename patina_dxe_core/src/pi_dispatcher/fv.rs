@@ -424,19 +424,16 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         // SAFETY: caller must ensure that base_address is valid.
         let fv = unsafe { VolumeRef::new_from_address(base_address) }?;
 
-        let device_path_ptr = match fv.fv_name() {
-            Some(fv_name) => {
-                // Construct FvPiWgDevicePath
-                let device_path = FvPiWgDevicePath::new_fv(fv_name.into_inner());
-                Box::into_raw(Box::new(device_path)) as *mut c_void
-            }
-            None => {
-                // Construct FvMemMapDevicePath
-                let device_path =
-                    FvMemMapDevicePath::new(MEMORY_MAPPED_IO, base_address, base_address.saturating_add(fv.size()));
+        let device_path_ptr = if let Some(fv_name) = fv.fv_name() {
+            // Construct FvPiWgDevicePath
+            let device_path = FvPiWgDevicePath::new_fv(fv_name.into_inner());
+            Box::into_raw(Box::new(device_path)) as *mut c_void
+        } else {
+            // Construct FvMemMapDevicePath
+            let device_path =
+                FvMemMapDevicePath::new(MEMORY_MAPPED_IO, base_address, base_address.saturating_add(fv.size()));
 
-                Box::into_raw(Box::new(device_path)) as *mut c_void
-            }
+            Box::into_raw(Box::new(device_path)) as *mut c_void
         };
 
         // install the protocol and return status
@@ -1157,9 +1154,7 @@ mod tests {
                     let layout3 = Layout::from_size_align(1001, 8).unwrap();
                     let buffer_valid3 = alloc(layout3) as *mut c_void;
 
-                    if buffer_valid3.is_null() {
-                        panic!("Memory allocation failed!");
-                    }
+                    assert!(!buffer_valid3.is_null(), "Memory allocation failed!");
                     /* Handle various cases for different conditions to hit */
                     MockProtocolData::fvb_read_efiapi(
                         fvb_ptr_mut_prot,
@@ -1206,9 +1201,7 @@ mod tests {
                     let layout3 = Layout::from_size_align(1001, 8).unwrap();
                     let buffer_valid3 = alloc(layout3) as *mut c_void;
 
-                    if buffer_valid3.is_null() {
-                        panic!("Memory allocation failed!");
-                    }
+                    assert!(!buffer_valid3.is_null(), "Memory allocation failed!");
 
                     let mut buffer_size_random: usize = 99;
                     let buffer_size_random_ref: *mut usize = &raw mut buffer_size_random;
@@ -1290,9 +1283,7 @@ mod tests {
                     let layout3 = Layout::from_size_align(1001, 8).unwrap();
                     let buffer_valid3 = alloc(layout3) as *mut c_void;
 
-                    if buffer_valid3.is_null() {
-                        panic!("Memory allocation failed!");
-                    }
+                    assert!(!buffer_valid3.is_null(), "Memory allocation failed!");
 
                     MockProtocolData::fvb_write_efiapi(
                         fvb_ptr_mut_prot,
@@ -1337,9 +1328,7 @@ mod tests {
                     let mut n_guid_mut: efi::Guid = efi::Guid::from_fields(0, 0, 0, 0, 0, &[0, 0, 0, 0, 0, 0]);
                     let n_guid_ref_mut: *mut efi::Guid = &raw mut n_guid_mut;
 
-                    if buffer_valid3.is_null() {
-                        panic!("Memory allocation failed!");
-                    }
+                    assert!(!buffer_valid3.is_null(), "Memory allocation failed!");
                     MockProtocolData::fv_get_next_file_efiapi(
                         ptr::null(),
                         std::ptr::null_mut(),
@@ -1414,9 +1403,7 @@ mod tests {
                     let layout3 = Layout::from_size_align(1001, 8).unwrap();
                     let mut buffer_valid3 = alloc(layout3) as *mut c_void;
 
-                    if buffer_valid3.is_null() {
-                        panic!("Memory allocation failed!");
-                    }
+                    assert!(!buffer_valid3.is_null(), "Memory allocation failed!");
 
                     let mut gd2: efi::Guid = efi::Guid::from_fields(
                         0x434f695c,
@@ -1506,9 +1493,7 @@ mod tests {
                     let mut found_type: u8 = ffs::file::raw::r#type::DRIVER;
                     let found_type_ref: *mut fv::EfiFvFileType = &raw mut found_type;
 
-                    if buffer_valid3.is_null() {
-                        panic!("Memory allocation failed!");
-                    }
+                    assert!(!buffer_valid3.is_null(), "Memory allocation failed!");
 
                     MockProtocolData::fv_read_file_efiapi(
                         ptr::null(),
@@ -1632,9 +1617,7 @@ mod tests {
                 let layout = Layout::from_size_align(1000, 8).unwrap();
                 let mut buffer = alloc(layout) as *mut c_void;
 
-                if buffer.is_null() {
-                    panic!("Memory allocation failed!");
-                }
+                assert!(!buffer.is_null(), "Memory allocation failed!");
 
                 let mut len = 1000;
                 let buffer_size: *mut usize = &raw mut len;
@@ -1856,7 +1839,7 @@ mod tests {
                     name_guid,
                     19,
                     0,
-                    &mut std::ptr::null_mut() as *mut *mut c_void,
+                    std::ptr::from_mut::<*mut c_void>(&mut std::ptr::null_mut()),
                     &raw mut actual_section_size,
                     &raw mut auth_status,
                 );

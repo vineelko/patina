@@ -240,24 +240,21 @@ impl FixedSizeBlockAllocator {
         match list_index(&layout) {
             Some(index) => {
                 let head = self.list_heads.get_mut(index).ok_or(FixedSizeBlockAllocatorError::InternalError)?;
-                match head.take() {
-                    Some(node) => {
-                        let head = self.list_heads.get_mut(index).ok_or(FixedSizeBlockAllocatorError::InternalError)?;
-                        *head = node.next.take();
-                        let ptr: NonNull<u8> = NonNull::from(node).cast();
-                        Ok(NonNull::slice_from_raw_parts(ptr, layout.size()))
-                    }
-                    None => {
-                        // no block exists in list => allocate new block
-                        let block_size = *BLOCK_SIZES.get(index).ok_or(FixedSizeBlockAllocatorError::InternalError)?;
-                        // only works if all block sizes are a power of 2
-                        let block_align = block_size;
-                        let layout = match Layout::from_size_align(block_size, block_align) {
-                            Ok(layout) => layout,
-                            Err(_) => return Err(FixedSizeBlockAllocatorError::InvalidLayout),
-                        };
-                        self.fallback_alloc(layout)
-                    }
+                if let Some(node) = head.take() {
+                    let head = self.list_heads.get_mut(index).ok_or(FixedSizeBlockAllocatorError::InternalError)?;
+                    *head = node.next.take();
+                    let ptr: NonNull<u8> = NonNull::from(node).cast();
+                    Ok(NonNull::slice_from_raw_parts(ptr, layout.size()))
+                } else {
+                    // no block exists in list => allocate new block
+                    let block_size = *BLOCK_SIZES.get(index).ok_or(FixedSizeBlockAllocatorError::InternalError)?;
+                    // only works if all block sizes are a power of 2
+                    let block_align = block_size;
+                    let layout = match Layout::from_size_align(block_size, block_align) {
+                        Ok(layout) => layout,
+                        Err(_) => return Err(FixedSizeBlockAllocatorError::InvalidLayout),
+                    };
+                    self.fallback_alloc(layout)
                 }
             }
             None => self.fallback_alloc(layout),
@@ -290,11 +287,12 @@ impl FixedSizeBlockAllocator {
                 let new_node = BlockListNode { next: head.take() };
                 let block_size = *BLOCK_SIZES.get(index).expect("list_index guarantees valid index");
                 // verify that block has size and alignment required for storing node
-                if size_of::<BlockListNode>() > block_size || align_of::<BlockListNode>() > block_size {
-                    // Should never reach this statement under normal operation since BlockListNode is a single pointer and all block sizes are >= 8 bytes,
-                    // Failure indicates corruption of the allocator's internal state.
-                    panic!("FSB deallocating block too small to store BlockListNode.");
-                }
+                // Should never reach this statement under normal operation since BlockListNode is a single pointer and all block sizes are >= 8 bytes,
+                // Failure indicates corruption of the allocator's internal state.
+                assert!(
+                    !(size_of::<BlockListNode>() > block_size || align_of::<BlockListNode>() > block_size),
+                    "FSB deallocating block too small to store BlockListNode."
+                );
                 let new_node_ptr = ptr.as_ptr() as *mut BlockListNode;
                 // SAFETY: new_node_ptr points to memory returned by alloc for this layout.
                 unsafe {
@@ -760,12 +758,11 @@ unsafe impl Allocator for SpinLockedFixedSizeBlockAllocator {
                 }
 
                 // Try the allocation one more time
-                match self.lock().alloc(layout) {
-                    Ok(alloc) => Ok(alloc),
-                    Err(_) => {
-                        debug_assert!(false);
-                        Err(AllocError)
-                    }
+                if let Ok(alloc) = self.lock().alloc(layout) {
+                    Ok(alloc)
+                } else {
+                    debug_assert!(false);
+                    Err(AllocError)
                 }
             }
             Err(_) => {

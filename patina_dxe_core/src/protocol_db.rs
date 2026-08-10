@@ -225,36 +225,33 @@ impl ProtocolDb {
         interface: *mut c_void,
     ) -> Result<(efi::Handle, Vec<ProtocolNotify>), EfiError> {
         //generate an output handle.
-        let (output_handle, key) = match handle {
-            Some(handle) => {
-                //installing on existing handle.
-                self.validate_handle(handle)?;
-                let key = handle as usize;
-                (handle, key)
-            }
-            None => {
-                //installing on a new handle. Add a BTreeMap to track protocol instances on the new handle.
-                let mut key;
-                if self.hash_new_handles {
-                    let mut hasher = Xorshift64starHasher::default();
+        let (output_handle, key) = if let Some(handle) = handle {
+            //installing on existing handle.
+            self.validate_handle(handle)?;
+            let key = handle as usize;
+            (handle, key)
+        } else {
+            //installing on a new handle. Add a BTreeMap to track protocol instances on the new handle.
+            let mut key;
+            if self.hash_new_handles {
+                let mut hasher = Xorshift64starHasher::default();
+                hasher.write_usize(self.next_handle);
+                key = hasher.finish() as usize;
+                self.next_handle += 1;
+                //make sure we don't collide with an existing key. 0 is reserved for "invalid handle".
+                while key == 0 || self.handles.contains_key(&key) {
                     hasher.write_usize(self.next_handle);
                     key = hasher.finish() as usize;
                     self.next_handle += 1;
-                    //make sure we don't collide with an existing key. 0 is reserved for "invalid handle".
-                    while key == 0 || self.handles.contains_key(&key) {
-                        hasher.write_usize(self.next_handle);
-                        key = hasher.finish() as usize;
-                        self.next_handle += 1;
-                    }
-                } else {
-                    key = self.next_handle;
-                    self.next_handle += 1;
                 }
-
-                self.handles.insert(key, Handle::new(self.next_handle));
-                let handle = key as efi::Handle;
-                (handle, key)
+            } else {
+                key = self.next_handle;
+                self.next_handle += 1;
             }
+
+            self.handles.insert(key, Handle::new(self.next_handle));
+            let handle = key as efi::Handle;
+            (handle, key)
         };
 
         debug_assert!(self.handles.contains_key(&key));
@@ -661,13 +658,12 @@ impl SpinLockedProtocolDb {
             let (handle, _) = self
                 .install_protocol_interface(None, well_known_handle_guid, core::ptr::null_mut())
                 .expect("failed to install well-known handle");
-            if handle != *target_handle {
-                panic!(
-                    "Well-known handle installed at unexpected handle value. \
-                     `init_protocol_db` must be called before any other protocol database operations. \
-                     Expected handle {target_handle:#x?}, got {handle:#x?}"
-                );
-            }
+            assert!(
+                handle == *target_handle,
+                "Well-known handle installed at unexpected handle value. \
+                 `init_protocol_db` must be called before any other protocol database operations. \
+                 Expected handle {target_handle:#x?}, got {handle:#x?}"
+            );
         }
         self.lock().enable_handle_hashing();
     }

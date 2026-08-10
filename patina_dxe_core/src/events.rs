@@ -266,15 +266,14 @@ pub extern "efiapi" fn set_timer(event: efi::Event, timer_type: efi::TimerDelay,
 /// current TPL, panicking on violation. No incoming parameters are dereferenced,
 /// so this is not marked `unsafe`.
 pub extern "efiapi" fn raise_tpl(new_tpl: efi::Tpl) -> efi::Tpl {
-    if new_tpl > efi::TPL_HIGH_LEVEL {
-        panic!("Invalid attempt to raise TPL above TPL_HIGH_LEVEL: {new_tpl:#x?}");
-    }
+    assert!(new_tpl <= efi::TPL_HIGH_LEVEL, "Invalid attempt to raise TPL above TPL_HIGH_LEVEL: {new_tpl:#x?}");
 
     let prev_tpl = CURRENT_TPL.fetch_max(new_tpl, Ordering::SeqCst);
 
-    if new_tpl < prev_tpl {
-        panic!("Invalid attempt to raise TPL to lower value. New TPL: {new_tpl:#x?}, Prev TPL: {prev_tpl:#x?}");
-    }
+    assert!(
+        new_tpl >= prev_tpl,
+        "Invalid attempt to raise TPL to lower value. New TPL: {new_tpl:#x?}, Prev TPL: {prev_tpl:#x?}"
+    );
 
     if (new_tpl == efi::TPL_HIGH_LEVEL) && (prev_tpl < efi::TPL_HIGH_LEVEL) {
         arch::disable_interrupts();
@@ -291,9 +290,10 @@ pub extern "efiapi" fn raise_tpl(new_tpl: efi::Tpl) -> efi::Tpl {
 pub extern "efiapi" fn restore_tpl(new_tpl: efi::Tpl) {
     let prev_tpl = CURRENT_TPL.fetch_min(new_tpl, Ordering::SeqCst);
 
-    if new_tpl > prev_tpl {
-        panic!("Invalid attempt to restore TPL to higher value. New TPL: {new_tpl:#x?}, Prev TPL: {prev_tpl:#x?}");
-    }
+    assert!(
+        new_tpl <= prev_tpl,
+        "Invalid attempt to restore TPL to higher value. New TPL: {new_tpl:#x?}, Prev TPL: {prev_tpl:#x?}"
+    );
 
     if new_tpl < prev_tpl {
         // loop over any pending event notifications. Note: more notifications can be queued in the course of servicing

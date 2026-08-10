@@ -1195,7 +1195,7 @@ mod tests {
             Guid::Borrowed(_) => panic!("Expected Owned variant"),
         };
 
-        let ref_ptr = ref_c_guid as *const efi::Guid;
+        let ref_ptr = std::ptr::from_ref::<efi::Guid>(ref_c_guid);
         let bytes_ptr = &raw const bytes_c_guid;
 
         assert_eq!(ref_ptr as usize % align_of::<efi::Guid>(), 0);
@@ -1830,7 +1830,7 @@ mod tests {
         assert_eq!(efi_guid_ref.as_bytes(), binary_guid.as_bytes());
 
         let ptr1 = &raw const binary_guid.0;
-        let ptr2 = efi_guid_ref as *const efi::Guid;
+        let ptr2 = std::ptr::from_ref::<efi::Guid>(efi_guid_ref);
         assert_eq!(ptr1, ptr2);
     }
 

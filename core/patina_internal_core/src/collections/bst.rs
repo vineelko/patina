@@ -123,22 +123,24 @@ where
         let mut current = start;
         loop {
             match node.key().cmp(current.key()) {
-                Ordering::Less => match current.left() {
-                    Some(left) => current = left,
-                    None => {
+                Ordering::Less => {
+                    if let Some(left) = current.left() {
+                        current = left;
+                    } else {
                         current.set_left(Some(node));
                         node.set_parent(Some(current));
                         return Ok(());
                     }
-                },
-                Ordering::Greater => match current.right() {
-                    Some(right) => current = right,
-                    None => {
+                }
+                Ordering::Greater => {
+                    if let Some(right) = current.right() {
+                        current = right;
+                    } else {
                         current.set_right(Some(node));
                         node.set_parent(Some(current));
                         return Ok(());
                     }
-                },
+                }
                 Ordering::Equal => return Err(Error::AlreadyExists),
             }
         }
@@ -935,7 +937,7 @@ mod fuzz_tests {
 
             // Random inserts should not make the tree too unbalanced
             assert!(bst.height() < 50);
-            random_numbers.sort();
+            random_numbers.sort_unstable();
 
             #[cfg(feature = "alloc")]
             {

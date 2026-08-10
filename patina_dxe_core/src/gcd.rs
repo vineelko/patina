@@ -396,17 +396,18 @@ impl MemoryProtectionPolicy {
 
                         // We need to ensure we are operating on page aligned addresses and lengths, as the image(s) that
                         // were allocated here may not be page aligned. We don't share pools across types, so this is safe.
-                        (addr, len) = match align_range(addr, len, UEFI_PAGE_SIZE as u64) {
-                            Ok((aligned_addr, aligned_len)) => (aligned_addr, aligned_len),
-                            Err(_) => {
-                                log_debug_assert!(
-                                    "Failed to align address {addr:#x?} + {len:#x?} to page size, compatibility mode may fail",
-                                );
+                        (addr, len) = if let Ok((aligned_addr, aligned_len)) =
+                            align_range(addr, len, UEFI_PAGE_SIZE as u64)
+                        {
+                            (aligned_addr, aligned_len)
+                        } else {
+                            log_debug_assert!(
+                                "Failed to align address {addr:#x?} + {len:#x?} to page size, compatibility mode may fail",
+                            );
 
-                                // If we can't align the address, we can't set the attributes, so try the next range
-                                addr += len;
-                                continue;
-                            }
+                            // If we can't align the address, we can't set the attributes, so try the next range
+                            addr += len;
+                            continue;
                         };
 
                         if gcd.set_memory_space_attributes(addr as usize, len as usize, attributes).is_err() {
@@ -509,12 +510,14 @@ pub fn init_gcd(physical_hob_list: *const c_void) {
     log::info!("free_memory_capabilities: {free_memory_capabilities:#x?}");
 
     // make sure the PHIT is present and it was reasonable.
-    if free_memory_size == 0 {
-        panic!("PHIT HOB indicates no free memory available for DXE core to start. Free memory size = 0.");
-    }
-    if memory_end <= memory_start {
-        panic!("PHIT HOB indicates no memory available for DXE core to start. Memory end <= memory start.");
-    }
+    assert!(
+        free_memory_size != 0,
+        "PHIT HOB indicates no free memory available for DXE core to start. Free memory size = 0."
+    );
+    assert!(
+        memory_end > memory_start,
+        "PHIT HOB indicates no memory available for DXE core to start. Memory end <= memory start."
+    );
 
     // initialize the GCD with an initial memory space. Note: this will fail if GCD.init() above didn't happen.
     // SAFETY: We are directly using the free memory space from the PHIT HOB, which must be valid and reserved for use

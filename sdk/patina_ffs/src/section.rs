@@ -704,12 +704,11 @@ impl Iterator for SectionIterator<'_> {
         match result {
             Ok(ref section) => {
                 let section_size = section.size().expect("Section must be composed");
-                self.next_offset += match align_up(section_size as u64, 4) {
-                    Ok(addr) => addr as usize,
-                    Err(_) => {
-                        self.error = true;
-                        return Some(Err(FirmwareFileSystemError::DataCorrupt));
-                    }
+                self.next_offset += if let Ok(addr) = align_up(section_size as u64, 4) {
+                    addr as usize
+                } else {
+                    self.error = true;
+                    return Some(Err(FirmwareFileSystemError::DataCorrupt));
                 };
             }
             Err(_) => self.error = true,

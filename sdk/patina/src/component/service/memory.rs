@@ -846,7 +846,10 @@ mod mock {
         sync::Mutex,
     };
 
-    use super::*;
+    use super::{
+        AccessType, AllocationOptions, Allocator, Box, CachingType, EfiMemoryType, MemoryError, MemoryManager, NonNull,
+        PageAllocation, UEFI_PAGE_SIZE,
+    };
     /// A fully working mock [`MemoryManager`] based off of the std global allocator.
     ///
     /// This mock [`MemoryManager`] implementation should be used when you expect allocations to succeed. If you wish to

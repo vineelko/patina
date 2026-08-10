@@ -44,17 +44,16 @@ extern "efiapi" fn get_memory_attributes(
 
     // this API only returns the MEMORY_ACCESS attributes, per UEFI spec
     for desc_result in GCD.iter(base_address as usize, length as usize) {
-        let descriptor = match desc_result {
-            Ok(desc) => desc,
-            Err(_) => {
-                log::error!(
-                    "No descriptors found for range [{:#x}, {:#x}) in {}",
-                    base_address,
-                    base_address + length,
-                    function!()
-                );
-                return efi::Status::NO_MAPPING;
-            }
+        let descriptor = if let Ok(desc) = desc_result {
+            desc
+        } else {
+            log::error!(
+                "No descriptors found for range [{:#x}, {:#x}) in {}",
+                base_address,
+                base_address + length,
+                function!()
+            );
+            return efi::Status::NO_MAPPING;
         };
 
         // if we have already found attributes, ensure they are consistent
@@ -106,28 +105,26 @@ extern "efiapi" fn set_memory_attributes(
         return efi::Status::INVALID_PARAMETER;
     }
 
-    let end = match base_address.checked_add(length) {
-        Some(e) => e,
-        None => {
-            log::error!("Address overflow in {}", function!());
-            return efi::Status::INVALID_PARAMETER;
-        }
+    let end = if let Some(e) = base_address.checked_add(length) {
+        e
+    } else {
+        log::error!("Address overflow in {}", function!());
+        return efi::Status::INVALID_PARAMETER;
     };
 
     let range = base_address..end;
 
     for desc_result in GCD.iter(base_address as usize, length as usize) {
-        let descriptor = match desc_result {
-            Ok(desc) => desc,
-            Err(_) => {
-                log::error!(
-                    "No descriptors found for range [{:#x}, {:#x}) in {}",
-                    base_address,
-                    base_address + length,
-                    function!()
-                );
-                return efi::Status::UNSUPPORTED;
-            }
+        let descriptor = if let Ok(desc) = desc_result {
+            desc
+        } else {
+            log::error!(
+                "No descriptors found for range [{:#x}, {:#x}) in {}",
+                base_address,
+                base_address + length,
+                function!()
+            );
+            return efi::Status::UNSUPPORTED;
         };
 
         // this API only adds new attributes that are set, it ignores all 0 attributes. So, we need to get the memory
@@ -183,27 +180,25 @@ extern "efiapi" fn clear_memory_attributes(
         return efi::Status::INVALID_PARAMETER;
     }
 
-    let end = match base_address.checked_add(length) {
-        Some(e) => e,
-        None => {
-            log::error!("Address overflow in {}", function!());
-            return efi::Status::INVALID_PARAMETER;
-        }
+    let end = if let Some(e) = base_address.checked_add(length) {
+        e
+    } else {
+        log::error!("Address overflow in {}", function!());
+        return efi::Status::INVALID_PARAMETER;
     };
     let range = base_address..end;
 
     for desc_result in GCD.iter(base_address as usize, length as usize) {
-        let descriptor = match desc_result {
-            Ok(desc) => desc,
-            Err(_) => {
-                log::error!(
-                    "No descriptors found for range [{:#x}, {:#x}) in {}",
-                    base_address,
-                    base_address + length,
-                    function!()
-                );
-                return efi::Status::UNSUPPORTED;
-            }
+        let descriptor = if let Ok(desc) = desc_result {
+            desc
+        } else {
+            log::error!(
+                "No descriptors found for range [{:#x}, {:#x}) in {}",
+                base_address,
+                base_address + length,
+                function!()
+            );
+            return efi::Status::UNSUPPORTED;
         };
         // this API only adds clears attributes that are set to 1, it ignores all 0 attributes. So, we need to get the memory
         // descriptor first and then set the new attributes as the GCD API takes into account all attributes set or unset.

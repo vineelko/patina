@@ -96,15 +96,12 @@ where
         };
 
         let protocol = Box::leak(Box::new(protocol));
-        match bs.install_protocol_interface(None, &mut protocol.protocol) {
-            Err(status) => {
-                log::error!("Failed to install Advanced Logger protocol! Status = {status}");
-                Err(EfiError::ProtocolError)
-            }
-            Ok(_) => {
-                log::info!("Advanced Logger protocol installed.");
-                Ok(())
-            }
+        if let Err(status) = bs.install_protocol_interface(None, &mut protocol.protocol) {
+            log::error!("Failed to install Advanced Logger protocol! Status = {status}");
+            Err(EfiError::ProtocolError)
+        } else {
+            log::info!("Advanced Logger protocol installed.");
+            Ok(())
         }
     }
 }

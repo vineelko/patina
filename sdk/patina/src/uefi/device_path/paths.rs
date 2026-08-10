@@ -119,7 +119,7 @@ impl Deref for DevicePathBuf {
 impl DerefMut for DevicePathBuf {
     fn deref_mut(&mut self) -> &mut Self::Target {
         // SAFETY: DevicePath has the same memory layout as `[u8]`.
-        unsafe { &mut *(self.buffer.as_mut_slice() as *mut [u8] as *mut DevicePath) }
+        unsafe { &mut *(core::ptr::from_mut::<[u8]>(self.buffer.as_mut_slice()) as *mut DevicePath) }
     }
 }
 
@@ -167,7 +167,7 @@ impl DevicePath {
     /// Create a &`DevicePath` for a `DevicePathBuf`.
     pub fn from(device_path_buff: &DevicePathBuf) -> &Self {
         // SAFETY: This is safe because DevicePath have the same memory layout as `[u8]`.
-        unsafe { &*(device_path_buff.buffer.as_slice() as *const [u8] as *const Self) }
+        unsafe { &*(core::ptr::from_ref::<[u8]>(device_path_buff.buffer.as_slice()) as *const Self) }
     }
 
     /// Create a &`DevicePath` from a pointer to a byte buffer.
@@ -207,7 +207,7 @@ impl DevicePath {
         // SAFETY: The device path structure was validated by iterating through all nodes and finding an end node.
         // The buffer is properly sized and contains a valid device path. The cast is considered safe due to
         // DevicePath's repr(transparent).
-        let device_path = unsafe { &*(buffer as *const [u8] as *const DevicePath) };
+        let device_path = unsafe { &*(core::ptr::from_ref::<[u8]>(buffer) as *const DevicePath) };
         Ok(device_path)
     }
 
@@ -250,7 +250,7 @@ impl DevicePath {
         // SAFETY: The slice `end_buffer` is a valid trailing portion of the device path that contains
         // the last n nodes including the end node. DevicePath is repr(transparent) over [u8], so this cast is
         // considered valid.
-        unsafe { &*(end_buffer as *const [u8] as *const DevicePath) }
+        unsafe { &*(core::ptr::from_ref::<[u8]>(end_buffer) as *const DevicePath) }
     }
 
     /// Return true if the device path starts with the other device path.

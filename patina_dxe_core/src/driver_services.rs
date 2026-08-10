@@ -171,12 +171,10 @@ fn authenticate_connect(
             let file_path = {
                 if recursive {
                     copy_device_path_to_boxed_slice(device_path)
+                } else if let Some(remaining_path) = remaining_device_path {
+                    concat_device_path_to_boxed_slice(device_path, remaining_path.as_ptr())
                 } else {
-                    if let Some(remaining_path) = remaining_device_path {
-                        concat_device_path_to_boxed_slice(device_path, remaining_path.as_ptr())
-                    } else {
-                        copy_device_path_to_boxed_slice(device_path)
-                    }
+                    copy_device_path_to_boxed_slice(device_path)
                 }
             };
 
@@ -254,28 +252,25 @@ fn core_connect_single_controller(
             // as ensured by the construction of driver_candidates above.
             let status =
                 unsafe { (driver_binding.supported)(driver_binding_interface, controller_handle, device_path) };
-            match status {
-                efi::Status::SUCCESS => {
-                    perf!(perf_driver_binding_support_end, driver_binding.driver_binding_handle, controller_handle);
+            if status == efi::Status::SUCCESS {
+                perf!(perf_driver_binding_support_end, driver_binding.driver_binding_handle, controller_handle);
 
-                    started_drivers.push(driver_binding_interface);
+                started_drivers.push(driver_binding_interface);
 
-                    perf!(perf_driver_binding_start_begin, driver_binding.driver_binding_handle, controller_handle);
+                perf!(perf_driver_binding_start_begin, driver_binding.driver_binding_handle, controller_handle);
 
-                    // SAFETY: driver_binding_interface is a valid pointer to a driver binding protocol instance
-                    // as ensured by the construction of driver_candidates above.
-                    let status =
-                        unsafe { (driver_binding.start)(driver_binding_interface, controller_handle, device_path) };
-                    if status == efi::Status::SUCCESS {
-                        one_started = true;
-                    }
-
-                    perf!(perf_driver_binding_start_end, driver_binding.driver_binding_handle, controller_handle);
+                // SAFETY: driver_binding_interface is a valid pointer to a driver binding protocol instance
+                // as ensured by the construction of driver_candidates above.
+                let status =
+                    unsafe { (driver_binding.start)(driver_binding_interface, controller_handle, device_path) };
+                if status == efi::Status::SUCCESS {
+                    one_started = true;
                 }
-                _ => {
-                    perf!(perf_driver_binding_support_end, driver_binding.driver_binding_handle, controller_handle);
-                    continue;
-                }
+
+                perf!(perf_driver_binding_start_end, driver_binding.driver_binding_handle, controller_handle);
+            } else {
+                perf!(perf_driver_binding_support_end, driver_binding.driver_binding_handle, controller_handle);
+                continue;
             }
         }
         if started_drivers.is_empty() {

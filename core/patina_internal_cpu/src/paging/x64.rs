@@ -78,13 +78,14 @@ where
         };
 
         match self.paging.query_memory_region(address, size) {
-            Ok(attr) => match cache_attr {
-                CacheAttributeValue::Valid(cache_attr_val) => Ok(attr | cache_attr_val),
-                _ => {
+            Ok(attr) => {
+                if let CacheAttributeValue::Valid(cache_attr_val) = cache_attr {
+                    Ok(attr | cache_attr_val)
+                } else {
                     debug_assert!(false, "Cache attributes should be valid for mapped region");
                     Ok(attr)
                 }
-            },
+            }
             Err(err) => Err((err, cache_attr)),
         }
     }

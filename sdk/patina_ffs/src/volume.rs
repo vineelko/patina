@@ -403,14 +403,11 @@ impl<'a> Iterator for FileRefIter<'a> {
         if let Ok(ref file) = result {
             // per the PI spec, "Given a file F, the next file FvHeader is located at the next 8-byte aligned firmware volume
             // offset following the last byte the file F"
-            match align_up(self.next_offset as u64 + file.size() as u64, 8) {
-                Ok(next_offset) => {
-                    self.next_offset = next_offset as usize;
-                }
-                Err(_) => {
-                    self.error = true;
-                    return Some(Err(FirmwareFileSystemError::DataCorrupt));
-                }
+            if let Ok(next_offset) = align_up(self.next_offset as u64 + file.size() as u64, 8) {
+                self.next_offset = next_offset as usize;
+            } else {
+                self.error = true;
+                return Some(Err(FirmwareFileSystemError::DataCorrupt));
             }
         } else {
             self.error = true;
@@ -1227,7 +1224,7 @@ mod test {
                 );
                 assert_eq!(header.data_offset, 0x1C);
                 assert_eq!(header.attributes, 0x3412);
-                assert_eq!(guid_data.to_vec(), &[0x00u8, 0x01, 0x02, 0x03]);
+                assert_eq!(guid_data.clone(), &[0x00u8, 0x01, 0x02, 0x03]);
                 assert_eq!(section.try_content_as_slice().unwrap(), &[0x04, 0x15, 0x19, 0x80]);
             }
             otherwise_bad => panic!("invalid section: {otherwise_bad:x?}"),

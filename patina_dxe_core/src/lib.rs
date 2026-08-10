@@ -374,13 +374,9 @@ impl<P: PlatformInfo> Core<P> {
 
     /// The entry point for the Patina DXE Core.
     pub fn entry_point(&'static self, physical_hob_list: *const c_void) -> ! {
-        if !self.set_instance() {
-            panic!("DXE Core instance was already set!");
-        }
+        assert!(self.set_instance(), "DXE Core instance was already set!");
 
-        if physical_hob_list.is_null() {
-            panic!("DXE Core entry point called with null HOB list pointer!");
-        }
+        assert!(!physical_hob_list.is_null(), "DXE Core entry point called with null HOB list pointer!");
 
         let relocated_hob_list = self.init_memory(physical_hob_list);
 
@@ -457,9 +453,7 @@ impl<P: PlatformInfo> Core<P> {
         // the initial free memory may not be enough to contain the HOB list. We need to relocate the HOBs because
         // the initial HOB list is not in mapped memory as passed from pre-DXE.
         hob_list.relocate_hobs();
-        if self.set_hob_list(hob_list).is_err() {
-            panic!("HOB list was already set!");
-        }
+        assert!(self.set_hob_list(hob_list).is_ok(), "HOB list was already set!");
 
         // Add custom monitor commands to the debugger before initializing so that
         // they are available in the initial breakpoint.
@@ -737,18 +731,20 @@ mod tests {
             // other tests already.
             CORE.override_instance();
 
-            if NonNull::from_ref(&CORE) != NonNull::from_ref(Core::<MockPlatformInfo>::instance()) {
-                panic!("CORE instance mismatch");
-            }
+            assert!(
+                NonNull::from_ref(&CORE) == NonNull::from_ref(Core::<MockPlatformInfo>::instance()),
+                "CORE instance mismatch"
+            );
 
             // We return true because its the same address
             assert!(CORE.set_instance());
             // This should fail because CORE2 is a different instance
             assert!(!CORE2.set_instance());
 
-            if NonNull::from_ref(&CORE) != NonNull::from_ref(Core::<MockPlatformInfo>::instance()) {
-                panic!("CORE instance mismatch after second set_instance");
-            }
+            assert!(
+                NonNull::from_ref(&CORE) == NonNull::from_ref(Core::<MockPlatformInfo>::instance()),
+                "CORE instance mismatch after second set_instance"
+            );
         })
         .unwrap();
     }

@@ -42,7 +42,10 @@ use patina_smbios::{
         SmbiosRecordStructure, Type0PlatformFirmwareInformation, Type1SystemInformation, Type2BaseboardInformation,
         Type3SystemEnclosure,
     },
-    smbios_types::*,
+    smbios_types::{
+        BiosCharacteristics, BiosCharacteristicsExt1, BiosCharacteristicsExt2, BoardType, BootUpState,
+        ExtendedBiosRomSize, FeatureFlags, PowerSupplyState, SecurityStatus, ThermalState, WakeUpType,
+    },
 };
 
 /// Example custom vendor-specific OEM record (Type 0x80)

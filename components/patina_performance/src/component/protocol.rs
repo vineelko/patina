@@ -127,7 +127,7 @@ pub(crate) unsafe extern "efiapi" fn create_performance_measurement_efiapi(
     // To conform with UEFI spec, `identifier` must be a u32 when passed in.
     // However, FPDT performance measurement IDs are always u16.
     if identifier > u32::from(u16::MAX) {
-        log::error!("Performance: Invalid identifier passed to create_performance_measurement_efiapi: {identifier}",);
+        log::error!("Performance: Invalid identifier passed to create_performance_measurement_efiapi: {identifier}");
         return efi::Status::INVALID_PARAMETER;
     }
 
@@ -166,7 +166,7 @@ pub(crate) unsafe extern "efiapi" fn create_performance_measurement_efiapi(
             status_code.into()
         }
         Err(error) => {
-            log::error!("Performance: Something went wrong in create_performance_measurement. Error: {error}",);
+            log::error!("Performance: Something went wrong in create_performance_measurement. Error: {error}");
             efi::Status::ABORTED
         }
     }

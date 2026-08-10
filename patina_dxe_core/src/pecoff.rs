@@ -211,7 +211,7 @@ impl UefiPeInfo {
         }
 
         if let Some(index) = filename.rfind(|ref c| ['/', '\\'].contains(c)) {
-            filename.drain(..index + 1);
+            filename.drain(..=index);
         }
 
         Ok(Some(format!("{filename}.efi")))

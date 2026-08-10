@@ -8,7 +8,7 @@
 //!
 use patina::standard::efi;
 use zerocopy::{IntoBytes, LittleEndian, U64};
-use zerocopy_derive::*;
+use zerocopy_derive::{FromBytes, Immutable};
 
 /// Errors that may occur when parsing MM structures.
 #[derive(Debug, Clone, PartialEq, Eq)]

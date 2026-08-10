@@ -147,9 +147,7 @@ extern "efiapi" fn set_watchdog_timer(
 extern "efiapi" fn metronome_arch_available(event: efi::Event, _context: *mut c_void) {
     match PROTOCOL_DB.locate_protocol(protocol::metronome::PROTOCOL_GUID.into_inner()) {
         Ok(metronome_arch_ptr) => {
-            if metronome_arch_ptr.is_null() {
-                panic!("Located metronome protocol pointer is null.");
-            }
+            assert!(!metronome_arch_ptr.is_null(), "Located metronome protocol pointer is null.");
             // SAFETY: metronome_arch_ptr is expected to be a valid pointer to the metronome protocol since it is
             // associated with the metronome arch guid.
             unsafe { METRONOME_ARCH_PTR.init(metronome_arch_ptr) };
@@ -167,9 +165,7 @@ extern "efiapi" fn metronome_arch_available(event: efi::Event, _context: *mut c_
 extern "efiapi" fn watchdog_arch_available(event: efi::Event, _context: *mut c_void) {
     match PROTOCOL_DB.locate_protocol(protocol::watchdog::PROTOCOL_GUID.into_inner()) {
         Ok(watchdog_arch_ptr) => {
-            if watchdog_arch_ptr.is_null() {
-                panic!("Located watchdog protocol pointer is null.");
-            }
+            assert!(!watchdog_arch_ptr.is_null(), "Located watchdog protocol pointer is null.");
             // SAFETY: watchdog_arch_ptr is expected to be a valid pointer to the watchdog protocol since it is
             // associated with the watchdog arch guid.
             unsafe { WATCHDOG_ARCH_PTR.init(watchdog_arch_ptr) };

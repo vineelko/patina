@@ -214,27 +214,26 @@ impl<T: SerialIO> PatinaDebugger<T> {
         };
 
         // Either take the existing state machine, or start one if this is the first break.
-        let mut gdb = match debug.gdb {
-            Some(_) => debug.gdb.take().unwrap(),
-            None => {
-                // Flush any stale data from the transport.
-                while self.transport.try_read().map_err(|_| DebugError::TransportFailure)?.is_some() {}
+        let mut gdb = if debug.gdb.is_some() {
+            debug.gdb.take().unwrap()
+        } else {
+            // Flush any stale data from the transport.
+            while self.transport.try_read().map_err(|_| DebugError::TransportFailure)?.is_some() {}
 
-                // SAFETY: The buffer will only ever be used by the paired GDB stub
-                // within the internal state lock. Because there is no GDB stub at
-                // this point, there is no other references to the buffer. This
-                // ensures a single locked mutable reference to the buffer.
-                let gdb_buffer = unsafe { debug.gdb_buffer.ok_or(DebugError::NotInitialized)?.as_mut() };
+            // SAFETY: The buffer will only ever be used by the paired GDB stub
+            // within the internal state lock. Because there is no GDB stub at
+            // this point, there is no other references to the buffer. This
+            // ensures a single locked mutable reference to the buffer.
+            let gdb_buffer = unsafe { debug.gdb_buffer.ok_or(DebugError::NotInitialized)?.as_mut() };
 
-                let conn = SerialConnection::new(&self.transport);
+            let conn = SerialConnection::new(&self.transport);
 
-                let builder = GdbStubBuilder::new(conn)
-                    .with_packet_buffer(gdb_buffer)
-                    .build()
-                    .map_err(|_| DebugError::GdbStubInit)?;
+            let builder = GdbStubBuilder::new(conn)
+                .with_packet_buffer(gdb_buffer)
+                .build()
+                .map_err(|_| DebugError::GdbStubInit)?;
 
-                builder.run_state_machine(&mut target).map_err(|_| DebugError::GdbStubInit)?
-            }
+            builder.run_state_machine(&mut target).map_err(|_| DebugError::GdbStubInit)?
         };
 
         let mut timeout_reached = false;

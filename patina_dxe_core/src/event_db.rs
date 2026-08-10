@@ -520,7 +520,7 @@ impl EventDb {
         // the debugger is not enabled.
         patina_debugger::poll_debugger();
 
-        let events: Vec<usize> = self.events.keys().rev().cloned().collect();
+        let events: Vec<usize> = self.events.keys().rev().copied().collect();
         for event in events {
             let current_event = if let Some(current) = self.events.get_mut(&event) {
                 current

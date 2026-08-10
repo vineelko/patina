@@ -2383,6 +2383,7 @@ mod tests {
                 assert!(!buffer_ptr.is_null());
                 assert!(allocator.get_memory_ranges().next().is_some());
 
+                #[allow(clippy::no_effect_underscore_binding)]
                 let _alloc_trait: &dyn core::alloc::Allocator = allocator;
 
                 assert!(allocator.free_pool(buffer_ptr).is_ok());
@@ -2403,6 +2404,7 @@ mod tests {
                 assert!(!buffer_ptr.is_null());
                 assert!(allocator.get_memory_ranges().next().is_some());
 
+                #[allow(clippy::no_effect_underscore_binding)]
                 let _alloc_trait: &dyn core::alloc::Allocator = allocator;
 
                 assert!(allocator.free_pool(buffer_ptr).is_ok());

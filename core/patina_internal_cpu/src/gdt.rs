@@ -195,9 +195,7 @@ struct GdtPointer {
 /// Initializes the GDT from a fixed descriptor set and loads it.
 pub fn init() {
     let gdt_ptr = GDT.as_ptr() as usize;
-    if gdt_ptr >= SIZE_4GB {
-        panic!("GDT above 4GB, MP services will fail");
-    }
+    assert!(gdt_ptr < SIZE_4GB, "GDT above 4GB, MP services will fail");
 
     let gdtr = GdtPointer { limit: (core::mem::size_of::<[u64; GDT_ENTRY_COUNT]>() - 1) as u16, base: gdt_ptr as u64 };
 

@@ -177,12 +177,11 @@ impl DebuggerArch for X64Arch {
             Some("mtrr") => {
                 if let Some(val) = tokens.next() {
                     let mtrr = patina_mtrr::create_mtrr_lib(0);
-                    let addr = match u64::from_str_radix(val.trim_start_matches("0x"), 16) {
-                        Ok(a) => a,
-                        Err(_) => {
-                            let _ = write!(out, "Invalid address format: '{val}'. Expected hex address (e.g. 0x1000).");
-                            return;
-                        }
+                    let addr = if let Ok(a) = u64::from_str_radix(val.trim_start_matches("0x"), 16) {
+                        a
+                    } else {
+                        let _ = write!(out, "Invalid address format: '{val}'. Expected hex address (e.g. 0x1000).");
+                        return;
                     };
 
                     let attr = mtrr.get_memory_attribute(addr);

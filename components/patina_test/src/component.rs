@@ -113,14 +113,13 @@ impl TestRunner {
         test_list: &'static [__private_api::TestCase],
         storage: &mut Storage,
     ) -> patina::error::Result<()> {
-        let recorder = match storage.get_service::<Recorder>() {
-            Some(recorder) => recorder,
-            None => {
-                let recorder = Recorder::default();
-                recorder.initialize(storage)?;
-                storage.add_service(recorder);
-                storage.get_service::<Recorder>().expect("Recorder service should be registered.")
-            }
+        let recorder = if let Some(recorder) = storage.get_service::<Recorder>() {
+            recorder
+        } else {
+            let recorder = Recorder::default();
+            recorder.initialize(storage)?;
+            storage.add_service(recorder);
+            storage.get_service::<Recorder>().expect("Recorder service should be registered.")
         };
 
         let records = test_list

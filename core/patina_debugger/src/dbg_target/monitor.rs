@@ -121,12 +121,11 @@ impl ext::monitor_cmd::MonitorCmd for PatinaTarget {
 
 impl PatinaTarget {
     fn module_cmd(&mut self, tokens: &mut SplitWhitespace<'_>, out: &mut dyn Write) {
-        let mut state = match self.system_state.try_lock() {
-            Some(state) => state,
-            None => {
-                let _ = out.write_str("ERROR: Failed to acquire modules lock!");
-                return;
-            }
+        let mut state = if let Some(state) = self.system_state.try_lock() {
+            state
+        } else {
+            let _ = out.write_str("ERROR: Failed to acquire modules lock!");
+            return;
         };
 
         match tokens.next() {
