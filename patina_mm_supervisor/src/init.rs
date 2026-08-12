@@ -29,14 +29,18 @@ use patina_paging::{
 
 use crate::{
     AllocationType, CommBufferConfig, MmSupervisorCore, PageOwnership, PlatformInfo, SharedPagingAllocator,
+    hob_validation,
     intrinsics::{get_current_cpu_id, read_cr3, write_msr},
     is_buffer_inside_mmram,
     mem::page_allocator::SmramDescriptor,
-    mem::{self, page_allocator::coalesced_smrr_range},
+    mem::{
+        self,
+        page_allocator::{MAX_TEMP_REGIONS, coalesced_smrr_range},
+    },
     mm_policy::{self, MemDescriptorV1_0, dump_policy, gate::PolicyGate, walk_page_table},
     query_address_ownership,
     save_state::SaveStateInfo,
-    smrr::{configure_smm_code_access, smrr_initialize},
+    smrr::{SmramRegion, configure_smm_code_access, smrr_initialize},
     state::{init_state, security_state},
 };
 
@@ -237,11 +241,29 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // SAFETY: `hob_list` is provided by the MM IPL and is guaranteed to be a
         // valid HOB list (the caller asserts it is non-null before dispatching).
-        unsafe {
-            self.init_page_allocators(hob_list);
+        let (scanned_regions, region_count) = unsafe { self.init_page_allocators(hob_list) };
+
+        // Validate the critical incoming HOBs against the untrusted producer's
+        // data before any of their contents are consumed below.
+        let scanned_regions = scanned_regions.get(..region_count).unwrap_or(&scanned_regions);
+        // SAFETY: `hob_list` is a valid HOB list per the caller's guarantee,
+        // and the page allocator was just initialized so the MMRAM containment
+        // checks are meaningful.
+        if let Err(e) = unsafe { hob_validation::validate_incoming_hobs_pre_paging_init(hob_list, scanned_regions) } {
+            log::error!("Incoming HOB validation failed: {}", e);
         }
 
         self.init_page_table();
+
+        // Validate the incoming HOBs that require an active page table, now
+        // that it is available (the remaining checks that only need the page
+        // allocator ran above).
+        // SAFETY: `hob_list` is a valid HOB list per the caller's guarantee,
+        // and the page table was just initialized so per-page attribute queries
+        // are meaningful.
+        if let Err(e) = unsafe { hob_validation::validate_incoming_hobs_post_paging_init(hob_list) } {
+            log::error!("Post-paging HOB validation failed: {}", e);
+        }
 
         // SAFETY: `hob_list` is provided by the MM IPL and is guaranteed to be a
         // valid HOB list (the caller asserts it is non-null before dispatching).
@@ -264,7 +286,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// ## Safety
     ///
     /// The caller must ensure that `hob_list` points to a valid HOB list.
-    unsafe fn init_page_allocators(&self, hob_list: *const c_void) {
+    unsafe fn init_page_allocators(&self, hob_list: *const c_void) -> ([SmramRegion; MAX_TEMP_REGIONS], usize) {
         // Initialize the page allocator from the HOB list. This finds all SMRAM
         // regions and sets up memory tracking.
         // SAFETY: `hob_list` is a valid HOB list per this function's contract.
@@ -307,6 +329,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         if let Err(e) = init_result {
             panic!("Failed to initialize paging allocator: {:?}", e);
         }
+
+        (smram_regions, region_count)
     }
 
     /// Initializes the global page table from the active CR3.
@@ -864,7 +888,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 /// Finds the first GUID HOB matching `target_guid` and returns its data slice.
 ///
 /// Returns `None` if no matching HOB is found.
-fn find_guid_hob(hob_list_info: &PhaseHandoffInformationTable, target_guid: patina::BinaryGuid) -> Option<&[u8]> {
+pub(crate) fn find_guid_hob(
+    hob_list_info: &PhaseHandoffInformationTable,
+    target_guid: patina::BinaryGuid,
+) -> Option<&[u8]> {
     let hob = Hob::Handoff(hob_list_info);
     for current_hob in &hob {
         if let Hob::GuidHob(guid_hob, data) = current_hob
