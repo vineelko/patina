@@ -250,7 +250,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // and the page allocator was just initialized so the MMRAM containment
         // checks are meaningful.
         if let Err(e) = unsafe { hob_validation::validate_incoming_hobs_pre_paging_init(hob_list, scanned_regions) } {
-            log::error!("Incoming HOB validation failed: {}", e);
+            panic!("Incoming HOB validation failed: {}", e);
         }
 
         self.init_page_table();
@@ -262,7 +262,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // and the page table was just initialized so per-page attribute queries
         // are meaningful.
         if let Err(e) = unsafe { hob_validation::validate_incoming_hobs_post_paging_init(hob_list) } {
-            log::error!("Post-paging HOB validation failed: {}", e);
+            panic!("Post-paging HOB validation failed: {}", e);
         }
 
         // SAFETY: `hob_list` is provided by the MM IPL and is guaranteed to be a

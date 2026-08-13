@@ -17,7 +17,9 @@
 //!    overlap each other, and each module's entry point lies within its own
 //!    allocation range.
 //! 4. Resource descriptor HOBs (v1 and v2) do not overlap within the same
-//!    version and address space (memory vs I/O).
+//!    version and address space (memory vs I/O). Descriptors owned by the
+//!    Memory Type Information GUID are skipped, since the PEI memory bin HOB is
+//!    expected to overlap the system-memory descriptors backing it.
 //! 5. Every v2 resource descriptor carries valid memory attributes (exactly one
 //!    cacheability bit for memory, no `EFI_MEMORY_UCE`, no attributes for I/O).
 //! 6. The pointers reported in the MM Supervisor PassDown HOB reference memory
@@ -50,7 +52,10 @@ use core::fmt;
 use patina::management_mode::supervisor::{
     MM_SUPERVISOR_CORE_GUID, MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_USER_GUID,
 };
-use patina::pi::hob::{EFI_RESOURCE_IO, EFI_RESOURCE_IO_RESERVED, Hob, PhaseHandoffInformationTable};
+use patina::pi::hob::{
+    EFI_RESOURCE_IO, EFI_RESOURCE_IO_RESERVED, Hob, MEMORY_TYPE_INFO_HOB_GUID, PhaseHandoffInformationTable,
+    ResourceDescriptor,
+};
 use patina::{UEFI_PAGE_SIZE, align_range};
 use patina_paging::{MemoryAttributes, PageTable};
 use zerocopy::FromBytes;
@@ -494,6 +499,13 @@ fn is_io(resource_type: u32) -> bool {
     resource_type == EFI_RESOURCE_IO || resource_type == EFI_RESOURCE_IO_RESERVED
 }
 
+/// Returns whether a resource descriptor is owned by the Memory Type Information
+/// GUID, and therefore describes PEI memory bin ranges that are expected to
+/// overlap the system-memory resource descriptors backing them.
+fn is_memory_type_info(resource: &ResourceDescriptor) -> bool {
+    resource.owner == MEMORY_TYPE_INFO_HOB_GUID
+}
+
 /// Reports the first overlapping pair within a single resource descriptor
 /// category as a [`HobValidationError::ResourceDescriptorsOverlap`].
 fn check_category_overlap(ranges: &mut [(u64, u64)], kind: &'static str) -> Result<(), HobValidationError> {
@@ -536,6 +548,11 @@ fn validate_resource_descriptor_overlaps(handoff: &PhaseHandoffInformationTable)
     for current in &hob {
         match current {
             Hob::ResourceDescriptor(rd) => {
+                // The PEI memory bin (Memory Type Info) HOB is expected to overlap the
+                // system-memory resource descriptors backing it, so skip it.
+                if is_memory_type_info(rd) {
+                    continue;
+                }
                 let range = (rd.physical_start, rd.resource_length);
                 if is_io(rd.resource_type) {
                     push_range(&mut v1_io, &mut v1_io_n, range, "v1 I/O");
@@ -544,6 +561,9 @@ fn validate_resource_descriptor_overlaps(handoff: &PhaseHandoffInformationTable)
                 }
             }
             Hob::ResourceDescriptorV2(rd) => {
+                if is_memory_type_info(&rd.v1) {
+                    continue;
+                }
                 let range = (rd.v1.physical_start, rd.v1.resource_length);
                 if is_io(rd.v1.resource_type) {
                     push_range(&mut v2_io, &mut v2_io_n, range, "v2 I/O");
@@ -953,6 +973,21 @@ mod tests {
         assert!(is_io(EFI_RESOURCE_IO));
         assert!(is_io(EFI_RESOURCE_IO_RESERVED));
         assert!(!is_io(0)); // EFI_RESOURCE_SYSTEM_MEMORY
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_is_memory_type_info() {
+        use patina::pi::hob::{HobHeader, RESOURCE_DESCRIPTOR};
+        let resource = |owner| ResourceDescriptor {
+            header: HobHeader { r#type: RESOURCE_DESCRIPTOR, length: 0, reserved: 0 },
+            owner,
+            resource_type: 0,
+            resource_attribute: 0,
+            physical_start: 0,
+            resource_length: 0,
+        };
+        assert!(is_memory_type_info(&resource(MEMORY_TYPE_INFO_HOB_GUID)));
+        assert!(!is_memory_type_info(&resource(MM_SUPERVISOR_CORE_GUID)));
     }
 
     #[test]
