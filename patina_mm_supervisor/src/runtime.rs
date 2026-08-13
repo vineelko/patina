@@ -117,8 +117,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             self.mailbox_manager.reset_all();
         } else {
             // AP: check in by marking state, then enter holding pen.
-            log::info!("AP (CPU {}) checked in, entering holding pen...", cpu_id);
             self.cpu_manager.set_ap_state(cpu_id, ApState::InHoldingPen);
+            log::info!("AP (CPU {}) checked in, entering holding pen...", cpu_id);
             self.ap_holding_pen(cpu_id);
 
             // Check out: clear the InHoldingPen state now that this AP has left the pen and let BSP know we are out.

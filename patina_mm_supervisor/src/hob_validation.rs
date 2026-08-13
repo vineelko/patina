@@ -31,6 +31,8 @@
 //! 7. Every page of the MM Supervisor Core module is supervisor-owned (the U/S
 //!    "SP" bit is set) and every page of the MM Supervisor User module is
 //!    user-accessible (the SP bit is clear).
+//! 8. Each module's entry point lies on an executable page (its `ExecuteProtect`
+//!    bit is clear), i.e. it sits in the module's code section.
 //!
 //! Before the checks run, both the scanned MMRAM regions and every discovered
 //! HOB are logged (at debug level) to aid debugging.
@@ -207,6 +209,11 @@ pub enum HobValidationError {
         /// The attribute bits that were actually set on the page.
         found: u64,
     },
+    /// A module's entry point does not lie on an executable page.
+    EntryPointNotExecutable {
+        /// The module entry point that is not executable.
+        entry_point: u64,
+    },
 }
 
 impl core::error::Error for HobValidationError {}
@@ -282,6 +289,9 @@ impl fmt::Display for HobValidationError {
                 "page at 0x{:x} has forbidden attributes set (forbidden 0x{:x}, found 0x{:x})",
                 addr, forbidden, found
             ),
+            Self::EntryPointNotExecutable { entry_point } => {
+                write!(f, "module entry point 0x{:x} does not lie on an executable page", entry_point)
+            }
         }
     }
 }
@@ -366,25 +376,36 @@ fn validate_pass_down_pointers(pass_down: &MmSupvPassDownHobData) -> Result<(), 
     Ok(())
 }
 
-/// Returns whether `[base, base + length)` overlaps any of the given MMRAM regions.
-fn buffer_overlaps_mmram(regions: &[SmramRegion], base: u64, length: u64) -> bool {
-    regions.iter().any(|r| ranges_overlap((base, length), (r.base, r.size)))
+/// Returns the single contiguous MMRAM span `(base, size)` covered by `regions`.
+///
+/// Only meaningful once [`validate_mmram_contiguous`] has confirmed the regions
+/// form one gap-free span; the union then equals `[min_base, max_end)`.
+fn mmram_span(regions: &[SmramRegion]) -> (u64, u64) {
+    let base = regions.iter().map(|r| r.base).min().unwrap_or(0);
+    let end = regions.iter().map(|r| r.base.saturating_add(r.size)).max().unwrap_or(0);
+    (base, end.saturating_sub(base))
+}
+
+/// Returns whether `[base, base + length)` overlaps the MMRAM span.
+fn buffer_overlaps_mmram(mmram: (u64, u64), base: u64, length: u64) -> bool {
+    ranges_overlap((base, length), mmram)
 }
 
 /// Validates that no memory allocation HOB overlaps MMRAM.
 ///
 /// Plain `EFI_HOB_TYPE_MEMORY_ALLOCATION` HOBs describe allocations outside of
-/// MMRAM, so any that overlaps an MMRAM region is rejected.
+/// MMRAM, so any that overlaps the MMRAM span is rejected. `mmram` is the single
+/// contiguous span validated by [`validate_mmram_contiguous`].
 fn validate_memory_allocations(
     handoff: &PhaseHandoffInformationTable,
-    regions: &[SmramRegion],
+    mmram: (u64, u64),
 ) -> Result<(), HobValidationError> {
     let hob = Hob::Handoff(handoff);
     for current in &hob {
         if let Hob::MemoryAllocation(alloc) = current {
             let base = alloc.alloc_descriptor.memory_base_address;
             let length = alloc.alloc_descriptor.memory_length;
-            if buffer_overlaps_mmram(regions, base, length) {
+            if buffer_overlaps_mmram(mmram, base, length) {
                 return Err(HobValidationError::MemoryAllocationInsideMmram { base, length });
             }
         }
@@ -428,7 +449,7 @@ fn validate_allocation_modules(handoff: &PhaseHandoffInformationTable) -> Result
         }
     }
 
-    if let Some((a, b)) = find_overlap(modules.get(..count).unwrap_or(&modules)) {
+    if let Some((a, b)) = find_overlap(modules.get_mut(..count).unwrap_or(&mut [])) {
         return Err(HobValidationError::AllocationModulesOverlap {
             base_a: a.0,
             size_a: a.1,
@@ -446,12 +467,20 @@ fn entry_point_in_range(entry_point: u64, base: u64, length: u64) -> bool {
 }
 
 /// Returns the first pair of overlapping `[base, size)` ranges, if any.
-fn find_overlap(ranges: &[(u64, u64)]) -> Option<((u64, u64), (u64, u64))> {
-    for (i, a) in ranges.iter().enumerate() {
-        for b in ranges.iter().skip(i + 1) {
-            if ranges_overlap(*a, *b) {
-                return Some((*a, *b));
-            }
+fn find_overlap(ranges: &mut [(u64, u64)]) -> Option<((u64, u64), (u64, u64))> {
+    ranges.sort_unstable_by_key(|&(base, _)| base);
+    let mut prev = *ranges.first()?;
+    let mut prev_end = prev.0.saturating_add(prev.1);
+    for &cur in ranges.iter().skip(1) {
+        if ranges_overlap(prev, cur) {
+            return Some((prev, cur));
+        }
+        // Keep the interval with the greatest end so a later range is compared
+        // against the widest predecessor (catches nested/contained ranges).
+        let cur_end = cur.0.saturating_add(cur.1);
+        if cur_end > prev_end {
+            prev = cur;
+            prev_end = cur_end;
         }
     }
     None
@@ -467,7 +496,7 @@ fn is_io(resource_type: u32) -> bool {
 
 /// Reports the first overlapping pair within a single resource descriptor
 /// category as a [`HobValidationError::ResourceDescriptorsOverlap`].
-fn check_category_overlap(ranges: &[(u64, u64)], kind: &'static str) -> Result<(), HobValidationError> {
+fn check_category_overlap(ranges: &mut [(u64, u64)], kind: &'static str) -> Result<(), HobValidationError> {
     if let Some((a, b)) = find_overlap(ranges) {
         return Err(HobValidationError::ResourceDescriptorsOverlap {
             kind,
@@ -526,10 +555,10 @@ fn validate_resource_descriptor_overlaps(handoff: &PhaseHandoffInformationTable)
         }
     }
 
-    check_category_overlap(v1_mem.get(..v1_mem_n).unwrap_or(&v1_mem), "v1 memory")?;
-    check_category_overlap(v1_io.get(..v1_io_n).unwrap_or(&v1_io), "v1 I/O")?;
-    check_category_overlap(v2_mem.get(..v2_mem_n).unwrap_or(&v2_mem), "v2 memory")?;
-    check_category_overlap(v2_io.get(..v2_io_n).unwrap_or(&v2_io), "v2 I/O")?;
+    check_category_overlap(v1_mem.get_mut(..v1_mem_n).unwrap_or(&mut []), "v1 memory")?;
+    check_category_overlap(v1_io.get_mut(..v1_io_n).unwrap_or(&mut []), "v1 I/O")?;
+    check_category_overlap(v2_mem.get_mut(..v2_mem_n).unwrap_or(&mut []), "v2 memory")?;
+    check_category_overlap(v2_io.get_mut(..v2_io_n).unwrap_or(&mut []), "v2 I/O")?;
 
     Ok(())
 }
@@ -673,7 +702,9 @@ pub(crate) unsafe fn validate_incoming_hobs_pre_paging_init(
     dump_hobs(handoff);
 
     validate_mmram_contiguous(regions)?;
-    validate_memory_allocations(handoff, regions)?;
+    // MMRAM is a single contiguous span (checked above), so allocations can be
+    // tested against one range instead of iterating the region list.
+    validate_memory_allocations(handoff, mmram_span(regions))?;
     validate_allocation_modules(handoff)?;
     validate_resource_descriptor_overlaps(handoff)?;
     validate_resource_v2_memory_attributes(handoff)?;
@@ -708,7 +739,9 @@ pub(crate) unsafe fn validate_incoming_hobs_post_paging_init(
 /// Verifies the page protections of the MM Supervisor Core and User modules.
 ///
 /// Iterates the module HOBs, selecting the MM Supervisor's own
-/// `MemoryAllocationModule` HOBs, and dispatches on the module GUID.
+/// `MemoryAllocationModule` HOBs, dispatches on the module GUID to check
+/// supervisor/user page ownership, and confirms each module's entry point lies
+/// on an executable page.
 fn verify_module_page_protections(handoff: &PhaseHandoffInformationTable) -> Result<(), HobValidationError> {
     let hob = Hob::Handoff(handoff);
     for current in &hob {
@@ -730,6 +763,7 @@ fn verify_module_page_protections(handoff: &PhaseHandoffInformationTable) -> Res
                 );
                 // Supervisor core pages must be supervisor-owned (SP set).
                 verify_page_attributes(base, length, MemoryAttributes::Supervisor, MemoryAttributes::empty())?;
+                verify_entry_point_executable(module.entry_point)?;
             }
             name if name == MM_SUPERVISOR_USER_GUID => {
                 log::info!(
@@ -739,6 +773,7 @@ fn verify_module_page_protections(handoff: &PhaseHandoffInformationTable) -> Res
                 );
                 // User core pages must be user-accessible (SP clear).
                 verify_page_attributes(base, length, MemoryAttributes::empty(), MemoryAttributes::Supervisor)?;
+                verify_entry_point_executable(module.entry_point)?;
             }
             _ => {}
         }
@@ -788,6 +823,27 @@ fn verify_page_attributes(
             });
         }
         addr = addr.saturating_add(page_size);
+    }
+
+    Ok(())
+}
+
+/// Verifies that the page containing `entry_point` is executable (its
+/// `ExecuteProtect` bit is clear) in the active page table, confirming the entry
+/// point lands in the module's code section.
+fn verify_entry_point_executable(entry_point: u64) -> Result<(), HobValidationError> {
+    let page_size = UEFI_PAGE_SIZE as u64;
+    let (page_base, _) = align_range(entry_point, 1, page_size)
+        .map_err(|_| HobValidationError::PageAttributeQueryFailed { addr: entry_point })?;
+
+    let page_table = security_state().lock_page_table();
+    let pt = page_table.as_ref().ok_or(HobValidationError::PageTableUnavailable)?;
+
+    let attrs = pt
+        .query_memory_region(page_base, page_size)
+        .map_err(|_| HobValidationError::PageAttributeQueryFailed { addr: page_base })?;
+    if attrs.contains(MemoryAttributes::ExecuteProtect) {
+        return Err(HobValidationError::EntryPointNotExecutable { entry_point });
     }
 
     Ok(())
@@ -857,19 +913,30 @@ mod tests {
 
     #[test]
     fn test_mm_supervisor_hob_validation_find_overlap() {
-        assert!(find_overlap(&[(0, 0x1000), (0x2000, 0x1000)]).is_none());
-        assert!(find_overlap(&[(0, 0x1000), (0x800, 0x1000)]).is_some());
+        assert!(find_overlap(&mut [(0, 0x1000), (0x2000, 0x1000)]).is_none());
+        assert!(find_overlap(&mut [(0, 0x1000), (0x800, 0x1000)]).is_some());
+        // Unsorted input with a contained range is still detected after sorting.
+        assert!(find_overlap(&mut [(0x4000, 0x1000), (0, 0x8000), (0x1000, 0x100)]).is_some());
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_mmram_span() {
+        // Contiguous regions (unsorted) collapse to one [min_base, max_end) span.
+        let regions = [region(0x2000, 0x2000), region(0x1000, 0x1000)];
+        assert_eq!(mmram_span(&regions), (0x1000, 0x3000));
+        // A single region maps to itself.
+        assert_eq!(mmram_span(&[region(0x8000, 0x1000)]), (0x8000, 0x1000));
     }
 
     #[test]
     fn test_mm_supervisor_hob_validation_buffer_overlaps_mmram() {
-        let regions = [region(0x1000, 0x1000), region(0x4000, 0x1000)];
-        // An allocation outside every MMRAM region does not overlap.
-        assert!(!buffer_overlaps_mmram(&regions, 0x2000, 0x1000));
-        // An allocation landing inside an MMRAM region overlaps.
-        assert!(buffer_overlaps_mmram(&regions, 0x1400, 0x100));
-        // A partial overlap at a region boundary is detected.
-        assert!(buffer_overlaps_mmram(&regions, 0x0800, 0x1000));
+        let mmram = (0x1000u64, 0x1000u64); // [0x1000, 0x2000)
+        // An allocation outside the MMRAM span does not overlap.
+        assert!(!buffer_overlaps_mmram(mmram, 0x2000, 0x1000));
+        // An allocation landing inside the MMRAM span overlaps.
+        assert!(buffer_overlaps_mmram(mmram, 0x1400, 0x100));
+        // A partial overlap at the span boundary is detected.
+        assert!(buffer_overlaps_mmram(mmram, 0x0800, 0x1000));
     }
 
     #[test]
@@ -890,12 +957,12 @@ mod tests {
 
     #[test]
     fn test_mm_supervisor_hob_validation_check_category_overlap_none() {
-        assert_eq!(check_category_overlap(&[(0, 0x1000), (0x1000, 0x1000)], "v1 memory"), Ok(()));
+        assert_eq!(check_category_overlap(&mut [(0, 0x1000), (0x1000, 0x1000)], "v1 memory"), Ok(()));
     }
 
     #[test]
     fn test_mm_supervisor_hob_validation_check_category_overlap_reports() {
-        let result = check_category_overlap(&[(0, 0x2000), (0x1000, 0x1000)], "v2 I/O");
+        let result = check_category_overlap(&mut [(0, 0x2000), (0x1000, 0x1000)], "v2 I/O");
         assert!(matches!(result, Err(HobValidationError::ResourceDescriptorsOverlap { kind: "v2 I/O", .. })));
     }
 
@@ -989,6 +1056,13 @@ mod tests {
     }
 
     #[test]
+    fn test_mm_supervisor_hob_validation_verify_entry_point_executable_page_table_unavailable() {
+        // The page table is uninitialized in unit tests, so the query reports it
+        // as unavailable rather than panicking.
+        assert_eq!(verify_entry_point_executable(0x1000), Err(HobValidationError::PageTableUnavailable));
+    }
+
+    #[test]
     fn test_mm_supervisor_hob_validation_error_display_non_empty() {
         // Every error variant must produce a non-empty, human-readable message.
         let errors = [
@@ -1022,6 +1096,7 @@ mod tests {
             HobValidationError::PageAttributeQueryFailed { addr: 0x1000 },
             HobValidationError::PageMissingAttribute { addr: 0x1000, desired: 0x1, found: 0 },
             HobValidationError::PageHasForbiddenAttribute { addr: 0x1000, forbidden: 0x1, found: 0x1 },
+            HobValidationError::EntryPointNotExecutable { entry_point: 0x5000 },
         ];
         for err in errors {
             assert!(!format!("{err}").is_empty());
