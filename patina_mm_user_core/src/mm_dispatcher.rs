@@ -37,13 +37,15 @@ use core::{cmp::Ordering, ffi::c_void};
 use patina::standard::efi;
 use patina::{
     c_ptr::CPtr,
-    management_mode::supervisor::{MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_USER_GUID},
+    management_mode::supervisor::{
+        MM_SUPERVISOR_CORE_GUID, MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_USER_GUID,
+    },
     pi::hob::Hob,
 };
 use patina_internal_core::depex::{AssociatedDependency, Depex};
 use spin::Mutex;
 
-use crate::{DepexHobData, MM_SUPERVISOR_CORE_GUID, MM_SUPERVISOR_DEPEX_HOB_GUID, protocol_db::ProtocolDatabase};
+use crate::{DepexHobData, MM_SUPERVISOR_DEPEX_HOB_GUID, protocol_db::ProtocolDatabase};
 
 /// Represents a discovered MM driver pending dispatch.
 #[derive(Debug)]
