@@ -44,6 +44,7 @@
 
 mod comm_buffer;
 mod cpu;
+mod hob_validation;
 mod init;
 mod intrinsics;
 mod mailbox;

@@ -149,7 +149,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         });
 
         if all_arrived {
-            log::trace!("All {} APs arrived", expected_aps);
+            log::info!("All {} APs arrived", expected_aps);
         } else {
             // All cores have to rendezvous in the holding pen before the BSP services a request. If any core
             // fails to arrive within the window, this is a security-fatal condition.
@@ -578,7 +578,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             core::hint::spin_loop();
         }
 
-        log::trace!("AP (CPU {}) exiting holding pen", cpu_id);
+        log::info!("AP (CPU {}) exiting holding pen", cpu_id);
     }
 
     /// Execute a command received by an AP.
