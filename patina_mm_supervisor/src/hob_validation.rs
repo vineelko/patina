@@ -56,6 +56,7 @@ use patina::pi::hob::{
     EFI_RESOURCE_IO, EFI_RESOURCE_IO_RESERVED, Hob, MEMORY_TYPE_INFO_HOB_GUID, PhaseHandoffInformationTable,
     ResourceDescriptor,
 };
+use patina::standard::efi;
 use patina::{UEFI_PAGE_SIZE, align_range};
 use patina_paging::{MemoryAttributes, PageTable};
 use zerocopy::FromBytes;
@@ -589,8 +590,6 @@ fn validate_resource_descriptor_overlaps(handoff: &PhaseHandoffInformationTable)
 /// carry the prohibited `EFI_MEMORY_UCE` bit; I/O regions must carry no
 /// attributes at all.
 fn check_v2_attributes(resource_type: u32, base: u64, attributes: u64) -> Result<(), HobValidationError> {
-    use r_efi::efi;
-
     if is_io(resource_type) {
         if attributes != 0 {
             return Err(HobValidationError::V2IoAttributesNotZero { base, attributes });
@@ -1005,13 +1004,13 @@ mod tests {
     fn test_mm_supervisor_hob_validation_v2_attributes_memory_valid() {
         use patina::pi::hob::EFI_RESOURCE_SYSTEM_MEMORY;
         // Exactly one cacheability bit is valid.
-        assert_eq!(check_v2_attributes(EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, r_efi::efi::MEMORY_WB), Ok(()));
+        assert_eq!(check_v2_attributes(EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, efi::MEMORY_WB), Ok(()));
     }
 
     #[test]
     fn test_mm_supervisor_hob_validation_v2_attributes_uce_rejected() {
         use patina::pi::hob::EFI_RESOURCE_SYSTEM_MEMORY;
-        let result = check_v2_attributes(EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, r_efi::efi::MEMORY_UCE);
+        let result = check_v2_attributes(EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, efi::MEMORY_UCE);
         assert!(matches!(result, Err(HobValidationError::V2ContainsUceAttribute { .. })));
     }
 
@@ -1025,8 +1024,7 @@ mod tests {
     #[test]
     fn test_mm_supervisor_hob_validation_v2_attributes_multiple_cacheability_rejected() {
         use patina::pi::hob::EFI_RESOURCE_SYSTEM_MEMORY;
-        let result =
-            check_v2_attributes(EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, r_efi::efi::MEMORY_WB | r_efi::efi::MEMORY_WT);
+        let result = check_v2_attributes(EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, efi::MEMORY_WB | efi::MEMORY_WT);
         assert!(matches!(result, Err(HobValidationError::V2InvalidCacheability { .. })));
     }
 
@@ -1037,7 +1035,7 @@ mod tests {
 
     #[test]
     fn test_mm_supervisor_hob_validation_v2_attributes_io_nonzero_rejected() {
-        let result = check_v2_attributes(EFI_RESOURCE_IO, 0x1000, r_efi::efi::MEMORY_WB);
+        let result = check_v2_attributes(EFI_RESOURCE_IO, 0x1000, efi::MEMORY_WB);
         assert!(matches!(result, Err(HobValidationError::V2IoAttributesNotZero { .. })));
     }
 
