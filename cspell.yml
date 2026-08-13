@@ -114,7 +114,6 @@ words:
   - htons
   - icfgr
   - impls
-  - indoc
   - inmodule
   - intid
   - irouter
@@ -224,6 +223,7 @@ words:
   - unrecovered
   - unreg
   - unregisters
+  - unrepresentable
   - unspec
   - unsynchronized
   - variadics
