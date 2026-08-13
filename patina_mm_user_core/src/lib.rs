@@ -98,12 +98,6 @@ use zerocopy::FromBytes;
 #[cfg(target_os = "uefi")]
 core::arch::global_asm!(include_str!("entry_point.asm"));
 
-/// GUID identifying the MM Supervisor Core module (to be skipped during driver discovery).
-///
-/// `gMmSupervisorCoreGuid`
-pub const MM_SUPERVISOR_CORE_GUID: patina::BinaryGuid =
-    patina::BinaryGuid::from_string("4e4c89dc-a452-4b6b-b183-f16a2a223733");
-
 /// GUID for depex data HOBs paired with driver `MemoryAllocationModule` HOBs.
 ///
 /// `gMmSupervisorDepexHobGuid`
