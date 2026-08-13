@@ -209,9 +209,7 @@ where
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
-    extern crate std;
     use super::*;
-    extern crate alloc;
     use alloc::vec::Vec;
 
     #[test]
