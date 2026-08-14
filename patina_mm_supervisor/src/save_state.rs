@@ -38,8 +38,12 @@ use patina_internal_cpu::save_state::{
     self, IA32_EFER_LMA, IO_INFO_SIZE, IO_TYPE_INPUT, IO_TYPE_OUTPUT, LMA_32BIT, LMA_64BIT, MmSaveStateIoInfo,
     MmSaveStateRegister, PROCESSOR_INFO_ENTRY_SIZE,
 };
+use zerocopy::IntoBytes;
 
-use crate::{PageOwnership, privilege_mgmt::SyscallResult, query_address_ownership, state::security_state};
+use crate::{
+    PageOwnership, privilege_mgmt::SyscallResult, query_address_ownership, runtime::with_user_access,
+    state::security_state,
+};
 
 /// Size in bytes of one `SMRAM_SAVE_STATE_MAP` region.
 ///
@@ -188,17 +192,15 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
         }
     }
 
-    // Create a single mutable slice over the validated user output buffer so the
-    // individual read handlers write through safe slice operations.
-    //
-    // SAFETY: `buffer` was validated above as a user-owned, writable region of
-    // at least `write_size` bytes.  User code is not executing concurrently
-    // while the supervisor services this syscall, so there is no aliasing.
-    let out = unsafe { core::slice::from_raw_parts_mut(buffer as *mut u8, write_size) };
+    let mut out = [0u8; IO_INFO_SIZE];
+    let out = out.get_mut(..write_size).ok_or(Status::BUFFER_TOO_SMALL)?;
 
     // Special case: PROCESSOR_ID — always allowed, no policy check
     if register == MmSaveStateRegister::ProcessorId {
-        return read_processor_id(cpu_index, out);
+        read_processor_id(cpu_index, out)?;
+        // SAFETY: `buffer` was validated above as a user-owned region of at least `out.len()` bytes.
+        unsafe { copy_to_user(buffer as *mut u8, out) };
+        return Ok(0);
     }
 
     // Build a safe view over this CPU's save state region.
@@ -244,7 +246,12 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
         MmSaveStateRegister::Io => read_io_register(&view, out),
         MmSaveStateRegister::Lma => read_lma_register(&view, width, out),
         _ => read_architectural_register(&view, register, width, out),
-    }
+    }?;
+
+    // SAFETY: `buffer` was validated above as a user-owned region of at least `out.len()` bytes.
+    unsafe { copy_to_user(buffer as *mut u8, out) };
+
+    Ok(0)
 }
 
 /// Returns the per-CPU save-state metadata captured at initialization.
@@ -377,6 +384,19 @@ fn actual_write_size(register: MmSaveStateRegister, width: u64) -> usize {
             }
         }
     }
+}
+
+/// Copies a staged save-state result into a validated user buffer while SMAP is disabled.
+///
+/// ## Safety
+///
+/// `buffer` must reference a writable user-owned region of at least `out.len()` bytes and
+/// must not overlap `out`.
+unsafe fn copy_to_user(buffer: *mut u8, out: &[u8]) {
+    with_user_access(|| {
+        // SAFETY: guaranteed by the caller's contract; SMAP is disabled for this copy.
+        unsafe { core::ptr::copy_nonoverlapping(out.as_ptr(), buffer, out.len()) };
+    });
 }
 
 /// Reads the PROCESSOR_ID for a given CPU and writes it to the user buffer.
@@ -535,17 +555,17 @@ fn read_io_register(view: &SaveStateView, out: &mut [u8]) -> SyscallResult {
         }
     };
 
-    // 4. Serialize the EFI_MM_SAVE_STATE_IO_INFO structure into the output
-    //    buffer by writing the whole #[repr(C)] struct at once.
-    let io_info =
-        MmSaveStateIoInfo { io_data, io_port: parsed.io_port, io_width: parsed.io_width, io_type: parsed.io_type };
-
-    // SAFETY: `out` was validated as a user owned, writable region of at least
-    // `IO_INFO_SIZE` bytes, which equals `size_of::<MmSaveStateIoInfo>()`.
-    // `write_unaligned` accounts for the buffer's unknown alignment.
-    unsafe {
-        core::ptr::write_unaligned(out.as_mut_ptr() as *mut MmSaveStateIoInfo, io_info);
-    }
+    // 4. Serialize the EFI_MM_SAVE_STATE_IO_INFO structure into the output buffer.
+    let io_info = MmSaveStateIoInfo {
+        io_data,
+        io_port: parsed.io_port,
+        _pad0: [0; 2],
+        io_width: parsed.io_width,
+        io_type: parsed.io_type,
+        _pad1: [0; 4],
+    };
+    let out = out.get_mut(..IO_INFO_SIZE).ok_or(Status::BUFFER_TOO_SMALL)?;
+    out.copy_from_slice(io_info.as_bytes());
 
     Ok(0)
 }
@@ -620,6 +640,52 @@ mod tests {
         assert_eq!(actual_write_size(MmSaveStateRegister::Rax, 4), 4);
         assert_eq!(actual_write_size(MmSaveStateRegister::Rax, 8), 8);
         assert_eq!(actual_write_size(MmSaveStateRegister::Rax, 16), 0);
+    }
+
+    #[test]
+    fn test_save_state_copy_to_user() {
+        let source = [0x12, 0x34, 0x56, 0x78];
+        let mut destination = [0u8; 4];
+
+        // SAFETY: `destination` is writable, exactly `source.len()` bytes, and does not overlap `source`.
+        unsafe { copy_to_user(destination.as_mut_ptr(), &source) };
+
+        assert_eq!(destination, source);
+    }
+
+    #[test]
+    fn test_save_state_io_register_serialization() {
+        const IO_PORT: u16 = 0xB2;
+        const IO_DATA: u8 = 0x5A;
+
+        let constants = save_state::vendor_constants();
+        let mut save_state_bytes = Box::new([0u8; SMRAM_SAVE_STATE_MAP_SIZE as usize]);
+        let revision = constants.min_rev_id_io;
+        save_state_bytes[constants.smmrevid_offset as usize..constants.smmrevid_offset as usize + 4]
+            .copy_from_slice(&revision.to_le_bytes());
+
+        // This encodes a valid one-byte IN for both the Intel and AMD save-state layouts.
+        let io_field = ((IO_PORT as u32) << 16) | (1 << 4) | (1 << 1) | 1;
+        save_state_bytes[constants.io_info_offset as usize..constants.io_info_offset as usize + 4]
+            .copy_from_slice(&io_field.to_le_bytes());
+        save_state_bytes[constants.rax_offset as usize] = IO_DATA;
+
+        // SAFETY: the boxed save-state map remains alive and immutable while `view` is used.
+        let view = unsafe { SaveStateView::new(save_state_bytes.as_ptr(), save_state_bytes.len()) };
+        let mut out = [0xFF; IO_INFO_SIZE];
+
+        assert_eq!(read_io_register(&view, &mut out), Ok(0));
+
+        let parsed = save_state::parse_io_field(io_field).unwrap();
+        let expected = MmSaveStateIoInfo {
+            io_data: IO_DATA as u64,
+            io_port: IO_PORT,
+            _pad0: [0; 2],
+            io_width: parsed.io_width,
+            io_type: parsed.io_type,
+            _pad1: [0; 4],
+        };
+        assert_eq!(out, expected.as_bytes());
     }
 
     #[test]
