@@ -23,6 +23,8 @@ patina_paging = { workspace = true }
 cfg-if = { workspace = true }
 patina_stacktrace = { workspace = true }
 mockall = { workspace = true, optional = true }
+zerocopy = { workspace = true }
+zerocopy-derive = { workspace = true }
 
 [target.'cfg(all(target_arch="x86_64"))'.dependencies]
 patina_mtrr = { workspace = true }
