@@ -7,9 +7,8 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
-use crate::{error::EfiError, pi::protocol::cpu_arch::CpuFlushType};
+use crate::{error::EfiError, pi::protocol::cpu_arch::CpuFlushType, standard::efi};
 use core::num::NonZeroU64;
-use r_efi::efi;
 
 cfg_if::cfg_if! {
     if #[cfg(not(target_os = "uefi"))] {
