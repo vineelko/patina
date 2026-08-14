@@ -112,7 +112,7 @@ impl<'a> HobList<'a> {
         let mut size_of_hobs = 0;
 
         for hob in self.iter() {
-            size_of_hobs += hob.size()
+            size_of_hobs += hob.size();
         }
 
         size_of_hobs
@@ -139,7 +139,7 @@ impl<'a> HobList<'a> {
         self.0.len()
     }
 
-    /// Implements is_empty for Hoblist.
+    /// Implements `is_empty` for Hoblist.
     /// Returns true if the list is empty.
     ///
     /// # Example(s)
@@ -361,7 +361,7 @@ impl<'a> HobList<'a> {
     /// }
     /// ```
     pub fn relocate_hobs(&mut self) {
-        for hob in self.0.iter_mut() {
+        for hob in &mut self.0 {
             match hob {
                 Hob::Handoff(hob) => *hob = Box::leak(Box::new(PhaseHandoffInformationTable::clone(hob))),
                 Hob::MemoryAllocation(hob) => *hob = Box::leak(Box::new(MemoryAllocation::clone(hob))),
@@ -378,12 +378,12 @@ impl<'a> HobList<'a> {
                 Hob::Cpu(hob) => *hob = Box::leak(Box::new(Cpu::clone(hob))),
                 Hob::ResourceDescriptorV2(hob) => *hob = Box::leak(Box::new(ResourceDescriptorV2::clone(hob))),
                 Hob::Misc(_) => (), // Data is owned in Misc (nothing to move),
-            };
+            }
         }
     }
 }
 
-/// Implements IntoIterator for HobList.
+/// Implements `IntoIterator` for `HobList`.
 ///
 /// Defines how it will be converted to an iterator.
 impl<'a> IntoIterator for HobList<'a> {
@@ -411,7 +411,7 @@ impl<'a> IntoIterator for &'a HobList<'a> {
 #[cfg_attr(coverage, coverage(off))]
 impl fmt::Debug for HobList<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for hob in self.0.clone().into_iter() {
+        for hob in self.0.clone() {
             match hob {
                 Hob::Handoff(hob) => {
                     writelncrlf!(f, "PHASE HANDOFF INFORMATION TABLE (PHIT) HOB")?;
@@ -571,6 +571,8 @@ mod tests {
         let ptr = c_array_ptr as *mut u8;
         // SAFETY: Caller is responsible for ensuring the pointer and length are valid per the function contract.
         unsafe {
+            #[allow(clippy::same_length_and_capacity)]
+            // TODO: Remove this once the clippy lint is fixed in the future.
             drop(Vec::from_raw_parts(ptr, len, len));
         }
     }
@@ -682,7 +684,7 @@ mod tests {
         let write_header = |buf: &mut [u8], offset: usize, r#type: u16, length: u16| {
             let header = hob::HobHeader { r#type, length, reserved: 0 };
             // SAFETY: Test code - `HobHeader` is `repr(C)` plain data serialized into the test-allocated buffer.
-            let bytes = unsafe { from_raw_parts(&header as *const _ as *const u8, size_of::<hob::HobHeader>()) };
+            let bytes = unsafe { from_raw_parts(&raw const header as *const u8, size_of::<hob::HobHeader>()) };
             buf[offset..offset + bytes.len()].copy_from_slice(bytes);
         };
 
@@ -784,7 +786,7 @@ mod tests {
                     assert_eq!(resource.v1.header.r#type, hob::RESOURCE_DESCRIPTOR2);
                     assert_eq!(resource.v1.resource_type, hob::EFI_RESOURCE_SYSTEM_MEMORY);
                 }
-                _ => {
+                Hob::Misc(_) => {
                     panic!("Unexpected hob type");
                 }
             }
@@ -844,7 +846,7 @@ mod tests {
                 Hob::Cpu(cpu) => {
                     assert_eq!(cpu.size_of_memory_space, 0);
                 }
-                _ => {
+                Hob::Misc(_) => {
                     panic!("Unexpected hob type");
                 }
             }
@@ -1061,7 +1063,7 @@ mod tests {
         let handoff = gen_phase_handoff_information_table();
         hoblist.push(Hob::Handoff(&handoff));
 
-        let debug_output = format!("{:?}", hoblist);
+        let debug_output = format!("{hoblist:?}");
 
         assert!(debug_output.contains("PHASE HANDOFF INFORMATION TABLE"));
         assert!(debug_output.contains("HOB Length:"));
@@ -1081,7 +1083,7 @@ mod tests {
         let end_of_list = gen_end_of_hoblist();
 
         // SAFETY: The list is created in this test with a valid end-of-list marker
-        let size = unsafe { get_pi_hob_list_size(&end_of_list as *const _ as *const c_void) };
+        let size = unsafe { get_pi_hob_list_size(&raw const end_of_list as *const c_void) };
 
         assert_eq!(size, size_of::<PhaseHandoffInformationTable>());
     }
@@ -1104,26 +1106,20 @@ mod tests {
         // Add a capsule HOB
         // SAFETY: Creating a byte slice from a struct for test purposes.
         let capsule_bytes =
-            unsafe { core::slice::from_raw_parts(&capsule as *const Capsule as *const u8, size_of::<Capsule>()) };
+            unsafe { core::slice::from_raw_parts(&raw const capsule as *const u8, size_of::<Capsule>()) };
         buffer.extend_from_slice(capsule_bytes);
 
         // Add a firmware volume HOB
         // SAFETY: Creating a byte slice from a struct for test purposes.
         let fv_bytes = unsafe {
-            core::slice::from_raw_parts(
-                &firmware_volume as *const FirmwareVolume as *const u8,
-                size_of::<FirmwareVolume>(),
-            )
+            core::slice::from_raw_parts(&raw const firmware_volume as *const u8, size_of::<FirmwareVolume>())
         };
         buffer.extend_from_slice(fv_bytes);
 
         // Add an end-of-list HOB
         // SAFETY: Creating a byte slice from a struct for test purposes.
         let end_bytes = unsafe {
-            core::slice::from_raw_parts(
-                &end_of_list as *const PhaseHandoffInformationTable as *const u8,
-                size_of::<PhaseHandoffInformationTable>(),
-            )
+            core::slice::from_raw_parts(&raw const end_of_list as *const u8, size_of::<PhaseHandoffInformationTable>())
         };
         buffer.extend_from_slice(end_bytes);
 
@@ -1152,32 +1148,21 @@ mod tests {
         let mut buffer = Vec::new();
 
         // SAFETY: Creating a byte slice from a struct for test purposes.
+        buffer.extend_from_slice(unsafe { core::slice::from_raw_parts(&raw const cpu as *const u8, size_of::<Cpu>()) });
+
+        // SAFETY: Creating a byte slice from a struct for test purposes.
         buffer.extend_from_slice(unsafe {
-            core::slice::from_raw_parts(&cpu as *const Cpu as *const u8, size_of::<Cpu>())
+            core::slice::from_raw_parts(&raw const resource as *const u8, size_of::<ResourceDescriptor>())
         });
 
         // SAFETY: Creating a byte slice from a struct for test purposes.
         buffer.extend_from_slice(unsafe {
-            core::slice::from_raw_parts(
-                &resource as *const ResourceDescriptor as *const u8,
-                size_of::<ResourceDescriptor>(),
-            )
+            core::slice::from_raw_parts(&raw const memory_alloc as *const u8, size_of::<MemoryAllocation>())
         });
 
         // SAFETY: Creating a byte slice from a struct for test purposes.
         buffer.extend_from_slice(unsafe {
-            core::slice::from_raw_parts(
-                &memory_alloc as *const MemoryAllocation as *const u8,
-                size_of::<MemoryAllocation>(),
-            )
-        });
-
-        // SAFETY: Creating a byte slice from a struct for test purposes.
-        buffer.extend_from_slice(unsafe {
-            core::slice::from_raw_parts(
-                &end_of_list as *const PhaseHandoffInformationTable as *const u8,
-                size_of::<PhaseHandoffInformationTable>(),
-            )
+            core::slice::from_raw_parts(&raw const end_of_list as *const u8, size_of::<PhaseHandoffInformationTable>())
         });
 
         // SAFETY: The list is created in this test with headers and an end-of-list marker that should be valid

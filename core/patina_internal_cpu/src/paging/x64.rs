@@ -15,8 +15,8 @@ use patina_paging::{
     MemoryAttributes, PageTable, PagingType, PtError, page_allocator::PageAllocator, x64::X64PageTable,
 };
 
-/// The x86_64 paging implementation. It acts as a bridge between the EFI CPU
-/// Architecture Protocol and the x86_64 paging implementation.
+/// The `x86_64` paging implementation. It acts as a bridge between the EFI CPU
+/// Architecture Protocol and the `x86_64` paging implementation.
 #[derive(Debug)]
 pub struct EfiCpuPagingX64<P, M>
 where
@@ -29,14 +29,13 @@ where
 
 fn efierror_to_pterror(efi_error: EfiError) -> PtError {
     match efi_error {
-        EfiError::InvalidParameter => PtError::InvalidParameter,
         EfiError::OutOfResources => PtError::OutOfResources,
         EfiError::NotFound => PtError::NoMapping,
         _ => PtError::InvalidParameter, // Default case for unsupported error codes
     }
 }
 
-/// The x86_64 paging implementation.
+/// The `x86_64` paging implementation.
 impl<P, M> PatinaPageTable for EfiCpuPagingX64<P, M>
 where
     P: PageTable,
@@ -48,12 +47,12 @@ where
         let memory_attributes = attributes & MemoryAttributes::AccessAttributesMask;
 
         if attributes != (cache_attributes | memory_attributes) {
-            log::error!("Invalid cache attribute: {:#x}", attributes);
+            log::error!("Invalid cache attribute: {attributes:#x}");
             return Err(PtError::InvalidParameter);
         }
 
         match apply_caching_attributes(address, size, cache_attributes, &mut self.mtrr) {
-            Ok(_) => self.paging.map_memory_region(address, size, attributes & MemoryAttributes::AccessAttributesMask),
+            Ok(()) => self.paging.map_memory_region(address, size, attributes & MemoryAttributes::AccessAttributesMask),
             Err(status) => Err(efierror_to_pterror(status)),
         }
     }
@@ -79,13 +78,14 @@ where
         };
 
         match self.paging.query_memory_region(address, size) {
-            Ok(attr) => match cache_attr {
-                CacheAttributeValue::Valid(cache_attr_val) => Ok(attr | cache_attr_val),
-                _ => {
+            Ok(attr) => {
+                if let CacheAttributeValue::Valid(cache_attr_val) = cache_attr {
+                    Ok(attr | cache_attr_val)
+                } else {
                     debug_assert!(false, "Cache attributes should be valid for mapped region");
                     Ok(attr)
                 }
-            },
+            }
             Err(err) => Err((err, cache_attr)),
         }
     }
@@ -129,7 +129,7 @@ fn apply_caching_attributes<M: Mtrr>(
         if curr_attribute != cache_type {
             // cache attributes are not already set
             match mtrr.set_memory_attribute(base_address, length, cache_type) {
-                Ok(_) => {
+                Ok(()) => {
                     // now we need to program the APs with the update, if they are up
                     return Ok(());
                 }
@@ -141,7 +141,7 @@ fn apply_caching_attributes<M: Mtrr>(
     Ok(())
 }
 
-/// Create an x86_64 paging instance under the general PatinaPageTable trait.
+/// Create an `x86_64` paging instance under the general `PatinaPageTable` trait.
 #[cfg_attr(coverage, coverage(off))]
 pub fn create_cpu_x64_paging<A: PageAllocator + 'static>(
     page_allocator: A,
@@ -153,7 +153,7 @@ pub fn create_cpu_x64_paging<A: PageAllocator + 'static>(
     })
 }
 
-/// Open the active x86_64 page table wrapped in the PatinaPageTable trait.
+/// Open the active `x86_64` page table wrapped in the `PatinaPageTable` trait.
 ///
 /// ## Safety
 /// The caller must ensure no other entity is concurrently modifying the page tables.
@@ -168,14 +168,13 @@ pub unsafe fn open_active_cpu_x64_paging<A: PageAllocator + 'static>(
 
 fn mtrr_err_to_efi_status(err: MtrrError) -> EfiError {
     match err {
-        MtrrError::MtrrNotSupported => EfiError::Unsupported,
-        MtrrError::VariableRangeMtrrExhausted => EfiError::OutOfResources,
-        MtrrError::FixedRangeMtrrBaseAddressNotAligned => EfiError::InvalidParameter,
-        MtrrError::FixedRangeMtrrLengthNotAligned => EfiError::InvalidParameter,
-        MtrrError::InvalidParameter => EfiError::InvalidParameter,
-        MtrrError::BufferTooSmall => EfiError::BufferTooSmall,
-        MtrrError::OutOfResources => EfiError::OutOfResources,
         MtrrError::AlreadyStarted => EfiError::AlreadyStarted,
+        MtrrError::BufferTooSmall => EfiError::BufferTooSmall,
+        MtrrError::FixedRangeMtrrBaseAddressNotAligned
+        | MtrrError::FixedRangeMtrrLengthNotAligned
+        | MtrrError::InvalidParameter => EfiError::InvalidParameter,
+        MtrrError::MtrrNotSupported => EfiError::Unsupported,
+        MtrrError::OutOfResources | MtrrError::VariableRangeMtrrExhausted => EfiError::OutOfResources,
     }
 }
 

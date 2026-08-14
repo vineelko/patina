@@ -1,6 +1,6 @@
 //! UEFI Advanced Logger Support
 //!
-//! This module provides a struct that implements log::Log for writing to a SerialIO
+//! This module provides a struct that implements `log::Log` for writing to a `SerialIO`
 //! and the advanced logger memory log. This module is written to be phase agnostic.
 //!
 //! ## License
@@ -36,7 +36,7 @@ pub struct TargetFilter<'a> {
     /// Maximum log level for this target. Messages above this are dropped entirely.
     pub log_level: log::LevelFilter,
     /// Optional override for the hardware print level for this target. Messages above this level will not be printed
-    /// to the hardware port, but may still be logged to the memory log based on log_level and the overall max_level.
+    /// to the hardware port, but may still be logged to the memory log based on `log_level` and the overall `max_level`.
     /// - `None` = use global `hw_print_level` from memory log header.
     /// - `Some(level_filter)` Use the provided level filter to control hardware printing for this target, instead
     ///   of the global `hw_print_level`.
@@ -60,7 +60,7 @@ impl<'a, S> AdvancedLogger<'a, S>
 where
     S: SerialIO + Send,
 {
-    /// Creates a new AdvancedLogger.
+    /// Creates a new `AdvancedLogger`.
     ///
     /// ## Arguments
     ///
@@ -106,7 +106,7 @@ where
         debug_assert!(!physical_hob_list.is_null(), "Could not initialize adv logger due to null hob list.");
         let hob_list_info =
             // SAFETY: The caller must provide a valid physical HOB list pointer.
-            unsafe { (physical_hob_list as *const PhaseHandoffInformationTable).as_ref() }.ok_or_else(|| {
+            unsafe { physical_hob_list.cast::<PhaseHandoffInformationTable>().as_ref() }.ok_or_else(|| {
                 log::error!("Could not initialize adv logger due to null hob list.");
                 EfiError::InvalidParameter
             })?;
@@ -118,7 +118,7 @@ where
                 // SAFETY: The HOB will have a address of the log info
                 // immediately following the HOB header.
                 unsafe {
-                    let address: *const efi::PhysicalAddress = ptr::from_ref(data) as *const efi::PhysicalAddress;
+                    let address: *const efi::PhysicalAddress = ptr::from_ref(data).cast::<efi::PhysicalAddress>();
                     let log_info_addr = (*address) as efi::PhysicalAddress;
                     self.set_log_info_address(log_info_addr);
                 };
@@ -131,7 +131,7 @@ where
 
     /// Writes a log entry to the hardware port and memory log if available.
     ///
-    /// `hw_print_mask_override` optionally overrides the global hw_print_level
+    /// `hw_print_mask_override` optionally overrides the global `hw_print_level`
     /// from the memory log header, enabling per-target hardware print filtering.
     pub(crate) fn log_write(&self, error_level: u32, hw_print_mask_override: Option<u32>, data: &[u8]) {
         self.refresh_log_info_address();
@@ -153,7 +153,7 @@ where
 
         if hw_write {
             let result = self.hardware_port.write(data);
-            debug_assert!(result.is_ok(), "Failed to write to hardware port: {:?}", result);
+            debug_assert!(result.is_ok(), "Failed to write to hardware port: {result:?}");
         }
     }
 
@@ -177,7 +177,7 @@ where
             }
             // Drop the lock before logging
 
-            log::info!("Advanced logger buffer initialized. Address = {:#x}", address);
+            log::info!("Advanced logger buffer initialized. Address = {address:#x}");
 
             // The frequency may not be initialized, if not do so now.
             if current_frequency == 0 {
@@ -201,7 +201,7 @@ where
     #[allow(dead_code)]
     pub(crate) fn get_log_address(&self) -> Option<efi::PhysicalAddress> {
         let log_guard = self.memory_log.read();
-        log_guard.as_ref().map(|log| log.get_address())
+        log_guard.as_ref().map(super::writer::AdvancedLogWriter::get_address)
     }
 
     fn refresh_log_info_address(&self) {
@@ -231,13 +231,13 @@ where
     S: SerialIO + Send,
 {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        let max_level = self.target_filter(metadata.target()).map(|f| f.log_level).unwrap_or(self.max_level);
+        let max_level = self.target_filter(metadata.target()).map_or(self.max_level, |f| f.log_level);
         metadata.level().to_level_filter() <= max_level
     }
 
     fn log(&self, record: &log::Record) {
         let filter = self.target_filter(record.target());
-        let max_level = filter.map(|f| f.log_level).unwrap_or(self.max_level);
+        let max_level = filter.map_or(self.max_level, |f| f.log_level);
 
         if record.metadata().level().to_level_filter() <= max_level {
             let level = log_level_to_debug_level(record.metadata().level());
@@ -253,14 +253,13 @@ where
     }
 }
 
-/// Converts a log::Level to a EFI Debug Level.
+/// Converts a `log::Level` to a EFI Debug Level.
 const fn log_level_to_debug_level(level: Level) -> u32 {
     match level {
         Level::Error => memory_log::DEBUG_LEVEL_ERROR,
-        Level::Warn => memory_log::DEBUG_LEVEL_WARNING,
-        Level::Info => memory_log::DEBUG_LEVEL_INFO,
+        Level::Info | Level::Debug => memory_log::DEBUG_LEVEL_INFO,
         Level::Trace => memory_log::DEBUG_LEVEL_VERBOSE,
-        Level::Debug => memory_log::DEBUG_LEVEL_INFO,
+        Level::Warn => memory_log::DEBUG_LEVEL_WARNING,
     }
 }
 
@@ -301,7 +300,7 @@ impl<'a, S> BufferedWriter<'a, S>
 where
     S: SerialIO + Send,
 {
-    /// Creates a new BufferedWriter with the specified log level, optional hardware print mask override, and writer.
+    /// Creates a new `BufferedWriter` with the specified log level, optional hardware print mask override, and writer.
     const fn new(level: u32, hw_print_mask_override: Option<u32>, writer: &'a AdvancedLogger<'a, S>) -> Self {
         Self { level, hw_print_mask_override, writer, buffer: [0; WRITER_BUFFER_SIZE], buffer_size: 0 }
     }
@@ -422,7 +421,7 @@ mod tests {
 
         const HOB_LEN: usize = size_of::<GuidHob>() + size_of::<efi::PhysicalAddress>();
         let hob_buff = Box::into_raw(Box::new([0_u8; HOB_LEN]));
-        let hob = hob_buff as *mut GuidHob;
+        let hob = hob_buff.cast::<GuidHob>();
 
         // SAFETY: We just allocated this memory so it's valid.
         unsafe {
@@ -432,11 +431,11 @@ mod tests {
                     header: HobHeader { r#type: GUID_EXTENSION, length: HOB_LEN as u16, reserved: 0 },
                     name: memory_log::ADV_LOGGER_HOB_GUID,
                 },
-            )
+            );
         };
 
         // SAFETY: Space for the additional physical address was explicitly allocated.
-        let address: *mut efi::PhysicalAddress = unsafe { hob.add(1) } as *mut efi::PhysicalAddress;
+        let address: *mut efi::PhysicalAddress = unsafe { hob.add(1) }.cast::<efi::PhysicalAddress>();
         // SAFETY: There is space for this address, writing it out of the structure as the C implementation does.
         unsafe { (*address) = log_address };
         (log_address, hob_buff as *const c_void)

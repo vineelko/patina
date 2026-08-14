@@ -160,26 +160,26 @@ impl SectionHeader {
             SectionHeader::Compression(compression, content_size) => {
                 //safety: compression is repr(C)
                 let compression_slice =
-                    unsafe { from_raw_parts(compression.as_ptr() as *const u8, mem::size_of_val(compression)) };
+                    unsafe { from_raw_parts(compression.as_ptr().cast::<u8>(), mem::size_of_val(compression)) };
                 (compression_slice.to_vec(), *content_size)
             }
             SectionHeader::GuidDefined(guid_defined, items, context_size) => {
                 //safety: guid_defined is repr(C)
                 let mut guid_defined_vec = unsafe {
-                    from_raw_parts(guid_defined.as_ptr() as *const u8, mem::size_of_val(guid_defined)).to_vec()
+                    from_raw_parts(guid_defined.as_ptr().cast::<u8>(), mem::size_of_val(guid_defined)).to_vec()
                 };
                 guid_defined_vec.extend(items);
                 (guid_defined_vec, *context_size)
             }
             SectionHeader::Version(version, content_size) => {
                 //safety: version is repr(C)
-                let version_slice = unsafe { from_raw_parts(version.as_ptr() as *const u8, mem::size_of_val(version)) };
+                let version_slice = unsafe { from_raw_parts(version.as_ptr().cast::<u8>(), mem::size_of_val(version)) };
                 (version_slice.to_vec(), *content_size)
             }
             SectionHeader::FreeFormSubtypeGuid(freeform_subtype_guid, content_size) => {
                 //safety: freeform_subtype_guid is repr(C)
                 let freeform_slice = unsafe {
-                    from_raw_parts(freeform_subtype_guid.as_ptr() as *const u8, mem::size_of_val(freeform_subtype_guid))
+                    from_raw_parts(freeform_subtype_guid.as_ptr().cast::<u8>(), mem::size_of_val(freeform_subtype_guid))
                 };
                 (freeform_slice.to_vec(), *content_size)
             }
@@ -195,7 +195,7 @@ impl SectionHeader {
 
         //safety: header is repr(C)
         let mut section_vec = unsafe {
-            from_raw_parts(&raw const section_header as *const u8, mem::size_of_val(&section_header)).to_vec()
+            from_raw_parts((&raw const section_header).cast::<u8>(), mem::size_of_val(&section_header)).to_vec()
         };
 
         //add ext size if req.
@@ -286,7 +286,7 @@ impl Section {
         }
 
         // SAFETY: buffer is large enough to contain the header.
-        let section_header = unsafe { ptr::read_unaligned(buffer.as_ptr() as *const section::Header) };
+        let section_header = unsafe { ptr::read_unaligned(buffer.as_ptr().cast::<section::Header>()) };
 
         // Determine section size and start of section content
         let (section_size, section_data_offset) = {
@@ -298,7 +298,7 @@ impl Section {
                 }
                 // SAFETY: buffer is large enough to contain extended header.
                 let ext_header = unsafe {
-                    ptr::read_unaligned(buffer.as_ptr() as *const section::header::CommonSectionHeaderExtended)
+                    ptr::read_unaligned(buffer.as_ptr().cast::<section::header::CommonSectionHeaderExtended>())
                 };
                 (ext_header.extended_size as usize, ext_header_size)
             } else {
@@ -326,8 +326,11 @@ impl Section {
                 // SAFETY: buffer is large enough to hold the compression header.
                 let compression_header = unsafe {
                     ptr::read_unaligned(
-                        buffer.get(section_data_offset..).ok_or(FirmwareFileSystemError::InvalidHeader)?.as_ptr()
-                            as *const section::header::Compression,
+                        buffer
+                            .get(section_data_offset..)
+                            .ok_or(FirmwareFileSystemError::InvalidHeader)?
+                            .as_ptr()
+                            .cast::<section::header::Compression>(),
                     )
                 };
                 let content_size: u32 = section_size
@@ -349,8 +352,11 @@ impl Section {
                 // SAFETY: buffer is large enough to hold the GuidDefined header.
                 let guid_defined_header = unsafe {
                     ptr::read_unaligned(
-                        buffer.get(section_data_offset..).ok_or(FirmwareFileSystemError::InvalidHeader)?.as_ptr()
-                            as *const section::header::GuidDefined,
+                        buffer
+                            .get(section_data_offset..)
+                            .ok_or(FirmwareFileSystemError::InvalidHeader)?
+                            .as_ptr()
+                            .cast::<section::header::GuidDefined>(),
                     )
                 };
 
@@ -380,8 +386,11 @@ impl Section {
                 // SAFETY: buffer is large enough to hold the version header.
                 let version_header = unsafe {
                     ptr::read_unaligned(
-                        buffer.get(section_data_offset..).ok_or(FirmwareFileSystemError::InvalidHeader)?.as_ptr()
-                            as *const section::header::Version,
+                        buffer
+                            .get(section_data_offset..)
+                            .ok_or(FirmwareFileSystemError::InvalidHeader)?
+                            .as_ptr()
+                            .cast::<section::header::Version>(),
                     )
                 };
                 let content_size: u32 = section_size
@@ -400,8 +409,11 @@ impl Section {
                 // SAFETY: buffer is large enough to hold the freeform header type
                 let freeform_header = unsafe {
                     ptr::read_unaligned(
-                        buffer.get(section_data_offset..).ok_or(FirmwareFileSystemError::InvalidHeader)?.as_ptr()
-                            as *const section::header::FreeformSubtypeGuid,
+                        buffer
+                            .get(section_data_offset..)
+                            .ok_or(FirmwareFileSystemError::InvalidHeader)?
+                            .as_ptr()
+                            .cast::<section::header::FreeformSubtypeGuid>(),
                     )
                 };
                 let content_size: u32 = section_size
@@ -457,7 +469,7 @@ impl Section {
     /// Whether the section (or any extracted sub-section) requires composition.
     pub fn dirty(&self) -> bool {
         if let SectionData::Encapsulation(data) = &self.data {
-            if data.extracted { self.dirty || data.sub_sections.iter().any(|x| x.dirty()) } else { self.dirty }
+            if data.extracted { self.dirty || data.sub_sections.iter().any(Section::dirty) } else { self.dirty }
         } else {
             self.dirty
         }
@@ -503,7 +515,7 @@ impl Section {
     pub fn compose(&mut self, composer: &dyn SectionComposer) -> Result<(), FirmwareFileSystemError> {
         match &mut self.data {
             SectionData::Encapsulation(encapsulation) => {
-                for section in encapsulation.sub_sections.iter_mut() {
+                for section in &mut encapsulation.sub_sections {
                     section.compose(composer)?;
                 }
             }
@@ -570,7 +582,7 @@ impl Section {
         let mut sections: Vec<Section> =
             SectionIterator::new(&extracted_data).collect::<Result<Vec<_>, FirmwareFileSystemError>>()?;
 
-        for section in sections.iter_mut() {
+        for section in &mut sections {
             section.extract_with_depth(extractor, depth + 1)?;
         }
 
@@ -579,7 +591,7 @@ impl Section {
                 encapsulation.sub_sections = sections;
                 encapsulation.extracted = true;
             }
-            _ => unreachable!(),
+            SectionData::Leaf(_) => unreachable!(),
         }
         Ok(())
     }
@@ -692,12 +704,11 @@ impl Iterator for SectionIterator<'_> {
         match result {
             Ok(ref section) => {
                 let section_size = section.size().expect("Section must be composed");
-                self.next_offset += match align_up(section_size as u64, 4) {
-                    Ok(addr) => addr as usize,
-                    Err(_) => {
-                        self.error = true;
-                        return Some(Err(FirmwareFileSystemError::DataCorrupt));
-                    }
+                self.next_offset += if let Ok(addr) = align_up(section_size as u64, 4) {
+                    addr as usize
+                } else {
+                    self.error = true;
+                    return Some(Err(FirmwareFileSystemError::DataCorrupt));
                 };
             }
             Err(_) => self.error = true,

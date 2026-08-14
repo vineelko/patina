@@ -31,13 +31,13 @@ cfg_if::cfg_if! {
         }
     }
 }
-/// AARCH64 Implementation of the InterruptManager.
+/// AARCH64 Implementation of the `InterruptManager`.
 #[derive(Default, Copy, Clone)]
 pub struct InterruptsAarch64 {}
 
 #[allow(dead_code)]
 impl InterruptsAarch64 {
-    /// Creates a new instance of the AARCH64 implementation of the InterruptManager.
+    /// Creates a new instance of the AARCH64 implementation of the `InterruptManager`.
     pub const fn new() -> Self {
         Self {}
     }
@@ -112,7 +112,7 @@ fn initialize_exception() -> Result<(), EfiError> {
     #[cfg(not(test))]
     {
         // SAFETY: We are using the address of a symbol defined in assembly as the stack pointer for EL0.
-        let mut sp_el0_reg = unsafe { &sp_el0_end as *const _ as u64 };
+        let mut sp_el0_reg = unsafe { core::ptr::from_ref(&sp_el0_end) as u64 };
         sp_el0_reg &= !0x0F;
         write_sysreg!(reg sp_el0, sp_el0_reg);
 
@@ -125,11 +125,13 @@ fn initialize_exception() -> Result<(), EfiError> {
 
         // Program VBar
         // SAFETY: We are using the address of the exception handlers as the vector base address.
-        let vec_base = unsafe { &exception_handlers_start as *const _ as u64 };
+        let vec_base = unsafe { core::ptr::from_ref(&exception_handlers_start) as u64 };
+        // Arms write different EL-specific registers. Identical only when built against the host stub macros.
+        #[allow(clippy::match_same_arms)]
         match current_el {
             AArch64El::EL2 => write_sysreg!(reg vbar_el2, vec_base, "isb sy"),
             AArch64El::EL1 => write_sysreg!(reg vbar_el1, vec_base, "isb sy"),
-        };
+        }
     }
 
     let fiq = get_fiq_state();

@@ -50,6 +50,9 @@ impl CompositeSectionExtractor {
 }
 
 impl SectionExtractor for CompositeSectionExtractor {
+    #[allow(clippy::used_underscore_binding)]
+    // Allowed because the parameter is used behind feature flags and will be considered unused
+    // when no features are enabled.
     fn extract(&self, _section: &Section) -> Result<alloc::vec::Vec<u8>, FirmwareFileSystemError> {
         #[cfg(feature = "brotli")]
         {

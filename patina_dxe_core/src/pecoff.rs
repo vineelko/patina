@@ -48,10 +48,10 @@ const IMAGE_REL_BASED_HIGHLOW: u16 = 3;
 // 64-bit value.
 const IMAGE_REL_BASED_DIR64: u16 = 10;
 
-/// PE/COFF Specification Machine Type for IMAGE_FILE_MACHINE_AMD64 images.
+/// PE/COFF Specification Machine Type for `IMAGE_FILE_MACHINE_AMD64` images.
 #[allow(dead_code)]
 pub const IMAGE_MACHINE_TYPE_X64: u16 = 0x8664;
-/// PE/COFF Specification Machine Type for IMAGE_FILE_MACHINE_ARM64 images.
+/// PE/COFF Specification Machine Type for `IMAGE_FILE_MACHINE_ARM64` images.
 #[allow(dead_code)]
 pub const IMAGE_MACHINE_TYPE_AARCH64: u16 = 0xAA64;
 
@@ -68,12 +68,12 @@ pub enum HeaderType {
 pub struct UefiPeInfo {
     /// Type of header (PE32 or TE)
     pub header_type: HeaderType,
-    /// Offset into an image header where the image_base address is located.
+    /// Offset into an image header where the `image_base` address is located.
     /// NOT the actual image base address.
     pub image_base_header_field_offset: usize,
     /// RVA offset of the entry point.
     pub entry_point_offset: usize,
-    /// The subsystem type (IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER \[0xB\], etc.).
+    /// The subsystem type (`IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER` \[0xB\], etc.).
     pub image_type: u16,
     /// The total length of the image.
     pub size_of_image: u32,
@@ -81,15 +81,15 @@ pub struct UefiPeInfo {
     pub section_alignment: u32,
     /// The total length of the image header.
     pub size_of_headers: usize,
-    /// The COFF machine type (IMAGE_FILE_MACHINE_*).
+    /// The COFF machine type (`IMAGE_FILE_MACHINE`_*).
     pub machine: u16,
     /// Structs representing the section table inside the image header.
     pub sections: Vec<goblin::pe::section_table::SectionTable>,
-    /// The filename, if present, from debug_data
+    /// The filename, if present, from `debug_data`
     pub filename: Option<String>,
     /// The relocation directory, if present.
     pub reloc_dir: Option<goblin::pe::data_directories::DataDirectory>,
-    /// Whether the NX_COMPAT DLL Characteristic flag is set
+    /// Whether the `NX_COMPAT` DLL Characteristic flag is set
     pub nx_compat: bool,
 }
 
@@ -126,7 +126,7 @@ impl UefiPeInfo {
         pe.image_base_header_field_offset = TE_IMAGE_BASE_HEADER_FIELD_OFFSET;
         pe.header_type = HeaderType::Te(parsed_te.rva_offset);
         pe.entry_point_offset = parsed_te.header.entry_point as usize;
-        pe.image_type = parsed_te.header.subsystem as u16;
+        pe.image_type = u16::from(parsed_te.header.subsystem);
         pe.machine = parsed_te.header.machine;
         pe.section_alignment = 0;
         pe.size_of_headers = parsed_te.header.base_of_code as usize;
@@ -148,7 +148,7 @@ impl UefiPeInfo {
             // Parse the filename from the debug data if it exists.
             if let Some(codeview_data) = &parsed_te.debug_data.codeview_pdb70_debug_info {
                 pe.filename = UefiPeInfo::read_filename(codeview_data.filename)?;
-            };
+            }
 
             Ok(pe)
         } else {
@@ -206,12 +206,14 @@ impl UefiPeInfo {
         let filename_end = bytes.iter().position(|&c| c == b'\0').unwrap_or(bytes.len());
         let mut filename = String::from_utf8_lossy(bytes.get(..filename_end).unwrap_or(bytes)).into_owned();
 
+        #[allow(clippy::case_sensitive_file_extension_comparisons)]
+        // TODO: Determine whether case insensitivity is required here.
         if filename.ends_with(".pdb") || filename.ends_with(".dll") {
             filename.truncate(filename.len() - 4);
         }
 
         if let Some(index) = filename.rfind(|ref c| ['/', '\\'].contains(c)) {
-            filename.drain(..index + 1);
+            filename.drain(..=index);
         }
 
         Ok(Some(format!("{filename}.efi")))
@@ -245,7 +247,7 @@ impl UefiPeInfo {
 ///
 /// ## Panics
 ///
-/// Panics if the loaded_image buffer is not the same length as the image.
+/// Panics if the `loaded_image` buffer is not the same length as the image.
 pub fn load_image(pe_info: &UefiPeInfo, image: &[u8], loaded_image: &mut [u8]) -> error::Result<()> {
     loaded_image.fill(0);
 
@@ -267,7 +269,7 @@ pub fn load_image(pe_info: &UefiPeInfo, image: &[u8], loaded_image: &mut [u8]) -
         let src = image
             .get((section.pointer_to_raw_data as usize)..(section.pointer_to_raw_data as usize + size as usize))
             .ok_or(error::Error::BufferTooShort(size as usize, "image"))?;
-        dst.copy_from_slice(src)
+        dst.copy_from_slice(src);
     }
     Ok(())
 }
@@ -701,7 +703,7 @@ mod tests {
         let mut loaded_image: Vec<u8> = vec![0; pe_info.size_of_image as usize];
         match load_image(&pe_info, edit_image, &mut loaded_image) {
             Err(error::Error::BufferTooShort(..)) => {}
-            Ok(_) => panic!("Expected BufferTooShort error"),
+            Ok(()) => panic!("Expected BufferTooShort error"),
             Err(e) => panic!("Expected BufferTooShort error, got {e:?}"),
         }
     }
@@ -935,7 +937,7 @@ mod tests {
 
         // Invalidate virtual size, backflow to size_of_raw_data
         image_info.sections[RELOC_DIR_ENTRY_INDEX].virtual_size = 0;
-        assert!(load_resource_section(&image_info, image).is_ok())
+        assert!(load_resource_section(&image_info, image).is_ok());
     }
 
     #[test]

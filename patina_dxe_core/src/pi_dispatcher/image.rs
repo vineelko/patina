@@ -176,7 +176,7 @@ struct PrivateImageData {
 }
 
 impl PrivateImageData {
-    /// Creates a new PrivateImageData with an owned image buffer.
+    /// Creates a new `PrivateImageData` with an owned image buffer.
     fn new(mut image_info: efi::protocols::loaded_image::Protocol, pe_info: UefiPeInfo) -> Result<Self, EfiError> {
         let image_size = usize::try_from(image_info.image_size).map_err(|_| EfiError::LoadError)?;
         let section_alignment = usize::try_from(pe_info.section_alignment).map_err(|_| EfiError::LoadError)?;
@@ -214,7 +214,7 @@ impl PrivateImageData {
         Ok(image_data)
     }
 
-    /// Creates a new PrivateImageData with a borrowed image buffer.
+    /// Creates a new `PrivateImageData` with a borrowed image buffer.
     fn new_from_static_image(
         image_info: efi::protocols::loaded_image::Protocol,
         image_buffer: &'static [u8],
@@ -320,7 +320,7 @@ impl PrivateImageData {
         let handle = core_install_protocol_interface(
             None,
             efi::protocols::loaded_image::PROTOCOL_GUID,
-            self.image_info.as_ref() as *const efi::protocols::loaded_image::Protocol as *mut c_void,
+            core::ptr::from_ref::<efi::protocols::loaded_image::Protocol>(self.image_info.as_ref()) as *mut c_void,
         )?;
 
         core_install_protocol_interface(
@@ -361,7 +361,7 @@ impl PrivateImageData {
         if let Err(err) = core_uninstall_protocol_interface(
             handle,
             efi::protocols::loaded_image::PROTOCOL_GUID,
-            self.image_info.as_ref() as *const efi::protocols::loaded_image::Protocol as *mut c_void,
+            core::ptr::from_ref::<efi::protocols::loaded_image::Protocol>(self.image_info.as_ref()) as *mut c_void,
         ) && !matches!(err, EfiError::NotFound | EfiError::InvalidParameter)
         {
             log::warn!("Failed to uninstall loaded image protocol for handle {handle:?}: {err}");
@@ -403,10 +403,10 @@ impl PrivateImageData {
 
     /// Sets both the file path and file name for this image.
     ///
-    /// The file name is a part of the loaded_image protocol, and is the remaining portion of the device path after
+    /// The file name is a part of the `loaded_image` protocol, and is the remaining portion of the device path after
     /// the parent handle's device path (if there is a valid parent handle).
     ///
-    /// The file path is the full device path for this image and is what is set for the loaded_image_device_path protocol.
+    /// The file path is the full device path for this image and is what is set for the `loaded_image_device_path` protocol.
     fn set_file_path(&mut self, file_path: NonNull<Protocol>) -> Result<(), EfiError> {
         let mut fp = file_path.as_ptr();
 
@@ -462,7 +462,7 @@ impl PrivateImageData {
     fn apply_image_memory_protections(&self) -> Result<(), EfiError> {
         for section in &self.pe_info.sections {
             // each section starts at image_base + virtual_address, per PE/COFF spec.
-            let section_base_addr = (self.image_info.image_base as u64) + (section.virtual_address as u64);
+            let section_base_addr = (self.image_info.image_base as u64) + u64::from(section.virtual_address);
 
             // we need to get the current attributes for this region and add our new attribute
             // if we can't find this range in the GCD, try the next one, but report the failure
@@ -477,7 +477,7 @@ impl PrivateImageData {
             // capabilities.
             let aligned_virtual_size =
                 if let Ok(virtual_size) = align_up(section.virtual_size, self.pe_info.section_alignment) {
-                    virtual_size as u64
+                    u64::from(virtual_size)
                 } else {
                     log_debug_assert!(
                         "Failed to align up section size {:#X} with alignment {:#X}",
@@ -533,7 +533,7 @@ pub(super) struct ImageData {
 }
 
 impl ImageData {
-    /// Creates a new ImageData with default values.
+    /// Creates a new `ImageData` with default values.
     const fn new() -> Self {
         ImageData {
             system_table: core::ptr::null_mut(),
@@ -543,7 +543,7 @@ impl ImageData {
         }
     }
 
-    /// Creates a new TplMutex wrapping the ImageData.
+    /// Creates a new `TplMutex` wrapping the `ImageData`.
     pub(super) const fn new_locked() -> tpl_mutex::TplMutex<Self> {
         tpl_mutex::TplMutex::new(efi::TPL_NOTIFY, Self::new(), "ImageLock")
     }
@@ -574,7 +574,7 @@ impl ImageData {
             .expect("Did not find MemoryAllocationModule Hob for DxeCore. Use patina::guid::DXE_CORE_ID as FFS GUID.");
 
         let mut image_info = empty_image_info();
-        image_info.system_table = system_table as *mut _ as *mut efi::SystemTable;
+        image_info.system_table = core::ptr::from_mut(system_table) as *mut efi::SystemTable;
         image_info.image_base = dxe_core_hob.alloc_descriptor.memory_base_address as *mut c_void;
         image_info.image_size = dxe_core_hob.alloc_descriptor.memory_length;
 
@@ -603,16 +603,15 @@ impl ImageData {
         let handle = core_install_protocol_interface(
             Some(protocol_db::DXE_CORE_HANDLE),
             efi::protocols::loaded_image::PROTOCOL_GUID,
-            private_image_data.image_info.as_ref() as *const efi::protocols::loaded_image::Protocol as *mut c_void,
+            core::ptr::from_ref::<efi::protocols::loaded_image::Protocol>(private_image_data.image_info.as_ref())
+                as *mut c_void,
         )
         .unwrap_or_else(|err| panic!("Failed to install dxe core image handle: {err}"));
 
-        if handle != protocol_db::DXE_CORE_HANDLE {
-            panic!(
-                "DXE Core image was installed with DXE_CORE_HANDLE but got {:?} after `install_protocol_interface`",
-                handle
-            );
-        }
+        assert!(
+            handle == protocol_db::DXE_CORE_HANDLE,
+            "DXE Core image was installed with DXE_CORE_HANDLE but got {handle:?} after `install_protocol_interface`"
+        );
 
         let protocol_ptr = NonNull::from(private_image_data.image_info.as_ref());
 
@@ -649,7 +648,7 @@ impl ImageData {
 
     /// Returns the image metadata by its file path using simple file system or load file protocols.
     ///
-    /// Returns a tuple of (image buffer, from_fv, device handle, authentication status).
+    /// Returns a tuple of (image buffer, `from_fv`, device handle, authentication status).
     fn locate_image_metadata_by_file_path(
         boot_policy: bool,
         file_path: NonNull<Protocol>,
@@ -688,16 +687,16 @@ unsafe impl Send for ImageData {}
 
 impl<P: super::PlatformInfo> super::PiDispatcher<P> {
     /// Loads the image specified by the device path or slice.
-    /// * parent_image_handle - the handle of the image that is loading this one.
-    /// * file_path - optional device path describing where to load the image from.
+    /// * `parent_image_handle` - the handle of the image that is loading this one.
+    /// * `file_path` - optional device path describing where to load the image from.
     /// * image - optional slice containing the image data.
     ///
     /// One of `file_path` or `image` must be specified.
     /// returns the image handle of the freshly loaded image.
     ///
-    /// Returns Ok(efi::Handle) if the image was loaded successfully.
+    /// Returns `Ok(efi::Handle)` if the image was loaded successfully.
     /// returns Err(ImageStatus) if there was an error loading the issue. The enum value determines if the image was loaded
-    ///   with security violations, or not at all. See [ImageStatus] for details.
+    ///   with security violations, or not at all. See [`ImageStatus`] for details.
     pub fn load_image(
         &self,
         boot_policy: bool,
@@ -798,9 +797,9 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
         }
     }
 
-    /// Loads the image specified by the device_path or source_buffer argument.
+    /// Loads the image specified by the `device_path` or `source_buffer` argument.
     ///
-    /// See the EFI_BOOT_SERVICES::LoadImage() API definition in the UEFI spec for parameter
+    /// See the `EFI_BOOT_SERVICES::LoadImage()` API definition in the UEFI spec for parameter
     /// and usage details.
     ///
     /// # Safety
@@ -883,7 +882,7 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
                 let entry_point = private_info.entry_point;
 
                 // save a pointer to the yielder so that exit() can use it.
-                private_data.image_start_contexts.push(yielder as *const Yielder<_, _>);
+                private_data.image_start_contexts.push(core::ptr::from_ref::<Yielder<_, _>>(yielder));
 
                 // get a copy of the system table pointer to pass to the entry point.
                 let system_table = private_data.system_table;
@@ -919,6 +918,7 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
         drop(private_data);
 
         // switch stacks and execute the above defined coroutine to start the image.
+        #[allow(clippy::match_same_arms)] // TODO: clippy exception present unto the todo is resolved
         let status = match coroutine.resume(image_handle) {
             CoroutineResult::Yield(status) => status,
             // Note: `CoroutineResult::Return` is unexpected, since it would imply
@@ -948,13 +948,13 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
     }
 
     /// Transfers control to the entry point of an image that was loaded by
-    /// load_image. See the EFI_BOOT_SERVICES::StartImage() API definition in
+    /// `load_image`. See the `EFI_BOOT_SERVICES::StartImage()` API definition in
     /// the UEFI spec for usage details.
     ///
-    /// * image_handle - handle of the image to be started.
-    /// * exit_data_size - pointer to receive the size, in bytes, of exit_data.
-    ///   if exit_data is null, this is parameter is ignored.
-    /// * exit_data - pointer to receive a data buffer with exit data, if any.
+    /// * `image_handle` - handle of the image to be started.
+    /// * `exit_data_size` - pointer to receive the size, in bytes, of `exit_data`.
+    ///   if `exit_data` is null, this is parameter is ignored.
+    /// * `exit_data` - pointer to receive a data buffer with exit data, if any.
     ///
     /// # Safety
     ///
@@ -1177,16 +1177,16 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
     }
 
     /// Terminates a loaded EFI image and returns control to boot services. See
-    /// the EFI_BOOT_SERVICES::Exit() API definition in the UEFI spec for usage
+    /// the `EFI_BOOT_SERVICES::Exit()` API definition in the UEFI spec for usage
     /// details.
     ///
     /// `image_handle` is validated against the private image data map; if not
     /// found, `INVALID_PARAMETER` is returned.
     ///
-    /// * image_handle - the handle of the currently running image.
-    /// * exit_status - the exit status for the image.
-    /// * exit_data_size - the size of the exit_data buffer, if exit_data is notnull.
-    /// * exit_data - optional buffer of data provided by the caller.
+    /// * `image_handle` - the handle of the currently running image.
+    /// * `exit_status` - the exit status for the image.
+    /// * `exit_data_size` - the size of the `exit_data` buffer, if `exit_data` is notnull.
+    /// * `exit_data` - optional buffer of data provided by the caller.
     ///
     /// # Safety
     ///
@@ -1216,15 +1216,14 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
             if image.pe_info.image_type == EFI_IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER {
                 let cache_attrs =
                     dxe_services::core_get_memory_space_descriptor(buffer.as_ptr() as efi::PhysicalAddress)
-                        .map(|desc| desc.attributes & efi::CACHE_ATTRIBUTE_MASK)
-                        .unwrap_or(DEFAULT_CACHE_ATTR);
+                        .map_or(DEFAULT_CACHE_ATTR, |desc| desc.attributes & efi::CACHE_ATTRIBUTE_MASK);
 
                 match core_set_memory_space_attributes(
                     buffer.as_ptr() as efi::PhysicalAddress,
                     buffer.len() as u64,
                     cache_attrs,
                 ) {
-                    Ok(_) => {
+                    Ok(()) => {
                         // success, keep going
                     }
                     Err(status) => {
@@ -1234,7 +1233,7 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
                             status
                         );
                     }
-                };
+                }
             }
         }
 
@@ -1376,13 +1375,13 @@ fn get_file_buffer_from_fw(file_path: NonNull<Protocol>) -> Result<(Vec<u8>, efi
 
     // Read image from the firmware file
     let mut buffer: *mut u8 = core::ptr::null_mut();
-    let buffer_ptr: *mut *mut c_void = &mut buffer as *mut _ as *mut *mut c_void;
+    let buffer_ptr: *mut *mut c_void = &raw mut buffer as *mut *mut c_void;
     let mut buffer_size = 0;
     let mut authentication_status = 0;
     let authentication_status_ptr = &mut authentication_status;
     let status = (fw_vol.read_section)(
         fw_vol,
-        &fv_name_guid,
+        &raw const fv_name_guid,
         PE32,
         0, // Instance
         buffer_ptr,
@@ -1486,7 +1485,7 @@ fn get_file_buffer_from_load_protocol(
         )
     };
 
-    EfiError::status_to_result(status).map(|_| (file_buffer, handle))
+    EfiError::status_to_result(status).map(|()| (file_buffer, handle))
 }
 
 // authenticate the given image against the Security and Security2 Architectural Protocols
@@ -1497,7 +1496,7 @@ fn authenticate_image(
     from_fv: bool,
     authentication_status: u32,
 ) -> Result<(), EfiError> {
-    let device_path_raw = device_path.map_or(core::ptr::null_mut(), |p| p.as_ptr());
+    let device_path_raw = device_path.map_or(core::ptr::null_mut(), core::ptr::NonNull::as_ptr);
 
     // SAFETY: Checks locate_protocol return value to determine if pointer is valid. as_ref() is used for shared access
     // which will also check if the pointer is null before allowing access.
@@ -1524,7 +1523,7 @@ fn authenticate_image(
     let mut security_status = efi::Status::SUCCESS;
     if let Some(security2) = security2_protocol {
         security_status = (security2.file_authentication)(
-            security2 as *const _ as *mut pi::protocol::security2::Security2Protocol,
+            core::ptr::from_ref(security2).cast_mut(),
             device_path_raw,
             image.as_ptr() as *const _ as *mut c_void,
             image.len(),
@@ -1533,14 +1532,14 @@ fn authenticate_image(
         if security_status == efi::Status::SUCCESS && from_fv {
             let security = security_protocol.expect("Security Arch must be installed if Security2 Arch is installed");
             security_status = (security.file_authentication_state)(
-                security as *const _ as *mut pi::protocol::security::SecurityProtocol,
+                core::ptr::from_ref(security).cast_mut(),
                 authentication_status,
                 device_path_raw,
             );
         }
     } else if let Some(security) = security_protocol {
         security_status = (security.file_authentication_state)(
-            security as *const _ as *mut pi::protocol::security::SecurityProtocol,
+            core::ptr::from_ref(security).cast_mut(),
             authentication_status,
             device_path_raw,
         );
@@ -1606,7 +1605,7 @@ mod tests {
     };
     use core::{ffi::c_void, sync::atomic::AtomicBool};
     use patina::standard::efi::{
-        self,
+        self, Time,
         protocols::device_path::{End, Hardware, Media, TYPE_END, TYPE_HARDWARE, TYPE_MEDIA},
     };
     use patina::{
@@ -1835,10 +1834,7 @@ mod tests {
             // Check for either load error or unsupported. On aarch64, goblin will parse
             // the resources section as well and fail due to the invalid directory table size,
             // returning unsupported.
-            assert!(matches!(
-                status,
-                Err(ImageStatus::LoadError(EfiError::LoadError)) | Err(ImageStatus::LoadError(EfiError::Unsupported))
-            ));
+            assert!(matches!(status, Err(ImageStatus::LoadError(EfiError::LoadError | EfiError::Unsupported))));
         });
     }
 
@@ -1891,7 +1887,7 @@ mod tests {
                 .install_protocol_interface(
                     None,
                     pi::protocol::security::PROTOCOL_GUID.into_inner(),
-                    &security_protocol as *const _ as *mut _,
+                    &raw const security_protocol as *mut _,
                 )
                 .unwrap();
 
@@ -1941,7 +1937,7 @@ mod tests {
                 .install_protocol_interface(
                     None,
                     pi::protocol::security::PROTOCOL_GUID.into_inner(),
-                    &security_protocol as *const _ as *mut _,
+                    &raw const security_protocol as *mut _,
                 )
                 .unwrap();
 
@@ -1970,7 +1966,7 @@ mod tests {
                 .install_protocol_interface(
                     None,
                     pi::protocol::security2::PROTOCOL_GUID.into_inner(),
-                    &security2_protocol as *const _ as *mut _,
+                    &raw const security2_protocol as *mut _,
                 )
                 .unwrap();
 
@@ -2020,7 +2016,7 @@ mod tests {
                 .install_protocol_interface(
                     None,
                     pi::protocol::security2::PROTOCOL_GUID.into_inner(),
-                    &security2_protocol as *const _ as *mut _,
+                    &raw const security2_protocol as *mut _,
                 )
                 .unwrap();
 
@@ -2072,7 +2068,7 @@ mod tests {
                 .install_protocol_interface(
                     None,
                     pi::protocol::security2::PROTOCOL_GUID.into_inner(),
-                    &security2_protocol as *const _ as *mut _,
+                    &raw const security2_protocol as *mut _,
                 )
                 .unwrap();
 
@@ -2117,7 +2113,7 @@ mod tests {
                 .install_protocol_interface(
                     None,
                     pi::protocol::security2::PROTOCOL_GUID.into_inner(),
-                    &security2_protocol as *const _ as *mut _,
+                    &raw const security2_protocol as *mut _,
                 )
                 .unwrap();
 
@@ -2325,9 +2321,9 @@ mod tests {
             size: core::mem::size_of::<efi::protocols::file::Info>() as u64,
             file_size: test_file.metadata().unwrap().len(),
             physical_size: test_file.metadata().unwrap().len(),
-            create_time: Default::default(),
-            last_access_time: Default::default(),
-            modification_time: Default::default(),
+            create_time: Time::default(),
+            last_access_time: Time::default(),
+            modification_time: Time::default(),
             attribute: 0,
             file_name: [0; 0],
         };
@@ -2894,7 +2890,7 @@ mod tests {
             pe_info.section_alignment = CUSTOM_ALIGNMENT;
 
             let mut protocol = super::empty_image_info();
-            protocol.image_size = pe_info.size_of_image as u64;
+            protocol.image_size = u64::from(pe_info.size_of_image);
             protocol.image_code_type = efi::BOOT_SERVICES_CODE;
             protocol.image_data_type = efi::BOOT_SERVICES_DATA;
 
@@ -3170,7 +3166,7 @@ mod tests {
     // Test support function to generate device path bytes from a string representation.
     // This does not currently support all device path node types, only the ones I cared about for these tests.
     fn device_path_from_string(path: String) -> Box<[u8]> {
-        let path = path.replace("\\", "/").replace("0x", "");
+        let path = path.replace('\\', "/").replace("0x", "");
 
         let mut total = Vec::new();
         let mut current_path = String::new();
@@ -3368,15 +3364,12 @@ mod tests {
         let mut hobs = Vec::new();
         // SAFETY: Taking a byte view of a stack-allocated HOB struct for serialization into the test HOB list.
         hobs.extend_from_slice(unsafe {
-            core::slice::from_raw_parts(
-                &ma_hob as *const MemoryAllocationModule as *const u8,
-                core::mem::size_of::<MemoryAllocationModule>(),
-            )
+            core::slice::from_raw_parts(&raw const ma_hob as *const u8, core::mem::size_of::<MemoryAllocationModule>())
         });
         // SAFETY: Taking a byte view of a stack-allocated HOB header for serialization into the test HOB list.
         hobs.extend_from_slice(unsafe {
             core::slice::from_raw_parts(
-                &end_hob as *const patina::pi::hob::HobHeader as *const u8,
+                &raw const end_hob as *const u8,
                 core::mem::size_of::<patina::pi::hob::HobHeader>(),
             )
         });

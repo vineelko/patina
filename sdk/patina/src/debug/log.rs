@@ -118,27 +118,27 @@ mod tests {
     #[test]
     fn test_format_standard_ends_with_crlf() {
         let output = format_record(&Format::Standard, log::Level::Info, "test", "hello");
-        assert!(output.ends_with("\r\n"), "expected CRLF line ending, got: {:?}", output);
+        assert!(output.ends_with("\r\n"), "expected CRLF line ending, got: {output:?}");
         assert!(!output.ends_with("\n\r\n"), "should not have bare LF before CRLF");
     }
 
     #[test]
     fn test_format_standard_trace_ends_with_crlf() {
         let output = format_record(&Format::Standard, log::Level::Trace, "test", "verbose");
-        assert!(output.ends_with("\r\n"), "expected CRLF line ending, got: {:?}", output);
+        assert!(output.ends_with("\r\n"), "expected CRLF line ending, got: {output:?}");
         assert!(output.starts_with("TRACE - test.rs:42:"));
     }
 
     #[test]
     fn test_format_json_ends_with_crlf() {
         let output = format_record(&Format::Json, log::Level::Warn, "test", "warning");
-        assert!(output.ends_with("\r\n"), "expected CRLF line ending, got: {:?}", output);
+        assert!(output.ends_with("\r\n"), "expected CRLF line ending, got: {output:?}");
     }
 
     #[test]
     fn test_format_verbose_json_ends_with_crlf() {
         let output = format_record(&Format::VerboseJson, log::Level::Error, "my_target", "oops");
-        assert!(output.ends_with("\r\n"), "expected CRLF line ending, got: {:?}", output);
+        assert!(output.ends_with("\r\n"), "expected CRLF line ending, got: {output:?}");
         assert!(output.contains("my_target"));
         assert!(output.contains("test.rs"));
     }

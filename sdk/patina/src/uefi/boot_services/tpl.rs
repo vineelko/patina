@@ -37,11 +37,11 @@ impl Tpl {
     /// The boot manager executes at this level and passes control to other UEFI applications at this level.
     pub const APPLICATION: Tpl = Tpl(efi::TPL_APPLICATION);
 
-    /// Interrupts code executing below TPL_CALLBACK level.
+    /// Interrupts code executing below `TPL_CALLBACK` level.
     /// Long term operations (such as file system operations and disk I/O) can occur at this level.
     pub const CALLBACK: Tpl = Tpl(efi::TPL_CALLBACK);
 
-    /// Interrupts code executing below TPL_NOTIFY level.
+    /// Interrupts code executing below `TPL_NOTIFY` level.
     /// Blocking is not allowed at this level.
     /// Code executes to completion and returns.
     /// If code requires more processing, it needs to signal an event to wait to obtain control again at whatever level it requires.

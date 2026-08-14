@@ -24,7 +24,7 @@ pub(crate) fn find_previous_table_address(runtime_services: &impl RuntimeService
         .ok()
 }
 
-/// Struct used to get the value from the FirmwarePerformanceVariable
+/// Struct used to get the value from the `FirmwarePerformanceVariable`
 #[repr(C)]
 pub(crate) struct FirmwarePerformanceVariable {
     boot_performance_table_pointer: usize,
@@ -41,7 +41,7 @@ impl TryFrom<Vec<u8>> for FirmwarePerformanceVariable {
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
         if value.len() == mem::size_of::<Self>() {
             // SAFETY: This is safe because the value for ADDRESS_VARIABLE_GUID is an address where a FirmwarePerformanceVariable is.
-            Ok(unsafe { ptr::read_unaligned(value.as_ptr() as *const FirmwarePerformanceVariable) })
+            Ok(unsafe { ptr::read_unaligned(value.as_ptr().cast::<FirmwarePerformanceVariable>()) })
         } else {
             Err(())
         }

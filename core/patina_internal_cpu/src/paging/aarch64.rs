@@ -1,4 +1,4 @@
-//! AArch64 Paging
+//! `AArch64` Paging
 //!
 //! This module provides an in direction to the external paging crate.
 //!
@@ -74,7 +74,7 @@ where
     }
 }
 
-/// Create an AArch64 paging instance under the general PatinaPageTable trait.
+/// Create an `AArch64` paging instance under the general `PatinaPageTable` trait.
 #[cfg_attr(coverage, coverage(off))]
 pub fn create_cpu_aarch64_paging<A: PageAllocator + 'static>(
     page_allocator: A,
@@ -82,7 +82,7 @@ pub fn create_cpu_aarch64_paging<A: PageAllocator + 'static>(
     Ok(EfiCpuPagingAArch64 { paging: AArch64PageTable::new(page_allocator, PagingType::Paging4Level).unwrap() })
 }
 
-/// Open the active AArch64 page table wrapped in the PatinaPageTable trait.
+/// Open the active `AArch64` page table wrapped in the `PatinaPageTable` trait.
 ///
 /// ## Safety
 /// The caller must ensure no other entity is concurrently modifying the page tables.
