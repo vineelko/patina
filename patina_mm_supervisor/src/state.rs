@@ -48,6 +48,8 @@ type SupervisorPageTable = X64PageTable<SharedPagingAllocator>;
 pub(crate) struct InitState {
     /// Physical address of the global `MmSupervisorCore` instance.
     supervisor: Once<NonZeroUsize>,
+    /// Type-erased lookup for the processor ID at a dense CPU index.
+    processor_id_lookup_fn: Once<fn(usize) -> Option<u64>>,
     /// Set once BSP one-time initialization has completed.
     bsp_init_complete: AtomicBool,
     /// Pointer to the per-core initialized buffer from the PassDown HOB.
@@ -72,6 +74,7 @@ impl InitState {
     pub(crate) const fn new() -> Self {
         Self {
             supervisor: Once::new(),
+            processor_id_lookup_fn: Once::new(),
             bsp_init_complete: AtomicBool::new(false),
             mm_initialized_buffer: Once::new(),
             per_core_init_count: AtomicU32::new(0),
@@ -94,6 +97,16 @@ impl InitState {
     /// Returns the stored supervisor instance address, if set.
     pub(crate) fn supervisor(&self) -> Option<NonZeroUsize> {
         self.supervisor.get().copied()
+    }
+
+    /// Stores the type-erased processor-ID lookup (one-time).
+    pub(crate) fn set_processor_id_lookup_fn(&self, func: fn(usize) -> Option<u64>) {
+        self.processor_id_lookup_fn.call_once(|| func);
+    }
+
+    /// Returns the type-erased processor-ID lookup, if initialized.
+    pub(crate) fn processor_id_lookup_fn(&self) -> Option<fn(usize) -> Option<u64>> {
+        self.processor_id_lookup_fn.get().copied()
     }
 
     /// Marks BSP one-time initialization as complete (Release ordering).
@@ -317,3 +330,58 @@ pub(crate) static DEFAULT_SUPERVISOR_MMI_HANDLERS: &[SupervisorMmiHandler] = &[
         handle: mm_exit_boot_services_handler,
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn processor_id_lookup(cpu_index: usize) -> Option<u64> {
+        Some(cpu_index as u64 + 0x10)
+    }
+
+    fn replacement_processor_id_lookup(_: usize) -> Option<u64> {
+        None
+    }
+
+    #[test]
+    fn test_init_state_defaults() {
+        let state = InitState::new();
+
+        assert!(state.supervisor().is_none());
+        assert!(state.processor_id_lookup_fn().is_none());
+        assert!(!state.is_bsp_init_complete());
+        assert_eq!(state.per_core_init_count(), 0);
+        assert!(state.user_entry_point().is_none());
+        assert!(state.mseg_base().is_none());
+        assert!(state.ap_startup_fn().is_none());
+        assert!(!state.is_at_runtime());
+        assert!(state.smrr_range().is_none());
+    }
+
+    #[test]
+    fn test_init_state_processor_id_lookup_is_initialized_once() {
+        let state = InitState::new();
+
+        state.set_processor_id_lookup_fn(processor_id_lookup);
+        assert_eq!(state.processor_id_lookup_fn().unwrap()(3), Some(0x13));
+
+        state.set_processor_id_lookup_fn(replacement_processor_id_lookup);
+        assert_eq!(state.processor_id_lookup_fn().unwrap()(3), Some(0x13));
+    }
+
+    #[test]
+    fn test_init_state_synchronization_updates() {
+        let state = InitState::new();
+
+        state.mark_bsp_init_complete();
+        assert!(state.is_bsp_init_complete());
+
+        assert_eq!(state.inc_per_core_init_count(), 1);
+        assert_eq!(state.inc_per_core_init_count(), 2);
+        assert_eq!(state.per_core_init_count(), 2);
+
+        assert!(state.mark_at_runtime());
+        assert!(!state.mark_at_runtime());
+        assert!(state.is_at_runtime());
+    }
+}

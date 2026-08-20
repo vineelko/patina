@@ -283,6 +283,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let physical_address = NonNull::from_ref(self).expose_provenance();
         let stored = init_state().set_supervisor(physical_address);
         if stored {
+            init_state().set_processor_id_lookup_fn(Self::processor_id_by_index);
             // Register the conformed AP startup function for this platform
             init_state().set_ap_startup_fn(Self::start_ap_procedure_trampoline);
         }
@@ -351,13 +352,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             assert!(self.set_instance(), "MM Supervisor Core instance was already set!");
             assert!(!hob_list.is_null(), "MM Supervisor Core requires a non-null HOB list pointer.");
 
-            log::trace!("MM Supervisor Core v{}", env!("CARGO_PKG_VERSION"));
-            log::trace!("BSP (CPU {}, index {}) starting one-time initialization...", cpu_id, cpu_index);
+            log::info!("MM Supervisor Core v{}", env!("CARGO_PKG_VERSION"));
+            log::info!("BSP (CPU {}, index {}) starting one-time initialization...", cpu_id, cpu_index);
 
-            // Register BSP with CPU manager
             self.cpu_manager.register_cpu(cpu_id, cpu_index, true);
 
-            // Perform BSP-only one-time initialization (this sets up MM_INITIALIZED_BUFFER)
+            // Perform BSP-only one-time initialization.
             self.bsp_init(hob_list);
 
             // Dispatch to the user level entry point discovered from the HOB list (if found)
@@ -391,23 +391,22 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                     0,
                 )
             };
-            log::trace!("Returned from user entry point with value: 0x{:016x}", ret);
+            log::info!("Returned from user entry point with value: 0x{:016x}", ret);
 
             // Mark BSP init as complete so APs can proceed
             self.initialized.store(true, Ordering::Release);
             init_state().mark_bsp_init_complete();
 
-            log::trace!("BSP one-time initialization complete.");
+            log::info!("BSP initialization complete.");
         } else {
             // AP path: Wait for BSP to complete one-time initialization
-            log::trace!("AP (CPU {}, index {}) waiting for BSP initialization...", cpu_id, cpu_index);
+            log::info!("AP (CPU {}, index {}) waiting for BSP initialization...", cpu_id, cpu_index);
 
             // Spin until BSP completes initialization
             while !init_state().is_bsp_init_complete() {
                 core::hint::spin_loop();
             }
 
-            // Register this AP with the CPU manager
             self.cpu_manager.register_cpu(cpu_id, cpu_index, false);
         }
 
@@ -419,7 +418,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // Track that this core has completed per-core init
         let init_count = init_state().inc_per_core_init_count();
-        log::trace!("CPU {} (index {}) completed per-core init ({} cores initialized)", cpu_id, cpu_index, init_count);
+        log::info!("CPU {} (index {}) completed per-core init ({} cores initialized)", cpu_id, cpu_index, init_count);
 
         // BSP waits for all registered CPUs to complete per-core init before returning
         if is_bsp {
@@ -428,7 +427,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 core::hint::spin_loop();
             }
 
-            log::trace!("All {} cores completed initialization, returning to caller.", expected_cpus);
+            log::info!("All {} cores completed initialization, returning to caller.", expected_cpus);
         }
 
         // First entry returns to caller after init is complete
@@ -438,6 +437,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// Get the CPU manager.
     pub fn cpu_manager(&self) -> &CpuManager<MAX_CPUS> {
         &self.cpu_manager
+    }
+
+    /// Returns the UEFI processor ID registered at a dense CPU index.
+    fn processor_id_by_index(cpu_index: usize) -> Option<u64> {
+        Self::instance().cpu_manager.get_cpu_id_by_index(cpu_index).map(u64::from)
     }
 
     /// Get the mailbox manager.
