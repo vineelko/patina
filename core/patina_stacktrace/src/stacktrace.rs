@@ -147,7 +147,9 @@ impl StackTrace {
                 // modify memory or violate Rust safety invariants. The caller
                 // must ensure that using these register values is safe. Reading
                 // PC/SP/FP does not mutate memory and the hardware guarantees
-                // those registers exist on aarch64.
+                // those registers exist on aarch64. `stack_frame` originates
+                // from trusted register snapshots; all invariants for
+                // `dump_with` are upheld locally before forwarding.
                 unsafe {
                     core::arch::asm!(
                         "adr {pc}, .",   // Get current PC (program counter)
@@ -167,6 +169,9 @@ impl StackTrace {
                 // invariants. The caller must ensure that using these register
                 // values is safe. Reading PC/SP/FP does not mutate memory and
                 // the hardware guarantees those registers exist on x86_64.
+                // `stack_frame` originates from trusted register snapshots; all
+                // invariants for `dump_with` are upheld locally before
+                // forwarding.
                 unsafe {
                     core::arch::asm!(
                         "lea {pc}, [rip]", // Get current PC (program counter)
