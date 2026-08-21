@@ -1,8 +1,5 @@
 use crate::{error::StResult, pe::PE};
-use core::{
-    arch::asm,
-    fmt::{self, Display, Formatter},
-};
+use core::fmt::{self, Display, Formatter};
 
 cfg_if::cfg_if! {
     if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
@@ -142,18 +139,19 @@ impl StackTrace {
     #[cfg_attr(coverage, coverage(off))]
     #[inline(never)]
     pub unsafe fn dump() -> StResult<()> {
-        let mut stack_frame = StackFrame::default();
-
         cfg_if::cfg_if! {
-            if #[cfg(target_arch = "aarch64")] {
+            if #[cfg(all(target_os = "uefi", target_arch = "aarch64"))] {
+                let mut stack_frame = StackFrame::default();
                 // SAFETY: Inline assembly reads the current program counter
                 // (PC), stack pointer (SP), and frame pointer (FP). It does not
                 // modify memory or violate Rust safety invariants. The caller
-                // must ensure that using these register values is safe.
-                // SAFETY: Reading PC/SP/FP does not mutate memory and the hardware
-                // guarantees those registers exist on aarch64.
+                // must ensure that using these register values is safe. Reading
+                // PC/SP/FP does not mutate memory and the hardware guarantees
+                // those registers exist on aarch64. `stack_frame` originates
+                // from trusted register snapshots; all invariants for
+                // `dump_with` are upheld locally before forwarding.
                 unsafe {
-                    asm!(
+                    core::arch::asm!(
                         "adr {pc}, .",   // Get current PC (program counter)
                         "mov {sp}, sp",  // Get current SP (stack pointer)
                         "mov {fp}, x29", // Get current FP (frame pointer)
@@ -161,17 +159,21 @@ impl StackTrace {
                         sp = out(reg) stack_frame.sp,
                         fp = out(reg) stack_frame.fp,
                     );
+                    StackTrace::dump_with(stack_frame)
                 }
-            } else {
+            } else if #[cfg(all(target_os = "uefi", target_arch = "x86_64"))] {
+                let mut stack_frame = StackFrame::default();
                 // SAFETY: Inline assembly reads the current program counter
                 // (PC), stack pointer (SP), and frame pointer (FP) on x86_64.
                 // It does not modify the memory or violate Rust safety
                 // invariants. The caller must ensure that using these register
-                // values is safe.
-                // SAFETY: Reading PC/SP/FP does not mutate memory and the hardware
-                // guarantees those registers exist on x86_64.
+                // values is safe. Reading PC/SP/FP does not mutate memory and
+                // the hardware guarantees those registers exist on x86_64.
+                // `stack_frame` originates from trusted register snapshots; all
+                // invariants for `dump_with` are upheld locally before
+                // forwarding.
                 unsafe {
-                    asm!(
+                    core::arch::asm!(
                         "lea {pc}, [rip]", // Get current PC (program counter)
                         "mov {sp}, rsp",   // Get current SP (stack pointer)
                         "mov {fp}, rbp",   // Get current FP (frame pointer) - Not used
@@ -179,13 +181,12 @@ impl StackTrace {
                         sp = out(reg) stack_frame.sp,
                         fp = out(reg) stack_frame.fp,
                     );
+                    StackTrace::dump_with(stack_frame)
                 }
+            } else {
+                unimplemented!("Stack trace dumping is only implemented for UEFI on AArch64 and x86_64 architectures.");
             }
         }
-
-        // SAFETY: `stack_frame` originates from trusted register snapshots; all
-        // invariants for `dump_with` are upheld locally before forwarding.
-        unsafe { StackTrace::dump_with(stack_frame) }
     }
 
     /// Dumps the stack trace by walking the FP/LR registers, without relying on unwind

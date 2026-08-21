@@ -6,7 +6,7 @@
 //!
 //! SPDX-License-Identifier: Apache-2.0
 //!
-#[cfg(not(test))]
+#[cfg(target_os = "uefi")]
 use core::arch::asm;
 use patina::arch as interrupts;
 use patina::error::EfiError;
@@ -36,13 +36,13 @@ impl EfiCpuX64 {
     }
 
     fn initialize_gdt(&self) {
-        #[cfg(not(test))]
+        #[cfg(target_os = "uefi")]
         patina_internal_cpu::gdt::init();
     }
 
     #[cfg_attr(coverage, coverage(off))]
     fn initialize_fpu(&self) {
-        #[cfg(not(test))]
+        #[cfg(target_os = "uefi")]
         // SAFETY: This assembly writes only hard coded values to CR4 register, and MMX and FPU control words. No
         // inputs are used that could violate memory safety.
         unsafe {

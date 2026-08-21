@@ -122,7 +122,7 @@ extern crate alloc;
 
 pub use debugger::PatinaDebugger;
 
-#[cfg(not(test))]
+#[cfg(target_os = "uefi")]
 use arch::{DebuggerArch, SystemArch};
 use patina::{component::service::perf_timer::ArchTimerFunctionality, peripheral::serial::SerialIO};
 use patina_internal_cpu::interrupts::{ExceptionContext, InterruptManager};
@@ -255,7 +255,7 @@ pub fn breakpoint() {
 /// execution in the current state and an CPU exception must be raised.
 #[inline(always)]
 pub fn breakpoint_unchecked() {
-    #[cfg(not(test))]
+    #[cfg(target_os = "uefi")]
     SystemArch::breakpoint();
     #[cfg(test)]
     panic!("breakpoint_unchecked");
