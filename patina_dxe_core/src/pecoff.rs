@@ -109,7 +109,6 @@ impl UefiPeInfo {
     pub fn parse_mapped(bytes: &[u8]) -> error::Result<Self> {
         let mut opts = goblin::pe::options::ParseOptions::default();
         opts.resolve_rva = false;
-        opts.parse_attribute_certificates = false;
         match scroll::Pread::gread_with::<u16>(bytes, &mut 0, scroll::LE)? {
             PE32_MAGIC => UefiPeInfo::from_pe(bytes, &opts),
             TE_MAGIC => UefiPeInfo::from_te(bytes),
@@ -183,8 +182,8 @@ impl UefiPeInfo {
             != 0;
 
         // Set the relocation diretory if it exists
-        if let Some(reloc_section) = optional_header.data_directories.get_base_relocation_table() {
-            pe.reloc_dir = Some(*reloc_section);
+        if let Some(&reloc_section) = optional_header.data_directories.get_base_relocation_table() {
+            pe.reloc_dir = Some(reloc_section);
         }
 
         // Calculate the image base offset by finding the offset of the windows fields
@@ -1117,5 +1116,25 @@ mod tests {
 
         let mut loaded_image = vec![0; image_info.size_of_image as usize];
         load_image(&image_info, image, &mut loaded_image).unwrap();
+    }
+
+    #[test]
+    fn test_te_image_with_malformed_debug_directory_loads_without_filename() {
+        test_support::init_test_logger();
+        let mut image = include_bytes!("../resources/test/te/test_image.te").to_vec();
+
+        // debug_dir is the last field of TeHeader (a DataDirectory { virtual_address, size }).
+        // Corrupt its size so the debug directory can no longer be resolved, without disturbing
+        // anything else about the image.
+        const HEADER_SIZE: usize = core::mem::size_of::<goblin::pe::header::TeHeader>();
+        image[HEADER_SIZE - 8..HEADER_SIZE - 4].copy_from_slice(&0u32.to_le_bytes());
+        image[HEADER_SIZE - 4..HEADER_SIZE].copy_from_slice(&u32::MAX.to_le_bytes());
+
+        let image_info = UefiPeInfo::parse(&image).unwrap();
+
+        assert!(image_info.filename.is_none());
+
+        let mut loaded_image = vec![0; image_info.size_of_image as usize];
+        load_image(&image_info, &image, &mut loaded_image).unwrap();
     }
 }
