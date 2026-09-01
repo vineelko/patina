@@ -119,40 +119,59 @@ impl UefiPeInfo {
     /// Parses a PE with a TE header, gathering the necessary data for operating on the image in a UEFI environment.
     fn from_te(bytes: &[u8]) -> error::Result<Self> {
         let mut pe = UefiPeInfo::default();
-        let parsed_te = goblin::pe::TE::parse(bytes)?;
+        let mut offset = 0;
+        let header = goblin::pe::header::TeHeader::parse(bytes, &mut offset)?;
+        let rva_offset = header.stripped_size as usize - core::mem::size_of::<goblin::pe::header::TeHeader>();
+        let sections = header.sections(bytes, &mut offset)?;
 
         // Set the simple fields.
         pe.image_base_header_field_offset = TE_IMAGE_BASE_HEADER_FIELD_OFFSET;
-        pe.header_type = HeaderType::Te(parsed_te.rva_offset);
-        pe.entry_point_offset = parsed_te.header.entry_point as usize;
-        pe.image_type = u16::from(parsed_te.header.subsystem);
-        pe.machine = parsed_te.header.machine;
+        pe.header_type = HeaderType::Te(rva_offset);
+        pe.entry_point_offset = header.entry_point as usize;
+        pe.image_type = u16::from(header.subsystem);
+        pe.machine = header.machine;
         pe.section_alignment = 0;
-        pe.size_of_headers = parsed_te.header.base_of_code as usize;
-        pe.sections = parsed_te.sections;
+        pe.size_of_headers = header.base_of_code as usize;
+        pe.sections = sections;
         // TE doesn't have the optional header with DLL Characteristics, so we have to assume the image is NX_COMPAT
         pe.nx_compat = true;
 
         // TE headers always have a reloc dir, even if it's empty
         // unlike PE32 headers.
-        if parsed_te.header.reloc_dir.size != 0 {
-            pe.reloc_dir = Some(parsed_te.header.reloc_dir);
+        if header.reloc_dir.size != 0 {
+            pe.reloc_dir = Some(header.reloc_dir);
         }
 
         // TE headers don't have a size of image filed like PE32 headers
         // so it needs to be calculated.
-        if let Some(last_section) = pe.sections.last() {
-            pe.size_of_image = last_section.virtual_address + last_section.virtual_size;
+        let Some(last_section) = pe.sections.last() else {
+            return Err(error::Error::Goblin(goblin::error::Error::Malformed("No sections found in PE.".to_string())));
+        };
+        pe.size_of_image = last_section.virtual_address + last_section.virtual_size;
 
-            // Parse the filename from the debug data if it exists.
-            if let Some(codeview_data) = &parsed_te.debug_data.codeview_pdb70_debug_info {
-                pe.filename = UefiPeInfo::read_filename(codeview_data.filename)?;
+        // Debug data is optional metadata. Use it when valid, but do not reject an otherwise
+        // loadable image when its debug directory cannot be resolved or parsed.
+        let mut debug_opts = goblin::pe::options::ParseOptions::default();
+        debug_opts.resolve_rva = false;
+        match goblin::pe::debug::DebugData::parse_with_opts_and_fixup(
+            bytes,
+            header.debug_dir,
+            &pe.sections,
+            0,
+            &debug_opts,
+            rva_offset as u32,
+        ) {
+            Ok(debug_data) => {
+                if let Some(codeview_data) = debug_data.codeview_pdb70_debug_info {
+                    pe.filename = UefiPeInfo::read_filename(codeview_data.filename)?;
+                }
             }
-
-            Ok(pe)
-        } else {
-            Err(error::Error::Goblin(goblin::error::Error::Malformed("No sections found in PE.".to_string())))
+            Err(err) => {
+                log::warn!("Failed to parse optional TE/COFF debug metadata: {err:?}");
+            }
         }
+
+        Ok(pe)
     }
 
     /// Parses a PE image with a PE32 header, gathering the necessary data for operating on the image in a UEFI environment.
