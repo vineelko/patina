@@ -335,7 +335,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             // Subsequent entry: go directly to request loop or holding pen (does not return)
             log::trace!("CPU {cpu_id} (index {cpu_index}) re-entering MM Supervisor Core, skipping initialization.");
             smrr_enable();
-            self.enter_runtime(cpu_id);
+            self.enter_runtime(cpu_id, cpu_index);
 
             return;
         }
