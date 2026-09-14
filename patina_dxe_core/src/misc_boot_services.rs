@@ -489,11 +489,11 @@ mod tests {
             ) -> efi::Status {
                 unimplemented!()
             }
-            let watchdog =
+            static WATCHDOG: protocol::watchdog::WatchdogProtocol =
                 protocol::watchdog::WatchdogProtocol { register_handler, set_timer_period, get_timer_period };
-            // SAFETY: The mock protocol lives for the duration of the test and the pointer is only used by the test.
+            // SAFETY: WATCHDOG is a 'static, so the pointer remains valid for the rest of the process.
             unsafe {
-                WATCHDOG_ARCH_PTR.init(&raw const watchdog as *mut c_void);
+                WATCHDOG_ARCH_PTR.init(&raw const WATCHDOG as *mut c_void);
             };
             // Test case 5: Set watchdog timer with null data - should return SUCCESS (watchdog protocol available)
             // SAFETY: The unsafe block is required because r-efi declares set_watchdog_timer as an
@@ -554,14 +554,12 @@ mod tests {
                 efi::Status::SUCCESS
             }
 
-            let metronome = protocol::metronome::MetronomeProtocol {
-                tick_period: 10000, //10 microseconds
-                wait_for_tick,
-            };
+            static METRONOME: protocol::metronome::MetronomeProtocol =
+                protocol::metronome::MetronomeProtocol { tick_period: 10000, wait_for_tick };
 
-            // SAFETY: The mock protocol lives for the duration of the test and the pointer is only used by the test.
+            // SAFETY: METRONOME is a 'static, so the pointer remains valid for the rest of the process.
             unsafe {
-                METRONOME_ARCH_PTR.init(&raw const metronome as *mut c_void);
+                METRONOME_ARCH_PTR.init(&raw const METRONOME as *mut c_void);
             }
 
             // Test case 4: Normal stall duration - should return SUCCESS (metronome protocol available)
