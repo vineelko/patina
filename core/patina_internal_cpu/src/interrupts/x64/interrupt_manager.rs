@@ -252,8 +252,6 @@ fn dump_pte(cr2: u64) {
 #[cfg_attr(coverage, coverage(off))]
 #[cfg(test)]
 mod test {
-    extern crate std;
-
     use serial_test::serial;
 
     use super::*;
