@@ -6,6 +6,7 @@
 //!
 //! SPDX-License-Identifier: Apache-2.0
 //!
+use alloc::vec::Vec;
 use patina_ffs::{
     FirmwareFileSystemError,
     section::{Section, SectionExtractor},
@@ -53,7 +54,7 @@ impl SectionExtractor for CompositeSectionExtractor {
     #[allow(clippy::used_underscore_binding)]
     // Allowed because the parameter is used behind feature flags and will be considered unused
     // when no features are enabled.
-    fn extract(&self, _section: &Section) -> Result<alloc::vec::Vec<u8>, FirmwareFileSystemError> {
+    fn extract(&self, _section: &Section) -> Result<Vec<u8>, FirmwareFileSystemError> {
         #[cfg(feature = "brotli")]
         {
             match self.brotli.extract(_section) {
