@@ -6,6 +6,8 @@ license.workspace = true
 edition.workspace = true
 readme = "README.md"
 description = "A pure Rust implementation of the MM User Core for standalone MM mode environments."
+keywords.workspace = true
+categories.workspace = true
 
 # Metadata to tell docs.rs how to build the documentation when uploading
 [package.metadata.docs.rs]
