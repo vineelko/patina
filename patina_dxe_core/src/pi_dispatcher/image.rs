@@ -1644,7 +1644,6 @@ impl Buffer {
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
-    extern crate std;
     use super::*;
     // Only used by `start_image_error_status_should_unload_image`, which is skipped on
     // aarch64-pc-windows-msvc due to lack of support in corosensei at this time.
@@ -1671,6 +1670,7 @@ mod tests {
             hob::{HobList, MemoryAllocationHeader, MemoryAllocationModule},
         },
     };
+    use std::alloc::{Layout, alloc};
     use std::{fs::File, io::Read, ptr::NonNull, slice::from_raw_parts};
 
     #[cfg(target_arch = "aarch64")]
@@ -2729,8 +2729,7 @@ mod tests {
             // Manually construct PrivateImageData with minimal required fields
             const LEN: usize = 0x2000;
             // SAFETY: Allocate a page-aligned test buffer and treat it as a raw image backing store.
-            let fake_buffer =
-                unsafe { alloc::alloc::alloc(alloc::alloc::Layout::from_size_align(LEN, 0x1000).unwrap()) };
+            let fake_buffer = unsafe { alloc(Layout::from_size_align(LEN, 0x1000).unwrap()) };
 
             // SAFETY: fake_buffer points to LEN bytes we just allocated and is valid for mutable slice creation.
             let slice = unsafe { core::slice::from_raw_parts_mut(fake_buffer, LEN) };
