@@ -442,9 +442,15 @@ impl PolicyGate {
                 PolicyError::InternalError
             })?;
 
-        self.snapshot_count.call_once(|| count);
+        Ok(self.record_snapshot(count))
+    }
+
+    /// Records that the memory policy buffer now holds `count` descriptors and
+    /// transitions the gate to the locked state.
+    fn record_snapshot(&self, count: usize) -> usize {
+        let count = *self.snapshot_count.call_once(|| count);
         log::info!("Policy snapshot taken: {count} descriptors, ready-to-lock is now TRUE");
-        Ok(count)
+        count
     }
 
     /// Verifies that the current page table still matches the saved snapshot.
@@ -468,9 +474,7 @@ impl PolicyGate {
         scratch: *mut MemDescriptorV1_0,
         scratch_max_count: usize,
     ) -> Result<(), PolicyError> {
-        let saved_count = if let Some(&c) = self.snapshot_count.get() {
-            c
-        } else {
+        let Some(&saved_count) = self.snapshot_count.get() else {
             log::warn!("verify_snapshot: no snapshot available, skipping verification");
             return Ok(());
         };
@@ -483,43 +487,18 @@ impl PolicyGate {
                 PolicyError::InternalError
             })?;
 
-        if fresh_count != saved_count {
-            log::error!("verify_snapshot: descriptor count mismatch (saved={saved_count}, fresh={fresh_count})");
-            return Err(PolicyError::AccessDenied);
-        }
-
         // View both buffers as slices so the comparison runs in safe code.
-        let saved_ptr = self.memory_policy_buffer.cast_const();
+        //
         // SAFETY: `walk_page_table` populated `scratch` with `fresh_count` descriptors; the saved
-        // snapshot buffer was populated by a prior `take_snapshot` call with `saved_count`
-        // (== `fresh_count`) entries.
+        // snapshot buffer was populated by a prior `take_snapshot` call with `saved_count` entries.
         let (saved, fresh) = unsafe {
             (
-                core::slice::from_raw_parts(saved_ptr, saved_count),
+                core::slice::from_raw_parts(self.memory_policy_buffer.cast_const(), saved_count),
                 core::slice::from_raw_parts(scratch.cast_const(), fresh_count),
             )
         };
 
-        for (i, (saved, fresh)) in saved.iter().zip(fresh.iter()).enumerate() {
-            if saved != fresh {
-                log::error!(
-                    "verify_snapshot: descriptor {} mismatch - \
-                     saved=(base=0x{:x}, size=0x{:x}, attrs=0x{:x}) vs \
-                     fresh=(base=0x{:x}, size=0x{:x}, attrs=0x{:x})",
-                    i,
-                    saved.base_address,
-                    saved.size,
-                    saved.mem_attributes,
-                    fresh.base_address,
-                    fresh.size,
-                    fresh.mem_attributes,
-                );
-                return Err(PolicyError::AccessDenied);
-            }
-        }
-
-        log::info!("verify_snapshot: page table matches saved snapshot ({saved_count} descriptors)");
-        Ok(())
+        compare_snapshot(saved, fresh)
     }
 
     /// Writes the merged firmware + memory policy into `dest` and returns the total
@@ -633,9 +612,47 @@ impl PolicyGate {
     }
 }
 
+/// Returns an error when a freshly walked page table no longer matches the recorded snapshot.
+fn compare_snapshot(saved: &[MemDescriptorV1_0], fresh: &[MemDescriptorV1_0]) -> Result<(), PolicyError> {
+    if saved.len() != fresh.len() {
+        log::error!("verify_snapshot: descriptor count mismatch (saved={}, fresh={})", saved.len(), fresh.len());
+        return Err(PolicyError::AccessDenied);
+    }
+
+    for (i, (saved, fresh)) in saved.iter().zip(fresh.iter()).enumerate() {
+        if saved != fresh {
+            log::error!(
+                "verify_snapshot: descriptor {} mismatch - \
+                 saved=(base=0x{:x}, size=0x{:x}, attrs=0x{:x}) vs \
+                 fresh=(base=0x{:x}, size=0x{:x}, attrs=0x{:x})",
+                i,
+                saved.base_address,
+                saved.size,
+                saved.mem_attributes,
+                fresh.base_address,
+                fresh.size,
+                fresh.mem_attributes,
+            );
+            return Err(PolicyError::AccessDenied);
+        }
+    }
+
+    log::info!("verify_snapshot: page table matches saved snapshot ({} descriptors)", saved.len());
+    Ok(())
+}
+
 #[cfg(test)]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
+    use super::super::test_support::{Descriptors, PolicyBuilder, instruction, io, mem, msr, save_state};
+    use super::super::{RESOURCE_ATTR_COND_WRITE, RESOURCE_ATTR_WRITE, TYPE_MSR};
     use super::*;
+    use zerocopy::IntoBytes;
+
+    const READ: u16 = RESOURCE_ATTR_READ as u16;
+    const WRITE: u16 = RESOURCE_ATTR_WRITE as u16;
+    const EXECUTE: u16 = RESOURCE_ATTR_EXECUTE as u16;
+    const STRICT: u16 = RESOURCE_ATTR_STRICT_WIDTH as u16;
 
     #[test]
     fn test_io_width() {
@@ -650,5 +667,414 @@ mod tests {
         assert_eq!(Instruction::Wbinvd.as_index(), 1);
         assert_eq!(Instruction::Hlt.as_index(), 2);
         assert_eq!(Instruction::COUNT, 3);
+    }
+
+    #[test]
+    fn test_gate_rejects_an_invalid_policy_buffer() {
+        // SAFETY: `new` checks for null before dereferencing.
+        assert_eq!(unsafe { PolicyGate::new(core::ptr::null()) }.err(), Some(PolicyError::NullPointer));
+
+        let wrong_version = PolicyBuilder::new().version(2, 0).build();
+        // SAFETY: the builder produced an aligned, fully-initialized header that outlives the call.
+        assert_eq!(unsafe { PolicyGate::new(wrong_version.as_ptr()) }.err(), Some(PolicyError::InvalidVersion));
+    }
+
+    #[test]
+    fn test_gate_exposes_its_policy_buffer() {
+        let policy = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Msr(vec![])).build();
+        let gate = policy.gate();
+
+        assert_eq!(gate.as_ptr(), policy.as_ptr());
+        assert_eq!(gate.firmware_policy_size(), 64);
+        assert!(!gate.is_locked());
+        assert_eq!(gate.snapshot_count(), None);
+    }
+
+    #[test]
+    fn test_is_io_allowed_validates_its_arguments() {
+        let policy = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Io(vec![io(0x60, 1, READ)])).build();
+        let gate = policy.gate();
+
+        // Execute is not a meaningful I/O access type.
+        assert_eq!(gate.is_io_allowed(0x60, IoWidth::Byte, AccessType::Execute), Err(PolicyError::InvalidAccessMask));
+        // Ports live in the 16-bit space.
+        assert_eq!(gate.is_io_allowed(0x1_0000, IoWidth::Byte, AccessType::Read), Err(PolicyError::InvalidIoAddress));
+        // A width that runs off the end of the port space.
+        assert_eq!(gate.is_io_allowed(0xFFFF, IoWidth::Dword, AccessType::Read), Err(PolicyError::InvalidIoRange));
+    }
+
+    #[test]
+    fn test_is_io_allowed_requires_a_policy_root() {
+        let policy = PolicyBuilder::new().build();
+        assert_eq!(
+            policy.gate().is_io_allowed(0x60, IoWidth::Byte, AccessType::Read),
+            Err(PolicyError::PolicyRootNotFound)
+        );
+    }
+
+    #[test]
+    fn test_is_io_allowed_matches_ranges_on_an_allow_list() {
+        let policy =
+            PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Io(vec![io(0xCF8, 8, READ | WRITE)])).build();
+        let gate = policy.gate();
+
+        assert_eq!(gate.is_io_allowed(0xCF8, IoWidth::Dword, AccessType::Read), Ok(()));
+        assert_eq!(gate.is_io_allowed(0xCFC, IoWidth::Dword, AccessType::Write), Ok(()));
+        // Straddles the end of the descriptor's range.
+        assert_eq!(gate.is_io_allowed(0xCFE, IoWidth::Dword, AccessType::Read), Err(PolicyError::AccessDenied));
+        // Outside the descriptor entirely.
+        assert_eq!(gate.is_io_allowed(0x60, IoWidth::Byte, AccessType::Read), Err(PolicyError::AccessDenied));
+    }
+
+    #[test]
+    fn test_is_io_allowed_honours_strict_width_descriptors() {
+        let policy =
+            PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Io(vec![io(0x70, 2, READ | STRICT)])).build();
+        let gate = policy.gate();
+
+        assert_eq!(gate.is_io_allowed(0x70, IoWidth::Word, AccessType::Read), Ok(()));
+        // Strict width requires an exact address and size match.
+        assert_eq!(gate.is_io_allowed(0x70, IoWidth::Byte, AccessType::Read), Err(PolicyError::AccessDenied));
+        assert_eq!(gate.is_io_allowed(0x71, IoWidth::Word, AccessType::Read), Err(PolicyError::AccessDenied));
+        // The descriptor grants read only.
+        assert_eq!(gate.is_io_allowed(0x70, IoWidth::Word, AccessType::Write), Err(PolicyError::AccessDenied));
+    }
+
+    #[test]
+    fn test_is_io_allowed_inverts_on_a_deny_list() {
+        let policy =
+            PolicyBuilder::new().root(ACCESS_ATTR_DENY, Descriptors::Io(vec![io(0xB2, 1, READ | WRITE)])).build();
+        let gate = policy.gate();
+
+        assert_eq!(gate.is_io_allowed(0xB2, IoWidth::Byte, AccessType::Write), Err(PolicyError::AccessDenied));
+        assert_eq!(gate.is_io_allowed(0x60, IoWidth::Byte, AccessType::Write), Ok(()));
+    }
+
+    #[test]
+    fn test_is_io_allowed_fails_closed_on_an_unknown_access_attribute() {
+        let policy = PolicyBuilder::new().root(0x7F, Descriptors::Io(vec![io(0x60, 1, READ)])).build();
+        assert_eq!(policy.gate().is_io_allowed(0x60, IoWidth::Byte, AccessType::Read), Err(PolicyError::AccessDenied));
+    }
+
+    #[test]
+    fn test_is_msr_allowed() {
+        let policy = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Msr(vec![msr(0x1B, 4, READ)])).build();
+        let gate = policy.gate();
+
+        assert_eq!(gate.is_msr_allowed(0x1B, AccessType::Read), Ok(()));
+        assert_eq!(gate.is_msr_allowed(0x1E, AccessType::Read), Ok(()));
+        // One past the descriptor's range.
+        assert_eq!(gate.is_msr_allowed(0x1F, AccessType::Read), Err(PolicyError::AccessDenied));
+        // The descriptor grants read only.
+        assert_eq!(gate.is_msr_allowed(0x1B, AccessType::Write), Err(PolicyError::AccessDenied));
+        assert_eq!(gate.is_msr_allowed(0x1B, AccessType::Execute), Err(PolicyError::InvalidAccessMask));
+    }
+
+    #[test]
+    fn test_is_msr_allowed_without_a_policy_root_or_with_an_unknown_attribute() {
+        let missing = PolicyBuilder::new().build();
+        assert_eq!(missing.gate().is_msr_allowed(0x1B, AccessType::Read), Err(PolicyError::PolicyRootNotFound));
+
+        let deny = PolicyBuilder::new().root(ACCESS_ATTR_DENY, Descriptors::Msr(vec![msr(0x1B, 1, READ)])).build();
+        assert_eq!(deny.gate().is_msr_allowed(0x1B, AccessType::Read), Err(PolicyError::AccessDenied));
+        assert_eq!(deny.gate().is_msr_allowed(0x20, AccessType::Read), Ok(()));
+
+        let unknown = PolicyBuilder::new().root(0x7F, Descriptors::Msr(vec![msr(0x1B, 1, READ)])).build();
+        assert_eq!(unknown.gate().is_msr_allowed(0x1B, AccessType::Read), Err(PolicyError::AccessDenied));
+    }
+
+    #[test]
+    fn test_is_instruction_allowed() {
+        let policy = PolicyBuilder::new()
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Instruction(vec![instruction(Instruction::Hlt, EXECUTE)]))
+            .build();
+        let gate = policy.gate();
+
+        assert_eq!(gate.is_instruction_allowed(Instruction::Hlt), Ok(()));
+        assert_eq!(gate.is_instruction_allowed(Instruction::Cli), Err(PolicyError::AccessDenied));
+    }
+
+    #[test]
+    fn test_is_instruction_allowed_without_a_policy_root_or_with_an_unknown_attribute() {
+        let missing = PolicyBuilder::new().build();
+        assert_eq!(missing.gate().is_instruction_allowed(Instruction::Cli), Err(PolicyError::PolicyRootNotFound));
+
+        // A descriptor without the execute attribute never matches.
+        let no_execute = PolicyBuilder::new()
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Instruction(vec![instruction(Instruction::Cli, READ)]))
+            .build();
+        assert_eq!(no_execute.gate().is_instruction_allowed(Instruction::Cli), Err(PolicyError::AccessDenied));
+
+        let deny = PolicyBuilder::new()
+            .root(ACCESS_ATTR_DENY, Descriptors::Instruction(vec![instruction(Instruction::Cli, EXECUTE)]))
+            .build();
+        assert_eq!(deny.gate().is_instruction_allowed(Instruction::Cli), Err(PolicyError::AccessDenied));
+        assert_eq!(deny.gate().is_instruction_allowed(Instruction::Hlt), Ok(()));
+
+        let unknown = PolicyBuilder::new()
+            .root(0x7F, Descriptors::Instruction(vec![instruction(Instruction::Cli, EXECUTE)]))
+            .build();
+        assert_eq!(unknown.gate().is_instruction_allowed(Instruction::Cli), Err(PolicyError::AccessDenied));
+    }
+
+    #[test]
+    fn test_is_save_state_read_allowed_without_a_policy_root_allows_everything() {
+        // No save-state root means the platform ships a level-20 policy.
+        let policy = PolicyBuilder::new().build();
+        assert_eq!(policy.gate().is_save_state_read_allowed(SaveStateField::Rax, 8, None), Ok(()));
+    }
+
+    #[test]
+    fn test_is_save_state_read_allowed_matches_conditions() {
+        let policy = PolicyBuilder::new()
+            .root(
+                ACCESS_ATTR_ALLOW,
+                Descriptors::SaveState(vec![
+                    save_state(SaveStateField::Rax, RESOURCE_ATTR_READ, SaveStateCondition::Unconditional),
+                    save_state(SaveStateField::IoTrap, RESOURCE_ATTR_COND_READ, SaveStateCondition::IoRead),
+                ]),
+            )
+            .build();
+        let gate = policy.gate();
+
+        assert_eq!(gate.is_save_state_read_allowed(SaveStateField::Rax, 8, None), Ok(()));
+        assert_eq!(
+            gate.is_save_state_read_allowed(SaveStateField::IoTrap, 4, Some(SaveStateCondition::IoRead)),
+            Ok(())
+        );
+        // The conditional descriptor only covers I/O reads.
+        assert_eq!(
+            gate.is_save_state_read_allowed(SaveStateField::IoTrap, 4, Some(SaveStateCondition::IoWrite)),
+            Err(PolicyError::AccessDenied)
+        );
+        // A conditional descriptor never matches when no condition is supplied.
+        assert_eq!(gate.is_save_state_read_allowed(SaveStateField::IoTrap, 4, None), Err(PolicyError::AccessDenied));
+    }
+
+    #[test]
+    fn test_is_save_state_read_allowed_on_deny_and_unknown_lists() {
+        let deny = PolicyBuilder::new()
+            .root(
+                ACCESS_ATTR_DENY,
+                Descriptors::SaveState(vec![save_state(
+                    SaveStateField::Rax,
+                    RESOURCE_ATTR_READ,
+                    SaveStateCondition::Unconditional,
+                )]),
+            )
+            .build();
+        assert_eq!(
+            deny.gate().is_save_state_read_allowed(SaveStateField::Rax, 8, None),
+            Err(PolicyError::AccessDenied)
+        );
+        assert_eq!(deny.gate().is_save_state_read_allowed(SaveStateField::IoTrap, 8, None), Ok(()));
+
+        // A descriptor granting neither read nor conditional read never matches.
+        let write_only = PolicyBuilder::new()
+            .root(
+                ACCESS_ATTR_ALLOW,
+                Descriptors::SaveState(vec![save_state(
+                    SaveStateField::Rax,
+                    RESOURCE_ATTR_COND_WRITE,
+                    SaveStateCondition::Unconditional,
+                )]),
+            )
+            .build();
+        assert_eq!(
+            write_only.gate().is_save_state_read_allowed(SaveStateField::Rax, 8, None),
+            Err(PolicyError::AccessDenied)
+        );
+
+        let unknown = PolicyBuilder::new()
+            .root(
+                0x7F,
+                Descriptors::SaveState(vec![save_state(
+                    SaveStateField::Rax,
+                    RESOURCE_ATTR_READ,
+                    SaveStateCondition::Unconditional,
+                )]),
+            )
+            .build();
+        assert_eq!(
+            unknown.gate().is_save_state_read_allowed(SaveStateField::Rax, 8, None),
+            Err(PolicyError::AccessDenied)
+        );
+    }
+
+    #[test]
+    fn test_take_snapshot_requires_a_memory_policy_buffer() {
+        let policy = PolicyBuilder::new().build();
+        let gate = policy.gate();
+
+        // SAFETY: the buffer check fails before `cr3` is ever dereferenced.
+        assert_eq!(unsafe { gate.take_snapshot(0x1000, |_, _| false) }, Err(PolicyError::InternalError));
+    }
+
+    #[test]
+    fn test_take_snapshot_is_idempotent_once_recorded() {
+        let policy = PolicyBuilder::new().build();
+        let gate = policy.gate();
+
+        assert_eq!(gate.record_snapshot(3), 3);
+        assert!(gate.is_locked());
+        assert_eq!(gate.snapshot_count(), Some(3));
+        // A second record does not overwrite the first.
+        assert_eq!(gate.record_snapshot(7), 3);
+
+        // SAFETY: the recorded count short-circuits before `cr3` is dereferenced.
+        assert_eq!(unsafe { gate.take_snapshot(0x1000, |_, _| false) }, Ok(3));
+    }
+
+    #[test]
+    fn test_verify_snapshot_is_skipped_before_a_snapshot_is_taken() {
+        let policy = PolicyBuilder::new().build();
+        let gate = policy.gate();
+
+        // SAFETY: the missing snapshot short-circuits before `cr3`/`scratch` are dereferenced.
+        assert_eq!(unsafe { gate.verify_snapshot(0x1000, |_, _| false, core::ptr::null_mut(), 0) }, Ok(()));
+    }
+
+    #[test]
+    fn test_compare_snapshot() {
+        let saved = [mem(0x1000, 0x1000, RESOURCE_ATTR_READ), mem(0x8000, 0x1000, RESOURCE_ATTR_WRITE)];
+
+        assert_eq!(compare_snapshot(&saved, &saved), Ok(()));
+        // A page table that grew or shrank since the snapshot.
+        assert_eq!(compare_snapshot(&saved, &saved[..1]), Err(PolicyError::AccessDenied));
+        // Same shape, but an attribute changed under us.
+        let tampered = [saved[0], mem(0x8000, 0x1000, RESOURCE_ATTR_EXECUTE)];
+        assert_eq!(compare_snapshot(&saved, &tampered), Err(PolicyError::AccessDenied));
+    }
+
+    #[test]
+    fn test_fetch_n_update_policy_requires_a_snapshot() {
+        let policy = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Mem(vec![])).build();
+        let gate = policy.gate();
+        let mut dest = vec![0u8; 256];
+
+        assert_eq!(
+            // SAFETY: `dest` is writable for `dest.len()` bytes.
+            unsafe { gate.fetch_n_update_policy(dest.as_mut_ptr(), dest.len()) },
+            Err(PolicyError::InternalError)
+        );
+    }
+
+    #[test]
+    fn test_fetch_n_update_policy_rejects_a_small_destination() {
+        let policy = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Mem(vec![])).build();
+        let mut gate = policy.gate();
+        let mut snapshot = [mem(0x1000, 0x1000, RESOURCE_ATTR_READ)];
+        gate.set_memory_policy_buffer(snapshot.as_mut_ptr(), snapshot.len());
+        gate.record_snapshot(snapshot.len());
+
+        let mut dest = vec![0u8; 8];
+        assert_eq!(
+            // SAFETY: `dest` is writable for `dest.len()` bytes.
+            unsafe { gate.fetch_n_update_policy(dest.as_mut_ptr(), dest.len()) },
+            Err(PolicyError::InternalError)
+        );
+    }
+
+    #[test]
+    fn test_fetch_n_update_policy_requires_a_memory_policy_root() {
+        let policy = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Msr(vec![])).build();
+        let mut gate = policy.gate();
+        let mut snapshot: [MemDescriptorV1_0; 0] = [];
+        gate.set_memory_policy_buffer(snapshot.as_mut_ptr(), 0);
+        gate.record_snapshot(0);
+
+        let mut dest = vec![0u8; 256];
+        assert_eq!(
+            // SAFETY: `dest` is writable for `dest.len()` bytes.
+            unsafe { gate.fetch_n_update_policy(dest.as_mut_ptr(), dest.len()) },
+            Err(PolicyError::PolicyRootNotFound)
+        );
+    }
+
+    #[test]
+    fn test_fetch_n_update_policy_requires_a_sized_firmware_policy() {
+        let policy = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Mem(vec![])).declared_size(0).build();
+        let gate = policy.gate();
+        gate.record_snapshot(0);
+
+        let mut dest = vec![0u8; 256];
+        assert_eq!(
+            // SAFETY: `dest` is writable for `dest.len()` bytes.
+            unsafe { gate.fetch_n_update_policy(dest.as_mut_ptr(), dest.len()) },
+            Err(PolicyError::InternalError)
+        );
+    }
+
+    #[test]
+    fn test_fetch_n_update_policy_rejects_an_overflowing_descriptor_count() {
+        let policy = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Mem(vec![])).build();
+        let gate = policy.gate();
+        // A descriptor count this large cannot be converted to a byte count.
+        gate.record_snapshot(usize::MAX);
+
+        let mut dest = vec![0u8; 256];
+        assert_eq!(
+            // SAFETY: `dest` is writable for `dest.len()` bytes.
+            unsafe { gate.fetch_n_update_policy(dest.as_mut_ptr(), dest.len()) },
+            Err(PolicyError::InternalError)
+        );
+    }
+
+    #[test]
+    fn test_fetch_n_update_policy_rejects_an_overflowing_total_size() {
+        let policy = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Mem(vec![])).build();
+        let gate = policy.gate();
+        // The descriptor bytes alone fit, but appending them to the firmware policy does not.
+        gate.record_snapshot(usize::MAX / size_of::<MemDescriptorV1_0>());
+
+        let mut dest = vec![0u8; 256];
+        assert_eq!(
+            // SAFETY: `dest` is writable for `dest.len()` bytes.
+            unsafe { gate.fetch_n_update_policy(dest.as_mut_ptr(), dest.len()) },
+            Err(PolicyError::InternalError)
+        );
+    }
+
+    #[test]
+    fn test_fetch_n_update_policy_appends_the_snapshot_and_patches_the_header() {
+        let policy = PolicyBuilder::new()
+            .root(ACCESS_ATTR_DENY, Descriptors::Mem(vec![]))
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Io(vec![io(0x60, 1, READ)]))
+            .build();
+        let firmware_size = policy.header().size as usize;
+
+        let mut gate = policy.gate();
+        let mut snapshot =
+            [mem(0x1000, 0x1000, RESOURCE_ATTR_READ), mem(0x8000, 0x2000, RESOURCE_ATTR_READ | RESOURCE_ATTR_WRITE)];
+        gate.set_memory_policy_buffer(snapshot.as_mut_ptr(), snapshot.len());
+        gate.record_snapshot(snapshot.len());
+
+        let descriptor_bytes = snapshot.len() * size_of::<MemDescriptorV1_0>();
+        let mut dest = vec![0u64; (firmware_size + descriptor_bytes).div_ceil(8)];
+        let dest_bytes = dest.as_mut_slice().as_mut_bytes();
+
+        // SAFETY: `dest_bytes` is writable for its whole length and is 8-byte aligned.
+        let written = unsafe { gate.fetch_n_update_policy(dest_bytes.as_mut_ptr(), dest_bytes.len()) }
+            .expect("policy fits in the destination");
+        assert_eq!(written, firmware_size + descriptor_bytes);
+
+        // SAFETY: `fetch_n_update_policy` wrote a complete, aligned policy blob into `dest_bytes`.
+        let (header, roots) = unsafe {
+            let header = &*(dest_bytes.as_ptr() as *const SecurePolicyDataV1_0);
+            (header, header.get_policy_roots())
+        };
+        assert_eq!(header.size as usize, written);
+        assert_eq!(header.memory_policy_count, 0);
+
+        let mem_root = roots.iter().find(|r| r.policy_type == TYPE_MEM).expect("memory policy root");
+        assert_eq!(mem_root.access_attr, ACCESS_ATTR_ALLOW);
+        assert_eq!(mem_root.offset as usize, firmware_size);
+        assert_eq!(mem_root.count as usize, snapshot.len());
+
+        // The unrelated roots are copied through untouched.
+        assert!(!roots.iter().any(|r| r.policy_type == TYPE_MSR));
+        // SAFETY: the patched memory root describes the descriptors appended above.
+        let appended = unsafe { mem_root.get_mem_descriptors(dest_bytes.as_ptr()) };
+        assert_eq!(appended, snapshot.as_slice());
     }
 }
