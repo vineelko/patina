@@ -398,6 +398,14 @@ clear = true
 command = "cargo"
 args = ["build", "@@split(INDIVIDUAL_PACKAGE_TARGETS, )", "--target", "x86_64-unknown-uefi", "@@split(NO_STD_FLAGS, )", ]
 dependencies = ["individual-package-targets"]
+script_runner = "@duckscript"
+condition_script = ['''
+target = get_env CARGO_MAKE_RUST_TARGET_TRIPLE
+if eq ${target} "aarch64-pc-windows-msvc"
+    echo "Cross-compiling for x86_64-unknown-uefi from aarch64-pc-windows-msvc is skipped to save build time on Windows ARM64 hosts."
+    exit 1
+end
+''']
 
 [tasks.doc]
 description = "Builds all rust documentation in the workspace. Example `cargo make doc`"
