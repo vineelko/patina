@@ -16,12 +16,12 @@ use super::BootServices;
 #[must_use = "if unused the Tpl will immediately restored"]
 pub struct TplGuard<'a, T: BootServices + ?Sized> {
     pub(crate) boot_services: &'a T,
-    pub(crate) retore_tpl: Tpl,
+    pub(crate) restore_tpl: Tpl,
 }
 
 impl<T: BootServices + ?Sized> Drop for TplGuard<'_, T> {
     fn drop(&mut self) {
-        self.boot_services.restore_tpl(self.retore_tpl);
+        self.boot_services.restore_tpl(self.restore_tpl);
     }
 }
 

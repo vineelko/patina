@@ -279,7 +279,7 @@ pub trait BootServices {
     ///
     /// See [`BootServices::raise_tpl`] and [`BootServices::restore_tpl`] for more details.
     fn raise_tpl_guarded<'a>(&'a self, tpl: Tpl) -> TplGuard<'a, Self> {
-        TplGuard { boot_services: self, retore_tpl: self.raise_tpl(tpl) }
+        TplGuard { boot_services: self, restore_tpl: self.raise_tpl(tpl) }
     }
 
     /// Raises a task’s priority level and returns its previous level.
@@ -2467,7 +2467,7 @@ mod tests {
         }
 
         let guard = boot_services.raise_tpl_guarded(Tpl::NOTIFY);
-        assert_eq!(Tpl::APPLICATION, guard.retore_tpl);
+        assert_eq!(Tpl::APPLICATION, guard.restore_tpl);
         assert_eq!(efi::TPL_NOTIFY, CURRENT_TPL.load(Ordering::Relaxed));
         drop(guard);
         assert_eq!(efi::TPL_APPLICATION, CURRENT_TPL.load(Ordering::Relaxed));
