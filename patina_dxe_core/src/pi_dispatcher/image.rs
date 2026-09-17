@@ -49,11 +49,6 @@ use crate::{
     tpl_mutex,
 };
 
-use corosensei::{
-    Coroutine, CoroutineResult, Yielder,
-    stack::{MIN_STACK_SIZE, STACK_ALIGNMENT, Stack, StackPointer},
-};
-
 use efi::Guid;
 
 pub const EFI_IMAGE_SUBSYSTEM_EFI_APPLICATION: u16 = 10;
@@ -68,15 +63,6 @@ const EXPECTED_IMAGE_MACHINE: u16 = pecoff::IMAGE_MACHINE_TYPE_AARCH64;
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 compile_error!("Unsupported target_arch for PE/COFF image loading");
 
-pub const ENTRY_POINT_STACK_SIZE: usize = 0x100000;
-
-// Compile time assert to make sure `STACK_ALIGNMENT` (which comes from corosensei) is never larger than
-// UEFI_PAGE_SIZE. This can cause issues with the stack allocation not being aligned properly. This was chosen rather
-// than updating the `AllocationOptions` alignment configuration being set to `STACK_ALIGNMENT` because we cannot
-// guarantee that the alignment will be a multiple of UEFI_PAGE_SIZE in all cases. We would rather hit a compile time
-// error then runtime error where no image is executed because we fail to allocate the stack.
-const _: () = assert!(STACK_ALIGNMENT < UEFI_PAGE_SIZE);
-
 // dummy function used to initialize PrivateImageData.entry_point.
 #[cfg_attr(coverage, coverage(off))]
 extern "efiapi" fn unimplemented_entry_point(
@@ -84,82 +70,6 @@ extern "efiapi" fn unimplemented_entry_point(
     _system_table: *mut efi::SystemTable,
 ) -> efi::Status {
     unimplemented!()
-}
-
-// define a stack structure for coroutine support.
-struct ImageStack {
-    stack: Box<[u8], PageFree>,
-}
-
-impl ImageStack {
-    fn new(size: usize) -> Result<Self, EfiError> {
-        let len = align_up(size.max(MIN_STACK_SIZE), STACK_ALIGNMENT)?;
-        // allocate an extra page for the stack guard page.
-        let page_count = uefi_size_to_pages!(len) + 1;
-
-        let stack = CoreMemoryManager.allocate_pages(page_count, AllocationOptions::default())?.into_boxed_slice();
-
-        let base_address = stack.as_ptr() as efi::PhysicalAddress;
-        // attempt to set the memory space attributes for the stack guard page.
-        // if we fail, we should still try to continue to boot
-        // the stack grows downwards, so stack here is the guard page
-        let mut attributes = match dxe_services::core_get_memory_space_descriptor(base_address) {
-            Ok(descriptor) => descriptor.attributes,
-            Err(_) => DEFAULT_CACHE_ATTR,
-        };
-
-        attributes = MemoryProtectionPolicy::apply_image_stack_guard_policy(attributes);
-
-        if let Err(err) =
-            dxe_services::core_set_memory_space_attributes(base_address, UEFI_PAGE_SIZE as u64, attributes)
-        {
-            log::error!("Failed to set memory space attributes for stack guard page: {err}");
-            // unfortunately, this needs to be commented out for now, because the tests have gotten too complex
-            // and need to be refactored to handle the page table
-            // debug_assert!(false);
-        }
-
-        // we have the guard page at the bottom, so we need to add a page to the stack pointer for the limit
-        Ok(ImageStack { stack })
-    }
-
-    #[allow(unused)]
-    fn guard(&self) -> &[u8] {
-        self.stack.get(..UEFI_PAGE_SIZE).expect("stack is always > UEFI_PAGE_SIZE")
-    }
-
-    fn body(&self) -> &[u8] {
-        self.stack.get(UEFI_PAGE_SIZE..).expect("stack is always > UEFI_PAGE_SIZE")
-    }
-}
-
-// SAFETY: ImageStack provides a stable, owned stack buffer with valid base/limit pointers.
-unsafe impl Stack for ImageStack {
-    fn base(&self) -> StackPointer {
-        //stack grows downward, so "base" is the highest address, i.e. the ptr + size.
-        self.limit().checked_add(self.body().len()).expect("Stack base address overflow.")
-    }
-    fn limit(&self) -> StackPointer {
-        //stack grows downward, so "limit" is the lowest address, i.e. the ptr.
-        StackPointer::new(self.body().as_ptr() as usize)
-            .expect("Stack pointer address was zero, but it should always be nonzero.")
-    }
-
-    // These routines are only used when building on the host (e.g. for test or
-    // clippy). Corosensei has additional trait requirements for the stack when
-    // building for windows that need to be implemented to support that case.
-    // These are not used in UEFI.
-    #[cfg(windows)]
-    fn teb_fields(&self) -> corosensei::stack::StackTebFields {
-        corosensei::stack::StackTebFields {
-            StackBase: self.base().get(),
-            StackLimit: self.limit().get(),
-            DeallocationStack: self.stack.as_ptr() as usize,
-            GuaranteedStackBytes: 0,
-        }
-    }
-    #[cfg(windows)]
-    fn update_teb_fields(&mut self, _stack_limit: usize, _guaranteed_stack_bytes: usize) {}
 }
 
 // This struct tracks private data associated with a particular image handle.
@@ -524,11 +434,17 @@ unsafe impl Sync for ExitData {}
 // SAFETY: `ExitData` is owned by the caller of `StartImage` and cannot be accessed by any other entity.
 unsafe impl Send for ExitData {}
 
+// corosensei's `Yielder` is unavailable on aarch64-pc-windows-msvc and the functions that
+// use the fields are gated as well, so both fields are cfg-gated out on that target rather than
+// left unused.
+
 // This struct tracks global data used by the imaging subsystem.
 pub(super) struct ImageData {
     system_table: *mut efi::SystemTable,
     private_image_data: BTreeMap<efi::Handle, PrivateImageData>,
+    #[cfg(not(all(target_arch = "aarch64", target_os = "windows")))]
     current_running_image: Option<efi::Handle>,
+    #[cfg(not(all(target_arch = "aarch64", target_os = "windows")))]
     image_start_contexts: Vec<*const Yielder<efi::Handle, efi::Status>>,
 }
 
@@ -538,7 +454,9 @@ impl ImageData {
         ImageData {
             system_table: core::ptr::null_mut(),
             private_image_data: BTreeMap::new(),
+            #[cfg(not(all(target_arch = "aarch64", target_os = "windows")))]
             current_running_image: None,
+            #[cfg(not(all(target_arch = "aarch64", target_os = "windows")))]
             image_start_contexts: Vec::new(),
         }
     }
@@ -684,6 +602,310 @@ impl ImageData {
 unsafe impl Sync for ImageData {}
 // SAFETY: ImageData is only accessed through the image_data mutex.
 unsafe impl Send for ImageData {}
+
+// corosensei does not support aarch64-pc-windows-msvc (https://github.com/Amanieu/corosensei/issues/29).
+// `dispatch_stub` is used instead on that host.
+#[cfg(not(all(target_arch = "aarch64", target_os = "windows")))]
+mod dispatch {
+    #[allow(clippy::wildcard_imports)]
+    use super::*;
+    pub(super) use corosensei::Yielder;
+    use corosensei::{
+        Coroutine, CoroutineResult,
+        stack::{MIN_STACK_SIZE, STACK_ALIGNMENT, Stack, StackPointer},
+    };
+
+    const ENTRY_POINT_STACK_SIZE: usize = 0x100000;
+
+    // Compile time assert to make sure `STACK_ALIGNMENT` (which comes from corosensei) is never larger than
+    // UEFI_PAGE_SIZE. This can cause issues with the stack allocation not being aligned properly. This was chosen
+    // rather than updating the `AllocationOptions` alignment configuration being set to `STACK_ALIGNMENT` because we
+    // cannot guarantee that the alignment will be a multiple of UEFI_PAGE_SIZE in all cases. We would rather hit a
+    // compile time error then runtime error where no image is executed because we fail to allocate the stack.
+    const _: () = assert!(STACK_ALIGNMENT < UEFI_PAGE_SIZE);
+
+    // define a stack structure for coroutine support.
+    pub(super) struct ImageStack {
+        pub(super) stack: Box<[u8], PageFree>,
+    }
+
+    impl ImageStack {
+        pub(super) fn new(size: usize) -> Result<Self, EfiError> {
+            let len = align_up(size.max(MIN_STACK_SIZE), STACK_ALIGNMENT)?;
+            // allocate an extra page for the stack guard page.
+            let page_count = uefi_size_to_pages!(len) + 1;
+
+            let stack = CoreMemoryManager.allocate_pages(page_count, AllocationOptions::default())?.into_boxed_slice();
+
+            let base_address = stack.as_ptr() as efi::PhysicalAddress;
+            // attempt to set the memory space attributes for the stack guard page.
+            // if we fail, we should still try to continue to boot
+            // the stack grows downwards, so stack here is the guard page
+            let mut attributes = match dxe_services::core_get_memory_space_descriptor(base_address) {
+                Ok(descriptor) => descriptor.attributes,
+                Err(_) => DEFAULT_CACHE_ATTR,
+            };
+
+            attributes = MemoryProtectionPolicy::apply_image_stack_guard_policy(attributes);
+
+            if let Err(err) =
+                dxe_services::core_set_memory_space_attributes(base_address, UEFI_PAGE_SIZE as u64, attributes)
+            {
+                log::error!("Failed to set memory space attributes for stack guard page: {err}");
+                // unfortunately, this needs to be commented out for now, because the tests have gotten too complex
+                // and need to be refactored to handle the page table
+                // debug_assert!(false);
+            }
+
+            // we have the guard page at the bottom, so we need to add a page to the stack pointer for the limit
+            Ok(ImageStack { stack })
+        }
+
+        #[allow(unused)]
+        pub(super) fn guard(&self) -> &[u8] {
+            self.stack.get(..UEFI_PAGE_SIZE).expect("stack is always > UEFI_PAGE_SIZE")
+        }
+
+        pub(super) fn body(&self) -> &[u8] {
+            self.stack.get(UEFI_PAGE_SIZE..).expect("stack is always > UEFI_PAGE_SIZE")
+        }
+    }
+
+    // SAFETY: ImageStack provides a stable, owned stack buffer with valid base/limit pointers.
+    unsafe impl Stack for ImageStack {
+        fn base(&self) -> StackPointer {
+            //stack grows downward, so "base" is the highest address, i.e. the ptr + size.
+            self.limit().checked_add(self.body().len()).expect("Stack base address overflow.")
+        }
+        fn limit(&self) -> StackPointer {
+            //stack grows downward, so "limit" is the lowest address, i.e. the ptr.
+            StackPointer::new(self.body().as_ptr() as usize)
+                .expect("Stack pointer address was zero, but it should always be nonzero.")
+        }
+
+        // These routines are only used when building on the host (e.g. for test or
+        // clippy). Corosensei has additional trait requirements for the stack when
+        // building for windows that need to be implemented to support that case.
+        // These are not used in UEFI.
+        #[cfg(windows)]
+        fn teb_fields(&self) -> corosensei::stack::StackTebFields {
+            corosensei::stack::StackTebFields {
+                StackBase: self.base().get(),
+                StackLimit: self.limit().get(),
+                DeallocationStack: self.stack.as_ptr() as usize,
+                GuaranteedStackBytes: 0,
+            }
+        }
+        #[cfg(windows)]
+        fn update_teb_fields(&mut self, _stack_limit: usize, _guaranteed_stack_bytes: usize) {}
+    }
+
+    impl<P: super::super::PlatformInfo> super::super::PiDispatcher<P> {
+        /// Starts execution of a previously loaded image.
+        ///
+        /// The `image_handle` is validated against the protocol database and the
+        /// private image data map; an error is returned if the handle is unknown or
+        /// the image has already been started.
+        pub fn start_image(&'static self, image_handle: efi::Handle) -> Result<(), efi::Status> {
+            PROTOCOL_DB.validate_handle(image_handle)?;
+
+            if let Some(private_data) = self.image_data.lock().private_image_data.get_mut(&image_handle) {
+                if private_data.started {
+                    Err(EfiError::InvalidParameter)?;
+                }
+            } else {
+                Err(EfiError::InvalidParameter)?;
+            }
+
+            // allocate a buffer for the entry point stack.
+            let stack = ImageStack::new(ENTRY_POINT_STACK_SIZE)?;
+
+            self.performance.map_or_default(|perf| perf.perf_image_start_begin(image_handle));
+
+            // define a co-routine that wraps the entry point execution. this doesn't
+            // run until the coroutine.resume() call below.
+            let mut coroutine = Coroutine::with_stack(stack, move |yielder, image_handle| {
+                let mut private_data = self.image_data.lock();
+
+                // mark the image as started and grab a copy of the private info.
+                let status;
+                if let Some(private_info) = private_data.private_image_data.get_mut(&image_handle) {
+                    private_info.started = true;
+                    let entry_point = private_info.entry_point;
+
+                    // save a pointer to the yielder so that exit() can use it.
+                    private_data.image_start_contexts.push(core::ptr::from_ref::<Yielder<_, _>>(yielder));
+
+                    // get a copy of the system table pointer to pass to the entry point.
+                    let system_table = private_data.system_table;
+                    // drop our reference to the private data (i.e. release the lock).
+                    drop(private_data);
+
+                    // SAFETY: Invokes the entry point. The code behind this pointer
+                    // is FFI, which is inherently unsafe. The caller is responsible
+                    // for ensuring that `self` refers to a valid loaded image
+                    // (mapped), and that `entry_point` points to valid executable
+                    // code.
+                    status = unsafe { entry_point(image_handle, system_table) };
+
+                    // SAFETY: any variables with "Drop" routines that need to run need to be explicitly
+                    // dropped before calling exit(). Since exit() effectively "longjmp"s back to
+                    // StartImage(), Rust automatic drops will not be triggered. `image_handle` was
+                    // obtained from the outer `start_image` scope and is the handle of the currently
+                    // running image which will be valid. `exit_data_size` is 0 and `exit_data` is null.
+                    unsafe { self.exit(image_handle, status, 0, core::ptr::null_mut()) };
+                } else {
+                    status = efi::Status::NOT_FOUND;
+                }
+                status
+            });
+
+            // Save the handle of the previously running image and update the currently
+            // running image to the one we are about to invoke. In the event of nested
+            // calls to StartImage(), the chain of previously running images will
+            // be preserved on the stack of the various StartImage() instances.
+            let mut private_data = self.image_data.lock();
+            let previous_image = private_data.current_running_image;
+            private_data.current_running_image = Some(image_handle);
+            drop(private_data);
+
+            // switch stacks and execute the above defined coroutine to start the image.
+            #[allow(clippy::match_same_arms)] // TODO: clippy exception present unto the todo is resolved
+            let status = match coroutine.resume(image_handle) {
+                CoroutineResult::Yield(status) => status,
+                // Note: `CoroutineResult::Return` is unexpected, since it would imply
+                // that exit() failed. TODO: should panic here?
+                CoroutineResult::Return(status) => status,
+            };
+
+            log::info!("start_image entrypoint exit with status: {status}");
+
+            // because we used exit() to return from the coroutine (as opposed to
+            // returning naturally from it), the coroutine is marked as suspended rather
+            // than complete. We need to forcibly mark the coroutine done; otherwise it
+            // will try to use unwind to clean up the co-routine stack (i.e. "drop" any
+            // live objects). This unwind support requires std and will panic if
+            // executed.
+            // SAFETY: force_reset prevents unwinding a suspended coroutine with a custom stack.
+            unsafe { coroutine.force_reset() };
+
+            self.image_data.lock().current_running_image = previous_image;
+
+            self.performance.map_or_default(|perf| perf.perf_image_start_end(image_handle));
+
+            match status {
+                efi::Status::SUCCESS => Ok(()),
+                err => Err(err),
+            }
+        }
+
+        /// Terminates a started image and returns control to the caller of
+        /// `start_image`.
+        ///
+        /// `image_handle` is validated against the private image data map; if not
+        /// found, `INVALID_PARAMETER` is returned.
+        ///
+        /// # Safety
+        ///
+        /// If `image_handle` is valid and if `exit_data_size` is non-zero and
+        /// `exit_data` is non-null, the caller must ensure that `exit_data` points
+        /// to a valid buffer of at least `exit_data_size` bytes. This pointer is
+        /// stored and later returned to the caller of `start_image` to retrieve the
+        /// exit data.
+        pub(super) unsafe fn exit(
+            &self,
+            image_handle: efi::Handle,
+            status: efi::Status,
+            exit_data_size: usize,
+            exit_data: *mut efi::Char16,
+        ) -> efi::Status {
+            let started = match self.image_data.lock().private_image_data.get(&image_handle) {
+                Some(image_data) => image_data.started,
+                None => return efi::Status::INVALID_PARAMETER,
+            };
+
+            // if not started, just unload the image.
+            if !started {
+                return match self.unload_image(image_handle, true) {
+                    Ok(()) => efi::Status::SUCCESS,
+                    Err(_err) => efi::Status::INVALID_PARAMETER,
+                };
+            }
+
+            // image has been started - check the currently running image.
+            let mut private_data = self.image_data.lock();
+            if Some(image_handle) != private_data.current_running_image {
+                return efi::Status::INVALID_PARAMETER;
+            }
+
+            // save the exit data, if present, into the private_image_data for this
+            // image for start_image to retrieve and return.
+            if exit_data_size != 0
+                && !exit_data.is_null()
+                && let Some(image_data) = private_data.private_image_data.get_mut(&image_handle)
+            {
+                image_data.exit_data = Some(ExitData(exit_data_size, exit_data));
+            }
+
+            // retrieve the yielder that was saved in the start_image entry point
+            // coroutine wrapper.
+            // safety note: this assumes that the top of the image_start_contexts stack
+            // is the currently running image.
+            if let Some(yielder) = private_data.image_start_contexts.pop() {
+                // SAFETY: yielder pointer is created and stored by start_image for the current context.
+                let yielder = unsafe { &*yielder };
+                drop(private_data);
+
+                // safety note: any variables with "Drop" routines that need to run
+                // need to be explicitly dropped before calling suspend(). Since suspend()
+                // effectively "longjmp"s back to StartImage(), rust automatic
+                // drops will not be triggered.
+
+                // transfer control back to start_image by calling the suspend function on
+                // yielder. This will switch stacks back to the start_image that invoked
+                // the entry point coroutine.
+                yielder.suspend(status);
+            }
+
+            //should never reach here, but rust doesn't know that.
+            efi::Status::ACCESS_DENIED
+        }
+    }
+}
+#[cfg(not(all(target_arch = "aarch64", target_os = "windows")))]
+use dispatch::Yielder;
+// only referenced by test_stack_guard_sizes_are_calculated_correctly.
+#[cfg(all(test, not(all(target_arch = "aarch64", target_os = "windows"))))]
+use dispatch::ImageStack;
+
+// Stub used only where corosensei does not support coroutine-based dispatch
+// (currently just aarch64-pc-windows-msvc).
+#[cfg(all(target_arch = "aarch64", target_os = "windows"))]
+mod dispatch_stub {
+    #[allow(clippy::wildcard_imports)] // pulls in this file's shared image-dispatch types/helpers
+    use super::*;
+
+    impl<P: super::super::PlatformInfo> super::super::PiDispatcher<P> {
+        pub fn start_image(&'static self, image_handle: efi::Handle) -> Result<(), efi::Status> {
+            self.performance.map_or_default(|perf| perf.perf_image_start_begin(image_handle));
+            self.performance.map_or_default(|perf| perf.perf_image_start_end(image_handle));
+            Err(efi::Status::UNSUPPORTED)
+        }
+
+        /// # Safety
+        ///
+        /// Unreachable on supported host targets and actual UEFI builds.
+        pub(super) unsafe fn exit(
+            &self,
+            _image_handle: efi::Handle,
+            _status: efi::Status,
+            _exit_data_size: usize,
+            _exit_data: *mut efi::Char16,
+        ) -> efi::Status {
+            efi::Status::UNSUPPORTED
+        }
+    }
+}
 
 impl<P: super::PlatformInfo> super::PiDispatcher<P> {
     /// Loads the image specified by the device path or slice.
@@ -849,104 +1071,6 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
         status
     }
 
-    /// Starts execution of a previously loaded image.
-    ///
-    /// The `image_handle` is validated against the protocol database and the
-    /// private image data map; an error is returned if the handle is unknown or
-    /// the image has already been started.
-    pub fn start_image(&'static self, image_handle: efi::Handle) -> Result<(), efi::Status> {
-        PROTOCOL_DB.validate_handle(image_handle)?;
-
-        if let Some(private_data) = self.image_data.lock().private_image_data.get_mut(&image_handle) {
-            if private_data.started {
-                Err(EfiError::InvalidParameter)?;
-            }
-        } else {
-            Err(EfiError::InvalidParameter)?;
-        }
-
-        // allocate a buffer for the entry point stack.
-        let stack = ImageStack::new(ENTRY_POINT_STACK_SIZE)?;
-
-        self.performance.map_or_default(|perf| perf.perf_image_start_begin(image_handle));
-
-        // define a co-routine that wraps the entry point execution. this doesn't
-        // run until the coroutine.resume() call below.
-        let mut coroutine = Coroutine::with_stack(stack, move |yielder, image_handle| {
-            let mut private_data = self.image_data.lock();
-
-            // mark the image as started and grab a copy of the private info.
-            let status;
-            if let Some(private_info) = private_data.private_image_data.get_mut(&image_handle) {
-                private_info.started = true;
-                let entry_point = private_info.entry_point;
-
-                // save a pointer to the yielder so that exit() can use it.
-                private_data.image_start_contexts.push(core::ptr::from_ref::<Yielder<_, _>>(yielder));
-
-                // get a copy of the system table pointer to pass to the entry point.
-                let system_table = private_data.system_table;
-                // drop our reference to the private data (i.e. release the lock).
-                drop(private_data);
-
-                // SAFETY: Invokes the entry point. The code behind this pointer
-                // is FFI, which is inherently unsafe. The caller is responsible
-                // for ensuring that `self` refers to a valid loaded image
-                // (mapped), and that `entry_point` points to valid executable
-                // code.
-                status = unsafe { entry_point(image_handle, system_table) };
-
-                // SAFETY: any variables with "Drop" routines that need to run need to be explicitly
-                // dropped before calling exit(). Since exit() effectively "longjmp"s back to
-                // StartImage(), Rust automatic drops will not be triggered. `image_handle` was
-                // obtained from the outer `start_image` scope and is the handle of the currently
-                // running image which will be valid. `exit_data_size` is 0 and `exit_data` is null.
-                unsafe { self.exit(image_handle, status, 0, core::ptr::null_mut()) };
-            } else {
-                status = efi::Status::NOT_FOUND;
-            }
-            status
-        });
-
-        // Save the handle of the previously running image and update the currently
-        // running image to the one we are about to invoke. In the event of nested
-        // calls to StartImage(), the chain of previously running images will
-        // be preserved on the stack of the various StartImage() instances.
-        let mut private_data = self.image_data.lock();
-        let previous_image = private_data.current_running_image;
-        private_data.current_running_image = Some(image_handle);
-        drop(private_data);
-
-        // switch stacks and execute the above defined coroutine to start the image.
-        #[allow(clippy::match_same_arms)] // TODO: clippy exception present unto the todo is resolved
-        let status = match coroutine.resume(image_handle) {
-            CoroutineResult::Yield(status) => status,
-            // Note: `CoroutineResult::Return` is unexpected, since it would imply
-            // that exit() failed. TODO: should panic here?
-            CoroutineResult::Return(status) => status,
-        };
-
-        log::info!("start_image entrypoint exit with status: {status}");
-
-        // because we used exit() to return from the coroutine (as opposed to
-        // returning naturally from it), the coroutine is marked as suspended rather
-        // than complete. We need to forcibly mark the coroutine done; otherwise it
-        // will try to use unwind to clean up the co-routine stack (i.e. "drop" any
-        // live objects). This unwind support requires std and will panic if
-        // executed.
-        // SAFETY: force_reset prevents unwinding a suspended coroutine with a custom stack.
-        unsafe { coroutine.force_reset() };
-
-        self.image_data.lock().current_running_image = previous_image;
-
-        self.performance.map_or_default(|perf| perf.perf_image_start_end(image_handle));
-
-        match status {
-            efi::Status::SUCCESS => Ok(()),
-            err => Err(err),
-        }
-    }
-
     /// Transfers control to the entry point of an image that was loaded by
     /// `load_image`. See the `EFI_BOOT_SERVICES::StartImage()` API definition in
     /// the UEFI spec for usage details.
@@ -1102,78 +1226,6 @@ impl<P: super::PlatformInfo> super::PiDispatcher<P> {
             Ok(()) => efi::Status::SUCCESS,
             Err(err) => err,
         }
-    }
-
-    /// Terminates a started image and returns control to the caller of
-    /// `start_image`.
-    ///
-    /// `image_handle` is validated against the private image data map; if not
-    /// found, `INVALID_PARAMETER` is returned.
-    ///
-    /// # Safety
-    ///
-    /// If `image_handle` is valid and if `exit_data_size` is non-zero and
-    /// `exit_data` is non-null, the caller must ensure that `exit_data` points
-    /// to a valid buffer of at least `exit_data_size` bytes. This pointer is
-    /// stored and later returned to the caller of `start_image` to retrieve the
-    /// exit data.
-    unsafe fn exit(
-        &self,
-        image_handle: efi::Handle,
-        status: efi::Status,
-        exit_data_size: usize,
-        exit_data: *mut efi::Char16,
-    ) -> efi::Status {
-        let started = match self.image_data.lock().private_image_data.get(&image_handle) {
-            Some(image_data) => image_data.started,
-            None => return efi::Status::INVALID_PARAMETER,
-        };
-
-        // if not started, just unload the image.
-        if !started {
-            return match self.unload_image(image_handle, true) {
-                Ok(()) => efi::Status::SUCCESS,
-                Err(_err) => efi::Status::INVALID_PARAMETER,
-            };
-        }
-
-        // image has been started - check the currently running image.
-        let mut private_data = self.image_data.lock();
-        if Some(image_handle) != private_data.current_running_image {
-            return efi::Status::INVALID_PARAMETER;
-        }
-
-        // save the exit data, if present, into the private_image_data for this
-        // image for start_image to retrieve and return.
-        if exit_data_size != 0
-            && !exit_data.is_null()
-            && let Some(image_data) = private_data.private_image_data.get_mut(&image_handle)
-        {
-            image_data.exit_data = Some(ExitData(exit_data_size, exit_data));
-        }
-
-        // retrieve the yielder that was saved in the start_image entry point
-        // coroutine wrapper.
-        // safety note: this assumes that the top of the image_start_contexts stack
-        // is the currently running image.
-        if let Some(yielder) = private_data.image_start_contexts.pop() {
-            // SAFETY: yielder pointer is created and stored by start_image for the current context.
-            let yielder = unsafe { &*yielder };
-            drop(private_data);
-
-            // safety note: any variables with "Drop" routines that need to run
-            // need to be explicitly dropped before calling suspend(). Since suspend()
-            // effectively "longjmp"s back to StartImage(), rust automatic
-            // drops will not be triggered.
-
-            // transfer control back to start_image by calling the suspend function on
-            // yielder. This will switch stacks back to the start_image that invoked
-            // the entry point coroutine.
-            yielder.suspend(status);
-        }
-
-        //should never reach here, but rust doesn't know that.
-        efi::Status::ACCESS_DENIED
     }
 
     /// Terminates a loaded EFI image and returns control to boot services. See
@@ -1594,8 +1646,12 @@ impl Buffer {
 mod tests {
     extern crate std;
     use super::*;
+    // Only used by `start_image_error_status_should_unload_image`, which is skipped on
+    // aarch64-pc-windows-msvc due to lack of support in corosensei at this time.
+    #[cfg(not(all(target_arch = "aarch64", target_os = "windows")))]
+    use crate::Core;
     use crate::{
-        Core, MockPlatformInfo,
+        MockPlatformInfo,
         pecoff::UefiPeInfo,
         pi_dispatcher::PiDispatcher,
         protocol_db::{self, DXE_CORE_HANDLE},
@@ -2130,6 +2186,9 @@ mod tests {
         });
     }
 
+    // corosensei does not support aarch64-pc-windows-msvc, so this test (using coroutine-backed dispatch)
+    // can't run on that one host target right now.
+    #[cfg(not(all(target_arch = "aarch64", target_os = "windows")))]
     #[test]
     fn start_image_should_start_image() {
         with_locked_state(|| {
@@ -2172,6 +2231,9 @@ mod tests {
         });
     }
 
+    // corosensei does not support aarch64-pc-windows-msvc, so this test (using coroutine-backed dispatch)
+    // can't run on that one host target right now.
+    #[cfg(not(all(target_arch = "aarch64", target_os = "windows")))]
     #[test]
     fn start_image_error_status_should_unload_image() {
         with_locked_state(|| {
@@ -2838,6 +2900,8 @@ mod tests {
         .unwrap();
     }
 
+    // ImageStack does not exist on aarch64-pc-windows-msvc (corosensei does not support that host target right now).
+    #[cfg(not(all(target_arch = "aarch64", target_os = "windows")))]
     #[test]
     fn test_stack_guard_sizes_are_calculated_correctly() {
         test_support::with_global_lock(|| {
