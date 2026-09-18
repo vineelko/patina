@@ -44,6 +44,7 @@ pub(crate) fn sem_try_take(sem: &AtomicU32) -> bool {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
 
@@ -99,5 +100,59 @@ mod tests {
         }
         assert_eq!(sem.load(Ordering::Acquire), 0);
         assert!(!sem_try_take(&sem));
+    }
+
+    #[test]
+    fn test_sem_wait_spins_until_a_count_is_signalled() {
+        use core::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+
+        let sem = Arc::new(AtomicU32::new(0));
+        let waiting = Arc::new(AtomicBool::new(false));
+
+        let waiter = {
+            let (sem, waiting) = (sem.clone(), waiting.clone());
+            std::thread::spawn(move || {
+                waiting.store(true, Ordering::Release);
+                sem_wait(&sem);
+            })
+        };
+
+        // The waiter cannot leave `sem_wait` before a count exists, so once it reports that
+        // it has entered the loop it is guaranteed to spin on an empty semaphore.
+        while !waiting.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+        sem_signal(&sem);
+
+        waiter.join().expect("waiter observes the signal");
+        assert_eq!(sem.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn test_sem_try_take_hands_out_each_count_exactly_once_under_contention() {
+        use std::sync::Arc;
+
+        const COUNTS: u32 = 512;
+        const THREADS: u32 = 4;
+
+        let sem = Arc::new(AtomicU32::new(COUNTS));
+        let takers: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let sem = sem.clone();
+                std::thread::spawn(move || {
+                    let mut taken = 0;
+                    while sem_try_take(&sem) {
+                        taken += 1;
+                    }
+                    taken
+                })
+            })
+            .collect();
+
+        // Racing takers retry on a lost compare-exchange, so no count is ever double-issued.
+        let total: u32 = takers.into_iter().map(|t| t.join().expect("taker completes")).sum();
+        assert_eq!(total, COUNTS);
+        assert_eq!(sem.load(Ordering::Acquire), 0);
     }
 }
