@@ -638,8 +638,27 @@ pub unsafe fn walk_page_table(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
+    use super::super::test_support::{Descriptors, PolicyBuilder, instruction, io, mem, msr, save_state};
+    use super::super::{ACCESS_ATTR_DENY, Instruction, RESOURCE_ATTR_STRICT_WIDTH, SaveStateField, TYPE_SAVE_STATE};
     use super::*;
+
+    /// A policy exercising every recognized root type, with conforming descriptors.
+    fn full_policy() -> PolicyBuilder {
+        PolicyBuilder::new()
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Mem(vec![mem(0x1000, 0x2000, RESOURCE_ATTR_READ)]))
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Io(vec![io(0x60, 1, RESOURCE_ATTR_READ as u16)]))
+            .root(ACCESS_ATTR_DENY, Descriptors::Msr(vec![msr(0x1B, 1, RESOURCE_ATTR_WRITE as u16)]))
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Instruction(vec![instruction(Instruction::Hlt, 0x04)]))
+            .root(
+                ACCESS_ATTR_ALLOW,
+                Descriptors::SaveState(vec![
+                    save_state(SaveStateField::Rax, RESOURCE_ATTR_READ, SaveStateCondition::Unconditional),
+                    save_state(SaveStateField::IoTrap, RESOURCE_ATTR_COND_READ, SaveStateCondition::IoRead),
+                ]),
+            )
+    }
 
     #[test]
     fn test_dump_mem_policy_entry() {
@@ -651,5 +670,316 @@ mod tests {
             reserved: 0,
         };
         dump_mem_policy_entry(&desc);
+
+        // An entry granting nothing renders every permission as absent.
+        dump_mem_policy_entry(&MemDescriptorV1_0 { mem_attributes: 0, ..desc });
+        dump_mem_policy_entry(&MemDescriptorV1_0 { mem_attributes: RESOURCE_ATTR_EXECUTE, ..desc });
+    }
+
+    #[test]
+    fn test_dump_policy_walks_every_root_type() {
+        let policy = full_policy()
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Instruction(vec![]))
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Unknown(99))
+            .build();
+
+        // SAFETY: the builder produced a valid policy buffer that outlives this call.
+        unsafe { dump_policy(policy.as_ptr()) };
+    }
+
+    #[test]
+    fn test_dump_policy_renders_unset_attributes_and_unknown_entries() {
+        let policy = PolicyBuilder::new()
+            .root(ACCESS_ATTR_DENY, Descriptors::Io(vec![io(0x60, 1, 0)]))
+            .root(ACCESS_ATTR_DENY, Descriptors::Msr(vec![msr(0x1B, 1, 0)]))
+            .root(
+                ACCESS_ATTR_DENY,
+                Descriptors::Instruction(vec![
+                    instruction(Instruction::Cli, 0),
+                    instruction(Instruction::Wbinvd, RESOURCE_ATTR_EXECUTE as u16),
+                    InstructionDescriptorV1_0 { instruction_index: 9, attributes: 0, reserved: 0 },
+                ]),
+            )
+            .root(
+                ACCESS_ATTR_DENY,
+                Descriptors::SaveState(vec![
+                    save_state(SaveStateField::IoTrap, RESOURCE_ATTR_COND_READ, SaveStateCondition::IoWrite),
+                    SaveStateDescriptorV1_0 { map_field: 9, attributes: 0, access_condition: 9, reserved: 0 },
+                ]),
+            )
+            .build();
+
+        // SAFETY: the builder produced a valid policy buffer that outlives this call.
+        unsafe { dump_policy(policy.as_ptr()) };
+    }
+
+    #[test]
+    fn test_dump_policy_rejects_null_and_undersized_buffers() {
+        // SAFETY: `dump_policy` checks for null before dereferencing.
+        unsafe { dump_policy(core::ptr::null()) };
+
+        let policy = PolicyBuilder::new().declared_size(4).build();
+        // SAFETY: the header is valid; only its `size` field is understated.
+        unsafe { dump_policy(policy.as_ptr()) };
+    }
+
+    #[test]
+    fn test_security_policy_check_accepts_a_conforming_policy() {
+        let policy = full_policy().build();
+        // SAFETY: the builder produced a valid policy buffer that outlives this call.
+        assert_eq!(unsafe { security_policy_check(policy.as_ptr()) }, Ok(()));
+    }
+
+    #[test]
+    fn test_security_policy_check_rejects_a_malformed_header() {
+        // SAFETY: `security_policy_check` checks for null before dereferencing.
+        assert_eq!(unsafe { security_policy_check(core::ptr::null()) }, Err(PolicyCheckError::NullPointer));
+
+        let undersized = PolicyBuilder::new().declared_size(4).build();
+        assert_eq!(
+            // SAFETY: the header is valid; only its `size` field is understated.
+            unsafe { security_policy_check(undersized.as_ptr()) },
+            Err(PolicyCheckError::SizeMismatch { expected: size_of::<SecurePolicyDataV1_0>(), declared: 4 })
+        );
+
+        let wrong_version = PolicyBuilder::new().version(2, 3).build();
+        assert_eq!(
+            // SAFETY: the builder produced a valid policy buffer that outlives this call.
+            unsafe { security_policy_check(wrong_version.as_ptr()) },
+            Err(PolicyCheckError::InvalidVersion { major: 2, minor: 3 })
+        );
+
+        let dirty_flags = PolicyBuilder::new().flags(1).build();
+        assert_eq!(
+            // SAFETY: as above.
+            unsafe { security_policy_check(dirty_flags.as_ptr()) },
+            Err(PolicyCheckError::UnrecognizedHeaderBits)
+        );
+    }
+
+    #[test]
+    fn test_security_policy_check_rejects_malformed_roots() {
+        let duplicate = PolicyBuilder::new()
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Msr(vec![]))
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Msr(vec![]))
+            .build();
+        assert_eq!(
+            // SAFETY: the builder produced a valid policy buffer that outlives this call.
+            unsafe { security_policy_check(duplicate.as_ptr()) },
+            Err(PolicyCheckError::DuplicatePolicyType { policy_type: TYPE_MSR })
+        );
+
+        let dirty_reserved =
+            PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Msr(vec![])).root_reserved([0, 0, 7]).build();
+        assert_eq!(
+            // SAFETY: as above.
+            unsafe { security_policy_check(dirty_reserved.as_ptr()) },
+            Err(PolicyCheckError::InvalidReservedField { policy_type: TYPE_MSR, entry_index: 0 })
+        );
+
+        let unknown_type = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Unknown(9)).build();
+        assert_eq!(
+            // SAFETY: as above.
+            unsafe { security_policy_check(unknown_type.as_ptr()) },
+            Err(PolicyCheckError::UnrecognizedPolicyType { policy_type: 9 })
+        );
+    }
+
+    #[test]
+    fn test_security_policy_check_rejects_legacy_and_mismatched_sizes() {
+        let legacy = PolicyBuilder::new().memory_policy_count(1).build();
+        assert_eq!(
+            // SAFETY: the builder produced a valid policy buffer that outlives this call.
+            unsafe { security_policy_check(legacy.as_ptr()) },
+            Err(PolicyCheckError::LegacyMemoryPolicyDetected)
+        );
+
+        // Overstating the size keeps every descriptor array in bounds but fails the final tally.
+        let overstated =
+            PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Msr(vec![])).declared_size(256).build();
+        assert_eq!(
+            // SAFETY: as above.
+            unsafe { security_policy_check(overstated.as_ptr()) },
+            Err(PolicyCheckError::SizeMismatch { expected: 64, declared: 256 })
+        );
+    }
+
+    #[test]
+    fn test_security_policy_check_rejects_dirty_descriptor_reserved_fields() {
+        let cases: [(Descriptors, u32); 3] = [
+            (
+                Descriptors::Io(vec![IoDescriptorV1_0 {
+                    io_address: 0x60,
+                    length_or_width: 1,
+                    attributes: RESOURCE_ATTR_READ as u16,
+                    reserved: 1,
+                }]),
+                TYPE_IO,
+            ),
+            (
+                Descriptors::Mem(vec![MemDescriptorV1_0 {
+                    base_address: 0x1000,
+                    size: 0x1000,
+                    mem_attributes: RESOURCE_ATTR_READ,
+                    reserved: 1,
+                }]),
+                TYPE_MEM,
+            ),
+            (
+                Descriptors::Instruction(vec![InstructionDescriptorV1_0 {
+                    instruction_index: 0,
+                    attributes: RESOURCE_ATTR_EXECUTE as u16,
+                    reserved: 1,
+                }]),
+                TYPE_INSTRUCTION,
+            ),
+        ];
+
+        for (descriptors, policy_type) in cases {
+            let policy = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, descriptors).build();
+            assert_eq!(
+                // SAFETY: the builder produced a valid policy buffer that outlives this call.
+                unsafe { security_policy_check(policy.as_ptr()) },
+                Err(PolicyCheckError::InvalidReservedField { policy_type, entry_index: 0 })
+            );
+        }
+    }
+
+    #[test]
+    fn test_security_policy_check_rejects_invalid_save_state_descriptors() {
+        // Save state policy is read-only; any write attribute is unsupported.
+        let writable = PolicyBuilder::new()
+            .root(
+                ACCESS_ATTR_ALLOW,
+                Descriptors::SaveState(vec![save_state(
+                    SaveStateField::Rax,
+                    RESOURCE_ATTR_WRITE,
+                    SaveStateCondition::Unconditional,
+                )]),
+            )
+            .build();
+        assert_eq!(
+            // SAFETY: the builder produced a valid policy buffer that outlives this call.
+            unsafe { security_policy_check(writable.as_ptr()) },
+            Err(PolicyCheckError::UnsupportedAttribute {
+                policy_type: TYPE_SAVE_STATE,
+                entry_index: 0,
+                attributes: RESOURCE_ATTR_WRITE
+            })
+        );
+
+        // A condition without the conditional-read attribute is contradictory.
+        let conflicting = PolicyBuilder::new()
+            .root(
+                ACCESS_ATTR_ALLOW,
+                Descriptors::SaveState(vec![save_state(
+                    SaveStateField::Rax,
+                    RESOURCE_ATTR_READ,
+                    SaveStateCondition::IoRead,
+                )]),
+            )
+            .build();
+        assert_eq!(
+            // SAFETY: as above.
+            unsafe { security_policy_check(conflicting.as_ptr()) },
+            Err(PolicyCheckError::ConflictingCondition { entry_index: 0 })
+        );
+
+        let dirty_reserved = PolicyBuilder::new()
+            .root(
+                ACCESS_ATTR_ALLOW,
+                Descriptors::SaveState(vec![SaveStateDescriptorV1_0 {
+                    map_field: 0,
+                    attributes: RESOURCE_ATTR_READ,
+                    access_condition: 0,
+                    reserved: 1,
+                }]),
+            )
+            .build();
+        assert_eq!(
+            // SAFETY: as above.
+            unsafe { security_policy_check(dirty_reserved.as_ptr()) },
+            Err(PolicyCheckError::InvalidReservedField { policy_type: TYPE_SAVE_STATE, entry_index: 0 })
+        );
+    }
+
+    #[test]
+    fn test_mem_attrs_to_policy_attrs() {
+        assert_eq!(
+            mem_attrs_to_policy_attrs(MemoryAttributes::empty()),
+            RESOURCE_ATTR_READ | RESOURCE_ATTR_WRITE | RESOURCE_ATTR_EXECUTE
+        );
+        assert_eq!(mem_attrs_to_policy_attrs(MemoryAttributes::ReadOnly), RESOURCE_ATTR_READ | RESOURCE_ATTR_EXECUTE);
+        assert_eq!(
+            mem_attrs_to_policy_attrs(MemoryAttributes::ExecuteProtect),
+            RESOURCE_ATTR_READ | RESOURCE_ATTR_WRITE
+        );
+        assert_eq!(
+            mem_attrs_to_policy_attrs(MemoryAttributes::ReadOnly | MemoryAttributes::ExecuteProtect),
+            RESOURCE_ATTR_READ
+        );
+    }
+
+    #[test]
+    fn test_memory_policy_builder_coalesces_adjacent_regions() {
+        let mut buffer = [MemDescriptorV1_0::default(); 4];
+        // SAFETY: `buffer` holds 4 descriptors and outlives the builder.
+        let mut builder = unsafe { MemoryPolicyBuilder::new(buffer.as_mut_ptr(), buffer.len()) };
+
+        assert_eq!(builder.add_region(0x1000, 0x1000, RESOURCE_ATTR_READ), Ok(()));
+        // Adjacent with identical attributes: merged into the pending descriptor.
+        assert_eq!(builder.add_region(0x2000, 0x1000, RESOURCE_ATTR_READ), Ok(()));
+        // Adjacent but different attributes: starts a new descriptor.
+        assert_eq!(builder.add_region(0x3000, 0x1000, RESOURCE_ATTR_WRITE), Ok(()));
+        // Same attributes but a gap: also starts a new descriptor.
+        assert_eq!(builder.add_region(0x9000, 0x1000, RESOURCE_ATTR_WRITE), Ok(()));
+
+        assert_eq!(builder.finish(), Ok(3));
+        assert_eq!(buffer[0], mem(0x1000, 0x2000, RESOURCE_ATTR_READ));
+        assert_eq!(buffer[1], mem(0x3000, 0x1000, RESOURCE_ATTR_WRITE));
+        assert_eq!(buffer[2], mem(0x9000, 0x1000, RESOURCE_ATTR_WRITE));
+    }
+
+    #[test]
+    fn test_memory_policy_builder_reports_a_full_buffer() {
+        let mut buffer = [MemDescriptorV1_0::default(); 1];
+        // SAFETY: `buffer` holds 1 descriptor and outlives the builder.
+        let mut builder = unsafe { MemoryPolicyBuilder::new(buffer.as_mut_ptr(), buffer.len()) };
+
+        assert_eq!(builder.add_region(0x1000, 0x1000, RESOURCE_ATTR_READ), Ok(()));
+        // Flushing the first descriptor succeeds; the second has nowhere to go.
+        assert_eq!(builder.add_region(0x5000, 0x1000, RESOURCE_ATTR_READ), Ok(()));
+        assert_eq!(builder.add_region(0x9000, 0x1000, RESOURCE_ATTR_READ), Err(()));
+    }
+
+    #[test]
+    fn test_memory_policy_builder_finish_is_empty_without_regions() {
+        let mut buffer = [MemDescriptorV1_0::default(); 1];
+        // SAFETY: `buffer` holds 1 descriptor and outlives the builder.
+        let builder = unsafe { MemoryPolicyBuilder::new(buffer.as_mut_ptr(), buffer.len()) };
+        assert_eq!(builder.finish(), Ok(0));
+    }
+
+    #[test]
+    fn test_walk_page_table_rejects_a_missing_page_table_or_buffer() {
+        let mut buffer = [MemDescriptorV1_0::default(); 1];
+
+        // SAFETY: both calls bail out on the argument check before dereferencing anything.
+        unsafe {
+            assert_eq!(
+                walk_page_table(0, buffer.as_mut_ptr(), buffer.len(), |_, _| false),
+                Err(PageTableWalkError::InvalidCr3)
+            );
+            assert_eq!(
+                walk_page_table(0x1000, core::ptr::null_mut(), 1, |_, _| false),
+                Err(PageTableWalkError::InvalidCr3)
+            );
+        }
+    }
+
+    #[test]
+    fn test_policy_check_errors_are_comparable() {
+        assert_ne!(PolicyCheckError::NullPointer, PolicyCheckError::UnrecognizedHeaderBits);
+        assert_eq!(RESOURCE_ATTR_STRICT_WIDTH, 0x08);
     }
 }

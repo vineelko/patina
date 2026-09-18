@@ -90,7 +90,10 @@ struct CoreMmiHandler {
 /// handler (also on the BSP), so it is safe to share them.
 #[derive(Clone, Copy)]
 struct SendHandle(efi::Handle);
+// SAFETY: The handles are only written by the BSP during single-threaded init and read back on
+// the BSP during the ready-to-lock handler, so they are never shared across CPUs concurrently.
 unsafe impl Send for SendHandle {}
+// SAFETY: As above.
 unsafe impl Sync for SendHandle {}
 
 impl SendHandle {
@@ -104,14 +107,14 @@ impl SendHandle {
 pub fn register_core_mmi_handlers() {
     let mut handles = DISPATCH_HANDLES.lock();
 
-    for (i, entry) in CORE_MMI_HANDLERS.iter().enumerate() {
+    for (i, (slot, entry)) in handles.iter_mut().zip(CORE_MMI_HANDLERS.iter()).enumerate() {
         match MmUserCore::instance().mmi_db.register_internal_handler(entry.handler, Some(entry.handler_type)) {
             Ok(handle) => {
-                handles[i] = SendHandle(handle);
-                log::info!("Registered core MMI handler [{}] for {}", i, entry.handler_type);
+                *slot = SendHandle(handle);
+                log::info!("Registered core MMI handler [{i}] for {}", entry.handler_type);
             }
             Err(status) => {
-                log::error!("Failed to register core MMI handler [{}] for {}: {:?}", i, entry.handler_type, status);
+                log::error!("Failed to register core MMI handler [{i}] for {}: {status:?}", entry.handler_type);
             }
         }
     }
@@ -151,13 +154,13 @@ fn mm_driver_dispatch_handler(
 
     // Dispatch the MM drivers discovered during StartUserCore (single dependency-ordered pass).
     match MmUserCore::instance().dispatch_drivers() {
-        Ok(count) => log::info!("Successfully dispatched {} MM driver(s).", count),
-        Err(status) => log::error!("Driver dispatch failed: {:?}", status),
+        Ok(count) => log::info!("Successfully dispatched {count} MM driver(s)."),
+        Err(status) => log::error!("Driver dispatch failed: {status:?}"),
     }
 
     // Self-unregister (one-shot).
     let handles = DISPATCH_HANDLES.lock();
-    let dispatch_handle = handles[0].0;
+    let dispatch_handle = handles.first().map_or(core::ptr::null_mut(), |handle| handle.0);
     drop(handles);
 
     if !dispatch_handle.is_null() {
@@ -186,10 +189,10 @@ fn mm_ready_to_lock_handler(
 
     // Unregister handlers that are no longer needed after MM lock.
     let handles = DISPATCH_HANDLES.lock();
-    for (i, entry) in CORE_MMI_HANDLERS.iter().enumerate() {
-        if entry.unregister_on_lock && !handles[i].0.is_null() {
+    for (handle, entry) in handles.iter().zip(CORE_MMI_HANDLERS.iter()) {
+        if entry.unregister_on_lock && !handle.0.is_null() {
             // SAFETY: unregistering by handle is safe even if the handle is already gone.
-            let _ = unsafe { MmUserCore::instance().mmi_handler_unregister(handles[i].0) };
+            let _ = unsafe { MmUserCore::instance().mmi_handler_unregister(handle.0) };
         }
     }
     drop(handles);
@@ -197,7 +200,7 @@ fn mm_ready_to_lock_handler(
     // Install the MM Ready To Lock Protocol.
     let status = install_lifecycle_protocol(&patina::guid::MM_READY_TO_LOCK_PROTOCOL);
     if status != efi::Status::SUCCESS {
-        log::error!("Failed to install MM Ready To Lock Protocol: {:?}", status);
+        log::error!("Failed to install MM Ready To Lock Protocol: {status:?}");
     }
 
     status
@@ -271,4 +274,175 @@ fn mm_ready_to_boot_handler(
     });
 
     status
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage, coverage(off))]
+mod tests {
+    use super::*;
+
+    static CORE: MmUserCore = MmUserCore::new();
+
+    /// Publishes the process-wide core instance that every handler reaches through.
+    ///
+    /// nextest runs each test in its own process, so the `Once` behind `set_instance` and the
+    /// `DISPATCH_HANDLES` table both start empty for every test.
+    fn init_core() -> &'static MmUserCore {
+        assert!(CORE.set_instance(), "the core instance is set once per test process");
+        MmUserCore::instance()
+    }
+
+    /// Returns the handles recorded by `register_core_mmi_handlers`.
+    fn dispatch_handles() -> Vec<efi::Handle> {
+        DISPATCH_HANDLES.lock().iter().map(|handle| handle.0).collect()
+    }
+
+    /// Reports whether a handler is still registered, by unregistering it.
+    fn take_handler(core: &MmUserCore, handle: efi::Handle) -> bool {
+        core.mmi_db.mmi_handler_unregister(handle).is_ok()
+    }
+
+    fn protocol_holders(core: &MmUserCore, guid: &efi::Guid) -> usize {
+        core.protocol_db.locate_handle_by_protocol(guid).len()
+    }
+
+    #[test]
+    fn test_register_core_mmi_handlers_registers_every_entry() {
+        let core = init_core();
+
+        register_core_mmi_handlers();
+
+        let handles = dispatch_handles();
+        assert_eq!(handles.len(), CORE_MMI_HANDLERS.len(), "one slot per table entry");
+        assert!(handles.iter().all(|handle| !handle.is_null()), "every handler got a handle: {handles:?}");
+        // The handles are distinct, so the table did not overwrite a slot.
+        for (i, handle) in handles.iter().enumerate() {
+            assert!(!handles[..i].contains(handle), "duplicate handle at index {i}");
+        }
+        assert!(handles.iter().all(|&handle| take_handler(core, handle)), "every handle resolves in the database");
+    }
+
+    #[test]
+    fn test_install_lifecycle_protocol_publishes_on_a_fresh_handle() {
+        let core = init_core();
+
+        assert_eq!(install_lifecycle_protocol(&patina::guid::MM_END_OF_PEI_PROTOCOL), efi::Status::SUCCESS);
+
+        assert_eq!(protocol_holders(core, &patina::guid::MM_END_OF_PEI_PROTOCOL), 1);
+        // The interface is the null marker the PI pattern installs.
+        assert_eq!(
+            core.protocol_db.locate_protocol(&patina::guid::MM_END_OF_PEI_PROTOCOL),
+            Some(core::ptr::null_mut())
+        );
+    }
+
+    #[test]
+    fn test_end_of_pei_handler_installs_its_protocol() {
+        let core = init_core();
+
+        let status =
+            mm_end_of_pei_handler(&patina::guid::MM_END_OF_PEI_PROTOCOL, core::ptr::null_mut(), core::ptr::null_mut());
+
+        assert_eq!(status, efi::Status::SUCCESS);
+        assert_eq!(protocol_holders(core, &patina::guid::MM_END_OF_PEI_PROTOCOL), 1);
+    }
+
+    #[test]
+    fn test_end_of_dxe_handler_installs_its_protocol() {
+        let core = init_core();
+
+        let status =
+            mm_end_of_dxe_handler(&patina::guid::EVENT_GROUP_END_OF_DXE, core::ptr::null_mut(), core::ptr::null_mut());
+
+        assert_eq!(status, efi::Status::SUCCESS);
+        assert_eq!(protocol_holders(core, &patina::guid::MM_END_OF_DXE_PROTOCOL), 1);
+    }
+
+    #[test]
+    fn test_exit_boot_service_handler_installs_only_on_the_first_call() {
+        let core = init_core();
+
+        let first = mm_exit_boot_service_handler(
+            &patina::guid::EVENT_EXIT_BOOT_SERVICES,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        );
+        let second = mm_exit_boot_service_handler(
+            &patina::guid::EVENT_EXIT_BOOT_SERVICES,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        );
+
+        assert_eq!(first, efi::Status::SUCCESS);
+        assert_eq!(second, efi::Status::SUCCESS);
+        // A repeat event must not publish the protocol a second time on a new handle.
+        assert_eq!(protocol_holders(core, &patina::guid::EVENT_EXIT_BOOT_SERVICES), 1);
+    }
+
+    #[test]
+    fn test_ready_to_boot_handler_installs_only_on_the_first_call() {
+        let core = init_core();
+
+        let first =
+            mm_ready_to_boot_handler(&patina::guid::EVENT_READY_TO_BOOT, core::ptr::null_mut(), core::ptr::null_mut());
+        let second =
+            mm_ready_to_boot_handler(&patina::guid::EVENT_READY_TO_BOOT, core::ptr::null_mut(), core::ptr::null_mut());
+
+        assert_eq!(first, efi::Status::SUCCESS);
+        assert_eq!(second, efi::Status::SUCCESS);
+        assert_eq!(protocol_holders(core, &patina::guid::EVENT_READY_TO_BOOT), 1);
+    }
+
+    #[test]
+    fn test_driver_dispatch_handler_is_one_shot() {
+        let core = init_core();
+        register_core_mmi_handlers();
+        let dispatch_handle = dispatch_handles()[0];
+
+        let status =
+            mm_driver_dispatch_handler(&patina::guid::MM_DISPATCH_EVENT, core::ptr::null_mut(), core::ptr::null_mut());
+
+        assert_eq!(status, efi::Status::SUCCESS);
+        // No drivers were discovered, but the handler must still retire itself so a later
+        // MM_DISPATCH_EVENT does not re-enter the dispatcher.
+        assert!(!take_handler(core, dispatch_handle), "the dispatch handler unregistered itself");
+    }
+
+    #[test]
+    fn test_driver_dispatch_handler_tolerates_an_unregistered_handle() {
+        init_core();
+
+        // `register_core_mmi_handlers` was never called, so the handle slot is still null.
+        let status =
+            mm_driver_dispatch_handler(&patina::guid::MM_DISPATCH_EVENT, core::ptr::null_mut(), core::ptr::null_mut());
+
+        assert_eq!(status, efi::Status::SUCCESS);
+    }
+
+    #[test]
+    fn test_ready_to_lock_handler_retires_only_the_one_shot_handlers() {
+        let core = init_core();
+        register_core_mmi_handlers();
+        let handles = dispatch_handles();
+
+        let status = mm_ready_to_lock_handler(
+            &patina::guid::MM_DXE_READY_TO_LOCK_PROTOCOL,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        );
+
+        assert_eq!(status, efi::Status::SUCCESS);
+        assert_eq!(protocol_holders(core, &patina::guid::MM_READY_TO_LOCK_PROTOCOL), 1);
+
+        // Handlers flagged `unregister_on_lock` are gone; the rest survive the lock so they can
+        // still service end-of-DXE, exit-boot-services and ready-to-boot.
+        for (entry, &handle) in CORE_MMI_HANDLERS.iter().zip(handles.iter()) {
+            assert_eq!(
+                take_handler(core, handle),
+                !entry.unregister_on_lock,
+                "unexpected state for {} after ready-to-lock",
+                entry.handler_type
+            );
+        }
+    }
 }
