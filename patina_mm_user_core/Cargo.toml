@@ -30,3 +30,6 @@ serial_test = { workspace = true }
 default = []
 std = []
 doc = []
+
+[lints]
+workspace = true

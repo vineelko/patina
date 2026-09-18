@@ -332,8 +332,10 @@ pub(crate) static DEFAULT_SUPERVISOR_MMI_HANDLERS: &[SupervisorMmiHandler] = &[
 ];
 
 #[cfg(test)]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
+    use patina_internal_cpu::save_state::MmSaveStateRegister;
 
     fn processor_id_lookup(cpu_index: usize) -> Option<u64> {
         Some(cpu_index as u64 + 0x10)
@@ -367,6 +369,12 @@ mod tests {
 
         state.set_processor_id_lookup_fn(replacement_processor_id_lookup);
         assert_eq!(state.processor_id_lookup_fn().unwrap()(3), Some(0x13));
+
+        // The replacement is a working lookup in its own right, so the retained value above
+        // is the result of the one-time semantics rather than of an inert replacement.
+        let fresh = InitState::new();
+        fresh.set_processor_id_lookup_fn(replacement_processor_id_lookup);
+        assert_eq!(fresh.processor_id_lookup_fn().unwrap()(3), None);
     }
 
     #[test]
@@ -383,5 +391,106 @@ mod tests {
         assert!(state.mark_at_runtime());
         assert!(!state.mark_at_runtime());
         assert!(state.is_at_runtime());
+    }
+
+    #[test]
+    fn test_init_state_one_time_values_ignore_later_writes() {
+        let state = InitState::new();
+        let smrr = SmramRegion { base: 0x6000_0000, size: 0x10_0000, pre_allocated: false };
+
+        state.set_mm_initialized_buffer(0x8000_0000);
+        state.set_mseg_base(0x7000_0000);
+        state.set_smrr_range(smrr);
+
+        state.set_mm_initialized_buffer(0x9000_0000);
+        state.set_mseg_base(0x9000_0000);
+        state.set_smrr_range(SmramRegion { base: 0x9000_0000, size: 0x2000, pre_allocated: true });
+
+        assert_eq!(state.mm_initialized_buffer(), Some(0x8000_0000));
+        assert_eq!(state.mseg_base(), Some(0x7000_0000));
+        assert_eq!(state.smrr_range(), Some(smrr));
+    }
+
+    #[test]
+    fn test_init_state_supervisor_address_is_recorded_once() {
+        let state = InitState::new();
+        let first = NonZeroUsize::new(0x1000).unwrap();
+        let second = NonZeroUsize::new(0x2000).unwrap();
+
+        assert!(state.set_supervisor(first));
+        assert!(!state.set_supervisor(second));
+        assert_eq!(state.supervisor(), Some(first));
+    }
+
+    #[test]
+    fn test_init_state_entry_points_are_recorded_once() {
+        let state = InitState::new();
+
+        state.set_user_entry_point(0x4000);
+        state.set_user_entry_point(0x5000);
+        assert_eq!(state.user_entry_point(), Some(0x4000));
+
+        state.set_ap_startup_fn(|a, b, c| a + b + c);
+        state.set_ap_startup_fn(|_, _, _| 0);
+        assert_eq!(state.ap_startup_fn().unwrap()(1, 2, 3), 6);
+    }
+
+    #[test]
+    fn test_security_state_defaults() {
+        let state = SecurityState::new();
+
+        assert!(state.policy_gate().is_none());
+        assert!(state.lock_page_table().is_none());
+        assert!(state.comm_buffer_config().is_none());
+        assert!(state.save_state_info().is_none());
+        assert!(state.lock_save_state_access().is_none());
+
+        assert!(!state.page_allocator().is_initialized());
+        assert!(!state.paging_allocator().is_initialized());
+        assert_eq!(state.unblocked_tracker().region_count(), 0);
+        assert!(!state.unblocked_tracker().is_core_init_complete());
+    }
+
+    #[test]
+    fn test_security_state_one_time_values_ignore_later_writes() {
+        let state = SecurityState::new();
+
+        state.set_comm_buffer_config(CommBufferConfig { supv_comm_buffer: 0x1000, ..Default::default() });
+        state.set_comm_buffer_config(CommBufferConfig { supv_comm_buffer: 0x2000, ..Default::default() });
+        assert_eq!(state.comm_buffer_config().unwrap().supv_comm_buffer, 0x1000);
+
+        state.set_save_state_info(SaveStateInfo { number_of_cpus: 4, sm_base: 0x3000 });
+        state.set_save_state_info(SaveStateInfo { number_of_cpus: 8, sm_base: 0x9000 });
+        let info = state.save_state_info().unwrap();
+        assert_eq!((info.number_of_cpus, info.sm_base), (4, 0x3000));
+    }
+
+    #[test]
+    fn test_security_state_save_state_handoff_slot_round_trips() {
+        let state = SecurityState::new();
+
+        *state.lock_save_state_access() =
+            Some(SaveStateAccessHolder { user_protocol: 0x1234, register: MmSaveStateRegister::Rax, cpu_index: 2 });
+
+        let holder = state.lock_save_state_access().take().expect("hand-off is staged");
+        assert_eq!(holder.user_protocol, 0x1234);
+        assert_eq!(holder.cpu_index, 2);
+        assert!(state.lock_save_state_access().is_none());
+    }
+
+    #[test]
+    fn test_default_supervisor_mmi_handlers_cover_the_built_in_requests() {
+        let names: Vec<_> = DEFAULT_SUPERVISOR_MMI_HANDLERS.iter().map(|handler| handler.name).collect();
+        assert_eq!(names, ["MmReadyToLock", "MmSupvRequest", "MmExitBootServices"]);
+
+        let guids: Vec<_> = DEFAULT_SUPERVISOR_MMI_HANDLERS.iter().map(|handler| handler.handler_guid).collect();
+        assert_eq!(
+            guids,
+            [
+                EFI_DXE_MM_READY_TO_LOCK_PROTOCOL_GUID.into_inner(),
+                MM_SUPERVISOR_REQUEST_HANDLER_GUID.into_inner(),
+                EVENT_EXIT_BOOT_SERVICES.into_inner(),
+            ]
+        );
     }
 }
