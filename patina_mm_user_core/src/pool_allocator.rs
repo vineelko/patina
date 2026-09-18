@@ -108,7 +108,7 @@ struct PoolBlockHeader {
 impl PoolBlockHeader {
     /// Base address of this block (== address of the header itself).
     fn base(&self) -> usize {
-        self as *const Self as usize
+        ptr::from_ref::<Self>(self) as usize
     }
 
     /// Total usable capacity of this block in bytes.
@@ -163,6 +163,7 @@ pub struct PoolAllocator<P: PageAllocatorBackend + 'static> {
 // exposed outside this module, so transferring or sharing a `PoolAllocator`
 // across threads cannot create a data race.
 unsafe impl<P: PageAllocatorBackend> Send for PoolAllocator<P> {}
+// SAFETY: As above.
 unsafe impl<P: PageAllocatorBackend> Sync for PoolAllocator<P> {}
 
 impl<P: PageAllocatorBackend> PoolAllocator<P> {
@@ -184,7 +185,7 @@ impl<P: PageAllocatorBackend> PoolAllocator<P> {
         let base = match self.page_allocator.allocate_pages(num_pages) {
             Ok(addr) => addr,
             Err(e) => {
-                log::warn!("Pool allocator: failed to allocate {} pages: {:?}", num_pages, e);
+                log::warn!("Pool allocator: failed to allocate {num_pages} pages: {e:?}");
                 return None;
             }
         };
@@ -203,7 +204,7 @@ impl<P: PageAllocatorBackend> PoolAllocator<P> {
             header_ptr.as_mut()
         };
 
-        log::trace!("Pool allocator: new block at {:#018x} ({} pages)", base, num_pages);
+        log::trace!("Pool allocator: new block at {base:#018x} ({num_pages} pages)");
 
         header.try_alloc(layout)
     }
@@ -287,13 +288,13 @@ unsafe impl<P: PageAllocatorBackend> GlobalAlloc for PoolAllocator<P> {
             }
 
             if let Err(e) = self.page_allocator.free_pages(base, num_pages) {
-                log::warn!("Pool allocator: failed to free block at {:#018x}: {:?}", base, e);
+                log::warn!("Pool allocator: failed to free block at {base:#018x}: {e:?}");
             } else {
-                log::trace!("Pool allocator: freed block at {:#018x} ({} pages)", base, num_pages);
+                log::trace!("Pool allocator: freed block at {base:#018x} ({num_pages} pages)");
             }
             return;
         }
 
-        log::warn!("Pool allocator: dealloc called with unknown pointer {:#018x}", addr);
+        log::warn!("Pool allocator: dealloc called with unknown pointer {addr:#018x}");
     }
 }

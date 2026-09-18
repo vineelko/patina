@@ -11,10 +11,10 @@
 //! The MM Supervisor exposes page allocation via the following syscall indices
 //! (defined in SysCallLib.h / `SyscallIndex` enum in the supervisor):
 //!
-//! | Syscall     | RAX       | RDX (arg1)     | R8 (arg2)      | R9 (arg3)   |
-//! |-------------|-----------|----------------|----------------|-------------|
-//! | AllocPage   | `0x10004` | alloc_type (0) | mem_type (6)   | page_count  |
-//! | FreePage    | `0x10005` | address        | page_count     | 0           |
+//! | Syscall       | RAX       | RDX (arg1)       | R8 (arg2)      | R9 (arg3)   |
+//! |---------------|-----------|------------------|----------------|-------------|
+//! | `AllocPage`   | `0x10004` | `alloc_type` (0) | `mem_type` (6) | `page_count`|
+//! | `FreePage`    | `0x10005` | address          | `page_count`   | 0           |
 //!
 //! The supervisor returns:
 //! - RAX: result value
@@ -45,6 +45,8 @@ const RUNTIME_SERVICES_DATA: u64 = 6;
 /// Returns `true` if the supervisor confirms the range falls entirely within
 /// the user communication buffer region.
 pub fn is_comm_buffer(address: u64, size: u64) -> bool {
+    // SAFETY: `MmIsCommBuffer` only inspects the supplied range and returns a boolean; it
+    // neither reads nor writes through the address.
     let result = unsafe { raw_syscall(SyscallIndex::MmIsCommBuffer.as_u64(), address, size, 0) };
     result != 0
 }
@@ -69,6 +71,7 @@ pub struct SyscallPageAllocator {
 // SAFETY: SyscallPageAllocator uses an atomic flag and the syscall interface is
 // re-entrant from the BSP.
 unsafe impl Send for SyscallPageAllocator {}
+// SAFETY: As above.
 unsafe impl Sync for SyscallPageAllocator {}
 
 impl Default for SyscallPageAllocator {
@@ -102,15 +105,17 @@ impl PageAllocatorBackend for SyscallPageAllocator {
         }
 
         let addr = unsafe {
+            // SAFETY: `AllocPage` takes scalar arguments and returns an address; the allocator
+            // was checked to be initialized above, so the syscall interface is available.
             raw_syscall(SyscallIndex::AllocPage.as_u64(), ALLOCATE_ANY_PAGES, RUNTIME_SERVICES_DATA, num_pages as u64)
         };
 
         if addr == 0 {
-            log::warn!("SyscallPageAllocator: AllocPage({} pages) returned a null address", num_pages);
+            log::warn!("SyscallPageAllocator: AllocPage({num_pages} pages) returned a null address");
             return Err(PageAllocError::OutOfMemory);
         }
 
-        log::trace!("SyscallPageAllocator: allocated {} page(s) at 0x{:016x}", num_pages, addr);
+        log::trace!("SyscallPageAllocator: allocated {num_pages} page(s) at 0x{addr:016x}");
 
         Ok(addr)
     }
@@ -120,9 +125,11 @@ impl PageAllocatorBackend for SyscallPageAllocator {
             return Err(PageAllocError::NotInitialized);
         }
 
+        // SAFETY: The caller of `free_pages` guarantees `addr`/`num_pages` describe a region
+        // previously returned by `allocate_pages`, which the supervisor then reclaims.
         unsafe { raw_syscall(SyscallIndex::FreePage.as_u64(), addr, num_pages as u64, 0) };
 
-        log::trace!("SyscallPageAllocator: freed {} page(s) at 0x{:016x}", num_pages, addr);
+        log::trace!("SyscallPageAllocator: freed {num_pages} page(s) at 0x{addr:016x}");
 
         Ok(())
     }

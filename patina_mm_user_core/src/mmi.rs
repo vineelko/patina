@@ -47,15 +47,15 @@ use spin::Mutex;
 /// Re-exported from [`patina::pi::mm_cis::MmiHandlerEntryPoint`].
 use patina::pi::mm_cis::MmiHandlerEntryPoint;
 
-/// EFI_WARN_INTERRUPT_SOURCE_QUIESCED — PI spec warning status code.
+/// `EFI_WARN_INTERRUPT_SOURCE_QUIESCED` — PI spec warning status code.
 /// Indicates an interrupt source was quiesced.
 const WARN_INTERRUPT_SOURCE_QUIESCED: efi::Status = efi::Status::from_usize(3);
 
-/// EFI_WARN_INTERRUPT_SOURCE_PENDING — PI spec warning status code.
+/// `EFI_WARN_INTERRUPT_SOURCE_PENDING` — PI spec warning status code.
 /// Indicates an interrupt source was processed but not quiesced.
 const WARN_INTERRUPT_SOURCE_PENDING: efi::Status = efi::Status::from_usize(2);
 
-/// EFI_INTERRUPT_PENDING — PI spec status for pending interrupts.
+/// `EFI_INTERRUPT_PENDING` — PI spec status for pending interrupts.
 const INTERRUPT_PENDING: efi::Status = efi::Status::from_usize(0x80000000 | 0x00000004);
 
 /// Signature for internal (Rust-native) MMI handlers.
@@ -222,10 +222,10 @@ impl MmiDatabase {
         let mut inner = self.inner.lock();
 
         // Search root handlers
-        for handler in inner.root_handlers.iter_mut() {
+        for handler in &mut inner.root_handlers {
             if handler.id == target_id {
                 handler.to_remove = true;
-                log::debug!("Marked root MMI handler id={} for removal.", target_id);
+                log::debug!("Marked root MMI handler id={target_id} for removal.");
                 if inner.manage_calling_depth == 0 {
                     Self::cleanup_removed_handlers(&mut inner);
                 }
@@ -234,13 +234,12 @@ impl MmiDatabase {
         }
 
         // Search GUID-specific handlers
-        for entry in inner.entries.iter_mut() {
-            for handler in entry.handlers.iter_mut() {
+        for entry in &mut inner.entries {
+            for handler in &mut entry.handlers {
                 if handler.id == target_id {
                     handler.to_remove = true;
                     log::debug!(
-                        "Marked MMI handler id={} for removal (GUID: {}).",
-                        target_id,
+                        "Marked MMI handler id={target_id} for removal (GUID: {}).",
                         patina::Guid::from_ref(&entry.handler_type)
                     );
                     if inner.manage_calling_depth == 0 {
@@ -251,7 +250,7 @@ impl MmiDatabase {
             }
         }
 
-        log::warn!("MMI handler {:?} not found for unregistering.", dispatch_handle);
+        log::warn!("MMI handler {dispatch_handle:?} not found for unregistering.");
         Err(efi::Status::NOT_FOUND)
     }
 
@@ -284,10 +283,10 @@ impl MmiDatabase {
             inner.manage_calling_depth += 1;
 
             match handler_type {
-                None => inner.root_handlers.iter().filter(|h| !h.to_remove).cloned().collect::<Vec<_>>(),
+                None => inner.root_handlers.iter().filter(|h| !h.to_remove).copied().collect::<Vec<_>>(),
                 Some(guid) => {
                     if let Some(entry) = inner.entries.iter().find(|e| e.handler_type == *guid) {
-                        entry.handlers.iter().filter(|h| !h.to_remove).cloned().collect::<Vec<_>>()
+                        entry.handlers.iter().filter(|h| !h.to_remove).copied().collect::<Vec<_>>()
                     } else {
                         Vec::new()
                     }
@@ -371,7 +370,7 @@ impl MmiDatabase {
                 }
             }
         }
-        log::info!("Finished dispatching handlers with final status = {:?}", return_status);
+        log::info!("Finished dispatching handlers with final status = {return_status:?}");
         return_status
     }
 

@@ -100,6 +100,7 @@ pub struct ProtocolDatabase {
 // held. No interior reference escapes — only opaque id-tokens are handed across
 // the MM ABI — so sharing a `ProtocolDatabase` across threads cannot race.
 unsafe impl Send for ProtocolDatabase {}
+// SAFETY: As above.
 unsafe impl Sync for ProtocolDatabase {}
 
 impl Default for ProtocolDatabase {
@@ -145,21 +146,20 @@ impl ProtocolDatabase {
         let (installed_handle, pending) = {
             let mut inner = self.inner.lock();
 
-            let id = match Self::handle_to_id(handle) {
+            let id = if let Some(id) = Self::handle_to_id(handle) {
                 // Existing handle: it must exist and must not already carry this protocol.
-                Some(id) => match inner.handles.get(&id) {
-                    None => return Err(efi::Status::INVALID_PARAMETER),
-                    Some(protocols) if protocols.iter().any(|p| p.guid == *guid) => {
-                        return Err(efi::Status::INVALID_PARAMETER);
-                    }
-                    Some(_) => id,
-                },
-                // Null handle: allocate a new one.
-                None => {
-                    let id = inner.next_id();
-                    inner.handles.insert(id, Vec::new());
-                    id
+                let Some(protocols) = inner.handles.get(&id) else {
+                    return Err(efi::Status::INVALID_PARAMETER);
+                };
+                if protocols.iter().any(|p| p.guid == *guid) {
+                    return Err(efi::Status::INVALID_PARAMETER);
                 }
+                id
+            } else {
+                // Null handle: allocate a new one.
+                let id = inner.next_id();
+                inner.handles.insert(id, Vec::new());
+                id
             };
 
             inner.handles.entry(id).or_default().push(ProtocolInterface { guid: *guid, interface });
@@ -183,7 +183,7 @@ impl ProtocolDatabase {
             }
         }
 
-        log::debug!("MmInstallProtocolInterface: {:?} on handle {:p}", guid, installed_handle);
+        log::debug!("MmInstallProtocolInterface: {guid:?} on handle {installed_handle:p}");
         Ok(installed_handle)
     }
 

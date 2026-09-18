@@ -90,7 +90,10 @@ struct CoreMmiHandler {
 /// handler (also on the BSP), so it is safe to share them.
 #[derive(Clone, Copy)]
 struct SendHandle(efi::Handle);
+// SAFETY: The handles are only written by the BSP during single-threaded init and read back on
+// the BSP during the ready-to-lock handler, so they are never shared across CPUs concurrently.
 unsafe impl Send for SendHandle {}
+// SAFETY: As above.
 unsafe impl Sync for SendHandle {}
 
 impl SendHandle {
@@ -104,14 +107,14 @@ impl SendHandle {
 pub fn register_core_mmi_handlers() {
     let mut handles = DISPATCH_HANDLES.lock();
 
-    for (i, entry) in CORE_MMI_HANDLERS.iter().enumerate() {
+    for (i, (slot, entry)) in handles.iter_mut().zip(CORE_MMI_HANDLERS.iter()).enumerate() {
         match MmUserCore::instance().mmi_db.register_internal_handler(entry.handler, Some(entry.handler_type)) {
             Ok(handle) => {
-                handles[i] = SendHandle(handle);
-                log::info!("Registered core MMI handler [{}] for {}", i, entry.handler_type);
+                *slot = SendHandle(handle);
+                log::info!("Registered core MMI handler [{i}] for {}", entry.handler_type);
             }
             Err(status) => {
-                log::error!("Failed to register core MMI handler [{}] for {}: {:?}", i, entry.handler_type, status);
+                log::error!("Failed to register core MMI handler [{i}] for {}: {status:?}", entry.handler_type);
             }
         }
     }
@@ -151,13 +154,13 @@ fn mm_driver_dispatch_handler(
 
     // Dispatch the MM drivers discovered during StartUserCore (single dependency-ordered pass).
     match MmUserCore::instance().dispatch_drivers() {
-        Ok(count) => log::info!("Successfully dispatched {} MM driver(s).", count),
-        Err(status) => log::error!("Driver dispatch failed: {:?}", status),
+        Ok(count) => log::info!("Successfully dispatched {count} MM driver(s)."),
+        Err(status) => log::error!("Driver dispatch failed: {status:?}"),
     }
 
     // Self-unregister (one-shot).
     let handles = DISPATCH_HANDLES.lock();
-    let dispatch_handle = handles[0].0;
+    let dispatch_handle = handles.first().map_or(core::ptr::null_mut(), |handle| handle.0);
     drop(handles);
 
     if !dispatch_handle.is_null() {
@@ -186,10 +189,10 @@ fn mm_ready_to_lock_handler(
 
     // Unregister handlers that are no longer needed after MM lock.
     let handles = DISPATCH_HANDLES.lock();
-    for (i, entry) in CORE_MMI_HANDLERS.iter().enumerate() {
-        if entry.unregister_on_lock && !handles[i].0.is_null() {
+    for (handle, entry) in handles.iter().zip(CORE_MMI_HANDLERS.iter()) {
+        if entry.unregister_on_lock && !handle.0.is_null() {
             // SAFETY: unregistering by handle is safe even if the handle is already gone.
-            let _ = unsafe { MmUserCore::instance().mmi_handler_unregister(handles[i].0) };
+            let _ = unsafe { MmUserCore::instance().mmi_handler_unregister(handle.0) };
         }
     }
     drop(handles);
@@ -197,7 +200,7 @@ fn mm_ready_to_lock_handler(
     // Install the MM Ready To Lock Protocol.
     let status = install_lifecycle_protocol(&patina::guid::MM_READY_TO_LOCK_PROTOCOL);
     if status != efi::Status::SUCCESS {
-        log::error!("Failed to install MM Ready To Lock Protocol: {:?}", status);
+        log::error!("Failed to install MM Ready To Lock Protocol: {status:?}");
     }
 
     status

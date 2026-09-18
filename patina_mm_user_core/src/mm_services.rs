@@ -61,7 +61,7 @@ pub(crate) fn init_mm_services(provider: &'static dyn MmServices) {
 pub(crate) fn build_mm_system_table() -> EfiMmSystemTable {
     EfiMmSystemTable {
         hdr: efi::TableHeader {
-            signature: MM_MMST_SIGNATURE as u64,
+            signature: u64::from(MM_MMST_SIGNATURE),
             revision: MM_SYSTEM_TABLE_REVISION,
             header_size: core::mem::size_of::<EfiMmSystemTable>() as u32,
             crc32: 0,
@@ -708,7 +708,7 @@ impl MmServices for MmUserCore {
                 Ok(self.protocol_db.locate_handle_by_protocol(guid))
             }
             _ => {
-                log::warn!("MmLocateHandle: search type {} not yet supported", search_type);
+                log::warn!("MmLocateHandle: search type {search_type} not yet supported");
                 Err(efi::Status::UNSUPPORTED)
             }
         }

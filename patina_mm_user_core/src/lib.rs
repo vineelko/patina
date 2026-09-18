@@ -10,14 +10,14 @@
 //! ## Architecture
 //!
 //! The user core is invoked by the supervisor with three command types:
-//! - **StartUserCore**: One-time initialization. Walk HOBs to discover drivers and dispatch them.
-//! - **UserRequest**: Runtime MMI dispatch. Parse the communication buffer and invoke registered handlers.
-//! - **UserApProcedure**: Execute a procedure on behalf of an AP.
+//! - **`StartUserCore`**: One-time initialization. Walk HOBs to discover drivers and dispatch them.
+//! - **`UserRequest`**: Runtime MMI dispatch. Parse the communication buffer and invoke registered handlers.
+//! - **`UserApProcedure`**: Execute a procedure on behalf of an AP.
 //!
 //! ## Entry Protocol
 //!
 //! The supervisor calls the user core entry point with three arguments:
-//! - `arg1` (`u64`): Command type (0 = StartUserCore, 1 = UserRequest, 2 = UserApProcedure)
+//! - `arg1` (`u64`): Command type (0 = `StartUserCore`, 1 = `UserRequest`, 2 = `UserApProcedure`)
 //! - `arg2` (`u64`): Command-specific data pointer
 //! - `arg3` (`u64`): Command-specific size or auxiliary data
 //!
@@ -105,7 +105,7 @@ core::arch::global_asm!(include_str!("entry_point.asm"));
 pub const MM_SUPERVISOR_DEPEX_HOB_GUID: patina::BinaryGuid =
     patina::BinaryGuid::from_string("b17f0049-affd-4530-acd6-e245e19deaf1");
 
-/// Mirrors the MM_SUPV_DEPEX_HOB_DATA structure defined in the supervisor.
+/// Mirrors the `MM_SUPV_DEPEX_HOB_DATA` structure defined in the supervisor.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct DepexHobData {
@@ -232,7 +232,7 @@ impl MmUserCore {
     fn init_mm_system_table(&'static self) -> *mut EfiMmSystemTable {
         let addr = *self.mm_system_table.call_once(|| {
             let ptr = Box::into_raw(Box::new(mm_services::build_mm_system_table()));
-            log::info!("MM System Table allocated at {:p}", ptr);
+            log::info!("MM System Table allocated at {ptr:p}");
             ptr.expose_provenance()
         });
         core::ptr::with_exposed_provenance_mut(addr)
@@ -274,7 +274,7 @@ impl MmUserCore {
         let command = match UserCommandType::try_from(op_code) {
             Ok(cmd) => cmd,
             Err(unknown) => {
-                log::error!("Unknown command type: {}", unknown);
+                log::error!("Unknown command type: {unknown}");
                 return efi::Status::INVALID_PARAMETER.as_usize() as u64;
             }
         };
@@ -317,14 +317,11 @@ impl MmUserCore {
         mm_mem::SYSCALL_PAGE_ALLOCATOR.set_initialized();
 
         // Parse the HOB list
-        let hob_list_info = unsafe {
-            match (hob_list as *const PhaseHandoffInformationTable).as_ref() {
-                Some(info) => info,
-                None => {
-                    log::error!("Failed to read HOB list header.");
-                    return efi::Status::INVALID_PARAMETER.as_usize() as u64;
-                }
-            }
+        // SAFETY: The supervisor passes a non-null pointer to the HOB list it built, which
+        // outlives this call. The null case was rejected above.
+        let Some(hob_list_info) = (unsafe { (hob_list as *const PhaseHandoffInformationTable).as_ref() }) else {
+            log::error!("Failed to read HOB list header.");
+            return efi::Status::INVALID_PARAMETER.as_usize() as u64;
         };
 
         let hob = Hob::Handoff(hob_list_info);
@@ -339,18 +336,18 @@ impl MmUserCore {
         // Initialize the MM System Table (heap-allocated, function pointers
         // are thunks that forward to this instance's databases).
         let mm_system_table = self.init_mm_system_table();
-        log::info!("MM System Table initialized at {:p}", mm_system_table);
+        log::info!("MM System Table initialized at {mm_system_table:p}");
 
         // Publish the HOB list as a configuration table entry so dispatched
         // drivers can locate it via the system table (mirrors the C
         // `MmInstallConfigurationTable(&gMmCoreMmst, &gEfiHobListGuid, ...)`
         // call in `InitializeMmHobList`).
-        // SAFETY: `hob_list` points to the supervisor-provided HOB list and remains valid for the
-        // lifetime of the configuration-table entry.
-        if let Err(status) =
-            unsafe { self.install_configuration_table(&patina::guid::HOB_LIST, hob_list as *mut c_void, 0) }
-        {
-            log::error!("Failed to install HOB list configuration table: {:?}", status);
+        if let Err(status) = unsafe {
+            // SAFETY: `hob_list` points to the supervisor-provided HOB list and remains valid for
+            // the lifetime of the configuration-table entry.
+            self.install_configuration_table(&patina::guid::HOB_LIST, hob_list.cast_mut(), 0)
+        } {
+            log::error!("Failed to install HOB list configuration table: {status:?}");
         }
 
         // Register core MMI handlers (lifecycle events like ready-to-lock,
@@ -425,11 +422,15 @@ impl MmUserCore {
         }
 
         // Read the EfiMmEntryContext
+        // SAFETY: The supervisor places an `EfiMmEntryContext` at offset 0 of the buffer it
+        // passes here, and the null case was rejected above.
         let entry_context = unsafe { core::ptr::read(supv_to_user_buffer as *const EfiMmEntryContext) };
 
         self.update_cpu_context(entry_context.currently_executing_cpu as usize, entry_context.number_of_cpus as usize);
 
         // Read MmCommBufferStatus (immediately after the context)
+        // SAFETY: The supervisor places an `MmCommBufferStatus` at `context_size` bytes into the
+        // same buffer, per the `UserRequest` calling convention.
         let comm_status = unsafe {
             core::ptr::read((supv_to_user_buffer as *const u8).add(context_size as usize) as *const MmCommBufferStatus)
         };
@@ -443,11 +444,11 @@ impl MmUserCore {
         if comm_buffer_base != 0 && comm_status.is_comm_buffer_valid != 0 {
             // Validate the communication buffer via a supervisor syscall.
             let mut return_buffer_size: u64 = 0;
-            let sync_status = if !mm_mem::is_comm_buffer(comm_buffer_base, comm_buffer_size) {
-                log::error!("MmIsCommBuffer rejected buffer at 0x{:x} size 0x{:x}", comm_buffer_base, comm_buffer_size);
-                efi::Status::NOT_FOUND
-            } else {
+            let sync_status = if mm_mem::is_comm_buffer(comm_buffer_base, comm_buffer_size) {
                 self.dispatch_synchronous_mmi(comm_buffer_base, comm_buffer_size, &mut return_buffer_size)
+            } else {
+                log::error!("MmIsCommBuffer rejected buffer at 0x{comm_buffer_base:x} size 0x{comm_buffer_size:x}");
+                efi::Status::NOT_FOUND
             };
 
             updated_status.is_comm_buffer_valid = 0;
@@ -464,6 +465,7 @@ impl MmUserCore {
         unsafe { self.mmi_manage(None, core::ptr::null(), core::ptr::null_mut(), core::ptr::null_mut()) };
 
         // Write back the updated status to the supervisor-to-user buffer
+        // SAFETY: Writing back to the same `MmCommBufferStatus` slot that was read above.
         unsafe {
             core::ptr::write(
                 (supv_to_user_buffer as *mut u8).add(context_size as usize) as *mut MmCommBufferStatus,
@@ -490,8 +492,7 @@ impl MmUserCore {
         // The buffer must be large enough for at least the communicate header.
         if buffer_size < EfiMmCommunicateHeader::size() {
             log::error!(
-                "Communication buffer too small for header: {} < {}",
-                buffer_size,
+                "Communication buffer too small for header: {buffer_size} < {}",
                 EfiMmCommunicateHeader::size()
             );
             return efi::Status::BAD_BUFFER_SIZE;
@@ -506,6 +507,8 @@ impl MmUserCore {
             == patina::Guid::from_ref(&patina::pi::protocol::communication3::COMMUNICATE_HEADER_V3_GUID)
         {
             // V3 header
+            // SAFETY: The buffer was verified above to be at least a legacy header in size, and
+            // the V3 total size is bounds-checked immediately after this read.
             let v3 = unsafe {
                 core::ptr::read_unaligned(
                     comm_buffer_base as *const patina::pi::protocol::communication3::EfiMmCommunicateHeader,
@@ -514,7 +517,7 @@ impl MmUserCore {
             let header_size = mem::size_of::<patina::pi::protocol::communication3::EfiMmCommunicateHeader>();
             let total = v3.buffer_size as usize;
             if total > buffer_size {
-                log::error!("V3 buffer_size 0x{:x} exceeds available 0x{:x}", total, buffer_size);
+                log::error!("V3 buffer_size 0x{total:x} exceeds available 0x{buffer_size:x}");
                 return efi::Status::BAD_BUFFER_SIZE;
             }
             // GUID to dispatch is `message_guid` in V3
@@ -528,8 +531,7 @@ impl MmUserCore {
             let total = EfiMmCommunicateHeader::size() + message_length;
             if total > buffer_size {
                 log::error!(
-                    "Legacy message_length 0x{:x} exceeds available 0x{:x}",
-                    message_length,
+                    "Legacy message_length 0x{message_length:x} exceeds available 0x{:x}",
                     buffer_size.saturating_sub(EfiMmCommunicateHeader::size())
                 );
                 return efi::Status::BAD_BUFFER_SIZE;
@@ -542,18 +544,21 @@ impl MmUserCore {
         // Zero the remainder of the buffer past the message (matches C behaviour).
         let used = comm_header_size + data_size;
         if used < buffer_size {
+            // SAFETY: `used` is less than `buffer_size`, so the tail lies inside the comm buffer
+            // the supervisor validated.
             unsafe {
                 core::ptr::write_bytes((comm_buffer_base as *mut u8).add(used), 0, buffer_size - used);
             }
         }
 
         // Dispatch the GUID-specific handler.
+        // SAFETY: `comm_header_size` is within the buffer, whose size was checked above.
         let comm_data_ptr = unsafe { (comm_buffer_base as *mut u8).add(comm_header_size) as *mut c_void };
 
-        // SAFETY: `comm_guid_ptr` references the message GUID parsed from the validated comm buffer;
-        // `comm_data_ptr`/`data_size` describe the comm-buffer payload.
         let status = unsafe {
-            self.mmi_manage(Some(&*comm_guid_ptr), core::ptr::null(), comm_data_ptr, &mut data_size as *mut usize)
+            // SAFETY: `comm_guid_ptr` references the message GUID parsed from the validated comm
+            // buffer; `comm_data_ptr`/`data_size` describe the comm-buffer payload.
+            self.mmi_manage(Some(&*comm_guid_ptr), core::ptr::null(), comm_data_ptr, &raw mut data_size)
         };
 
         *return_buffer_size = (data_size + comm_header_size) as u64;
@@ -570,12 +575,13 @@ impl MmUserCore {
             return efi::Status::INVALID_PARAMETER.as_usize() as u64;
         }
 
-        log::trace!("Executing AP procedure at 0x{:016x} with arg 0x{:016x}", procedure, argument);
+        log::trace!("Executing AP procedure at 0x{procedure:016x} with arg 0x{argument:016x}");
 
+        type EfiApProcedure = unsafe extern "efiapi" fn(*mut c_void);
         // SAFETY: The supervisor has validated the procedure pointer before dispatching.
         // The procedure follows the EFI AP_PROCEDURE calling convention.
-        type EfiApProcedure = unsafe extern "efiapi" fn(*mut c_void);
         let proc_fn: EfiApProcedure = unsafe { core::mem::transmute(procedure) };
+        // SAFETY: As above.
         unsafe { proc_fn(argument as *mut c_void) };
 
         efi::Status::SUCCESS.as_usize() as u64
@@ -603,10 +609,7 @@ impl MmUserCore {
                 COMM_BUFFER_SIZE.store(buffer_size, Ordering::Release);
 
                 log::info!(
-                    "Found MM communication buffer: base=0x{:016x}, pages={}, size=0x{:x}",
-                    physical_start,
-                    number_of_pages,
-                    buffer_size,
+                    "Found MM communication buffer: base=0x{physical_start:016x}, pages={number_of_pages}, size=0x{buffer_size:x}"
                 );
                 return;
             }

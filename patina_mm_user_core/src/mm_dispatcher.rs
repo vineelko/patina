@@ -165,13 +165,12 @@ impl MmDispatcher {
 
                 // Skip the supervisor core and user core modules
                 if module_name == MM_SUPERVISOR_CORE_GUID || module_name == MM_SUPERVISOR_USER_GUID {
-                    log::info!("Skipping core module: {}", module_name);
+                    log::info!("Skipping core module: {module_name}");
                     continue;
                 }
 
                 log::info!(
-                    "Found MM driver: name={}, entry=0x{:016x}, base=0x{:016x}, size=0x{:x}",
-                    module_name,
+                    "Found MM driver: name={module_name}, entry=0x{:016x}, base=0x{:016x}, size=0x{:x}",
                     mem_alloc_mod.entry_point,
                     mem_alloc_mod.alloc_descriptor.memory_base_address,
                     mem_alloc_mod.alloc_descriptor.memory_length,
@@ -189,12 +188,11 @@ impl MmDispatcher {
                                 let depex_hob_data = <[u8]>::as_ptr(data) as *const DepexHobData;
                                 // SAFETY: We trust that the supervisor correctly formats the depex HOB data
                                 let depex_hob_data = unsafe { &*depex_hob_data };
-                                if depex_hob_data.name != module_name {
-                                    panic!(
-                                        "Depex HOB module name {} does not match driver module name {}",
-                                        depex_hob_data.name, module_name
-                                    );
-                                }
+                                assert!(
+                                    depex_hob_data.name == module_name,
+                                    "Depex HOB module name {} does not match driver module name {module_name}",
+                                    depex_hob_data.name
+                                );
                                 // print depex_hob_data.depex_expression pointer and length
                                 log::info!(
                                     "  Parsed depex HOB {:p} for driver {} at {:p}: expression length = {}",
@@ -226,7 +224,7 @@ impl MmDispatcher {
                     None
                 };
 
-                log::info!("  Driver {} has depex: {:?}", module_name, depex);
+                log::info!("  Driver {module_name} has depex: {depex:?}");
 
                 drivers.push(DriverEntry {
                     file_name: module_name.into_inner(),
@@ -277,7 +275,7 @@ impl MmDispatcher {
                     scheduled.push(driver);
                 } else {
                     // Check for Before/After associations
-                    match driver.depex.as_ref().map(|d| d.is_associated()) {
+                    match driver.depex.as_ref().map(patina_internal_core::depex::Depex::is_associated) {
                         Some(Some(AssociatedDependency::Before(guid))) => {
                             associated_before.entry(OrdGuid(guid)).or_default().push(driver);
                         }
@@ -322,8 +320,11 @@ impl MmDispatcher {
                 // MM driver entry signature: EFI_STATUS EFIAPI DriverEntry(EFI_HANDLE ImageHandle, EFI_MM_SYSTEM_TABLE *MmSystemTable)
                 // We pass a null image handle and the system table pointer.
                 type MmDriverEntryPoint = unsafe extern "efiapi" fn(efi::Handle, *const c_void) -> efi::Status;
+                // SAFETY: The entry point address came from the driver's `MemoryAllocationModule`
+                // HOB, which the supervisor produced, and matches the MM driver ABI.
                 let entry_fn: MmDriverEntryPoint = unsafe { core::mem::transmute(driver.entry_point) };
 
+                // SAFETY: As above; the driver owns the contract for its own entry point.
                 let status = unsafe { entry_fn(core::ptr::null_mut(), mm_system_table) };
 
                 if status == efi::Status::SUCCESS {

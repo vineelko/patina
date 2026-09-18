@@ -165,9 +165,10 @@ impl MmComponentDispatcher {
     /// Components that fail initialization are moved to the rejected list and
     /// will not be dispatched.
     pub fn insert_component(&mut self, idx: usize, mut component: Box<dyn patina::component::Component>) {
-        match component.initialize(&mut self.storage) {
-            true => self.components.insert(idx, component),
-            false => self.rejected.push(component),
+        if component.initialize(&mut self.storage) {
+            self.components.insert(idx, component);
+        } else {
+            self.rejected.push(component);
         }
     }
 
@@ -195,7 +196,7 @@ impl MmComponentDispatcher {
     /// Parses the HOB list, producing a `Hob<T>` datum for each guided HOB that
     /// has a registered parser.
     pub fn insert_hobs(&mut self, hob: &Hob<'_>) {
-        for entry in hob.into_iter() {
+        for entry in hob {
             if let Hob::GuidHob(guid, data) = entry {
                 let parser_funcs = self.storage.get_hob_parsers(&guid.name);
                 if parser_funcs.is_empty() {
