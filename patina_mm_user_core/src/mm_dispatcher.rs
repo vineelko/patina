@@ -487,7 +487,7 @@ mod tests {
             });
         }
 
-        /// Appends a driver module HOB. `alloc_name` selects whether the supervisor recognises it.
+        /// Appends a driver module HOB. `alloc_name` selects whether the supervisor recognizes it.
         fn module(mut self, alloc_name: patina::BinaryGuid, module_name: patina::BinaryGuid, entry_point: u64) -> Self {
             let module = MemoryAllocationModule {
                 header: HobHeader {

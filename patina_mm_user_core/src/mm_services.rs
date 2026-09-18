@@ -776,14 +776,15 @@ mod tests {
     fn install_on(
         mut handle: efi::Handle,
         mut guid: efi::Guid,
-        iface: *mut c_void,
+        interface: *mut c_void,
     ) -> Result<efi::Handle, efi::Status> {
-        let status = mm_install_protocol_interface_impl(&raw mut handle, &raw mut guid, efi::NATIVE_INTERFACE, iface);
+        let status =
+            mm_install_protocol_interface_impl(&raw mut handle, &raw mut guid, efi::NATIVE_INTERFACE, interface);
         if status == efi::Status::SUCCESS { Ok(handle) } else { Err(status) }
     }
 
-    fn install(guid: efi::Guid, iface: *mut c_void) -> efi::Handle {
-        install_on(core::ptr::null_mut(), guid, iface).expect("install succeeds")
+    fn install(guid: efi::Guid, interface: *mut c_void) -> efi::Handle {
+        install_on(core::ptr::null_mut(), guid, interface).expect("install succeeds")
     }
 
     #[test]

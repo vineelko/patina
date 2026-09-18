@@ -518,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn test_freeing_a_middle_block_keeps_its_neighbours_reachable() {
+    fn test_freeing_a_middle_block_keeps_its_neighbors_reachable() {
         let (backend, pool) = new_pool();
         let filling = layout(page_size() - header_size() - 64, 8);
 
@@ -530,7 +530,7 @@ mod tests {
         free(&pool, middle, filling);
         assert_eq!(backend.released().len(), 1);
 
-        // Both neighbours survive the unlink and can still be found by address.
+        // Both neighbors survive the unlink and can still be found by address.
         free(&pool, newest, filling);
         free(&pool, oldest, filling);
         assert_eq!(backend.released().len(), 3, "the list was still walkable after the middle block left");

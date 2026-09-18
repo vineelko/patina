@@ -358,8 +358,8 @@ mod tests {
     static REENTRANT_NOTIFY: &(dyn Fn(ProtocolInstalled<'_>) -> efi::Status + Send + Sync) =
         &(install_from_notify as fn(ProtocolInstalled<'_>) -> efi::Status);
 
-    fn install_new(db: &ProtocolDatabase, guid: &efi::Guid, iface: *mut c_void) -> efi::Handle {
-        db.install_protocol(core::ptr::null_mut(), guid, iface).expect("installing on a null handle succeeds")
+    fn install_new(db: &ProtocolDatabase, guid: &efi::Guid, interface: *mut c_void) -> efi::Handle {
+        db.install_protocol(core::ptr::null_mut(), guid, interface).expect("installing on a null handle succeeds")
     }
 
     #[test]
