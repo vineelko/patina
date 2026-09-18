@@ -56,6 +56,18 @@ pub(crate) struct SmramRegion {
     pub pre_allocated: bool,
 }
 
+/// Returns `true` if a raw `MSR_SMM_MCA_CAP` value reports SMM Code Access Check support.
+const fn smm_code_access_supported(mca_cap: u64) -> bool {
+    (mca_cap & SMM_CODE_ACCESS_CHK_BIT) != 0
+}
+
+/// Returns the value to write to `MSR_SMM_FEATURE_CONTROL` to enable and lock SMM
+/// Code Access Check, or `None` if both bits are already set in `current`.
+const fn smm_feature_control_update(current: u64) -> Option<u64> {
+    let updated = current | SMM_CODE_CHK_EN_BIT | SMM_FEATURE_CONTROL_LOCK_BIT;
+    if updated == current { None } else { Some(updated) }
+}
+
 /// Enables the SMM Code Access Check feature.
 ///
 /// When enabled, the CPU raises a machine check if code is fetched from outside
@@ -70,18 +82,17 @@ pub(crate) struct SmramRegion {
 pub(crate) fn configure_smm_code_access() {
     // SAFETY: MSR_SMM_MCA_CAP is a read-only architectural capability MSR that is
     // valid on all CPUs targeted by this code; reading it has no side effects.
-    let smm_code_access_supported = (unsafe { read_msr(MSR_SMM_MCA_CAP) } & SMM_CODE_ACCESS_CHK_BIT) != 0;
-    assert!(smm_code_access_supported, "Unsupported CPU: SMM Code Access Check not supported");
+    let mca_cap = unsafe { read_msr(MSR_SMM_MCA_CAP) };
+    assert!(smm_code_access_supported(mca_cap), "Unsupported CPU: SMM Code Access Check not supported");
 
     // SAFETY: MSR_SMM_FEATURE_CONTROL is an architectural MSR; reading it has no
     // side effects.
-    let smm_feature_control_msr = unsafe { read_msr(MSR_SMM_FEATURE_CONTROL) };
-    let new_smm_feature_control_msr = smm_feature_control_msr | SMM_CODE_CHK_EN_BIT | SMM_FEATURE_CONTROL_LOCK_BIT;
-    if new_smm_feature_control_msr != smm_feature_control_msr {
+    let current = unsafe { read_msr(MSR_SMM_FEATURE_CONTROL) };
+    if let Some(updated) = smm_feature_control_update(current) {
         // SAFETY: We only set the code check enable and lock bits, which is the
         // architecturally defined way to enable SMM Code Access Check. The write
         // is idempotent and performed only when the value actually changes.
-        unsafe { write_msr(MSR_SMM_FEATURE_CONTROL, new_smm_feature_control_msr) };
+        unsafe { write_msr(MSR_SMM_FEATURE_CONTROL, updated) };
     }
 }
 
@@ -135,12 +146,25 @@ pub(crate) const fn verify_smrr_base_size(smrr_base: u32, smrr_size: u32) -> boo
     true
 }
 
+/// Returns `true` if a raw CPUID leaf 1 `edx` value reports MTRR support.
+const fn mtrr_supported(cpuid_edx: u32) -> bool {
+    (cpuid_edx & (1 << 12)) != 0
+}
+
+/// Returns `true` if a raw `MSR_MTRR_CAP` value reports SMRR support.
+const fn smrr_supported(mtrr_cap: u64) -> bool {
+    (mtrr_cap & MTRR_CAP_SMRR_BIT) != 0
+}
+
+/// Returns `true` if a raw `MSR_MTRR_CAP` value reports the extended SMRR capability.
+const fn smrr_ext_supported(mtrr_cap: u64) -> bool {
+    (mtrr_cap & MTRR_CAP_SMRR_EXT_BIT) != 0
+}
+
 /// Returns `true` if the CPU reports MTRR support via CPUID.
 #[cfg_attr(coverage, coverage(off))]
 fn is_mtrr_supported() -> bool {
-    let version = __cpuid(CPUID_VERSION_INFO);
-    let reg_edx = version.edx;
-    (reg_edx & (1 << 12)) != 0
+    mtrr_supported(__cpuid(CPUID_VERSION_INFO).edx)
 }
 
 /// Returns `true` if the CPU reports SMRR support via `MTRR CAP`.
@@ -148,7 +172,7 @@ fn is_mtrr_supported() -> bool {
 fn is_smrr_supported() -> bool {
     // SAFETY: MSR_MTRR_CAP is a read-only architectural capability MSR; reading
     // it has no side effects.
-    (unsafe { read_msr(MSR_MTRR_CAP) } & MTRR_CAP_SMRR_BIT) != 0
+    smrr_supported(unsafe { read_msr(MSR_MTRR_CAP) })
 }
 
 /// Returns `true` if the CPU reports the extended SMRR capability via `MTRR CAP`.
@@ -156,7 +180,13 @@ fn is_smrr_supported() -> bool {
 fn is_smrr_ext_supported() -> bool {
     // SAFETY: MSR_MTRR_CAP is a read-only architectural capability MSR; reading
     // it has no side effects.
-    (unsafe { read_msr(MSR_MTRR_CAP) } & MTRR_CAP_SMRR_EXT_BIT) != 0
+    smrr_ext_supported(unsafe { read_msr(MSR_MTRR_CAP) })
+}
+
+/// Returns the value to write to `MSR_SMRR_BASE` to map `smrr_base` as write-back
+/// cacheable, preserving the register's unrelated bits.
+const fn smrr_base_value(raw: u64, smrr_base: u32) -> u64 {
+    base_reg_set_base(base_reg_set_memtype(raw, MTRR_CACHE_WRITE_BACK), smrr_base)
 }
 
 /// Programs the SMRR base and mask registers to protect the given SMRAM region.
@@ -190,15 +220,18 @@ pub(crate) fn smrr_initialize(range: SmramRegion) {
     // `verify_smrr_base_size`, so the values written form a well-formed SMRR
     // range. The valid bit is left clear, so the range is not yet enforced.
     unsafe {
-        let mut base = read_msr(MSR_SMRR_BASE);
-        base = base_reg_set_memtype(base, MTRR_CACHE_WRITE_BACK);
-        base = base_reg_set_base(base, smrr_base);
+        let base = smrr_base_value(read_msr(MSR_SMRR_BASE), smrr_base);
         write_msr(MSR_SMRR_BASE, base);
 
-        let mut mask = read_msr(MSR_SMRR_MASK);
-        mask = mask_reg_set_mask(mask, smrr_size);
+        let mask = mask_reg_set_mask(read_msr(MSR_SMRR_MASK), smrr_size);
         write_msr(MSR_SMRR_MASK, mask);
     }
+}
+
+/// Returns the value to write to `MSR_SMRR_MASK` to enable and finalize the range,
+/// or `None` if bit 10 shows it is already finalized.
+const fn smrr_enable_mask(mask: u64) -> Option<u64> {
+    if mask_reg_bit10_set(mask) { None } else { Some(mask | MASK_VALID_BIT | MASK_BIT_10) }
 }
 
 /// Enables and finalizes the SMRR by setting the valid and bit-10 fields on the
@@ -218,9 +251,7 @@ pub(crate) fn smrr_enable() {
     // preserving all other bits. The write is skipped if the range is already
     // finalized.
     unsafe {
-        let mut mask = read_msr(MSR_SMRR_MASK);
-        if !mask_reg_bit10_set(mask) {
-            mask |= MASK_VALID_BIT | MASK_BIT_10;
+        if let Some(mask) = smrr_enable_mask(read_msr(MSR_SMRR_MASK)) {
             write_msr(MSR_SMRR_MASK, mask);
         }
     }
@@ -328,5 +359,69 @@ mod tests {
         assert!(!mask_reg_bit10_set(MASK_VALID_BIT));
         assert!(mask_reg_bit10_set(MASK_BIT_10));
         assert!(mask_reg_bit10_set(MASK_BIT_10 | MASK_VALID_BIT));
+    }
+
+    #[test]
+    fn test_smrr_capability_bits_are_decoded_from_raw_registers() {
+        assert!(!smm_code_access_supported(0));
+        assert!(!smm_code_access_supported(!SMM_CODE_ACCESS_CHK_BIT));
+        assert!(smm_code_access_supported(SMM_CODE_ACCESS_CHK_BIT));
+
+        assert!(!mtrr_supported(0));
+        assert!(!mtrr_supported(!(1 << 12)));
+        assert!(mtrr_supported(1 << 12));
+
+        // The two MTRR_CAP capabilities are reported by distinct bits.
+        assert!(!smrr_supported(0));
+        assert!(smrr_supported(MTRR_CAP_SMRR_BIT));
+        assert!(!smrr_supported(MTRR_CAP_SMRR_EXT_BIT));
+
+        assert!(!smrr_ext_supported(0));
+        assert!(smrr_ext_supported(MTRR_CAP_SMRR_EXT_BIT));
+        assert!(!smrr_ext_supported(MTRR_CAP_SMRR_BIT));
+    }
+
+    #[test]
+    fn test_smrr_feature_control_update_sets_both_bits_and_preserves_the_rest() {
+        let expected = SMM_CODE_CHK_EN_BIT | SMM_FEATURE_CONTROL_LOCK_BIT;
+        assert_eq!(smm_feature_control_update(0), Some(expected));
+        assert_eq!(smm_feature_control_update(SMM_CODE_CHK_EN_BIT), Some(expected));
+        assert_eq!(smm_feature_control_update(SMM_FEATURE_CONTROL_LOCK_BIT), Some(expected));
+        // Unrelated bits are carried through untouched.
+        assert_eq!(smm_feature_control_update(0x10), Some(expected | 0x10));
+    }
+
+    #[test]
+    fn test_smrr_feature_control_update_skips_the_write_when_already_locked() {
+        // Both bits already set, so the MSR write is suppressed as redundant.
+        assert_eq!(smm_feature_control_update(SMM_CODE_CHK_EN_BIT | SMM_FEATURE_CONTROL_LOCK_BIT), None);
+        assert_eq!(smm_feature_control_update(u64::MAX), None);
+    }
+
+    #[test]
+    fn test_smrr_base_value_applies_write_back_type_and_base() {
+        assert_eq!(smrr_base_value(0, 0x0080_0000), 0x0080_0000 | u64::from(MTRR_CACHE_WRITE_BACK));
+        // A stale memory type in the register is replaced rather than OR-ed.
+        assert_eq!(smrr_base_value(0xFF, 0x0080_0000), 0x0080_0000 | u64::from(MTRR_CACHE_WRITE_BACK));
+        // Bits above [31:12] are preserved.
+        assert_eq!(
+            smrr_base_value(0xFFFF_FFFF_0000_0000, 0x1000_0000),
+            0xFFFF_FFFF_1000_0000 | u64::from(MTRR_CACHE_WRITE_BACK)
+        );
+    }
+
+    #[test]
+    fn test_smrr_enable_mask_sets_valid_and_bit10() {
+        assert_eq!(smrr_enable_mask(0), Some(MASK_VALID_BIT | MASK_BIT_10));
+        // The programmed range mask is preserved alongside the new bits.
+        assert_eq!(mask_reg_set_mask(0, 0x0080_0000), 0xFF80_0000);
+        assert_eq!(smrr_enable_mask(0xFF80_0000), Some(0xFF80_0000 | MASK_VALID_BIT | MASK_BIT_10));
+    }
+
+    #[test]
+    fn test_smrr_enable_mask_skips_an_already_finalized_range() {
+        // Bit 10 means the range is locked until reset, so no write must be issued.
+        assert_eq!(smrr_enable_mask(MASK_BIT_10), None);
+        assert_eq!(smrr_enable_mask(0xFF80_0000 | MASK_VALID_BIT | MASK_BIT_10), None);
     }
 }
