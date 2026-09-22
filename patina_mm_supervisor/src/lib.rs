@@ -64,10 +64,10 @@ mod supervisor_handlers;
 mod test_support;
 
 use cpu::CpuManager;
-use intrinsics::{get_current_cpu_id, is_bsp};
+use intrinsics::{current_apic_id, is_bsp};
 use mailbox::MailboxManager;
 // Re-exported for use by descendant modules via `crate::` paths.
-use mem::{AllocationType, SharedPagingAllocator};
+use mem::{AllocationType, SharedPagingAllocator, page_allocator::MmramPlacement};
 
 use privilege_mgmt::{invoke_demoted_routine, syscall_setup::SyscallInterface};
 
@@ -132,6 +132,9 @@ pub const MM_SUPV_PASS_DOWN_HOB_REVISION: u32 = 2;
 
 /// Timeout for waiting for APs to arrive in the holding pen (1 second).
 const AP_ARRIVAL_TIMEOUT_US: u64 = 1_000_000;
+
+/// Timeout for waiting for released APs to acknowledge leaving the holding pen (1 second).
+const AP_EXIT_TIMEOUT_US: u64 = 1_000_000;
 
 /// Timeout for waiting for an AP to complete a dispatched procedure (10 seconds).
 const AP_TIMEOUT_US: u64 = 10_000_000;
@@ -218,9 +221,25 @@ pub struct MmSupervisorCore<P: PlatformInfo, const MAX_CPUS: usize> {
     _phantom: core::marker::PhantomData<fn() -> P>,
 }
 
+/// Returns whether `[base, base + size)` lies entirely inside MMRAM.
+///
+/// Reports `false` before the regions are known, since nothing can be shown to be inside MMRAM
+/// until then.
+///
+/// ## Panics
+///
+/// Panics if the range is only partly inside MMRAM; see [`MmramPlacement::is_inside`].
 pub(crate) fn is_buffer_inside_mmram(base: u64, size: u64) -> bool {
-    // we will go over the page allocator to see if this region falls inside any of the MMRAM regions
-    security_state().page_allocator().is_region_inside_mmram(base, size)
+    security_state().page_allocator().classify_mmram(base, size).is_some_and(|p| p.is_inside(base, size))
+}
+
+/// Returns whether `[base, base + size)` touches MMRAM at all, including a range that only
+/// crosses a boundary.
+///
+/// Reports an overlap when the regions are not known yet, since nothing can be shown to lie
+/// outside MMRAM before then.
+pub(crate) fn buffer_overlaps_mmram(base: u64, size: u64) -> bool {
+    !matches!(security_state().page_allocator().classify_mmram(base, size), Some(MmramPlacement::Outside))
 }
 
 /// Checks if a specific core has completed initialization.
@@ -319,9 +338,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// This function is unsafe because it is called from the MM entry point and assumes the environment
     /// is properly set up. The function will perform basic sanity checks against the incoming parameters
     /// but does not validate the entire system state.
+    /// `hob_list` must be valid during BSP initialization. It is not accessed on runtime entries.
     pub unsafe fn entry_point(&'static self, cpu_index: usize, hob_list: *const c_void) {
         // Get the current CPU's APIC ID, EBX[31:24] contains the initial APIC ID
-        let cpu_id = (get_current_cpu_id().ebx >> 24) & 0xff;
+        let cpu_id = current_apic_id();
 
         // Determine if we're BSP by checking IA32_APIC_BASE MSR
         let is_bsp = is_bsp();
@@ -332,6 +352,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             // Subsequent entry: go directly to request loop or holding pen (does not return)
             log::trace!("CPU {cpu_id} (index {cpu_index}) re-entering MM Supervisor Core, skipping initialization.");
             smrr_enable();
+            if is_bsp {
+                self.free_init_module(init_state());
+            }
             self.enter_runtime(cpu_id, cpu_index);
 
             return;
@@ -351,7 +374,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             self.cpu_manager.register_cpu(cpu_id, cpu_index, true);
 
             // Perform BSP-only one-time initialization.
-            self.bsp_init(hob_list);
+            let user_hob_list = self.bsp_init(hob_list);
 
             // Dispatch to the user level entry point discovered from the HOB list (if found)
             let user_entry = match init_state().user_entry_point() {
@@ -380,7 +403,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                     cpl3_stack,
                     3,
                     UserCommandType::StartUserCore as u64,
-                    hob_list as u64,
+                    user_hob_list,
                     0,
                 )
             };
@@ -520,6 +543,14 @@ mod tests {
     fn test_is_buffer_inside_mmram_fails_closed_before_allocator_initialization() {
         assert!(!is_buffer_inside_mmram(0x1000, 0x1000));
         assert!(!is_buffer_inside_mmram(u64::MAX, 1));
+    }
+
+    #[test]
+    fn test_buffer_overlaps_mmram_fails_closed_before_allocator_initialization() {
+        // Nothing can be shown to lie outside MMRAM before the regions are known, so a buffer the
+        // supervisor is asked to treat as non-MM memory is reported as overlapping instead.
+        assert!(buffer_overlaps_mmram(0x1000, 0x1000));
+        assert!(buffer_overlaps_mmram(u64::MAX, 1));
     }
 
     #[test]
