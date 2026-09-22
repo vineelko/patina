@@ -981,8 +981,8 @@ impl PageAllocator {
     ///
     /// Freed pages go back into the same pool that later serves `User` (Ring 3) allocations, so a
     /// supervisor allocation that is released without scrubbing would disclose its contents to
-    /// Ring 3 on the next reuse. This must run before [`apply_freed_page_attributes`] unmaps the
-    /// range.
+    /// Ring 3 on the next reuse. This must run before [`Self::apply_freed_page_attributes`] unmaps
+    /// the range.
     fn zero_pages(addr: u64, num_pages: usize) {
         // SAFETY: the caller verified under the state lock that `[addr, addr + num_pages)` is a
         // live allocation inside a single SMRAM region and that it is still mapped R/W, so the
