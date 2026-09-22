@@ -424,11 +424,24 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // Write the returned status back to the user status mailbox, clearing
         // is_comm_buffer_valid to indicate processing is complete
+        let mut final_status = returned_status;
+        final_status.is_comm_buffer_valid = 0;
+
+        // Ring 3 filled in `return_buffer_size`, and the non-MM caller uses it to read the
+        // response out of the communication buffer. The user core clamps it too, but the
+        // supervisor does not take Ring 3's word for how far that caller should read.
+        if final_status.return_buffer_size > config.user_comm_buffer_size {
+            log::error!(
+                "User module reported a 0x{:x}-byte response for a 0x{:x}-byte communication buffer; truncating",
+                final_status.return_buffer_size,
+                config.user_comm_buffer_size
+            );
+            final_status.return_buffer_size = config.user_comm_buffer_size;
+        }
+
         // SAFETY: user_status_buffer is valid and writable
         unsafe {
             let status_ptr = config.user_status_buffer as *mut MmCommBufferStatus;
-            let mut final_status = returned_status;
-            final_status.is_comm_buffer_valid = 0;
             core::ptr::write_volatile(status_ptr, final_status);
         }
     }
@@ -1275,6 +1288,64 @@ mod tests {
         let context = unsafe { core::ptr::read(supv_to_user as *const EfiMmEntryContext) };
         assert_eq!(context.currently_executing_cpu, 0);
         assert_eq!(context.number_of_cpus, 1);
+    }
+
+    #[test]
+    fn test_process_user_request_clamps_an_oversized_response_from_ring_3() {
+        init_state().set_user_entry_point(0x4000);
+        let core = TestCore::new();
+        core.syscall_interface.init(4, 0x8000, 0x1000).expect("syscall interface initializes");
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
+
+        let mut buffers = TestBuffers::new(256);
+        let config = buffers.config();
+        let supv_to_user = config.supv_to_user_buffer;
+        let context_size = core::mem::size_of::<EfiMmEntryContext>();
+
+        // A user module that reports more than the communication buffer holds would otherwise
+        // send the non-MM caller reading past the end of it.
+        mock::set_handler(move |_cpu, _entry, _stack, _arg_count, _command, _buffer, _size| {
+            // SAFETY: the supervisor placed an `MmCommBufferStatus` right after the context.
+            unsafe {
+                let status = (supv_to_user as *mut u8).add(context_size) as *mut MmCommBufferStatus;
+                (*status).return_status = efi::Status::SUCCESS.as_usize() as u64;
+                (*status).return_buffer_size = u64::MAX;
+            }
+            0
+        });
+
+        core.process_user_request(&config, &valid_status(), 0);
+        mock::clear();
+
+        assert_eq!(buffers.user_status.return_buffer_size, 256);
+    }
+
+    #[test]
+    fn test_process_user_request_keeps_a_response_that_fits() {
+        init_state().set_user_entry_point(0x4000);
+        let core = TestCore::new();
+        core.syscall_interface.init(4, 0x8000, 0x1000).expect("syscall interface initializes");
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
+
+        let mut buffers = TestBuffers::new(256);
+        let config = buffers.config();
+        let supv_to_user = config.supv_to_user_buffer;
+        let context_size = core::mem::size_of::<EfiMmEntryContext>();
+
+        // Exactly the buffer size is legitimate and must survive the clamp untouched.
+        mock::set_handler(move |_cpu, _entry, _stack, _arg_count, _command, _buffer, _size| {
+            // SAFETY: the supervisor placed an `MmCommBufferStatus` right after the context.
+            unsafe {
+                let status = (supv_to_user as *mut u8).add(context_size) as *mut MmCommBufferStatus;
+                (*status).return_buffer_size = 256;
+            }
+            0
+        });
+
+        core.process_user_request(&config, &valid_status(), 0);
+        mock::clear();
+
+        assert_eq!(buffers.user_status.return_buffer_size, 256);
     }
 
     #[test]
