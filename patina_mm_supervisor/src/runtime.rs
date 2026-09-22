@@ -452,8 +452,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// 4. Iterate the default handlers then [`PlatformInfo::mmi_handlers`] to find a handler
     ///    matching the header GUID
     /// 5. Call the handler with a pointer to the data payload and mutable size
-    /// 6. Update the status buffer with return status and total response size
+    /// 6. Clamp the size the handler reported to the payload space it was given
     /// 7. Copy the internal buffer back to the external buffer
+    /// 8. Update the status buffer with return status and total response size
     fn process_supervisor_request(&self, config: &CommBufferConfig, status: &MmCommBufferStatus, cpu_index: usize) {
         log::trace!("Processing Supervisor request on CPU {cpu_index}...");
 
@@ -539,21 +540,31 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             log::warn!("No handler found for supervisor request GUID: {handler_guid:?}");
         }
 
+        // A handler reports its response length back through `data_size`. Clamp it to the payload
+        // space it was given: an unclamped value would overflow the total below, and reporting a
+        // size larger than what is copied back would hand the non-MM caller a length that runs
+        // past the end of the communication buffer.
+        let max_data_size = buffer_size - EfiMmCommunicateHeader::size();
+        if data_size > max_data_size {
+            log::error!(
+                "Handler reported a 0x{data_size:x}-byte response for 0x{max_data_size:x} bytes of payload space; \
+                 truncating"
+            );
+            data_size = max_data_size;
+        }
+
         // Compute the total response size (header + data) for the copy-back
         let total_response_size = data_size + EfiMmCommunicateHeader::size();
 
         // Copy the (possibly modified) internal buffer back to the external buffer
-        if total_response_size <= buffer_size {
-            // SAFETY: Both buffers are valid and total_response_size is within bounds
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    config.supv_comm_buffer_internal as *const u8,
-                    config.supv_comm_buffer as *mut u8,
-                    total_response_size,
-                );
-            }
-        } else {
-            log::error!("Response size 0x{total_response_size:x} exceeds buffer capacity 0x{buffer_size:x}");
+        // SAFETY: both buffers are `buffer_size` bytes and `total_response_size` is clamped to
+        // `buffer_size` above, so the copy stays inside both allocations.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                config.supv_comm_buffer_internal as *const u8,
+                config.supv_comm_buffer as *mut u8,
+                total_response_size,
+            );
         }
         log::trace!(
             "Copied {} bytes from internal buffer 0x{:x} back to external 0x{:x}",
@@ -1101,18 +1112,34 @@ mod tests {
     }
 
     #[test]
-    fn test_process_supervisor_request_refuses_an_oversized_response() {
+    fn test_process_supervisor_request_clamps_an_oversized_response() {
         let core = TestCore::new();
         let mut buffers = TestBuffers::new(64);
         buffers.write_supv_request(TEST_HANDLER_GUID, 4, &[1, 2, 3, 4]);
         let config = buffers.config();
-        // A response larger than the buffer skips the copy-back but still reports its size.
+        // A handler that reports more than it was given must not have that size reach the caller,
+        // which would use it to read past the end of the communication buffer.
         HANDLER_RESPONSE_SIZE.store(1024, Ordering::SeqCst);
 
         core.process_supervisor_request(&config, &valid_status(), 0);
 
-        assert_eq!(buffers.supv_external[EfiMmCommunicateHeader::size()], 1);
-        assert_eq!(buffers.supv_status.return_buffer_size, (1024 + EfiMmCommunicateHeader::size()) as u64);
+        // The response is truncated to the buffer and the reported size matches what was copied.
+        assert_eq!(buffers.supv_external[EfiMmCommunicateHeader::size()], 0xAB);
+        assert_eq!(buffers.supv_status.return_buffer_size, 64);
+    }
+
+    #[test]
+    fn test_process_supervisor_request_reports_an_oversized_response_without_overflowing() {
+        let core = TestCore::new();
+        let mut buffers = TestBuffers::new(64);
+        buffers.write_supv_request(TEST_HANDLER_GUID, 4, &[1, 2, 3, 4]);
+        let config = buffers.config();
+        // Adding the header to this size would wrap an unchecked `usize`.
+        HANDLER_RESPONSE_SIZE.store(usize::MAX, Ordering::SeqCst);
+
+        core.process_supervisor_request(&config, &valid_status(), 0);
+
+        assert_eq!(buffers.supv_status.return_buffer_size, 64);
     }
 
     #[test]
