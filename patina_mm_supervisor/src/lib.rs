@@ -221,6 +221,12 @@ pub(crate) fn is_buffer_inside_mmram(base: u64, size: u64) -> bool {
     security_state().page_allocator().is_region_inside_mmram(base, size)
 }
 
+/// Returns whether `[base, base + size)` touches MMRAM at all, including a range that only
+/// straddles a boundary.
+pub(crate) fn buffer_overlaps_mmram(base: u64, size: u64) -> bool {
+    security_state().page_allocator().overlaps_mmram(base, size)
+}
+
 /// Checks if a specific core has completed initialization.
 ///
 /// Reads the 1-byte slot at `mm_initialized_buffer + cpu_index`.
