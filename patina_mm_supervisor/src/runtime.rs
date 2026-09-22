@@ -657,11 +657,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         response
     }
 
-    /// Run a procedure on an AP, demoting to user mode if the procedure is in user-owned range.
+    /// Run a procedure on an AP by demoting to Ring 3.
     ///
-    /// This is the AP-side handler for `ApCommand::RunProcedure`. It mirrors the C
-    /// `ProcedureWrapper` logic: inspects the procedure pointer ownership and either
-    /// calls it directly (supervisor-owned) or demotes to Ring 3 (user-owned).
+    /// This is the AP-side handler for `ApCommand::RunProcedure`. Every such command originates
+    /// from a Ring 3 `StartApProc` syscall, so the procedure runs demoted regardless of what the
+    /// page table says about the address. Choosing the privilege from the address instead would
+    /// let Ring 3 name a supervisor-owned address and have this CPU call it in Ring 0.
     fn run_procedure_on_ap(&self, cpu_id: u32, procedure: u64, argument: u64) -> ApResponse {
         log::trace!("AP (CPU {cpu_id}) running procedure 0x{procedure:x} with arg 0x{argument:x}");
 
@@ -670,83 +671,71 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             return ApResponse::Error(efi::Status::INVALID_PARAMETER.as_usize() as u32);
         }
 
-        // Determine if the procedure is in user-owned (Ring 3) range by querying the
-        // page table via the centralized helper.
-        let is_user_range = match query_address_ownership(procedure, core::mem::size_of::<usize>() as u64) {
-            Some(PageOwnership::User) => true,
-            Some(PageOwnership::Supervisor) => false,
+        // The dispatching syscall already rejected anything that is not user-owned; re-check it
+        // here so the demotion below can never be handed a supervisor address.
+        match query_address_ownership(procedure, core::mem::size_of::<usize>() as u64) {
+            Some(PageOwnership::User) => {}
+            Some(owner) => {
+                log::error!("AP (CPU {cpu_id}) refusing procedure 0x{procedure:x} owned by {owner:?}");
+                return ApResponse::Error(efi::Status::SECURITY_VIOLATION.as_usize() as u32);
+            }
             None => {
                 log::error!(
                     "AP (CPU {cpu_id}) failed to query ownership for 0x{procedure:x} (unmapped or page table not ready)"
                 );
                 return ApResponse::Error(efi::Status::DEVICE_ERROR.as_usize() as u32);
             }
+        }
+
+        // Resolve the cpu_index (slot index) for this APIC ID
+        let cpu_index = if let Some(idx) = self.cpu_manager.find_cpu_index(cpu_id) {
+            idx
+        } else {
+            log::error!("AP (CPU {cpu_id}) has no registered slot, cannot demote");
+            return ApResponse::Error(efi::Status::DEVICE_ERROR.as_usize() as u32);
         };
 
-        if is_user_range {
-            // Resolve the cpu_index (slot index) for this APIC ID
-            let cpu_index = if let Some(idx) = self.cpu_manager.find_cpu_index(cpu_id) {
-                idx
-            } else {
-                log::error!("AP (CPU {cpu_id}) has no registered slot, cannot demote");
+        // Get the CPL3 stack for this CPU
+        let cpl3_stack = match self.syscall_interface.get_cpl3_stack(cpu_index) {
+            Ok(stack) => stack,
+            Err(e) => {
+                log::error!("AP (CPU {cpu_id}) failed to get CPL3 stack: {e:?}");
                 return ApResponse::Error(efi::Status::DEVICE_ERROR.as_usize() as u32);
-            };
+            }
+        };
 
-            // Get the CPL3 stack for this CPU
-            let cpl3_stack = match self.syscall_interface.get_cpl3_stack(cpu_index) {
-                Ok(stack) => stack,
-                Err(e) => {
-                    log::error!("AP (CPU {cpu_id}) failed to get CPL3 stack: {e:?}");
-                    return ApResponse::Error(efi::Status::DEVICE_ERROR.as_usize() as u32);
-                }
-            };
+        let user_entry = match init_state().user_entry_point() {
+            Some(entry) if entry != 0 => entry,
+            _ => {
+                log::error!("User entry point not configured, cannot demote AP (CPU {cpu_id})");
+                return ApResponse::Error(efi::Status::DEVICE_ERROR.as_usize() as u32);
+            }
+        };
 
-            let user_entry = match init_state().user_entry_point() {
-                Some(entry) if entry != 0 => entry,
-                _ => {
-                    log::error!("User entry point not configured, cannot demote AP (CPU {cpu_id})");
-                    return ApResponse::Error(efi::Status::DEVICE_ERROR.as_usize() as u32);
-                }
-            };
+        // Demote to user mode and call the procedure
+        // The procedure signature is: void (EFIAPI *)(void *ProcedureArgument)
+        log::trace!(
+            "AP (CPU {cpu_id}) demoting to user: proc=0x{procedure:x}, stack=0x{cpl3_stack:x}, arg=0x{argument:x}"
+        );
 
-            // Demote to user mode and call the procedure
-            // The procedure signature is: void (EFIAPI *)(void *ProcedureArgument)
-            log::trace!(
-                "AP (CPU {cpu_id}) demoting to user: proc=0x{procedure:x}, stack=0x{cpl3_stack:x}, arg=0x{argument:x}"
-            );
+        // SAFETY: `user_entry` was validated to be non-zero above and points to the user
+        // module entry published by MM IPL. `cpl3_stack` is the per-CPU Ring 3 stack
+        // returned by `get_cpl3_stack`. The arg count (3) matches the three argument values
+        // passed.
+        let ret = unsafe {
+            invoke_demoted_routine(
+                cpu_index,
+                user_entry,
+                cpl3_stack,
+                3,
+                UserCommandType::UserApProcedure as u64,
+                procedure,
+                argument,
+            )
+        };
 
-            // SAFETY: `user_entry` was validated to be non-zero above and points to the user
-            // module entry published by MM IPL. `cpl3_stack` is the per-CPU Ring 3 stack
-            // returned by `get_cpl3_stack`. The arg count (3) matches the three argument values
-            // passed.
-            let ret = unsafe {
-                invoke_demoted_routine(
-                    cpu_index,
-                    user_entry,
-                    cpl3_stack,
-                    3,
-                    UserCommandType::UserApProcedure as u64,
-                    procedure,
-                    argument,
-                )
-            };
-
-            log::trace!("AP (CPU {cpu_id}) returned from demoted procedure: 0x{ret:x}");
-            ApResponse::Success
-        } else {
-            // Supervisor-owned: call directly in Ring 0
-            log::trace!("AP (CPU {cpu_id}) calling supervisor procedure directly at 0x{procedure:x}");
-
-            type EfiApProcedure = unsafe extern "efiapi" fn(*mut core::ffi::c_void);
-            // SAFETY: The procedure pointer was validated to be non-null above and points to a
-            // supervisor-owned (Ring 0) function following the `EfiApProcedure` ABI.
-            let proc_fn: EfiApProcedure = unsafe { core::mem::transmute(procedure) };
-            // SAFETY: `procedure` is a supervisor-owned (Ring 0) address validated by the BSP and
-            // matching the `EfiApProcedure` ABI, so calling it with the provided argument is sound.
-            unsafe { proc_fn(argument as *mut core::ffi::c_void) };
-
-            ApResponse::Success
-        }
+        log::trace!("AP (CPU {cpu_id}) returned from demoted procedure: 0x{ret:x}");
+        ApResponse::Success
     }
 
     /// Type-erased trampoline for AP startup, called from the syscall dispatcher.
