@@ -261,13 +261,16 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         };
 
         if let Err(err) = result {
+            // `Status` debug-prints its raw `usize`, which for an error is a 19-digit decimal.
+            let status = err.as_usize();
+
             // A status-returning syscall hands `err` straight to Ring 3, so a failure is part of
             // its contract, not a fault: `SaveStateRead2` reports NOT_FOUND once per CPU that did
             // not trap the I/O on every software MMI. A value-returning syscall can only signal
             // `0`, which Ring 3 cannot tell from a legitimate zero, so it stays loud.
             match return_kind(index) {
-                ReturnKind::Status => log::debug!("Syscall {index:?} returned {err:?}"),
-                ReturnKind::Value => log::error!("Syscall {index:?} failed: {err:?}"),
+                ReturnKind::Status => log::debug!("Syscall {index:?} returned {status:#x}"),
+                ReturnKind::Value => log::error!("Syscall {index:?} failed: {status:#x}"),
             }
         }
 
