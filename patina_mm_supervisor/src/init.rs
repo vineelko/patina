@@ -1110,6 +1110,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 unsafe { dump_policy(policy_ptr) };
 
                 mm_policy::audit_boundary_msr_grants(&gate);
+                mm_policy::audit_boundary_io_grants(&gate);
 
                 let mem_policy_max_count = UEFI_PAGE_SIZE / core::mem::size_of::<MemDescriptorV1_0>();
                 gate.set_memory_policy_buffer(memory_policy_buffer as *mut MemDescriptorV1_0, mem_policy_max_count);

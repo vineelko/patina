@@ -580,17 +580,19 @@ impl MmUserCore {
         };
 
         // The handler writes its response length back through `data_size`, and that length
-        // reaches the non-MM caller as the size of the response. A caller that trusts a length
-        // running past the end of the communication buffer reads whatever follows it, so clamp
-        // to what the buffer can actually hold.
+        // reaches the non-MM caller as the size of the response. A length running past the end of
+        // the communication buffer describes a response that was never written, so there is no
+        // prefix worth returning: report the failure and hand back nothing.
         let reported = comm_header_size.saturating_add(data_size);
         if reported > buffer_size {
             log::error!(
                 "Handler reported a 0x{reported:x}-byte response for a 0x{buffer_size:x}-byte communication buffer; \
-                 truncating"
+                 rejecting"
             );
+            *return_buffer_size = 0;
+            return efi::Status::BAD_BUFFER_SIZE;
         }
-        *return_buffer_size = reported.min(buffer_size) as u64;
+        *return_buffer_size = reported as u64;
 
         status
     }
@@ -1128,7 +1130,7 @@ mod tests {
     }
 
     #[test]
-    fn test_synchronous_mmi_clamps_a_response_larger_than_the_buffer() {
+    fn test_synchronous_mmi_rejects_a_response_larger_than_the_buffer() {
         let core = init_core();
         core.mmi_db.register_internal_handler(oversized_handler, Some(&HANDLER_GUID)).expect("handler registers");
 
@@ -1139,9 +1141,9 @@ mod tests {
         let status = core.dispatch_synchronous_mmi(buffer.as_ptr() as u64, total as u64, &mut returned);
 
         // The size travels to the non-MM caller, which uses it to read the response out of the
-        // communication buffer, so it can never exceed what that buffer holds.
-        assert_eq!(status, efi::Status::SUCCESS);
-        assert_eq!(returned, total as u64);
+        // communication buffer, so a length it cannot hold is refused rather than shortened.
+        assert_eq!(status, efi::Status::BAD_BUFFER_SIZE);
+        assert_eq!(returned, 0);
     }
 
     #[test]

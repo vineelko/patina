@@ -137,6 +137,17 @@ pub struct RegionInfo {
     pub bitmap_start_bit: usize,
 }
 
+/// Where an address range sits relative to MMRAM.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MmramPlacement {
+    /// Every byte of the range is MMRAM.
+    Inside,
+    /// No byte of the range is MMRAM.
+    Outside,
+    /// The range is partly MMRAM and partly not.
+    Straddles,
+}
+
 /// Internal state for the page allocator, stored in bookkeeping pages.
 #[repr(C)]
 struct AllocatorState {
@@ -488,33 +499,63 @@ impl LockedState<'_> {
         })
     }
 
-    /// Returns whether `[addr, addr + size)` intersects any region.
+    /// Exclusive end address of `region`, or `None` if its extent cannot be expressed.
+    fn region_end(region: &RegionInfo) -> Option<u64> {
+        region
+            .total_pages
+            .checked_mul(UEFI_PAGE_SIZE)
+            .and_then(|size| u64::try_from(size).ok())
+            .and_then(|size| region.base.checked_add(size))
+    }
+
+    /// Exclusive end of the region containing `addr`, or `None` if no region does.
+    fn region_end_covering(&self, addr: u64) -> Option<u64> {
+        self.regions().iter().find_map(|region| {
+            let region_end = Self::region_end(region)?;
+            (addr >= region.base && addr < region_end).then_some(region_end)
+        })
+    }
+
+    /// Returns whether any region intersects `[start, end)`.
+    fn intersects_any_region(&self, start: u64, end: u64) -> bool {
+        self.regions().iter().any(|region| {
+            let Some(region_end) = Self::region_end(region) else {
+                return false;
+            };
+            start < region_end && region.base < end
+        })
+    }
+
+    /// Classifies `[addr, addr + size)` against the MMRAM regions.
     ///
-    /// This is the complement of [`Self::is_region_inside_mmram`] only for ranges that are wholly
-    /// in or wholly out. A range that straddles an MMRAM boundary is not "inside" MMRAM but does
-    /// overlap it, which is the case that matters when rejecting a buffer that must stay outside.
-    ///
-    /// An empty range overlaps nothing. A range whose end overflows is reported as overlapping,
-    /// so a malformed descriptor fails closed.
-    fn overlaps_mmram(&self, addr: u64, size: u64) -> bool {
+    /// Coverage is measured over the union of the regions, so a range spanning two adjacent
+    /// regions is [`MmramPlacement::Inside`] rather than a straddle. An empty range is
+    /// [`MmramPlacement::Outside`]; a range whose end overflows is reported as a straddle so a
+    /// malformed descriptor fails closed.
+    fn classify_mmram(&self, addr: u64, size: u64) -> MmramPlacement {
         if size == 0 {
-            return false;
+            return MmramPlacement::Outside;
         }
-        let Some(request_end) = addr.checked_add(size) else {
-            return true;
+        let Some(end) = addr.checked_add(size) else {
+            return MmramPlacement::Straddles;
         };
 
-        self.regions().iter().any(|region| {
-            let Some(region_size) =
-                region.total_pages.checked_mul(UEFI_PAGE_SIZE).and_then(|size| u64::try_from(size).ok())
-            else {
-                return false;
+        // Extend the covered prefix one region at a time until a gap appears.
+        let mut cursor = addr;
+        while cursor < end {
+            let Some(region_end) = self.region_end_covering(cursor) else {
+                break;
             };
-            let Some(region_end) = region.base.checked_add(region_size) else {
-                return false;
-            };
-            addr < region_end && region.base < request_end
-        })
+            cursor = region_end;
+        }
+
+        if cursor >= end {
+            MmramPlacement::Inside
+        } else if cursor > addr || self.intersects_any_region(cursor, end) {
+            MmramPlacement::Straddles
+        } else {
+            MmramPlacement::Outside
+        }
     }
 
     /// Populates freshly-zeroed bookkeeping with per-region metadata and marks
@@ -1159,15 +1200,16 @@ impl PageAllocator {
         self.lock_state().is_region_inside_mmram(addr, size)
     }
 
-    /// Returns whether `[addr, addr + size)` intersects any MMRAM region.
+    /// Classifies `[addr, addr + size)` against the MMRAM regions, or `None` if the regions are
+    /// not known yet.
     ///
-    /// Reports an overlap when the allocator is not initialized yet, since nothing can be shown
-    /// to lie outside MMRAM before the regions are known.
-    pub fn overlaps_mmram(&self, addr: u64, size: u64) -> bool {
+    /// Callers decide what an unknown layout means for them; nothing can be proven to be either
+    /// inside or outside MMRAM before the allocator is initialized.
+    pub fn classify_mmram(&self, addr: u64, size: u64) -> Option<MmramPlacement> {
         if !self.is_initialized() {
-            return true;
+            return None;
         }
-        self.lock_state().overlaps_mmram(addr, size)
+        Some(self.lock_state().classify_mmram(addr, size))
     }
 }
 
@@ -1386,42 +1428,44 @@ mod tests {
     }
 
     #[test]
-    fn test_page_allocator_overlaps_mmram_catches_ranges_containment_misses() {
+    fn test_page_allocator_classifies_ranges_containment_misses() {
         let fixture = AllocatorFixture::new();
         let base = fixture.base;
         let end = base + TEST_REGION_BYTES as u64;
+        let classify = |addr, size| fixture.allocator.classify_mmram(addr, size);
 
         // Wholly inside.
-        assert!(fixture.allocator.overlaps_mmram(base, 0x1000));
-        assert!(fixture.allocator.overlaps_mmram(base, TEST_REGION_BYTES as u64));
+        assert_eq!(classify(base, 0x1000), Some(MmramPlacement::Inside));
+        assert_eq!(classify(base, TEST_REGION_BYTES as u64), Some(MmramPlacement::Inside));
 
         // Straddling either boundary. These are the ranges `is_region_inside_mmram` reports as
-        // not inside MMRAM, which is why containment cannot be used to keep a buffer out of it.
+        // not inside MMRAM, which is why containment alone cannot keep a buffer out of it.
         assert!(!fixture.allocator.is_region_inside_mmram(base - 0x1000, 0x2000));
-        assert!(fixture.allocator.overlaps_mmram(base - 0x1000, 0x2000));
+        assert_eq!(classify(base - 0x1000, 0x2000), Some(MmramPlacement::Straddles));
         assert!(!fixture.allocator.is_region_inside_mmram(end - 0x1000, 0x2000));
-        assert!(fixture.allocator.overlaps_mmram(end - 0x1000, 0x2000));
+        assert_eq!(classify(end - 0x1000, 0x2000), Some(MmramPlacement::Straddles));
 
         // A range that swallows the whole region is also not "inside" it.
         assert!(!fixture.allocator.is_region_inside_mmram(base - 0x1000, TEST_REGION_BYTES as u64 + 0x2000));
-        assert!(fixture.allocator.overlaps_mmram(base - 0x1000, TEST_REGION_BYTES as u64 + 0x2000));
+        assert_eq!(classify(base - 0x1000, TEST_REGION_BYTES as u64 + 0x2000), Some(MmramPlacement::Straddles));
 
         // Clear of the region on either side, and touching only its exclusive bounds.
-        assert!(!fixture.allocator.overlaps_mmram(base - 0x1000, 0x1000));
-        assert!(!fixture.allocator.overlaps_mmram(end, 0x1000));
+        assert_eq!(classify(base - 0x1000, 0x1000), Some(MmramPlacement::Outside));
+        assert_eq!(classify(end, 0x1000), Some(MmramPlacement::Outside));
 
-        // An empty range overlaps nothing; an overflowing one fails closed.
-        assert!(!fixture.allocator.overlaps_mmram(base, 0));
-        assert!(fixture.allocator.overlaps_mmram(u64::MAX, 2));
+        // An empty range touches nothing; an overflowing one fails closed.
+        assert_eq!(classify(base, 0), Some(MmramPlacement::Outside));
+        assert_eq!(classify(u64::MAX, 2), Some(MmramPlacement::Straddles));
     }
 
     #[test]
     fn test_page_allocator_reports_overlap_before_it_knows_any_regions() {
-        // Nothing can be shown to lie outside MMRAM before the regions are scanned.
+        // Nothing can be shown to lie either inside or outside MMRAM before the regions are
+        // scanned, so the layout is reported as unknown rather than guessed at.
         let allocator = PageAllocator::new();
 
         assert!(!allocator.is_initialized());
-        assert!(allocator.overlaps_mmram(0x1000, 0x1000));
+        assert_eq!(allocator.classify_mmram(0x1000, 0x1000), None);
     }
 
     #[test]

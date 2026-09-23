@@ -65,7 +65,7 @@ use cpu::CpuManager;
 use intrinsics::{current_apic_id, is_bsp};
 use mailbox::MailboxManager;
 // Re-exported for use by descendant modules via `crate::` paths.
-use mem::{AllocationType, SharedPagingAllocator};
+use mem::{AllocationType, SharedPagingAllocator, page_allocator::MmramPlacement};
 
 use privilege_mgmt::{invoke_demoted_routine, syscall_setup::SyscallInterface};
 
@@ -219,15 +219,34 @@ pub struct MmSupervisorCore<P: PlatformInfo, const MAX_CPUS: usize> {
     _phantom: core::marker::PhantomData<fn() -> P>,
 }
 
+/// Returns whether `[base, base + size)` lies entirely inside MMRAM.
+///
+/// ## Panics
+///
+/// Panics if the range is partly inside and partly outside MMRAM. Every caller is deciding
+/// whether a firmware-described buffer may be treated as MM memory, and a range that crosses the
+/// boundary is neither: trusting it exposes the MMRAM half, rejecting it silently leaves a
+/// producer describing a region it does not own. There is no correct interpretation, so it is
+/// treated as the platform configuration error it is.
 pub(crate) fn is_buffer_inside_mmram(base: u64, size: u64) -> bool {
-    // we will go over the page allocator to see if this region falls inside any of the MMRAM regions
-    security_state().page_allocator().is_region_inside_mmram(base, size)
+    match security_state().page_allocator().classify_mmram(base, size) {
+        Some(MmramPlacement::Inside) => true,
+        // Nothing can be shown to be inside MMRAM before the regions are known.
+        Some(MmramPlacement::Outside) | None => false,
+        Some(MmramPlacement::Straddles) => {
+            let end = base.saturating_add(size);
+            panic!("Buffer 0x{base:016x}-0x{end:016x} crosses an MMRAM boundary");
+        }
+    }
 }
 
 /// Returns whether `[base, base + size)` touches MMRAM at all, including a range that only
 /// straddles a boundary.
+///
+/// Reports an overlap when the regions are not known yet, since nothing can be shown to lie
+/// outside MMRAM before then.
 pub(crate) fn buffer_overlaps_mmram(base: u64, size: u64) -> bool {
-    security_state().page_allocator().overlaps_mmram(base, size)
+    !matches!(security_state().page_allocator().classify_mmram(base, size), Some(MmramPlacement::Outside))
 }
 
 /// Checks if a specific core has completed initialization.

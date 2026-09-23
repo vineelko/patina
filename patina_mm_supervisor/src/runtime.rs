@@ -434,15 +434,18 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         final_status.is_comm_buffer_valid = 0;
 
         // Ring 3 filled in `return_buffer_size`, and the non-MM caller uses it to read the
-        // response out of the communication buffer. The user core clamps it too, but the
-        // supervisor does not take Ring 3's word for how far that caller should read.
+        // response out of the communication buffer. A value past the end of that buffer is not a
+        // response the caller can be given any part of: the supervisor cannot tell which bytes
+        // the user module meant, so truncating would hand back a prefix of something it never
+        // agreed to send. Report the failure instead and return nothing.
         if final_status.return_buffer_size > config.user_comm_buffer_size {
             log::error!(
-                "User module reported a 0x{:x}-byte response for a 0x{:x}-byte communication buffer; truncating",
+                "User module reported a 0x{:x}-byte response for a 0x{:x}-byte communication buffer; rejecting",
                 final_status.return_buffer_size,
                 config.user_comm_buffer_size
             );
-            final_status.return_buffer_size = config.user_comm_buffer_size;
+            final_status.return_status = efi::Status::BAD_BUFFER_SIZE.as_usize() as u64;
+            final_status.return_buffer_size = 0;
         }
 
         // SAFETY: user_status_buffer is valid and writable
@@ -557,17 +560,18 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             log::warn!("No handler found for supervisor request GUID: {handler_guid:?}");
         }
 
-        // A handler reports its response length back through `data_size`. Clamp it to the payload
-        // space it was given: an unclamped value would overflow the total below, and reporting a
-        // size larger than what is copied back would hand the non-MM caller a length that runs
-        // past the end of the communication buffer.
+        // A handler reports its response length back through `data_size`. A value past the
+        // payload space it was given describes a response that was never written, so there is no
+        // prefix worth copying out: report the failure and return nothing rather than handing the
+        // non-MM caller a length that runs past the end of the communication buffer.
         let max_data_size = buffer_size - EfiMmCommunicateHeader::size();
         if data_size > max_data_size {
             log::error!(
                 "Handler reported a 0x{data_size:x}-byte response for 0x{max_data_size:x} bytes of payload space; \
-                 truncating"
+                 rejecting"
             );
-            data_size = max_data_size;
+            self.write_supv_status(config, status, efi::Status::BAD_BUFFER_SIZE, 0);
+            return;
         }
 
         // Compute the total response size (header + data) for the copy-back
@@ -1118,7 +1122,7 @@ mod tests {
     }
 
     #[test]
-    fn test_process_supervisor_request_clamps_an_oversized_response() {
+    fn test_process_supervisor_request_rejects_an_oversized_response() {
         let core = TestCore::new();
         let mut buffers = TestBuffers::new(64);
         buffers.write_supv_request(TEST_HANDLER_GUID, 4, &[1, 2, 3, 4]);
@@ -1129,9 +1133,10 @@ mod tests {
 
         core.process_supervisor_request(&config, &valid_status(), 0);
 
-        // The response is truncated to the buffer and the reported size matches what was copied.
-        assert_eq!(buffers.supv_external[EfiMmCommunicateHeader::size()], 0xAB);
-        assert_eq!(buffers.supv_status.return_buffer_size, 64);
+        // Nothing is copied out and the caller is told why, rather than being handed a prefix of
+        // a response the handler never agreed to send.
+        assert_eq!(buffers.supv_status.return_status, efi::Status::BAD_BUFFER_SIZE.as_usize() as u64);
+        assert_eq!(buffers.supv_status.return_buffer_size, 0);
     }
 
     #[test]
@@ -1145,7 +1150,8 @@ mod tests {
 
         core.process_supervisor_request(&config, &valid_status(), 0);
 
-        assert_eq!(buffers.supv_status.return_buffer_size, 64);
+        assert_eq!(buffers.supv_status.return_status, efi::Status::BAD_BUFFER_SIZE.as_usize() as u64);
+        assert_eq!(buffers.supv_status.return_buffer_size, 0);
     }
 
     #[test]
@@ -1286,7 +1292,7 @@ mod tests {
     }
 
     #[test]
-    fn test_process_user_request_clamps_an_oversized_response_from_ring_3() {
+    fn test_process_user_request_rejects_an_oversized_response_from_ring_3() {
         init_state().set_user_entry_point(0x4000);
         let core = TestCore::new();
         core.syscall_interface.init(4, 0x8000, 0x1000).expect("syscall interface initializes");
@@ -1312,7 +1318,8 @@ mod tests {
         core.process_user_request(&config, &valid_status(), 0);
         mock::clear();
 
-        assert_eq!(buffers.user_status.return_buffer_size, 256);
+        assert_eq!(buffers.user_status.return_status, efi::Status::BAD_BUFFER_SIZE.as_usize() as u64);
+        assert_eq!(buffers.user_status.return_buffer_size, 0);
     }
 
     #[test]

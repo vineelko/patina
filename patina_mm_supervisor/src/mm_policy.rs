@@ -147,6 +147,54 @@ pub(crate) fn audit_boundary_msr_grants(gate: &PolicyGate) -> usize {
     granted
 }
 
+/// I/O ports whose write access defines the privilege boundary the supervisor rests on, as
+/// inclusive `(first, last, description)` ranges.
+///
+/// Same contract as [`BOUNDARY_MSRS`]: this list decides nothing, it reports. Granting Ring 3
+/// write access to PCI configuration space reaches the chipset registers that lock MMRAM and
+/// program the DRAM remap windows, so it can unlock MMRAM or alias normal memory over it without
+/// ever issuing a `WRMSR`; granting the ACPI software MMI command port lets a demoted driver
+/// forge the command value the MMI dispatchers key on, invoking handlers as though the request
+/// came from outside MM.
+///
+/// Ports a real platform has cause to drive from MM are deliberately absent - the embedded
+/// controller, CMOS, GPIO and the ACPI PM block among them - so that a normal policy does not
+/// produce noise here.
+const BOUNDARY_IO_PORTS: &[(u16, u16, &str)] =
+    &[(0x00B2, 0x00B3, "ACPI software MMI command/data port"), (0x0CF8, 0x0CFF, "PCI configuration address/data")];
+
+/// Reports every [`BOUNDARY_IO_PORTS`] port the policy grants Ring 3 write access to, returning
+/// how many it found.
+///
+/// The companion to [`audit_boundary_msr_grants`], and a diagnostic on the same terms: it runs
+/// once when the policy is installed, asks the policy its own question, and changes nothing.
+/// Ports are probed one byte at a time, which is the granularity at which the policy describes
+/// them.
+pub(crate) fn audit_boundary_io_grants(gate: &PolicyGate) -> usize {
+    let mut granted = 0;
+
+    for &(first, last, description) in BOUNDARY_IO_PORTS {
+        for port in first..=last {
+            if gate.is_io_allowed(u32::from(port), IoWidth::Byte, AccessType::Write).is_ok() {
+                log::error!(
+                    "MM policy grants Ring 3 write access to I/O port 0x{port:04x} ({description}). This port \
+                     reaches the configuration that defines the MM boundary; granting it makes Ring 3 isolation \
+                     unenforceable. Remove the entry from the platform MM policy."
+                );
+                granted += 1;
+            }
+        }
+    }
+
+    if granted == 0 {
+        log::info!("MM policy audit: no boundary-defining I/O port is writable from Ring 3");
+    } else {
+        log::error!("MM policy audit: {granted} boundary-defining I/O port(s) are writable from Ring 3");
+    }
+
+    granted
+}
+
 /// Privileged instruction types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
@@ -823,6 +871,51 @@ mod tests {
             .build();
 
         assert_eq!(audit_boundary_msr_grants(&policy.gate()), 0);
+    }
+
+    #[test]
+    fn test_boundary_msr_audit_covers_the_syscall_flag_mask() {
+        // `IA32_FMASK` is what clears DF and AC when Ring 3 enters Ring 0; a policy that lets
+        // Ring 3 write it hands back the flags the supervisor runs under.
+        const IA32_FMASK: u32 = 0xC000_0084;
+
+        let policy = PolicyBuilder::new()
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Msr(vec![msr(IA32_FMASK, 1, READ_WRITE)]))
+            .build();
+
+        assert_eq!(audit_boundary_msr_grants(&policy.gate()), 1);
+    }
+
+    #[test]
+    fn test_boundary_io_audit_stays_quiet_on_ports_a_platform_legitimately_drives() {
+        let granted = [
+            io(0x0062, 2, READ_WRITE),    // embedded controller
+            io(0x0070, 2, READ_WRITE),    // CMOS index/data
+            io(0x0400, 0x40, READ_WRITE), // an ACPI PM block
+            io(0x0CF9, 1, READ_WRITE),    // reset control, inside the PCI config window but not it
+        ];
+        let policy = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Io(granted.to_vec())).build();
+
+        // 0xCF9 sits within the audited 0xCF8-0xCFF span, so it is reported; the rest are not.
+        assert_eq!(audit_boundary_io_grants(&policy.gate()), 1);
+    }
+
+    #[test]
+    fn test_boundary_io_audit_reports_a_policy_that_grants_pci_config_space() {
+        let policy =
+            PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Io(vec![io(0x0CF8, 8, READ_WRITE)])).build();
+
+        assert_eq!(audit_boundary_io_grants(&policy.gate()), 8);
+    }
+
+    #[test]
+    fn test_boundary_io_audit_ignores_read_only_grants() {
+        // Reading PCI config space does not move the boundary; writing it does.
+        let policy = PolicyBuilder::new()
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Io(vec![io(0x0CF8, 8, RESOURCE_ATTR_READ as u16)]))
+            .build();
+
+        assert_eq!(audit_boundary_io_grants(&policy.gate()), 0);
     }
 
     #[test]
