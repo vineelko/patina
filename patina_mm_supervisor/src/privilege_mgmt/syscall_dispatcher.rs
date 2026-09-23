@@ -17,13 +17,6 @@
 //!
 //! The dispatcher validates the request and dispatches to the appropriate handler.
 //!
-//! ## Failure Reporting
-//!
-//! The ABI has one return register and no separate status channel, so a failure is reported in
-//! RAX as either `0` or an `EFI_STATUS` depending on whether the syscall returns data. See
-//! [`ReturnKind`]. No request from Ring 3 halts the supervisor, however malformed: that would
-//! let any code running in Ring 3 take the platform down at will.
-//!
 //! ## Security
 //!
 //! All syscall handlers must validate their arguments and check that any
@@ -113,47 +106,6 @@ fn instruction_name(instruction: Instruction) -> &'static str {
     }
 }
 
-/// How a syscall reports failure in RAX.
-///
-/// The syscall ABI has one return register and no separate status channel, so what a failure
-/// looks like depends on whether RAX would otherwise be carrying data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReturnKind {
-    /// RAX carries a value on success, so a failure is reported as `0`.
-    ///
-    /// An `EFI_STATUS` cannot be used here: a denied `RDMSR` would be indistinguishable from an
-    /// MSR that legitimately reads back with its high bit set. `0` is already what every caller
-    /// of these syscalls treats as "nothing" - a null allocation, or `FALSE` - so a refusal
-    /// reaches Ring 3 as the absence of the thing it asked for.
-    Value,
-    /// RAX carries no data, so it reports the `EFI_STATUS` itself.
-    ///
-    /// `EFI_SUCCESS` is `0`, which is what these syscalls already returned on success, so the
-    /// status is unambiguous and the success path is unchanged.
-    Status,
-}
-
-/// Returns how `index` reports a failure in RAX.
-fn return_kind(index: SyscallIndex) -> ReturnKind {
-    match index {
-        SyscallIndex::RdMsr
-        | SyscallIndex::IoRead
-        | SyscallIndex::AllocPage
-        | SyscallIndex::MmMemoryUnblocked
-        | SyscallIndex::MmIsCommBuffer => ReturnKind::Value,
-        SyscallIndex::WrMsr
-        | SyscallIndex::Cli
-        | SyscallIndex::IoWrite
-        | SyscallIndex::Wbinvd
-        | SyscallIndex::Hlt
-        | SyscallIndex::SaveStateRead
-        | SyscallIndex::SaveStateRead2
-        | SyscallIndex::FreePage
-        | SyscallIndex::StartApProc
-        | SyscallIndex::LegacyMax => ReturnKind::Status,
-    }
-}
-
 /// Context for a syscall invocation.
 #[derive(Debug, Clone, Copy)]
 pub struct SyscallContext {
@@ -194,30 +146,11 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         Self { ops }
     }
 
-    /// Dispatches a syscall and returns the value Ring 3 receives in RAX.
-    ///
-    /// Every outcome is reported to the caller; none halts the supervisor. A malformed request is
-    /// the caller's bug to handle, and a policy denial has already achieved its purpose by not
-    /// performing the operation, so neither is worth taking the platform down for - which would
-    /// also hand any code running in Ring 3 a way to halt the machine at will. Failures are
-    /// encoded per [`ReturnKind`].
-    pub fn dispatch_to_rax(&self, ctx: &SyscallContext) -> u64 {
-        // An unrecognized index has no handler to describe it, so report the status.
-        let kind = SyscallIndex::from_u64(ctx.call_index).map_or(ReturnKind::Status, return_kind);
-
-        match self.dispatch(ctx) {
-            Ok(value) => value,
-            Err(err) => match kind {
-                ReturnKind::Value => 0,
-                ReturnKind::Status => err.as_usize() as u64,
-            },
-        }
-    }
-
     /// Dispatches a syscall.
     ///
-    /// Validates the syscall index and dispatches to the appropriate handler.
-    /// [`dispatch_to_rax`](Self::dispatch_to_rax) turns the result into the value Ring 3 sees.
+    /// This is the main entry point called from the assembly syscall handler.
+    /// It validates the syscall index and dispatches to the appropriate handler. The result
+    /// is returned to Ring 3 in RAX.
     pub fn dispatch(&self, ctx: &SyscallContext) -> SyscallResult {
         // Parse the syscall index
         let index = if let Some(idx) = SyscallIndex::from_u64(ctx.call_index) {
@@ -248,10 +181,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
             SyscallIndex::Wbinvd => self.handle_instruction(Instruction::Wbinvd),
             SyscallIndex::Hlt => self.handle_instruction(Instruction::Hlt),
             SyscallIndex::SaveStateRead => self.handle_save_state_read(ctx),
-            SyscallIndex::LegacyMax => {
-                log::error!("Syscall index LegacyMax (0x{:x}) is a range marker, not a syscall", ctx.call_index);
-                Err(Status::UNSUPPORTED)
-            }
+            SyscallIndex::LegacyMax => panic!("Invalid syscall index: LegacyMax is not a real syscall"),
             SyscallIndex::AllocPage => self.handle_alloc_page(ctx),
             SyscallIndex::FreePage => self.handle_free_page(ctx),
             SyscallIndex::StartApProc => self.handle_start_ap_proc(ctx),
@@ -260,21 +190,16 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
             SyscallIndex::MmIsCommBuffer => self.handle_mm_is_comm_buffer(ctx),
         };
 
-        if let Err(err) = result {
-            // `Status` debug-prints its raw `usize`, which for an error is a 19-digit decimal.
-            let status = err.as_usize();
-
-            // A status-returning syscall hands `err` straight to Ring 3, so a failure is part of
-            // its contract, not a fault: `SaveStateRead2` reports NOT_FOUND once per CPU that did
-            // not trap the I/O on every software MMI. A value-returning syscall can only signal
-            // `0`, which Ring 3 cannot tell from a legitimate zero, so it stays loud.
-            match return_kind(index) {
-                ReturnKind::Status => log::debug!("Syscall {index:?} returned {status:#x}"),
-                ReturnKind::Value => log::error!("Syscall {index:?} failed: {status:#x}"),
+        match result {
+            Err(err) if index == SyscallIndex::SaveStateRead2 => {
+                log::trace!("Syscall SaveStateRead2: {:?} returned value=0x{:x}", index, err.as_usize());
+                Ok(err.as_usize() as u64) // Return error code to caller for SaveStateRead2
             }
+            Err(err) => {
+                panic!("Syscall: {index:?} failed with error: {err:?}"); // Panic for other syscalls
+            }
+            _ => result,
         }
-
-        result
     }
 
     /// Handles MSR read syscall.
@@ -705,7 +630,9 @@ pub extern "efiapi" fn syscall_dispatcher(
 ) -> u64 {
     let ctx = SyscallContext { call_index, arg1, arg2, arg3, caller_addr, ring3_stack_ptr };
 
-    SyscallDispatcher::new().dispatch_to_rax(&ctx)
+    // Unwrap is safe here because the dispatch() will always return a u64
+    // result, and panic on failure.
+    SyscallDispatcher::new().dispatch(&ctx).unwrap()
 }
 
 #[cfg(test)]
@@ -945,132 +872,31 @@ mod tests {
         let d = dispatcher(MockOps::default());
         assert_eq!(d.dispatch(&ctx(0x0008, 0, 0, 0)), Err(Status::UNSUPPORTED));
         assert!(d.ops.effects().is_empty());
-
-        // An unrecognized index is reported, not fatal.
-        assert_eq!(d.dispatch_to_rax(&ctx(0x0008, 0, 0, 0)), Status::UNSUPPORTED.as_usize() as u64);
     }
 
     #[test]
-    fn test_dispatch_reports_a_handler_failure_instead_of_halting() {
-        // A value-returning syscall reports nothing, since an EFI_STATUS would be
-        // indistinguishable from an MSR that legitimately reads back with its high bit set.
+    #[should_panic(expected = "failed with error")]
+    fn test_dispatch_panics_when_a_handler_fails() {
+        // Ring 3 cannot be allowed to continue after a rejected privileged request, so every
+        // syscall except `SaveStateRead2` turns a handler error into a panic.
         let d = dispatcher(MockOps { msr_policy: PolicyDecision::Unavailable, ..Default::default() });
-        assert_eq!(d.dispatch_to_rax(&ctx(SyscallIndex::RdMsr.as_u64(), 0x1B, 0, 0)), 0);
-
-        // A status-returning syscall reports the status itself.
-        let d = dispatcher(MockOps { msr_policy: PolicyDecision::Unavailable, ..Default::default() });
-        assert_eq!(
-            d.dispatch_to_rax(&ctx(SyscallIndex::WrMsr.as_u64(), 0x1B, 0, 0)),
-            Status::NOT_READY.as_usize() as u64
-        );
+        let _ = d.dispatch(&ctx(SyscallIndex::RdMsr.as_u64(), 0x1B, 0, 0));
     }
 
     #[test]
-    fn test_dispatch_reports_every_denied_syscall_without_halting() {
-        // Ring 3 must not be able to halt the platform with a malformed request, so walk the
-        // whole surface: an unusable argument for each index, and a policy that denies the rest.
-        let denied = || MockOps {
-            msr_policy: PolicyDecision::Denied(PolicyError::AccessDenied),
-            io_policy: PolicyDecision::Denied(PolicyError::AccessDenied),
-            instruction_policy: PolicyDecision::Denied(PolicyError::AccessDenied),
-            allocate_result: Err(PageAllocError::OutOfMemory),
-            free_result: Err(PageAllocError::NotAllocated),
-            allocation_type: None,
-            ap_status: None,
-            phase1_result: Err(Status::INVALID_PARAMETER),
-            phase2_result: Err(Status::ACCESS_DENIED),
-            unblocked: false,
-            is_bsp: false,
-            ..Default::default()
-        };
-
-        // Arguments chosen to be rejected outright where a handler validates them.
-        let cases = [
-            (SyscallIndex::RdMsr, (0x1B, 0, 0)),
-            (SyscallIndex::WrMsr, (0x1B, 0, 0)),
-            (SyscallIndex::Cli, (0, 0, 0)),
-            (SyscallIndex::IoRead, (0x1_0000_0000, 99, 0)), // bad port and bad width
-            (SyscallIndex::IoWrite, (0x1_0000_0000, 99, 0)),
-            (SyscallIndex::Wbinvd, (0, 0, 0)),
-            (SyscallIndex::Hlt, (0, 0, 0)),
-            (SyscallIndex::SaveStateRead, (0, 0, 0)), // null protocol pointer
-            (SyscallIndex::LegacyMax, (0, 0, 0)),
-            (SyscallIndex::AllocPage, (99, 99, 0)),    // bad types and zero pages
-            (SyscallIndex::FreePage, (1, 0, 0)),       // unaligned and zero pages
-            (SyscallIndex::StartApProc, (0, 0, 0)),    // null procedure
-            (SyscallIndex::SaveStateRead2, (0, 0, 0)), // null protocol pointer
-            (SyscallIndex::MmMemoryUnblocked, (0, 0, 0)),
-            (SyscallIndex::MmIsCommBuffer, (0, 0, 0)),
-        ];
-
-        for (index, (arg1, arg2, arg3)) in cases {
-            let d = dispatcher(denied());
-            let rax = d.dispatch_to_rax(&ctx(index.as_u64(), arg1, arg2, arg3));
-
-            match return_kind(index) {
-                // A value-returning syscall yields "nothing", never a status a caller would
-                // mistake for data.
-                ReturnKind::Value => assert_eq!(rax, 0, "{index:?} did not report a failure as 0"),
-                // A status-returning syscall yields a real error, never EFI_SUCCESS.
-                ReturnKind::Status => {
-                    assert_ne!(rax, 0, "{index:?} reported a failure as EFI_SUCCESS");
-                    assert!(
-                        Status::from_usize(rax as usize).is_error(),
-                        "{index:?} reported 0x{rax:x}, which is not an error status"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_every_syscall_index_has_a_return_kind() {
-        // `Value` is only sound for the syscalls whose callers already read 0 as "nothing".
-        for index in [
-            SyscallIndex::RdMsr,
-            SyscallIndex::IoRead,
-            SyscallIndex::AllocPage,
-            SyscallIndex::MmMemoryUnblocked,
-            SyscallIndex::MmIsCommBuffer,
-        ] {
-            assert_eq!(return_kind(index), ReturnKind::Value, "{index:?}");
-        }
-
-        for index in [
-            SyscallIndex::WrMsr,
-            SyscallIndex::Cli,
-            SyscallIndex::IoWrite,
-            SyscallIndex::Wbinvd,
-            SyscallIndex::Hlt,
-            SyscallIndex::SaveStateRead,
-            SyscallIndex::SaveStateRead2,
-            SyscallIndex::FreePage,
-            SyscallIndex::StartApProc,
-            SyscallIndex::LegacyMax,
-        ] {
-            assert_eq!(return_kind(index), ReturnKind::Status, "{index:?}");
-        }
-    }
-
-    #[test]
-    fn test_dispatch_reports_legacy_max_as_unsupported() {
-        // A range marker, not a real syscall, but still reachable from Ring 3.
+    #[should_panic(expected = "LegacyMax is not a real syscall")]
+    fn test_dispatch_panics_on_legacy_max() {
         let d = dispatcher(MockOps::default());
-
-        assert_eq!(d.dispatch(&ctx(SyscallIndex::LegacyMax.as_u64(), 0, 0, 0)), Err(Status::UNSUPPORTED));
-        assert_eq!(
-            d.dispatch_to_rax(&ctx(SyscallIndex::LegacyMax.as_u64(), 0, 0, 0)),
-            Status::UNSUPPORTED.as_usize() as u64
-        );
+        let _ = d.dispatch(&ctx(SyscallIndex::LegacyMax.as_u64(), 0, 0, 0));
     }
 
     #[test]
     fn test_dispatch_returns_status_code_for_save_state_read2_errors() {
-        // `SaveStateRead2` writes its result through a buffer, so RAX carries only the status.
+        // `SaveStateRead2` reports failures back to the caller instead of panicking.
         let d = dispatcher(MockOps { phase2_result: Err(Status::ACCESS_DENIED), ..Default::default() });
         assert_eq!(
-            d.dispatch_to_rax(&ctx(SyscallIndex::SaveStateRead2.as_u64(), 0x1000, 8, 0x2000)),
-            Status::ACCESS_DENIED.as_usize() as u64
+            d.dispatch(&ctx(SyscallIndex::SaveStateRead2.as_u64(), 0x1000, 8, 0x2000)),
+            Ok(Status::ACCESS_DENIED.as_usize() as u64)
         );
     }
 
@@ -1215,9 +1041,6 @@ mod tests {
         // `FirmwareOps`. `MmIsCommBuffer` is the one syscall that reaches a definite answer
         // without hardware: with no communication buffer published it reports FALSE.
         assert_eq!(syscall_dispatcher(SyscallIndex::MmIsCommBuffer.as_u64(), 0x1_0000, 0x100, 0, 0xCA11, 0x57AC), 0);
-
-        // An unknown index reaches the same entry point and must return rather than halt.
-        assert_eq!(syscall_dispatcher(0x0008, 0, 0, 0, 0xCA11, 0x57AC), Status::UNSUPPORTED.as_usize() as u64);
     }
 
     #[test]
