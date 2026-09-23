@@ -42,8 +42,32 @@
 
 .equ MSR_IA32_STAR,                 0xC0000081
 .equ MSR_IA32_LSTAR,                0xC0000082
+.equ MSR_IA32_FMASK,                0xC0000084
 .equ MSR_IA32_GS_BASE,              0xC0000101
 .equ MSR_IA32_KERNEL_GS_BASE,       0xC0000102
+
+# RFLAGS bits the CPU clears on `syscall` entry (RFLAGS &= ~IA32_FMASK).
+#
+# `syscall` is the one privilege transition with no architectural flag sanitization - unlike an
+# interrupt or trap gate, it consults nothing but this MSR - so with FMASK at its 0 reset value
+# Ring 3 chooses the flags Ring 0 runs under. DF and AC are the load-bearing ones:
+#
+#   DF (bit 10)  The x64 ABI guarantees DF=0 at every call boundary, so the compiler emits
+#                `rep movsb`/`rep stosb` for memcpy/memset without a preceding `cld`. A set DF
+#                runs those backwards, turning a forward copy of n bytes into an n-byte write
+#                *below* the destination.
+#   AC (bit 18)  Suppresses the SMAP check, letting Ring 0 touch user pages. Ring 3 cannot
+#                execute `stac`, but `popfq` at CPL 3 may set AC directly, which would leave
+#                SMAP off for the whole handler rather than only inside `with_user_access`.
+#
+# The rest are cleared for the same reason: TF would single-step the supervisor, NT would turn a
+# later `iret` into a task switch, RF would suppress instruction breakpoints, and the arithmetic
+# flags and IOPL are caller-clobbered scratch Ring 0 never reads. Clearing every bit with a
+# defined meaning is a simpler invariant to audit than a minimal mask that has to be re-derived
+# whenever the Ring 0 code changes. What is left set is only VM, VIF and VIP, which have no
+# meaning in long mode, and reserved bit 1, which is architecturally always set.
+# CF|PF|AF|ZF|SF|TF|IF|DF|OF|IOPL|NT|RF|AC|ID
+.equ MSR_IA32_FMASK_VALUE,          0x00257FD5
 
 
 .macro CHECK_RAX
@@ -106,7 +130,7 @@ invoke_demoted_routine:
     mov     r15, r8
     and     r15, -16
 
-    # Set up the MSR STAR, LSTAR, EFER, GS_BASE and KERNEL_GS_BASE, in situ
+    # Set up the MSR STAR, LSTAR, FMASK, EFER, GS_BASE and KERNEL_GS_BASE, in situ
     mov     rcx, MSR_IA32_STAR
     rdmsr
     push    rdx
@@ -125,6 +149,17 @@ invoke_demoted_routine:
     lea     rax, syscall_center
     lea     rdx, syscall_center
     shr     rdx, 32
+    wrmsr
+
+    # Must precede the EFER.SCE write below: SCE is what makes `syscall` reachable, and FMASK
+    # is the only thing that stops Ring 3 from picking Ring 0's RFLAGS once it is.
+    mov     rcx, MSR_IA32_FMASK
+    rdmsr
+    push    rdx
+    push    rax
+
+    mov     eax, MSR_IA32_FMASK_VALUE
+    xor     edx, edx
     wrmsr
 
     mov     rcx, MSR_IA32_EFER
@@ -169,7 +204,8 @@ invoke_demoted_routine:
     # 0                     <- Will be used for user stack saving
     # KERNEL_GS_BASE * 2    <- Will be restored on return
     # GS_BASE * 2           <- Will be restored on return
-    # EFER                  <- Will be restored on return
+    # EFER * 2              <- Will be restored on return
+    # FMASK * 2             <- Will be restored on return
     # LSTAR * 2             <- Will be restored on return
     # STAR * 2              <- Will be restored on return
     # One version of RBP    <- Value after we pushed NV registers
@@ -261,6 +297,12 @@ invoke_demoted_routine:
     #2000 years later...
 
 5:
+    # A call gate, unlike an interrupt gate, leaves RFLAGS untouched across the privilege
+    # change, and FMASK does not apply to it. Ring 3's DF and AC arrive here as-is, so they are
+    # cleared before any Rust runs.
+    cld
+    clac
+
     #First offset the return far related 4 pushes (we have 0 count of arguments):
     #PUSH.v old_SS // #SS on this or next pushes use SS.sel as error code
     #PUSH.v old_RSP
@@ -291,6 +333,11 @@ invoke_demoted_routine:
 
     pop     rax
     pop     rdx
+    mov     rcx, MSR_IA32_FMASK
+    wrmsr
+
+    pop     rax
+    pop     rdx
     mov     rcx, MSR_IA32_LSTAR
     wrmsr
 
@@ -299,7 +346,10 @@ invoke_demoted_routine:
     mov     rcx, MSR_IA32_STAR
     wrmsr
 
-    mov     rax, [rsp - 13 * 8]
+    # Return status, stashed below RSP by the `push rax` above and stepped over since. The 15
+    # slots are the 6 saved MSR pairs plus the 2 scratch slots and the status itself; keep this
+    # in step with the push sequence at the top of this routine.
+    mov     rax, [rsp - 15 * 8]
 
     xor     rcx, rcx
     mov     cx, LONG_DS_R0
