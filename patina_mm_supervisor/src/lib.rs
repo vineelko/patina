@@ -370,7 +370,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             self.cpu_manager.register_cpu(cpu_id, cpu_index, true);
 
             // Perform BSP-only one-time initialization.
-            self.bsp_init(hob_list);
+            let user_hob_list = self.bsp_init(hob_list);
 
             // Dispatch to the user level entry point discovered from the HOB list (if found)
             let user_entry = match init_state().user_entry_point() {
@@ -399,7 +399,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                     cpl3_stack,
                     3,
                     UserCommandType::StartUserCore as u64,
-                    hob_list as u64,
+                    user_hob_list,
                     0,
                 )
             };
@@ -539,6 +539,14 @@ mod tests {
     fn test_is_buffer_inside_mmram_fails_closed_before_allocator_initialization() {
         assert!(!is_buffer_inside_mmram(0x1000, 0x1000));
         assert!(!is_buffer_inside_mmram(u64::MAX, 1));
+    }
+
+    #[test]
+    fn test_buffer_overlaps_mmram_fails_closed_before_allocator_initialization() {
+        // Nothing can be shown to lie outside MMRAM before the regions are known, so a buffer the
+        // supervisor is asked to treat as non-MM memory is reported as overlapping instead.
+        assert!(buffer_overlaps_mmram(0x1000, 0x1000));
+        assert!(buffer_overlaps_mmram(u64::MAX, 1));
     }
 
     #[test]
