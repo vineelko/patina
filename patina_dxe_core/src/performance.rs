@@ -479,15 +479,21 @@ impl CorePerformance {
             | KnownPerfId::PerfCrossModuleStart
             | KnownPerfId::PerfCrossModuleEnd
             | KnownPerfId::PerfEvent => {
-                let module_guid = caller_identifier.as_guid().ok_or(EfiError::InvalidParameter)?;
+                // These ids are also reached from the legacy handle-based `PERF_START`/`PERF_END` API, where
+                // `normalize_perf_id` derives them from the token. Mirror EDK2's `GetModuleInfoFromHandle` and
+                // resolve the handle to its module GUID instead of requiring a GUID caller identifier.
+                let module_guid = match caller_identifier {
+                    CallerIdentifier::Guid(guid) => guid.into(),
+                    CallerIdentifier::Handle(handle) => {
+                        let Ok(guid) = get_module_guid_from_handle(handle) else {
+                            log::error!("Performance: Could not find the guid for module handle: {handle:?}");
+                            return Err(EfiError::InvalidParameter.into());
+                        };
+                        guid
+                    }
+                };
                 let string = string.unwrap_or("unknown name");
-                self.add_fbpt_record(DynamicStringEventRecord::new(
-                    perf_id,
-                    0,
-                    timestamp,
-                    (*module_guid).into(),
-                    string,
-                ))
+                self.add_fbpt_record(DynamicStringEventRecord::new(perf_id, 0, timestamp, module_guid, string))
             }
         };
 
@@ -705,6 +711,78 @@ mod tests {
                 PerfAttribute::PerfStartEntry,
             );
             assert_eq!(result.unwrap_err(), Error::Efi(EfiError::InvalidParameter));
+        })
+        .unwrap();
+    }
+
+    /// The legacy `PERF_START`/`PERF_END` API reaches the GUID-style ids with a handle caller identifier, since
+    /// `normalize_perf_id` derives those ids from the token. The handle must be resolved to the module GUID
+    /// rather than dereferenced as a GUID pointer.
+    #[test]
+    fn test_core_performance_create_measurement_resolves_handle_for_guid_style_ids() {
+        with_clean_global_lock(|| {
+            let perf = test_core_performance();
+            let file_guid = efi::Guid::from_bytes(&[0x5A; 16]);
+            let node_length =
+                (mem::size_of::<efi::protocols::device_path::Protocol>() + mem::size_of::<efi::Guid>()) as u16;
+            let handle = install_loaded_image_with_fw_path(node_length, file_guid);
+
+            let perf_ids = [
+                KnownPerfId::PerfFunctionStart,
+                KnownPerfId::PerfFunctionEnd,
+                KnownPerfId::PerfInModuleStart,
+                KnownPerfId::PerfInModuleEnd,
+                KnownPerfId::PerfCrossModuleStart,
+                KnownPerfId::PerfCrossModuleEnd,
+                KnownPerfId::PerfEvent,
+            ];
+            for perf_id in &perf_ids {
+                perf.create_measurement_inner(
+                    CallerIdentifier::Handle(handle),
+                    None,
+                    Some("BdsAttempt"),
+                    0,
+                    0,
+                    perf_id.as_u16(),
+                    PerfAttribute::PerfStartEntry,
+                )
+                .unwrap();
+            }
+
+            let table = perf.performance_table.lock();
+            let mut record_count = 0;
+            for record in table.perf_records().iter() {
+                // `DynamicStringEventRecordData` is progress_id(2) + apic_id(4) + timestamp(8) before the GUID.
+                const GUID_OFFSET: usize = 14;
+                let guid_bytes: &[u8; 16] = record.data.get(GUID_OFFSET..GUID_OFFSET + 16).unwrap().try_into().unwrap();
+                assert_eq!(BinaryGuid::from_bytes(guid_bytes), BinaryGuid::from(file_guid));
+                record_count += 1;
+            }
+            assert_eq!(record_count, perf_ids.len());
+        })
+        .unwrap();
+    }
+
+    /// A handle whose module GUID cannot be resolved is rejected instead of producing a record.
+    #[test]
+    fn test_core_performance_create_measurement_rejects_unresolvable_handle() {
+        with_clean_global_lock(|| {
+            let perf = test_core_performance();
+            // A node length that does not match the expected header + GUID size makes resolution fail.
+            let handle = install_loaded_image_with_fw_path(4, efi::Guid::from_bytes(&[0x5B; 16]));
+
+            let result = perf.create_measurement_inner(
+                CallerIdentifier::Handle(handle),
+                None,
+                Some("BdsAttempt"),
+                0,
+                0,
+                KnownPerfId::PerfInModuleStart.as_u16(),
+                PerfAttribute::PerfStartEntry,
+            );
+
+            assert_eq!(result.unwrap_err(), Error::Efi(EfiError::InvalidParameter));
+            assert_eq!(perf.performance_table.lock().perf_records().iter().count(), 0);
         })
         .unwrap();
     }

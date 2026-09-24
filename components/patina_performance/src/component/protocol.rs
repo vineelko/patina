@@ -141,7 +141,10 @@ pub(crate) unsafe extern "efiapi" fn create_performance_measurement_efiapi(
         Err(status) => return status,
     };
 
-    let is_guid = CallerIdentifier::perf_id_is_guid(perf_id);
+    // Only the GUID-based `LogPerformanceMeasurement` API (always `PerfAttribute::PerfEntry`) passes a GUID pointer.
+    // The legacy `PERF_START*`/`PERF_END*` API passes an image handle, which must never be dereferenced even when
+    // `normalize_perf_id` derives a GUID-style id such as `PerfInModuleStart` from it.
+    let is_guid = attribute == PerfAttribute::PerfEntry && CallerIdentifier::perf_id_is_guid(perf_id);
     // SAFETY: This is enforced by the safety contract of this function.
     // `from_ptr` performs basic validation on the pointer, but cannot guarantee safety.
     let caller_identifier = unsafe {
