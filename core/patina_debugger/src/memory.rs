@@ -79,7 +79,8 @@ pub fn write_memory<Arch: DebuggerArch>(address: u64, buffer: &[u8]) -> Result<(
         let page = current & PAGE_MASK;
         let end = (page + PAGE_SIZE).min(end_address);
         let len = (end - current) as usize;
-        let offset = (current - address) as isize;
+        // Note: Since current is always >= address, this offset cannot be negative.
+        let offset = (current - address) as usize;
 
         // Check that this page is writable before writing. If it is not, then temporarily
         // modify the page table to allow writing.
@@ -95,7 +96,7 @@ pub fn write_memory<Arch: DebuggerArch>(address: u64, buffer: &[u8]) -> Result<(
         let ptr = current as *mut u8;
         // SAFETY: We have ensured these pages are writable before accessing them.
         unsafe {
-            ptr::copy_nonoverlapping(buffer.as_ptr().offset(offset), ptr, len);
+            ptr::copy_nonoverlapping(buffer.as_ptr().add(offset), ptr, len);
         }
 
         if attributes.contains(MemoryAttributes::ReadOnly) {

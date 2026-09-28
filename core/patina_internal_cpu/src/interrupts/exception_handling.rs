@@ -8,7 +8,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
-use patina::{error::EfiError, pi::protocol::cpu_arch::EfiExceptionType};
+use patina::error::EfiError;
 use spin::rwlock::RwLock;
 
 use crate::interrupts::EfiExceptionInfoDump;
@@ -100,7 +100,7 @@ extern "efiapi" fn exception_handler(exception_type: usize, context: &mut Except
     match *handler_lock {
         HandlerType::UefiRoutine(handler) => {
             let efi_system_context = context.create_efi_system_context();
-            handler(exception_type as EfiExceptionType, efi_system_context);
+            handler(exception_type.cast_signed(), efi_system_context);
         }
         HandlerType::Handler(handler) => {
             handler.handle_interrupt(exception_type, context);
@@ -121,7 +121,7 @@ extern "efiapi" fn exception_handler(exception_type: usize, context: &mut Except
 mod tests {
     extern crate std;
 
-    use patina::pi::protocol::cpu_arch::EfiSystemContext;
+    use patina::pi::protocol::cpu_arch::{EfiExceptionType, EfiSystemContext};
 
     use super::*;
     use crate::interrupts::InterruptManager;
@@ -144,7 +144,7 @@ mod tests {
     }
 
     extern "efiapi" fn test_callback(exception_type: EfiExceptionType, _context: EfiSystemContext) {
-        assert!(exception_type == CALLBACK_EXCEPTION as EfiExceptionType);
+        assert!(exception_type == CALLBACK_EXCEPTION.cast_signed());
         // SAFETY: This is a test only static mutable variable.
         unsafe { CALLBACK_INVOKED = true };
     }

@@ -93,9 +93,6 @@ redundant_feature_names = "allow"
 # pedantic::cast_possible_truncation - Temporarily allowed until all cases are updated (each fix needs a lot of
 #                                      attention) to determine if the truncation is intentional and safe or not.
 cast_possible_truncation = "allow"
-# pedantic::cast_possible_wrap - Higher priority. Temporarily allowed until each instance is reviewed. About 20
-#                                instances currently in the codebase.
-cast_possible_wrap = "allow"
 # pedantic::cast_ptr_alignment - Higher priority. Temporarily allowed until each instance is reviewed.
 cast_ptr_alignment = "allow"
 # pedantic::elidable_lifetime_names - Allowed because the automock macro cannot handle anonymous lifetimes in traits.

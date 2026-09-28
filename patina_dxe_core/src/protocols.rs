@@ -916,7 +916,7 @@ pub fn core_locate_device_path(
             // non-null guarantee and the caller's contract on `device_path`.
             unsafe { remaining_device_path(temp_device_path, device_path) }
         {
-            Some((remaining_path, matching_nodes)) => (remaining_path, matching_nodes as isize),
+            Some((remaining_path, matching_nodes)) => (remaining_path, matching_nodes.cast_signed()),
             None => continue,
         };
 
