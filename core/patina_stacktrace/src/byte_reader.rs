@@ -16,8 +16,9 @@ pub(crate) trait ByteReader {
 
 impl ByteReader for [u8] {
     fn read8(&self, index: usize) -> StResult<u8> {
+        let end = index.checked_add(1).ok_or(Error::OutOfBoundsRead { module: None, index })?;
         let bytes: [u8; 1] = self
-            .get(index..index + 1)
+            .get(index..end)
             .ok_or(Error::OutOfBoundsRead { module: None, index })?
             .try_into()
             .map_err(|_| Error::OutOfBoundsRead { module: None, index })?;
@@ -25,8 +26,9 @@ impl ByteReader for [u8] {
     }
 
     fn read16(&self, index: usize) -> StResult<u16> {
+        let end = index.checked_add(2).ok_or(Error::OutOfBoundsRead { module: None, index })?;
         let bytes: [u8; 2] = self
-            .get(index..index + 2)
+            .get(index..end)
             .ok_or(Error::OutOfBoundsRead { module: None, index })?
             .try_into()
             .map_err(|_| Error::OutOfBoundsRead { module: None, index })?;
@@ -34,8 +36,9 @@ impl ByteReader for [u8] {
     }
 
     fn read32(&self, index: usize) -> StResult<u32> {
+        let end = index.checked_add(4).ok_or(Error::OutOfBoundsRead { module: None, index })?;
         let bytes: [u8; 4] = self
-            .get(index..index + 4)
+            .get(index..end)
             .ok_or(Error::OutOfBoundsRead { module: None, index })?
             .try_into()
             .map_err(|_| Error::OutOfBoundsRead { module: None, index })?;
@@ -43,8 +46,9 @@ impl ByteReader for [u8] {
     }
 
     fn read64(&self, index: usize) -> StResult<u64> {
+        let end = index.checked_add(8).ok_or(Error::OutOfBoundsRead { module: None, index })?;
         let bytes: [u8; 8] = self
-            .get(index..index + 8)
+            .get(index..end)
             .ok_or(Error::OutOfBoundsRead { module: None, index })?
             .try_into()
             .map_err(|_| Error::OutOfBoundsRead { module: None, index })?;
@@ -84,16 +88,18 @@ impl ByteReader for [u8] {
     }
 }
 
-// SAFETY: The caller must ensure `pointer` remains a valid, properly aligned
-// pointer to readable 8 bytes for the duration of this read.
+// SAFETY: The caller must ensure `pointer` remains a valid pointer to readable
+// 8 bytes for the duration of this read. The read does not require `pointer` to
+// be aligned.
 pub(crate) unsafe fn read_pointer64(pointer: u64) -> StResult<u64> {
     if pointer == 0 {
         return Err(Error::OutOfBoundsRead { module: None, index: 0 });
     }
 
     // SAFETY: The caller is expected to uphold the calling safety requirements
-    // for `pointer`.
-    Ok(unsafe { *(pointer as *const u64) })
+    // for `pointer`. `read_unaligned` is used because a corrupt stack can yield
+    // an unaligned value, and a plain dereference would be undefined behavior.
+    Ok(unsafe { core::ptr::read_unaligned(pointer as *const u64) })
 }
 
 #[cfg(test)]
@@ -195,6 +201,22 @@ mod tests {
         assert_eq!(unsafe { read_pointer64(base).unwrap() }, values[0]);
         // SAFETY: Same as above; pointer arithmetic stays within the array bounds.
         assert_eq!(unsafe { read_pointer64(base + core::mem::size_of::<u64>() as u64).unwrap() }, values[1]);
+    }
+
+    #[test]
+    fn read_pointer64_reads_unaligned_address() {
+        // A corrupt stack can yield an unaligned pointer. Reading one must be
+        // well defined and return the bytes at that address.
+        #[repr(align(8))]
+        struct Aligned([u8; 16]);
+
+        let buffer = Aligned([0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0, 0, 0, 0, 0, 0, 0]);
+        let base = buffer.0.as_ptr() as u64;
+        assert_eq!(base % 8, 0, "fixture must start aligned so base + 1 is unaligned");
+
+        // SAFETY: `base + 1` is inside `buffer`, which stays live for this call,
+        // and 8 readable bytes follow it.
+        assert_eq!(unsafe { read_pointer64(base + 1).unwrap() }, 0x8877_6655_4433_2211);
     }
 
     #[test]
