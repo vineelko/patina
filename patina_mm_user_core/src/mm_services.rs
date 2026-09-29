@@ -52,6 +52,31 @@ pub(crate) fn init_mm_services(provider: &'static dyn MmServices) {
     MM_SERVICES.init(provider);
 }
 
+/// Records a failure that a thunk itself detected, before any service ran.
+///
+/// Only the thunk's own argument checks report through here. A status produced
+/// deeper in the core is passed back untouched, because the layer that detected
+/// it already logged the reason and named the service.
+///
+/// `NOT_FOUND`, `UNSUPPORTED` and `BUFFER_TOO_SMALL` are how drivers probe for
+/// optional protocols and size their buffers, so they are recorded at debug
+/// level. Every other status points at a caller defect and is recorded at error
+/// level so it stands out in a boot log.
+fn report(service: &str, status: efi::Status) -> efi::Status {
+    if status == efi::Status::SUCCESS {
+        return status;
+    }
+
+    if status == efi::Status::NOT_FOUND || status == efi::Status::UNSUPPORTED || status == efi::Status::BUFFER_TOO_SMALL
+    {
+        log::debug!("MMST {service}: {status:?}");
+    } else {
+        log::error!("MMST {service} failed: {status:?}");
+    }
+
+    status
+}
+
 /// Build the MM System Table value.
 ///
 /// Every field is a thunk that defers to [`MmUserCore::instance`]; the table
@@ -119,7 +144,7 @@ unsafe extern "efiapi" fn mm_io_not_available(
     _count: usize,
     _buffer: *mut c_void,
 ) -> efi::Status {
-    efi::Status::UNSUPPORTED
+    report("MmCpuIo", efi::Status::UNSUPPORTED)
 }
 
 /// Installs, updates, or removes a configuration table entry.
@@ -137,7 +162,7 @@ unsafe extern "efiapi" fn mm_install_configuration_table_impl(
     table_size: usize,
 ) -> efi::Status {
     if guid.is_null() {
-        return efi::Status::INVALID_PARAMETER;
+        return report("MmInstallConfigurationTable", efi::Status::INVALID_PARAMETER);
     }
 
     // SAFETY: `guid` was null-checked above; the C caller guarantees a non-null pointer references a
@@ -157,7 +182,7 @@ extern "efiapi" fn mm_allocate_pool_impl(
     buffer: *mut *mut c_void,
 ) -> efi::Status {
     if buffer.is_null() {
-        return efi::Status::INVALID_PARAMETER;
+        return report("MmAllocatePool", efi::Status::INVALID_PARAMETER);
     }
 
     match MM_SERVICES.allocate_pool(pool_type, size) {
@@ -185,7 +210,7 @@ extern "efiapi" fn mm_allocate_pages_impl(
     memory: *mut efi::PhysicalAddress,
 ) -> efi::Status {
     if memory.is_null() {
-        return efi::Status::INVALID_PARAMETER;
+        return report("MmAllocatePages", efi::Status::INVALID_PARAMETER);
     }
 
     match MM_SERVICES.allocate_pages(alloc_type, memory_type, pages) {
@@ -218,7 +243,7 @@ unsafe extern "efiapi" fn mm_startup_this_ap_not_available(
     _cpu_number: usize,
     _proc_arguments: *mut c_void,
 ) -> efi::Status {
-    efi::Status::UNSUPPORTED
+    report("MmStartupThisAp", efi::Status::UNSUPPORTED)
 }
 
 extern "efiapi" fn mm_install_protocol_interface_impl(
@@ -228,7 +253,7 @@ extern "efiapi" fn mm_install_protocol_interface_impl(
     interface: *mut c_void,
 ) -> efi::Status {
     if handle.is_null() || protocol.is_null() {
-        return efi::Status::INVALID_PARAMETER;
+        return report("MmInstallProtocolInterface", efi::Status::INVALID_PARAMETER);
     }
 
     // SAFETY: `protocol` was null-checked above; the C caller guarantees it references a valid
@@ -255,7 +280,7 @@ extern "efiapi" fn mm_uninstall_protocol_interface_impl(
     interface: *mut c_void,
 ) -> efi::Status {
     if handle.is_null() || protocol.is_null() {
-        return efi::Status::INVALID_PARAMETER;
+        return report("MmUninstallProtocolInterface", efi::Status::INVALID_PARAMETER);
     }
 
     // SAFETY: `protocol` was null-checked above; the C caller guarantees it references a valid
@@ -275,11 +300,11 @@ extern "efiapi" fn mm_handle_protocol_impl(
     interface: *mut *mut c_void,
 ) -> efi::Status {
     if protocol.is_null() {
-        return efi::Status::INVALID_PARAMETER;
+        return report("MmHandleProtocol", efi::Status::INVALID_PARAMETER);
     }
 
     if interface.is_null() {
-        return efi::Status::INVALID_PARAMETER;
+        return report("MmHandleProtocol", efi::Status::INVALID_PARAMETER);
     }
     // C reference: *Interface = NULL before lookup.
     // SAFETY: `interface` was null-checked above; the C caller guarantees it references a writable
@@ -287,7 +312,7 @@ extern "efiapi" fn mm_handle_protocol_impl(
     unsafe { *interface = core::ptr::null_mut() };
 
     if handle.is_null() {
-        return efi::Status::INVALID_PARAMETER;
+        return report("MmHandleProtocol", efi::Status::INVALID_PARAMETER);
     }
 
     // SAFETY: `protocol` was null-checked above; the C caller guarantees it references a valid
@@ -311,7 +336,7 @@ extern "efiapi" fn mm_register_protocol_notify_impl(
     registration: *mut *mut c_void,
 ) -> efi::Status {
     if protocol.is_null() || registration.is_null() {
-        return efi::Status::INVALID_PARAMETER;
+        return report("MmRegisterProtocolNotify", efi::Status::INVALID_PARAMETER);
     }
 
     // SAFETY: `protocol` was null-checked above; the C caller guarantees it references a valid
@@ -328,7 +353,7 @@ extern "efiapi" fn mm_register_protocol_notify_impl(
                 Ok(()) => efi::Status::SUCCESS,
                 Err(status) => status,
             },
-            None => efi::Status::INVALID_PARAMETER,
+            None => report("MmRegisterProtocolNotify", efi::Status::INVALID_PARAMETER),
         }
     } else {
         // Register a new notification.
@@ -354,7 +379,7 @@ extern "efiapi" fn mm_locate_handle_impl(
     buffer: *mut efi::Handle,
 ) -> efi::Status {
     if buffer_size.is_null() {
-        return efi::Status::INVALID_PARAMETER;
+        return report("MmLocateHandle", efi::Status::INVALID_PARAMETER);
     }
 
     // SAFETY: `protocol`, when non-null, is guaranteed by the C caller to reference a valid `efi::Guid`.
@@ -366,7 +391,7 @@ extern "efiapi" fn mm_locate_handle_impl(
     };
 
     if handles.is_empty() {
-        return efi::Status::NOT_FOUND;
+        return report("MmLocateHandle", efi::Status::NOT_FOUND);
     }
 
     let required_size = handles.len() * core::mem::size_of::<efi::Handle>();
@@ -377,11 +402,11 @@ extern "efiapi" fn mm_locate_handle_impl(
     unsafe { *buffer_size = required_size };
 
     if caller_size < required_size {
-        return efi::Status::BUFFER_TOO_SMALL;
+        return report("MmLocateHandle", efi::Status::BUFFER_TOO_SMALL);
     }
 
     if buffer.is_null() {
-        return efi::Status::INVALID_PARAMETER;
+        return report("MmLocateHandle", efi::Status::INVALID_PARAMETER);
     }
 
     // SAFETY: `buffer` was null-checked above and `caller_size >= required_size`, so the destination
@@ -398,7 +423,7 @@ extern "efiapi" fn mm_locate_protocol_impl(
     interface: *mut *mut c_void,
 ) -> efi::Status {
     if protocol.is_null() || interface.is_null() {
-        return efi::Status::INVALID_PARAMETER;
+        return report("MmLocateProtocol", efi::Status::INVALID_PARAMETER);
     }
 
     // SAFETY: `protocol` was null-checked above; the C caller guarantees it references a valid
@@ -436,6 +461,7 @@ unsafe extern "efiapi" fn mmi_manage_impl(
     let guid = if handler_type.is_null() { None } else { Some(unsafe { &*handler_type }) };
 
     // SAFETY: `context`/`comm_buffer`/`comm_buffer_size` are forwarded unchanged to the handlers.
+    // The MMI database logs when no handler matches.
     unsafe { MM_SERVICES.mmi_manage(guid, context, comm_buffer, comm_buffer_size) }
 }
 
@@ -453,7 +479,7 @@ unsafe extern "efiapi" fn mmi_handler_register_impl(
     dispatch_handle: *mut efi::Handle,
 ) -> efi::Status {
     if dispatch_handle.is_null() {
-        return efi::Status::INVALID_PARAMETER;
+        return report("MmiHandlerRegister", efi::Status::INVALID_PARAMETER);
     }
 
     // SAFETY: `handler_type` is null-checked here; when non-null the C caller guarantees it
@@ -510,12 +536,21 @@ impl MmServices for MmUserCore {
     /// PI Spec: `EFI_MM_SYSTEM_TABLE.MmAllocatePool`
     fn allocate_pool(&self, _pool_type: efi::MemoryType, size: usize) -> Result<*mut u8, efi::Status> {
         if size == 0 {
+            log::error!("MmAllocatePool: size is 0");
             return Err(efi::Status::INVALID_PARAMETER);
         }
-        let layout = core::alloc::Layout::from_size_align(size, 8).map_err(|_| efi::Status::INVALID_PARAMETER)?;
+        let layout = core::alloc::Layout::from_size_align(size, 8).map_err(|_| {
+            log::error!("MmAllocatePool: size {size} does not form a valid layout");
+            efi::Status::INVALID_PARAMETER
+        })?;
         // SAFETY: `layout` has a non-zero size (checked above), satisfying the `GlobalAlloc::alloc` contract.
         let ptr = unsafe { alloc::alloc::alloc(layout) };
-        if ptr.is_null() { Err(efi::Status::OUT_OF_RESOURCES) } else { Ok(ptr) }
+        if ptr.is_null() {
+            log::error!("MmAllocatePool: the heap could not satisfy {size} bytes");
+            Err(efi::Status::OUT_OF_RESOURCES)
+        } else {
+            Ok(ptr)
+        }
     }
 
     /// Free pool memory.
@@ -523,6 +558,7 @@ impl MmServices for MmUserCore {
     /// PI Spec: `EFI_MM_SYSTEM_TABLE.MmFreePool`
     fn free_pool(&self, buffer: *mut u8) -> Result<(), efi::Status> {
         if buffer.is_null() {
+            log::error!("MmFreePool: buffer pointer is null");
             return Err(efi::Status::INVALID_PARAMETER);
         }
         dealloc_pool(buffer);
@@ -539,8 +575,10 @@ impl MmServices for MmUserCore {
         pages: usize,
     ) -> Result<u64, efi::Status> {
         if pages == 0 {
+            log::error!("MmAllocatePages: page count is 0");
             return Err(efi::Status::INVALID_PARAMETER);
         }
+        // The syscall allocator logs why the request failed.
         crate::mm_mem::SYSCALL_PAGE_ALLOCATOR.allocate_pages(pages).map_err(|_| efi::Status::OUT_OF_RESOURCES)
     }
 
@@ -549,8 +587,10 @@ impl MmServices for MmUserCore {
     /// PI Spec: `EFI_MM_SYSTEM_TABLE.MmFreePages`
     fn free_pages(&self, memory: u64, pages: usize) -> Result<(), efi::Status> {
         if memory == 0 || pages == 0 {
+            log::error!("MmFreePages: rejected address 0x{memory:016x} with {pages} page(s)");
             return Err(efi::Status::INVALID_PARAMETER);
         }
+        // The syscall allocator logs why the request failed.
         crate::mm_mem::SYSCALL_PAGE_ALLOCATOR.free_pages(memory, pages).map_err(|_| efi::Status::INVALID_PARAMETER)
     }
 
@@ -596,7 +636,10 @@ impl MmServices for MmUserCore {
     ///
     /// The returned pointer must be used carefully to avoid aliasing violations.
     unsafe fn handle_protocol(&self, handle: efi::Handle, protocol: &efi::Guid) -> Result<*mut c_void, efi::Status> {
-        self.protocol_db.handle_protocol(handle, protocol).ok_or(efi::Status::UNSUPPORTED)
+        self.protocol_db.handle_protocol(handle, protocol).ok_or_else(|| {
+            log::debug!("MmHandleProtocol: {protocol:?} is not installed on handle {handle:p}");
+            efi::Status::UNSUPPORTED
+        })
     }
 
     /// Locate the first device that supports a protocol.
@@ -607,7 +650,10 @@ impl MmServices for MmUserCore {
     ///
     /// The returned pointer must be used carefully to avoid aliasing violations.
     unsafe fn locate_protocol(&self, protocol: &efi::Guid) -> Result<*mut c_void, efi::Status> {
-        self.protocol_db.locate_protocol(protocol).ok_or(efi::Status::NOT_FOUND)
+        self.protocol_db.locate_protocol(protocol).ok_or_else(|| {
+            log::debug!("MmLocateProtocol: {protocol:?} is not installed on any handle");
+            efi::Status::NOT_FOUND
+        })
     }
 
     /// Manage (dispatch) an MMI.
@@ -683,7 +729,10 @@ impl MmServices for MmUserCore {
     ) -> Result<Registration, efi::Status> {
         // Tokens are derived from a non-zero counter, so they are never null.
         let token = self.protocol_db.register_protocol_notify(protocol, notify);
-        NonNull::new(token).map(Registration::new).ok_or(efi::Status::OUT_OF_RESOURCES)
+        NonNull::new(token).map(Registration::new).ok_or_else(|| {
+            log::error!("MmRegisterProtocolNotify: ran out of registration tokens for {protocol:?}");
+            efi::Status::OUT_OF_RESOURCES
+        })
     }
 
     /// Unregister a previously registered protocol-install notification.
@@ -704,7 +753,10 @@ impl MmServices for MmUserCore {
         match search_type {
             efi::ALL_HANDLES => Ok(self.protocol_db.all_handles()),
             efi::BY_PROTOCOL => {
-                let guid = protocol.ok_or(efi::Status::INVALID_PARAMETER)?;
+                let guid = protocol.ok_or_else(|| {
+                    log::error!("MmLocateHandle: BY_PROTOCOL search with a null protocol GUID");
+                    efi::Status::INVALID_PARAMETER
+                })?;
                 Ok(self.protocol_db.locate_handle_by_protocol(guid))
             }
             _ => {

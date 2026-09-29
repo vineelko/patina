@@ -31,7 +31,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
-use alloc::{collections::BTreeMap, vec::Vec};
+use alloc::{collections::BTreeMap, format, string::String, vec::Vec};
 use core::{cmp::Ordering, ffi::c_void};
 
 use patina::standard::efi;
@@ -45,21 +45,35 @@ use patina::{
 use patina_internal_core::depex::{AssociatedDependency, Depex};
 use spin::Mutex;
 
-use crate::{DepexHobData, MM_SUPERVISOR_DEPEX_HOB_GUID, protocol_db::ProtocolDatabase};
+use crate::{DepexHobData, MM_SUPERVISOR_DEPEX_HOB_GUID, image_name, protocol_db::ProtocolDatabase};
 
 /// Represents a discovered MM driver pending dispatch.
 #[derive(Debug)]
 struct DriverEntry {
     /// The GUID identifying this driver (from `MemoryAllocationModule.module_name`).
     file_name: efi::Guid,
+    /// The module name recovered from the loaded image's debug metadata, if present.
+    module_name: Option<String>,
     /// The entry point address of the driver.
     entry_point: u64,
     /// The base address of the driver image in memory.
-    _image_base: u64,
+    image_base: u64,
     /// The size of the driver image in memory.
-    _image_size: u64,
+    image_size: u64,
     /// The parsed dependency expression, if any.
     depex: Option<Depex>,
+}
+
+impl DriverEntry {
+    /// Formats the driver for logging as `<Name.efi> [<GUID>]`, falling back to
+    /// `[<GUID>]` when the image carries no debug metadata.
+    fn describe(&self) -> String {
+        let guid = patina::Guid::from_ref(&self.file_name);
+        match self.module_name {
+            Some(ref name) => format!("{name} [{guid}]"),
+            None => format!("[{guid}]"),
+        }
+    }
 }
 
 /// Wrapper for `efi::Guid` that implements `Ord` for use in `BTreeMap`.
@@ -130,6 +144,7 @@ impl MmDispatcher {
     ) -> Result<usize, efi::Status> {
         let mut is_executing = self.executing.lock();
         if *is_executing {
+            log::error!("MM driver dispatch rejected: a dispatch pass is already running");
             return Err(efi::Status::ALREADY_STARTED);
         }
         *is_executing = true;
@@ -165,16 +180,16 @@ impl MmDispatcher {
 
                 // Skip the supervisor core and user core modules
                 if module_name == MM_SUPERVISOR_CORE_GUID || module_name == MM_SUPERVISOR_USER_GUID {
-                    log::info!("Skipping core module: {module_name}");
+                    log::debug!("Skipping core module: {module_name}");
                     continue;
                 }
 
-                log::info!(
-                    "Found MM driver: name={module_name}, entry=0x{:016x}, base=0x{:016x}, size=0x{:x}",
-                    mem_alloc_mod.entry_point,
-                    mem_alloc_mod.alloc_descriptor.memory_base_address,
-                    mem_alloc_mod.alloc_descriptor.memory_length,
-                );
+                let image_base = mem_alloc_mod.alloc_descriptor.memory_base_address;
+                let image_size = mem_alloc_mod.alloc_descriptor.memory_length;
+
+                // SAFETY: The supervisor loaded this image into MMRAM at `image_base` for
+                // `image_size` bytes and keeps it mapped for the lifetime of MM.
+                let image_module_name = unsafe { image_name::loaded_image_name(image_base, image_size) };
 
                 // Look for a paired depex GuidHob in the next HOB
                 let depex: Option<Depex> = if let Some(next_hob) = all_hobs.get(index + 1) {
@@ -193,8 +208,7 @@ impl MmDispatcher {
                                     "Depex HOB module name {} does not match driver module name {module_name}",
                                     depex_hob_data.name
                                 );
-                                // print depex_hob_data.depex_expression pointer and length
-                                log::info!(
+                                log::debug!(
                                     "  Parsed depex HOB {:p} for driver {} at {:p}: expression length = {}",
                                     depex_hob_data.as_ptr(),
                                     module_name,
@@ -224,15 +238,26 @@ impl MmDispatcher {
                     None
                 };
 
-                log::info!("  Driver {module_name} has depex: {depex:?}");
+                log::debug!("  Driver {module_name} has depex: {depex:?}");
 
-                drivers.push(DriverEntry {
+                let driver = DriverEntry {
                     file_name: module_name.into_inner(),
+                    module_name: image_module_name,
                     entry_point: mem_alloc_mod.entry_point,
-                    _image_base: mem_alloc_mod.alloc_descriptor.memory_base_address,
-                    _image_size: mem_alloc_mod.alloc_descriptor.memory_length,
+                    image_base,
+                    image_size,
                     depex,
-                });
+                };
+
+                log::info!(
+                    "Found MM driver {}: entry=0x{:016x}, base=0x{:016x}, size=0x{:x}",
+                    driver.describe(),
+                    driver.entry_point,
+                    driver.image_base,
+                    driver.image_size,
+                );
+
+                drivers.push(driver);
             }
         }
 
@@ -310,11 +335,8 @@ impl MmDispatcher {
 
             // Dispatch each scheduled driver
             for driver in ordered {
-                log::info!(
-                    "Dispatching MM driver {} at entry 0x{:016x}",
-                    patina::Guid::from_ref(&driver.file_name),
-                    driver.entry_point,
-                );
+                let description = driver.describe();
+                log::info!("Dispatching MM driver {description} at entry 0x{:016x}", driver.entry_point);
 
                 // Call the driver's entry point.
                 // MM driver entry signature: EFI_STATUS EFIAPI DriverEntry(EFI_HANDLE ImageHandle, EFI_MM_SYSTEM_TABLE *MmSystemTable)
@@ -328,14 +350,10 @@ impl MmDispatcher {
                 let status = unsafe { entry_fn(core::ptr::null_mut(), mm_system_table) };
 
                 if status == efi::Status::SUCCESS {
-                    log::info!("  Driver {} returned SUCCESS.", patina::Guid::from_ref(&driver.file_name));
+                    log::info!("  Driver {description} returned SUCCESS.");
                     total_dispatched += 1;
                 } else {
-                    log::warn!(
-                        "  Driver {} returned status: 0x{:x}",
-                        patina::Guid::from_ref(&driver.file_name),
-                        status.as_usize(),
-                    );
+                    log::warn!("  Driver {description} returned status: {status:?} (0x{:x})", status.as_usize());
                 }
             }
 
@@ -354,8 +372,9 @@ impl MmDispatcher {
         // Log any remaining drivers
         for driver in &pending {
             log::warn!(
-                "Driver {} discovered but not dispatched (unsatisfied depex).",
-                patina::Guid::from_ref(&driver.file_name),
+                "Driver {} discovered but not dispatched (unsatisfied depex: {:?}).",
+                driver.describe(),
+                driver.depex,
             );
         }
 
@@ -455,6 +474,9 @@ mod tests {
     struct HobListBuffer {
         bytes: Vec<u8>,
         aligned: Vec<u64>,
+        /// Backing storage for the module images the HOBs point at, so that image-name
+        /// resolution reads real memory instead of a fabricated address.
+        images: Vec<Vec<u8>>,
     }
 
     impl HobListBuffer {
@@ -474,7 +496,7 @@ mod tests {
                 end_of_hob_list: 0,
             };
 
-            let mut this = Self { bytes: Vec::new(), aligned: Vec::new() };
+            let mut this = Self { bytes: Vec::new(), aligned: Vec::new(), images: Vec::new() };
             this.push_struct(&phit);
             this
         }
@@ -489,6 +511,12 @@ mod tests {
 
         /// Appends a driver module HOB. `alloc_name` selects whether the supervisor recognizes it.
         fn module(mut self, alloc_name: patina::BinaryGuid, module_name: patina::BinaryGuid, entry_point: u64) -> Self {
+            // Back the HOB with a real allocation. The heap buffer a `Vec` owns does not move
+            // when the `Vec` itself is moved, so the recorded address stays valid.
+            const IMAGE_SIZE: usize = 0x2000;
+            self.images.push(vec![0u8; IMAGE_SIZE]);
+            let image_base = self.images.last().expect("image was just pushed").as_ptr() as u64;
+
             let module = MemoryAllocationModule {
                 header: HobHeader {
                     r#type: MEMORY_ALLOCATION,
@@ -497,8 +525,8 @@ mod tests {
                 },
                 alloc_descriptor: MemoryAllocationHeader {
                     name: alloc_name,
-                    memory_base_address: 0x1000,
-                    memory_length: 0x2000,
+                    memory_base_address: image_base,
+                    memory_length: IMAGE_SIZE as u64,
                     memory_type: efi::BOOT_SERVICES_CODE,
                     reserved: [0; 4],
                 },

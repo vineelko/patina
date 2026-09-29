@@ -151,7 +151,11 @@ impl UnblockedMemoryState {
 
     /// Adds a new entry if there's space.
     fn add_entry(&mut self, base: u64, size: u64, attributes: u32) -> Result<(), UnblockError> {
-        let slot = self.entries.get_mut(self.count).ok_or(UnblockError::TooManyRegions)?;
+        let capacity = self.entries.len();
+        let slot = self.entries.get_mut(self.count).ok_or_else(|| {
+            log::debug!("Cannot track unblocked region 0x{base:016x} (+0x{size:x}): all {capacity} slots are in use");
+            UnblockError::TooManyRegions
+        })?;
         *slot = UnblockedMemoryEntry::new(base, size, attributes);
         self.count += 1;
         Ok(())
@@ -191,6 +195,7 @@ impl UnblockedMemoryTracker {
     pub fn init_from_descriptors(&self, descriptors: &[MemDescriptorV1_0]) -> Result<(), UnblockError> {
         // Check if already initialized
         if self.initialized.swap(true, Ordering::SeqCst) {
+            log::error!("UnblockedMemoryTracker init rejected: already initialized");
             return Err(UnblockError::AlreadyInitialized);
         }
 
@@ -215,7 +220,7 @@ impl UnblockedMemoryTracker {
             state.add_entry(desc.base_address, desc.size, desc.mem_attributes)?;
         }
 
-        log::info!("UnblockedMemoryTracker initialized with {} regions", state.count);
+        log::debug!("UnblockedMemoryTracker initialized with {} regions", state.count);
 
         Ok(())
     }
@@ -268,7 +273,8 @@ impl UnblockedMemoryTracker {
     }
 
     fn track_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> Result<TrackOutcome, UnblockError> {
-        // Validate parameters
+        // Validate parameters. The caller logs the range and the returned variant, so the
+        // two rejections below stay quiet.
         if size == 0 {
             return Err(UnblockError::InvalidParameter);
         }

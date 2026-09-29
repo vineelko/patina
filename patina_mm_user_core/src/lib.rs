@@ -49,6 +49,7 @@ extern crate alloc;
 pub mod component_dispatcher;
 pub mod config_table;
 pub mod core_handlers;
+mod image_name;
 pub mod mm_dispatcher;
 pub mod mm_mem;
 pub mod mm_services;
@@ -232,7 +233,7 @@ impl MmUserCore {
     fn init_mm_system_table(&'static self) -> *mut EfiMmSystemTable {
         let addr = *self.mm_system_table.call_once(|| {
             let ptr = Box::into_raw(Box::new(mm_services::build_mm_system_table()));
-            log::info!("MM System Table allocated at {ptr:p}");
+            log::debug!("MM System Table allocated at {ptr:p}");
             ptr.expose_provenance()
         });
         core::ptr::with_exposed_provenance_mut(addr)
@@ -622,7 +623,7 @@ impl MmUserCore {
             }
         }
 
-        log::warn!("No MM communication buffer HOB found — only root MMI handlers will be supported.");
+        log::warn!("No MM communication buffer HOB found - only root MMI handlers will be supported.");
     }
 }
 

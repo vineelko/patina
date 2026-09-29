@@ -149,9 +149,11 @@ impl ProtocolDatabase {
             let id = if let Some(id) = Self::handle_to_id(handle) {
                 // Existing handle: it must exist and must not already carry this protocol.
                 let Some(protocols) = inner.handles.get(&id) else {
+                    log::error!("MmInstallProtocolInterface: handle {handle:p} is not a known handle");
                     return Err(efi::Status::INVALID_PARAMETER);
                 };
                 if protocols.iter().any(|p| p.guid == *guid) {
+                    log::error!("MmInstallProtocolInterface: {guid:?} is already installed on handle {handle:p}");
                     return Err(efi::Status::INVALID_PARAMETER);
                 }
                 id
@@ -197,15 +199,26 @@ impl ProtocolDatabase {
         guid: &efi::Guid,
         interface: *mut c_void,
     ) -> Result<(), efi::Status> {
-        let id = Self::handle_to_id(handle).ok_or(efi::Status::INVALID_PARAMETER)?;
+        let id = Self::handle_to_id(handle).ok_or_else(|| {
+            log::error!("MmUninstallProtocolInterface: handle {handle:p} is null");
+            efi::Status::INVALID_PARAMETER
+        })?;
         let mut inner = self.inner.lock();
 
         let now_empty = {
-            let protocols = inner.handles.get_mut(&id).ok_or(efi::Status::INVALID_PARAMETER)?;
+            let protocols = inner.handles.get_mut(&id).ok_or_else(|| {
+                log::error!("MmUninstallProtocolInterface: handle {handle:p} is not a known handle");
+                efi::Status::INVALID_PARAMETER
+            })?;
             let pos = protocols
                 .iter()
                 .position(|p| p.guid == *guid && p.interface == interface)
-                .ok_or(efi::Status::NOT_FOUND)?;
+                .ok_or_else(|| {
+                    log::error!(
+                        "MmUninstallProtocolInterface: {guid:?} with interface {interface:p} is not installed on handle {handle:p}"
+                    );
+                    efi::Status::NOT_FOUND
+                })?;
             protocols.remove(pos);
             protocols.is_empty()
         };
@@ -267,13 +280,15 @@ impl ProtocolDatabase {
 
     /// Unregister a notification by its registration token.
     pub fn unregister_protocol_notify(&self, guid: &efi::Guid, registration: *mut c_void) -> Result<(), efi::Status> {
-        let token = NonZeroUsize::new(registration as usize).ok_or(efi::Status::INVALID_PARAMETER)?;
+        let token = NonZeroUsize::new(registration as usize).ok_or_else(|| {
+            log::error!("MmRegisterProtocolNotify: registration token for {guid:?} is null");
+            efi::Status::INVALID_PARAMETER
+        })?;
         let mut inner = self.inner.lock();
-        let pos = inner
-            .notifications
-            .iter()
-            .position(|n| n.guid == *guid && n.token == token)
-            .ok_or(efi::Status::NOT_FOUND)?;
+        let pos = inner.notifications.iter().position(|n| n.guid == *guid && n.token == token).ok_or_else(|| {
+            log::error!("MmRegisterProtocolNotify: no notification for {guid:?} with token {token}");
+            efi::Status::NOT_FOUND
+        })?;
         inner.notifications.remove(pos);
         Ok(())
     }

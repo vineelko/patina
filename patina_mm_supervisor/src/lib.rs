@@ -74,7 +74,7 @@ use spin::Mutex;
 use core::{
     ffi::c_void,
     ptr::NonNull,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use patina::management_mode::supervisor::UserCommandType;
@@ -210,6 +210,9 @@ pub struct MmSupervisorCore<P: PlatformInfo, const MAX_CPUS: usize> {
     syscall_interface: SyscallInterface<MAX_CPUS>,
     /// Flag indicating if the core has been initialized.
     initialized: AtomicBool,
+    /// Number of runtime MMIs the BSP has entered, used to tag log lines so a
+    /// single MMI can be followed from entry to exit.
+    mmi_count: AtomicU64,
     /// TESTING: serializes per-core initialization so only one core runs it at a time.
     init_lock: Mutex<()>,
     /// Phantom data for the platform type.
@@ -264,6 +267,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             mailbox_manager: MailboxManager::new(),
             syscall_interface: SyscallInterface::new(),
             initialized: AtomicBool::new(false),
+            mmi_count: AtomicU64::new(0),
             init_lock: Mutex::new(()),
             _phantom: core::marker::PhantomData,
         }

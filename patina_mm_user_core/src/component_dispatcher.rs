@@ -248,7 +248,7 @@ impl MmComponentDispatcher {
         log::warn!("MM components not dispatched:");
         for component in self.components.iter().chain(&self.rejected) {
             let metadata = component.metadata();
-            log::warn!("  {} — {}", metadata.name(), metadata.error_message().unwrap_or(Cow::from("")));
+            log::warn!("  {} - {}", metadata.name(), metadata.error_message().unwrap_or(Cow::from("")));
         }
     }
 }

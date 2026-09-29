@@ -402,6 +402,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> PolicyInitServices for RuntimePolic
 
     fn set_save_state_info(&mut self, info: SaveStateInfo) {
         security_state().set_save_state_info(info);
+        // SAFETY: `info.sm_base` came from the PassDown HOB the MM IPL published, so it
+        // references `info.number_of_cpus` resident SMBASE entries in MMRAM.
+        unsafe { crate::save_state::log_save_state_map(info) };
     }
 
     fn set_mseg_base(&mut self, base: u64) {
@@ -765,6 +768,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let sm_base_bytes =
             unsafe { core::slice::from_raw_parts(sm_base_array as *const u8, inputs.sm_base_array_size) };
 
+        let mut patched = 0usize;
         for (cpu, smbase_bytes) in sm_base_bytes.chunks_exact(core::mem::size_of::<u64>()).enumerate() {
             let smbase = u64::from_ne_bytes(smbase_bytes.try_into().expect("SMBASE chunks are exactly 8 bytes"));
             if smbase == 0 {
@@ -807,11 +811,16 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             // SAFETY: the range check above establishes that the destination is a complete
             // writable descriptor in MMRAM.
             unsafe { services.write_idtr(idt_desc_addr, idtr) };
+            patched += 1;
 
-            log::info!(
+            log::debug!(
                 "CPU {cpu}: patched SMI handler IDT descriptor at 0x{idt_desc_addr:016x}: base=0x{idtr_base:016x}, limit=0x{idtr_limit:04x}"
             );
         }
+
+        log::info!(
+            "Patched the SMI handler IDT descriptor on {patched}/{number_of_cpus} CPU(s): base=0x{idtr_base:016x}, limit=0x{idtr_limit:04x}"
+        );
     }
 
     /// Per-core initialization.
@@ -879,6 +888,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         services: &mut S,
     ) -> Result<(), PolicyInitError> {
         if hob_list.is_null() {
+            log::error!("Policy init failed: HOB list pointer is null");
             return Err(PolicyInitError::NullHobList);
         }
 
@@ -889,19 +899,18 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // 1. Process the MP Information HOB (`gMpInformationHobGuid`) for the CPU count. It sizes
         //    the Ring 3 stack array the PassDown HOB describes, so it is needed first.
-        let mp_information =
-            find_guid_hob(hob_list_info, crate::MP_INFORMATION_HOB_GUID).ok_or(PolicyInitError::HobNotFound)?;
+        let mp_information = find_required_hob(hob_list_info, crate::MP_INFORMATION_HOB_GUID, "MP Information")?;
         let number_of_cpus = self.parse_mp_information_hob(mp_information)?;
 
         // 1b. Process the PassDown HOB (policy, syscall, memory policy)
         let pass_down_data =
-            find_guid_hob(hob_list_info, crate::MM_SUPV_PASS_DOWN_HOB_GUID).ok_or(PolicyInitError::HobNotFound)?;
+            find_required_hob(hob_list_info, crate::MM_SUPV_PASS_DOWN_HOB_GUID, "MM Supervisor PassDown")?;
         // SAFETY: `pass_down_data` is a slice into the validated HOB list, so the buffer pointers
         // it carries reference live memory as `init_from_pass_down_hob` requires.
         let (sm_base, mmi_entry_size) = unsafe { services.init_from_pass_down_hob(pass_down_data, number_of_cpus)? };
 
         services.set_save_state_info(SaveStateInfo { number_of_cpus, sm_base });
-        log::info!("Save-state metadata initialized for {number_of_cpus} CPU(s)");
+        log::info!("Save-state metadata initialized for {number_of_cpus} CPU(s) from SMBASE array at 0x{sm_base:016x}");
 
         // 1b-ii. Process the MSEG SMRAM HOB (`gMsegSmramGuid`), if published. It carries the
         //        MSEG region reserved for an STM. Each core programs the base into
@@ -923,8 +932,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // 2. Process the supervisor communication buffer HOB. Only one
         //    MM_COMM_REGION_HOB is published (the supervisor one); the user
         //    channel flows through MM_COMM_BUFFER_HOB_GUID below.
-        let supv_region_data =
-            find_guid_hob(hob_list_info, crate::MM_COMMON_REGION_HOB_GUID).ok_or(PolicyInitError::HobNotFound)?;
+        let supv_region_data = find_required_hob(hob_list_info, crate::MM_COMMON_REGION_HOB_GUID, "MM Common Region")?;
         let (supv_comm_buffer, supv_comm_buffer_size, supv_comm_buffer_internal, supv_status_buffer) =
             services.init_supv_comm_buffer(supv_region_data)?;
 
@@ -933,7 +941,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         //    keeps working (see the HACKHACK at the tail of
         //    init_user_comm_buffer).
         let (user_buffer_data, user_buffer_data_len) = {
-            let data = find_guid_hob(hob_list_info, MM_COMM_BUFFER_HOB_GUID).ok_or(PolicyInitError::HobNotFound)?;
+            let data = find_required_hob(hob_list_info, MM_COMM_BUFFER_HOB_GUID, "MM Communication Buffer")?;
             (data.as_ptr().cast_mut(), data.len())
         };
         // SAFETY: the pointer and length identify the original HOB payload in the writable live
@@ -987,23 +995,40 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         let number_of_cpus = u64::from_le_bytes(
             data.get(0..8)
-                .ok_or(PolicyInitError::InvalidPolicyData)?
+                .ok_or_else(|| {
+                    log::error!("MP Information HOB has no processor count field");
+                    PolicyInitError::InvalidPolicyData
+                })?
                 .try_into()
-                .map_err(|_| PolicyInitError::InvalidPolicyData)?,
+                .map_err(|_| {
+                    log::error!("MP Information HOB processor count field is not 8 bytes");
+                    PolicyInitError::InvalidPolicyData
+                })?,
         );
-        let cpu_count: usize = number_of_cpus
-            .try_into()
-            .map_err(|_| PolicyInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS })?;
+        let cpu_count: usize = number_of_cpus.try_into().map_err(|_| {
+            log::error!("MP Information HOB CPU count {number_of_cpus} does not fit the target architecture");
+            PolicyInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }
+        })?;
         if cpu_count == 0 || cpu_count > MAX_CPUS {
             log::error!("MP Information HOB CPU count {cpu_count} is outside the supported range 1..={MAX_CPUS}");
             return Err(PolicyInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS });
         }
 
-        let processor_info_size =
-            cpu_count.checked_mul(PROCESSOR_INFO_ENTRY_SIZE).ok_or(PolicyInitError::InvalidPolicyData)?;
-        let processor_info_end =
-            PROCESSOR_INFO_BUFFER_OFFSET.checked_add(processor_info_size).ok_or(PolicyInitError::InvalidPolicyData)?;
-        data.get(PROCESSOR_INFO_BUFFER_OFFSET..processor_info_end).ok_or(PolicyInitError::InvalidPolicyData)?;
+        let processor_info_size = cpu_count.checked_mul(PROCESSOR_INFO_ENTRY_SIZE).ok_or_else(|| {
+            log::error!("MP Information HOB: {cpu_count} processor entries overflow the payload size");
+            PolicyInitError::InvalidPolicyData
+        })?;
+        let processor_info_end = PROCESSOR_INFO_BUFFER_OFFSET.checked_add(processor_info_size).ok_or_else(|| {
+            log::error!("MP Information HOB: processor info end offset overflows");
+            PolicyInitError::InvalidPolicyData
+        })?;
+        data.get(PROCESSOR_INFO_BUFFER_OFFSET..processor_info_end).ok_or_else(|| {
+            log::error!(
+                "MP Information HOB holds {} bytes but {cpu_count} processor entries need {processor_info_end}",
+                data.len()
+            );
+            PolicyInitError::InvalidPolicyData
+        })?;
 
         Ok(number_of_cpus)
     }
@@ -1115,7 +1140,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         };
 
         if let Ok(descriptor_count) = count {
-            log::info!("Successfully generated {descriptor_count} memory policy descriptors");
+            log::info!("Generated {descriptor_count} memory policy descriptor(s) from the page table walk");
             // SAFETY: `walk_page_table` succeeded, so `memory_policy_buffer` holds `descriptor_count`
             // valid `MemDescriptorV1_0` entries.
             if let Err(e) = unsafe {
@@ -1125,14 +1150,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             } {
                 log::error!("Failed to initialize unblocked memory tracker: {e:?}");
             } else {
-                log::info!("Unblocked memory tracker initialized");
                 security_state().unblocked_tracker().dump_regions();
             }
         } else {
             log::error!("Failed to generate memory policy descriptors: {:?}", count.err());
         }
 
-        log::info!("Generated {} memory policy descriptors", count.unwrap_or(0));
         Ok((sm_base, mmi_entry_size))
     }
 }
@@ -1213,6 +1236,21 @@ fn find_guid_hob_in<'a>(hobs: impl IntoIterator<Item = Hob<'a>>, target_guid: pa
         }
     }
     None
+}
+
+/// Locates a HOB that initialization cannot continue without.
+///
+/// [`PolicyInitError::HobNotFound`] carries no payload and is returned for
+/// several different HOBs, so `description` names the missing one in the log.
+fn find_required_hob<'a>(
+    hob_list_info: &'a PhaseHandoffInformationTable,
+    target_guid: patina::BinaryGuid,
+    description: &str,
+) -> Result<&'a [u8], PolicyInitError> {
+    find_guid_hob(hob_list_info, target_guid).ok_or_else(|| {
+        log::error!("Required {description} HOB ({}) is missing from the HOB list", target_guid.as_guid());
+        PolicyInitError::HobNotFound
+    })
 }
 
 /// Parses the MSEG SMRAM HOB payload (`gMsegSmramGuid`), a single

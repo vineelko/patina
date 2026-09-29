@@ -153,7 +153,10 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
     let write_size = validate_read_request(&holder, protocol, width, buffer)?;
 
     let mut out = [0u8; IO_INFO_SIZE];
-    let out = out.get_mut(..write_size).ok_or(Status::BUFFER_TOO_SMALL)?;
+    let out = out.get_mut(..write_size).ok_or_else(|| {
+        log::error!("SAVE_STATE_READ2: write size {write_size} exceeds the {IO_INFO_SIZE}-byte staging buffer");
+        Status::BUFFER_TOO_SMALL
+    })?;
 
     if holder.register == MmSaveStateRegister::ProcessorId {
         // Special case: PROCESSOR_ID — always allowed, no policy check.
@@ -268,6 +271,51 @@ fn save_state_info() -> Result<SaveStateInfo, Status> {
 /// Returns the number of CPUs from the save-state metadata.
 fn get_number_of_cpus() -> Result<u64, Status> {
     Ok(save_state_info()?.number_of_cpus)
+}
+
+/// Logs the per-CPU SMBASE and the save-state window derived from it.
+///
+/// This mirrors the CPU relocation table the C `PiSmmCpuDxeSmm` driver emits and
+/// gives the same at-a-glance view when diagnosing save-state or SMBASE issues.
+///
+/// ## Safety
+///
+/// `info.sm_base` must reference a readable array of at least
+/// `info.number_of_cpus` `u64` SMBASE entries that stays resident for the call.
+pub(crate) unsafe fn log_save_state_map(info: SaveStateInfo) {
+    if !log::log_enabled!(log::Level::Debug) {
+        return;
+    }
+
+    if info.sm_base == 0 {
+        log::warn!("SMBASE array pointer is null; skipping the save-state map dump");
+        return;
+    }
+
+    let Ok(num_cpus) = usize::try_from(info.number_of_cpus) else {
+        log::warn!("CPU count {} does not fit the target architecture", info.number_of_cpus);
+        return;
+    };
+
+    // Read the array as bytes so an unaligned producer address does not create an invalid
+    // `&[u64]`.
+    let Some(array_bytes) = num_cpus.checked_mul(core::mem::size_of::<u64>()) else {
+        log::warn!("SMBASE array size for {num_cpus} CPU(s) overflows");
+        return;
+    };
+
+    // SAFETY: The caller guarantees `sm_base` covers `num_cpus` initialized `u64` entries.
+    let sm_base_bytes = unsafe { core::slice::from_raw_parts(info.sm_base as *const u8, array_bytes) };
+
+    for (cpu_index, smbase_bytes) in sm_base_bytes.chunks_exact(core::mem::size_of::<u64>()).enumerate() {
+        let smbase = u64::from_ne_bytes(smbase_bytes.try_into().expect("SMBASE chunks are exactly 8 bytes"));
+        match smbase.checked_add(SMRAM_SAVE_STATE_MAP_OFFSET) {
+            Some(save_state) => log::debug!(
+                "CPU[{cpu_index:03}]  SMBASE=0x{smbase:016x}  SaveState=0x{save_state:016x}  Size=0x{SMRAM_SAVE_STATE_MAP_SIZE:08x}"
+            ),
+            None => log::error!("CPU[{cpu_index:03}]  SMBASE=0x{smbase:016x} overflows the save-state offset"),
+        }
+    }
 }
 
 /// A read-only byte view over a CPU's SMRAM save state region.
@@ -402,10 +450,19 @@ unsafe fn copy_to_user(buffer: *mut u8, out: &[u8]) {
 /// The `ProcessorId` (APIC ID) is read from the supervisor-owned [`CpuManager`](crate::cpu::CpuManager).
 fn read_processor_id(cpu_index: u64, out: &mut [u8]) -> SyscallResult {
     let lookup = init_state().processor_id_lookup_fn().ok_or(Status::NOT_READY)?;
-    let processor_id = lookup(cpu_index as usize).ok_or(Status::NOT_FOUND)?;
+    let processor_id = lookup(cpu_index as usize).ok_or_else(|| {
+        log::error!("PROCESSOR_ID: CPU index {cpu_index} has no registered processor ID");
+        Status::NOT_FOUND
+    })?;
 
     // Write the 8-byte ProcessorId to the user buffer.
-    out.get_mut(..8).ok_or(Status::BUFFER_TOO_SMALL)?.copy_from_slice(&processor_id.to_le_bytes());
+    let out_len = out.len();
+    out.get_mut(..8)
+        .ok_or_else(|| {
+            log::error!("PROCESSOR_ID: output buffer holds {out_len} bytes, need 8");
+            Status::BUFFER_TOO_SMALL
+        })?
+        .copy_from_slice(&processor_id.to_le_bytes());
 
     log::debug!("PROCESSOR_ID: CPU {cpu_index} = 0x{processor_id:x}");
     Ok(0)
@@ -490,9 +547,18 @@ fn read_register_field(
         // Read lo u32 then hi u32 (handles both contiguous and split
         // layouts) and write them as two adjacent u32 (matching C
         // split-register behaviour).
-        out.get_mut(..4).ok_or(Status::BUFFER_TOO_SMALL)?.copy_from_slice(&view.read_u32(lo).to_le_bytes());
+        let out_len = out.len();
+        out.get_mut(..4)
+            .ok_or_else(|| {
+                log::error!("Register {register:?}: output buffer holds {out_len} bytes, need 8");
+                Status::BUFFER_TOO_SMALL
+            })?
+            .copy_from_slice(&view.read_u32(lo).to_le_bytes());
         out.get_mut(4..8)
-            .ok_or(Status::BUFFER_TOO_SMALL)?
+            .ok_or_else(|| {
+                log::error!("Register {register:?}: output buffer holds {out_len} bytes, need 8");
+                Status::BUFFER_TOO_SMALL
+            })?
             .copy_from_slice(&view.read_u32(info.hi_offset as usize).to_le_bytes());
     } else {
         log::error!("Register {register:?} does not support {width}-byte read");
@@ -547,7 +613,11 @@ fn read_io_register(view: &SaveStateView, out: &mut [u8]) -> SyscallResult {
         io_type: parsed.io_type,
         _pad1: [0; 4],
     };
-    let out = out.get_mut(..IO_INFO_SIZE).ok_or(Status::BUFFER_TOO_SMALL)?;
+    let out_len = out.len();
+    let out = out.get_mut(..IO_INFO_SIZE).ok_or_else(|| {
+        log::error!("IO_READ: output buffer holds {out_len} bytes, need {IO_INFO_SIZE}");
+        Status::BUFFER_TOO_SMALL
+    })?;
     out.copy_from_slice(io_info.as_bytes());
 
     Ok(0)
@@ -569,11 +639,23 @@ fn read_lma_register(view: &SaveStateView, width: u64, out: &mut [u8]) -> Syscal
         if (efer & IA32_EFER_LMA) != 0 { LMA_64BIT } else { LMA_32BIT }
     };
 
+    let out_len = out.len();
     if width == 4 {
-        out.get_mut(..4).ok_or(Status::BUFFER_TOO_SMALL)?.copy_from_slice(&(lma_value as u32).to_le_bytes());
+        out.get_mut(..4)
+            .ok_or_else(|| {
+                log::error!("LMA read: output buffer holds {out_len} bytes, need 4");
+                Status::BUFFER_TOO_SMALL
+            })?
+            .copy_from_slice(&(lma_value as u32).to_le_bytes());
     } else if width == 8 {
-        out.get_mut(..8).ok_or(Status::BUFFER_TOO_SMALL)?.copy_from_slice(&lma_value.to_le_bytes());
+        out.get_mut(..8)
+            .ok_or_else(|| {
+                log::error!("LMA read: output buffer holds {out_len} bytes, need 8");
+                Status::BUFFER_TOO_SMALL
+            })?
+            .copy_from_slice(&lma_value.to_le_bytes());
     } else {
+        log::error!("LMA read: unsupported width {width}, expected 4 or 8");
         return Err(Status::INVALID_PARAMETER);
     }
 

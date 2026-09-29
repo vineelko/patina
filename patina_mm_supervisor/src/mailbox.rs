@@ -244,8 +244,16 @@ impl<const MAX_APS: usize> MailboxManager<MAX_APS> {
 
     /// Sends a command to a specific AP.
     pub fn send_command(&self, cpu_index: usize, command: ApCommand) -> Result<(), ()> {
-        let mailbox = self.mailboxes.get(cpu_index).ok_or(())?;
-        if mailbox.send_command(command) { Ok(()) } else { Err(()) }
+        let Some(mailbox) = self.mailboxes.get(cpu_index) else {
+            log::error!("No mailbox for CPU index {cpu_index} ({MAX_APS} slots)");
+            return Err(());
+        };
+        if mailbox.send_command(command) {
+            Ok(())
+        } else {
+            log::error!("CPU index {cpu_index} already has a command pending");
+            Err(())
+        }
     }
 
     /// Checks for a pending command (called by AP).

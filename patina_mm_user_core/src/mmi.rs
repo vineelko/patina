@@ -295,7 +295,11 @@ impl MmiDatabase {
             // lock released here
         };
 
-        log::info!("Dispatching MMI with handler_type = {:?}", handler_type.map(patina::Guid::from_ref));
+        log::trace!(
+            "Dispatching MMI with handler_type = {:?} ({} handler(s))",
+            handler_type.map(patina::Guid::from_ref),
+            handlers_snapshot.len()
+        );
         // ----- Phase 2: dispatch without the lock held -----
         let return_status =
             Self::dispatch_handler_snapshot(&handlers_snapshot, handler_type, context, comm_buffer, comm_buffer_size);
@@ -320,6 +324,7 @@ impl MmiDatabase {
         comm_buffer_size: *mut usize,
     ) -> efi::Status {
         if handlers.is_empty() {
+            log::debug!("No MMI handler registered for {:?}", handler_type.map(patina::Guid::from_ref));
             return efi::Status::NOT_FOUND;
         }
 
@@ -332,7 +337,7 @@ impl MmiDatabase {
         let guid_ref = handler_type.unwrap_or(&null_guid);
 
         for handler in handlers {
-            log::info!("Dispatching handler with id = {}, kind = {:?}", handler.id, handler.kind);
+            log::trace!("Dispatching handler with id = {}, kind = {:?}", handler.id, handler.kind);
             let status = match handler.kind {
                 HandlerKind::External(entry_point) => {
                     // SAFETY: External handler follows the PI spec efiapi calling convention.
@@ -346,13 +351,13 @@ impl MmiDatabase {
                 efi::Status::SUCCESS => {
                     return_status = efi::Status::SUCCESS;
                     if short_circuit {
-                        log::info!("Short-circuiting after successful handler dispatch.");
+                        log::trace!("Short-circuiting after successful handler dispatch (id = {}).", handler.id);
                         break;
                     }
                 }
                 s if s == INTERRUPT_PENDING => {
                     if short_circuit {
-                        log::info!("Short-circuiting due to pending interrupt.");
+                        log::trace!("Short-circuiting due to pending interrupt (id = {}).", handler.id);
                         return INTERRUPT_PENDING;
                     }
                     if return_status != efi::Status::SUCCESS {
@@ -370,7 +375,7 @@ impl MmiDatabase {
                 }
             }
         }
-        log::info!("Finished dispatching handlers with final status = {return_status:?}");
+        log::trace!("Finished dispatching handlers with final status = {return_status:?}");
         return_status
     }
 
