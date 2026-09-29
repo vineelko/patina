@@ -443,7 +443,7 @@ impl<P: PlatformInfo> Core<P> {
         let pi_hob_list_size = unsafe { get_pi_hob_list_size(physical_hob_list) };
 
         // SAFETY: Creating a slice from the original PI HOB list pointer with the calculated size.
-        let pi_hob_slice = unsafe { core::slice::from_raw_parts(physical_hob_list as *const u8, pi_hob_list_size) };
+        let pi_hob_slice = unsafe { core::slice::from_raw_parts(physical_hob_list.cast::<u8>(), pi_hob_list_size) };
 
         // Leak a DXE allocated PI HOB list so it is available throughout the DXE phase.
         let relocated_hob_list = Box::leak(pi_hob_slice.to_vec().into_boxed_slice()).as_mut_ptr().cast::<c_void>();
@@ -790,7 +790,7 @@ mod tests {
                 protocols::core_install_protocol_interface(
                     None,
                     patina::pi::protocol::bds::PROTOCOL_GUID.into_inner(),
-                    std::ptr::from_mut(protocol) as *mut c_void,
+                    std::ptr::from_mut(protocol).cast::<c_void>(),
                 )
                 .unwrap();
 
@@ -864,7 +864,7 @@ mod tests {
                 protocols::core_install_protocol_interface(
                     None,
                     patina::pi::protocol::status_code::PROTOCOL_GUID.into_inner(),
-                    std::ptr::from_mut(protocol) as *mut c_void,
+                    std::ptr::from_mut(protocol).cast::<c_void>(),
                 )
                 .unwrap();
 

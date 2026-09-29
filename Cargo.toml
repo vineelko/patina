@@ -127,9 +127,6 @@ needless_continue = "allow"
 # pedantic::needless_pass_by_value - Temporarily allowed due to the number of instances that need updated in existing
 #                                    code. Each update needs to be carefully reviewed.
 needless_pass_by_value = "allow"
-# pedantic::ptr_as_ptr - Temporarily allowed until all instances are fixed. Remaining instances in pre-existing code
-#                        code need further inspection.
-ptr_as_ptr = "allow"
 # pedantic::pub_underscore_fields - Temporarily allowed until each instance is reviewed.
 pub_underscore_fields = "allow"
 # pedantic::ref_option_ref - All occurrences are currently related to automock. Revisit to determine if this should
