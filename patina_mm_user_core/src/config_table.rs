@@ -129,6 +129,7 @@ impl MmConfigurationTableDb {
             }
             // No match, table null → error
             (None, true) => {
+                log::error!("MmInstallConfigurationTable: cannot delete {guid:?}, it is not installed");
                 return efi::Status::NOT_FOUND;
             }
         }

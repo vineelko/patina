@@ -111,10 +111,14 @@ pub fn register_core_mmi_handlers() {
         match MmUserCore::instance().mmi_db.register_internal_handler(entry.handler, Some(entry.handler_type)) {
             Ok(handle) => {
                 *slot = SendHandle(handle);
-                log::info!("Registered core MMI handler [{i}] for {}", entry.handler_type);
+                log::debug!("Registered core MMI handler [{i}] for {}", entry.handler_type);
             }
             Err(status) => {
-                log::error!("Failed to register core MMI handler [{i}] for {}: {status:?}", entry.handler_type);
+                log::error!(
+                    "Failed to register core MMI handler [{i}] for {}: {:#x}",
+                    entry.handler_type,
+                    status.as_usize()
+                );
             }
         }
     }
@@ -150,12 +154,12 @@ fn mm_driver_dispatch_handler(
     _comm_buffer: *mut c_void,
     _comm_buffer_size: *mut usize,
 ) -> efi::Status {
-    log::info!("MmDriverDispatchHandler");
+    log::info!("MM driver dispatch event received");
 
     // Dispatch the MM drivers discovered during StartUserCore (single dependency-ordered pass).
     match MmUserCore::instance().dispatch_drivers() {
         Ok(count) => log::info!("Successfully dispatched {count} MM driver(s)."),
-        Err(status) => log::error!("Driver dispatch failed: {status:?}"),
+        Err(status) => log::error!("Driver dispatch failed: {:#x}", status.as_usize()),
     }
 
     // Self-unregister (one-shot).
@@ -167,8 +171,6 @@ fn mm_driver_dispatch_handler(
         // SAFETY: unregistering by handle is safe even if the handle is already gone.
         let _ = unsafe { MmUserCore::instance().mmi_handler_unregister(dispatch_handle) };
     }
-
-    log::info!("MmDriverDispatchHandler done");
 
     efi::Status::SUCCESS
 }
@@ -185,7 +187,7 @@ fn mm_ready_to_lock_handler(
     _comm_buffer: *mut c_void,
     _comm_buffer_size: *mut usize,
 ) -> efi::Status {
-    log::info!("MmReadyToLockHandler");
+    log::info!("MM Ready To Lock event received");
 
     // Unregister handlers that are no longer needed after MM lock.
     let handles = DISPATCH_HANDLES.lock();
@@ -200,7 +202,7 @@ fn mm_ready_to_lock_handler(
     // Install the MM Ready To Lock Protocol.
     let status = install_lifecycle_protocol(&patina::guid::MM_READY_TO_LOCK_PROTOCOL);
     if status != efi::Status::SUCCESS {
-        log::error!("Failed to install MM Ready To Lock Protocol: {status:?}");
+        log::error!("Failed to install MM Ready To Lock Protocol: {:#x}", status.as_usize());
     }
 
     status
@@ -216,7 +218,7 @@ fn mm_end_of_pei_handler(
     _comm_buffer: *mut c_void,
     _comm_buffer_size: *mut usize,
 ) -> efi::Status {
-    log::info!("MmEndOfPeiHandler");
+    log::info!("MM End of PEI event received");
 
     install_lifecycle_protocol(&patina::guid::MM_END_OF_PEI_PROTOCOL)
 }
@@ -231,7 +233,7 @@ fn mm_end_of_dxe_handler(
     _comm_buffer: *mut c_void,
     _comm_buffer_size: *mut usize,
 ) -> efi::Status {
-    log::info!("MmEndOfDxeHandler");
+    log::info!("MM End of DXE event received");
 
     install_lifecycle_protocol(&patina::guid::MM_END_OF_DXE_PROTOCOL)
 }
