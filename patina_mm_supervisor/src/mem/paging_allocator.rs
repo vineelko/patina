@@ -121,20 +121,34 @@ impl PagingPoolAllocator {
     pub unsafe fn init(&self, pool_base: u64, pool_pages: usize) -> Result<(), PagingAllocError> {
         let mut state = self.state.lock();
         if state.initialized {
+            log::error!("Paging allocator init rejected: already initialized");
             return Err(PagingAllocError::AlreadyInitialized);
         }
 
         if pool_base == 0 || pool_pages == 0 {
+            log::error!("Paging allocator init rejected: base=0x{pool_base:016x}, pages={pool_pages}");
             return Err(PagingAllocError::PoolTooSmall);
         }
 
         if !pool_base.is_multiple_of(UEFI_PAGE_SIZE as u64) {
+            log::error!("Paging allocator init rejected: base 0x{pool_base:016x} is not page aligned");
             return Err(PagingAllocError::InvalidAlignment);
         }
 
-        let pool_bytes = Self::page_bytes(pool_pages).ok_or(PagingAllocError::PoolTooSmall)?;
-        let pool_bytes_u64 = u64::try_from(pool_bytes).map_err(|_| PagingAllocError::PoolTooSmall)?;
-        pool_base.checked_add(pool_bytes_u64).ok_or(PagingAllocError::PoolTooSmall)?;
+        let pool_bytes = Self::page_bytes(pool_pages).ok_or_else(|| {
+            log::error!("Paging allocator init rejected: {pool_pages} pages do not fit a byte count");
+            PagingAllocError::PoolTooSmall
+        })?;
+        let pool_bytes_u64 = u64::try_from(pool_bytes).map_err(|_| {
+            log::error!("Paging allocator init rejected: pool size 0x{pool_bytes:x} does not fit u64");
+            PagingAllocError::PoolTooSmall
+        })?;
+        pool_base.checked_add(pool_bytes_u64).ok_or_else(|| {
+            log::error!(
+                "Paging allocator init rejected: base 0x{pool_base:016x} plus 0x{pool_bytes_u64:x} bytes overflows"
+            );
+            PagingAllocError::PoolTooSmall
+        })?;
 
         // SAFETY: `init` is an `unsafe fn` whose contract (see `# Safety` above) requires the
         // caller to provide `pool_base`/`pool_pages` describing a valid, exclusively-owned region
@@ -185,6 +199,8 @@ impl PagingPoolAllocator {
 
         // Check if we have enough space
         if new_offset > pool_bytes {
+            // `paging_error_to_pt` reports the failed request; this adds how much the pool
+            // had left, which is what matters when sizing the pool.
             log::error!(
                 "Paging allocator out of memory: need {} bytes, have {} bytes remaining",
                 total_bytes,
@@ -229,12 +245,12 @@ impl PagingPageAllocator for PagingPoolAllocator {
     ///
     /// This implements the `patina_paging::PageAllocator` trait.
     fn allocate_page(&mut self, align: u64, size: u64, is_root: bool) -> Result<u64, PtError> {
-        self.allocate_page_internal(align, size, is_root).map_err(paging_error_to_pt)
+        self.allocate_page_internal(align, size, is_root).map_err(|error| paging_error_to_pt(error, align, size))
     }
 }
 
-fn paging_error_to_pt(error: PagingAllocError) -> PtError {
-    log::error!("Paging allocator error: {error:?}");
+fn paging_error_to_pt(error: PagingAllocError, align: u64, size: u64) -> PtError {
+    log::error!("Paging allocator failed a request for 0x{size:x} bytes at align 0x{align:x}: {error:?}");
     match error {
         PagingAllocError::NotInitialized
         | PagingAllocError::AlreadyInitialized
@@ -262,7 +278,7 @@ impl SharedPagingAllocator {
 impl PagingPageAllocator for SharedPagingAllocator {
     fn allocate_page(&mut self, align: u64, size: u64, is_root: bool) -> Result<u64, PtError> {
         let allocator = self.inner;
-        allocator.allocate_page_internal(align, size, is_root).map_err(paging_error_to_pt)
+        allocator.allocate_page_internal(align, size, is_root).map_err(|error| paging_error_to_pt(error, align, size))
     }
 }
 
@@ -301,6 +317,28 @@ mod tests {
             allocator.allocate_page_internal(UEFI_PAGE_SIZE as u64, UEFI_PAGE_SIZE as u64, false),
             Err(PagingAllocError::NotInitialized)
         );
+    }
+
+    #[test]
+    fn test_paging_allocator_init_rejects_a_pool_size_that_overflows() {
+        let mut buffer = Box::new(AlignedBuffer([0xA5; TEST_BUFFER_BYTES]));
+        let base = buffer.0.as_mut_ptr() as u64;
+
+        // SAFETY: the page count is rejected before the allocator touches the buffer.
+        unsafe {
+            assert_eq!(PagingPoolAllocator::new().init(base, usize::MAX), Err(PagingAllocError::PoolTooSmall));
+        }
+    }
+
+    #[test]
+    fn test_paging_allocator_init_rejects_a_pool_that_wraps_the_address_space() {
+        // A base near the top of the address space cannot hold a one page pool.
+        let base = u64::MAX - UEFI_PAGE_SIZE as u64 + 1;
+
+        // SAFETY: the range check fails before the allocator writes anything.
+        unsafe {
+            assert_eq!(PagingPoolAllocator::new().init(base, 2), Err(PagingAllocError::PoolTooSmall));
+        }
     }
 
     #[test]
@@ -404,8 +442,8 @@ mod tests {
 
     #[test]
     fn test_paging_allocator_maps_trait_errors() {
-        assert_eq!(paging_error_to_pt(PagingAllocError::InvalidSize), PtError::InvalidParameter);
-        assert_eq!(paging_error_to_pt(PagingAllocError::OutOfMemory), PtError::OutOfResources);
+        assert_eq!(paging_error_to_pt(PagingAllocError::InvalidSize, 0x1000, 0x1000), PtError::InvalidParameter);
+        assert_eq!(paging_error_to_pt(PagingAllocError::OutOfMemory, 0x1000, 0x1000), PtError::OutOfResources);
     }
 
     #[test]

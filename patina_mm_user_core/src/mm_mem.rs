@@ -112,17 +112,19 @@ impl SyscallPageAllocator {
     /// is available (i.e., early in `StartUserCore` handling).
     pub fn set_initialized(&self) {
         self.initialized.store(true, Ordering::Release);
-        log::info!("SyscallPageAllocator initialized — heap is now available.");
+        log::info!("SyscallPageAllocator initialized - heap is now available.");
     }
 }
 
 impl PageAllocatorBackend for SyscallPageAllocator {
     fn allocate_pages(&self, num_pages: usize) -> Result<u64, PageAllocError> {
         if !self.initialized.load(Ordering::Acquire) {
+            log::error!("SyscallPageAllocator: AllocPage({num_pages} pages) before the syscall interface is ready");
             return Err(PageAllocError::NotInitialized);
         }
 
         if num_pages == 0 {
+            log::error!("SyscallPageAllocator: AllocPage rejected, page count is 0");
             return Err(PageAllocError::OutOfMemory);
         }
 
@@ -144,6 +146,9 @@ impl PageAllocatorBackend for SyscallPageAllocator {
 
     fn free_pages(&self, addr: u64, num_pages: usize) -> Result<(), PageAllocError> {
         if !self.initialized.load(Ordering::Acquire) {
+            log::error!(
+                "SyscallPageAllocator: FreePage(0x{addr:016x}, {num_pages} pages) before the syscall interface is ready"
+            );
             return Err(PageAllocError::NotInitialized);
         }
 

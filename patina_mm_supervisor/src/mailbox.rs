@@ -244,8 +244,16 @@ impl<const MAX_APS: usize> MailboxManager<MAX_APS> {
 
     /// Sends a command to a specific AP.
     pub fn send_command(&self, cpu_index: usize, command: ApCommand) -> Result<(), ()> {
-        let mailbox = self.mailboxes.get(cpu_index).ok_or(())?;
-        if mailbox.send_command(command) { Ok(()) } else { Err(()) }
+        let Some(mailbox) = self.mailboxes.get(cpu_index) else {
+            log::error!("No mailbox for CPU index {cpu_index} ({MAX_APS} slots)");
+            return Err(());
+        };
+        if mailbox.send_command(command) {
+            Ok(())
+        } else {
+            log::error!("CPU index {cpu_index} already has a command pending");
+            Err(())
+        }
     }
 
     /// Checks for a pending command (called by AP).
@@ -346,6 +354,26 @@ mod tests {
     fn test_mailbox_manager_is_const() {
         // Verify we can create a static manager
         static _MANAGER: MailboxManager<8> = MailboxManager::new();
+    }
+
+    #[test]
+    fn test_mailbox_manager_rejects_an_unknown_cpu_index() {
+        let manager: MailboxManager<4> = MailboxManager::new();
+        let command = ApCommand::RunProcedure { procedure: 0x1000, argument: 0x2000 };
+
+        // Slot 4 is past the end of a four slot manager.
+        assert_eq!(manager.send_command(4, command), Err(()));
+        assert_eq!(manager.check_mailbox(4), None);
+    }
+
+    #[test]
+    fn test_mailbox_manager_rejects_a_second_pending_command() {
+        let manager: MailboxManager<4> = MailboxManager::new();
+        let command = ApCommand::RunProcedure { procedure: 0x1000, argument: 0x2000 };
+
+        assert!(manager.send_command(2, command).is_ok());
+        // The slot already holds a command that the AP has not taken yet.
+        assert_eq!(manager.send_command(2, command), Err(()));
     }
 
     #[test]

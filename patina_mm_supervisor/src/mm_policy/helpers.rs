@@ -530,6 +530,11 @@ impl MemoryPolicyBuilder {
     fn flush_current(&mut self) -> Result<(), ()> {
         if let Some(desc) = self.current.take() {
             if self.count >= self.max_count {
+                log::error!(
+                    "Memory policy buffer is full at {} descriptor(s); cannot record 0x{:016x}",
+                    self.max_count,
+                    desc.base_address
+                );
                 return Err(());
             }
 

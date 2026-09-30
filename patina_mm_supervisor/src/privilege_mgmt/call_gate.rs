@@ -234,12 +234,25 @@ where
     T: FromBytes + IntoBytes + Immutable,
     F: FnOnce(&mut T),
 {
-    let end = offset.checked_add(core::mem::size_of::<T>()).ok_or(CallGateError::GdtTooSmall)?;
-    let bytes = gdt.get_mut(offset..end).ok_or(CallGateError::GdtTooSmall)?;
+    let gdt_len = gdt.len();
+    let end = offset.checked_add(core::mem::size_of::<T>()).ok_or_else(|| {
+        log::error!("GDT entry at offset {offset} overflows the address space");
+        CallGateError::GdtTooSmall
+    })?;
+    let bytes = gdt.get_mut(offset..end).ok_or_else(|| {
+        log::error!("GDT entry at offset {offset}..{end} runs past the end of the {gdt_len} byte GDT");
+        CallGateError::GdtTooSmall
+    })?;
 
-    let mut entry = T::read_from_bytes(bytes).map_err(|_| CallGateError::GdtTooSmall)?;
+    let mut entry = T::read_from_bytes(bytes).map_err(|_| {
+        log::error!("GDT entry at offset {offset} could not be read");
+        CallGateError::GdtTooSmall
+    })?;
     update(&mut entry);
-    entry.write_to(bytes).map_err(|_| CallGateError::GdtTooSmall)?;
+    entry.write_to(bytes).map_err(|_| {
+        log::error!("GDT entry at offset {offset} could not be written back");
+        CallGateError::GdtTooSmall
+    })?;
 
     Ok(())
 }
