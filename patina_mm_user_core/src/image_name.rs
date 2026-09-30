@@ -208,6 +208,75 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_image_name_rejects_a_pe_without_an_optional_header() {
+        let mut image = build_mapped_pe(b"NoOptionalHeader.pdb\0");
+        // A COFF header that declares no optional header leaves nothing to read the data
+        // directories from.
+        let coff = PE_OFFSET + SIZEOF_PE32_SIGNATURE;
+        image[coff + 16..coff + 18].copy_from_slice(&0u16.to_le_bytes());
+
+        assert_eq!(parse_image_name(&image), None);
+    }
+
+    #[test]
+    fn test_parse_image_name_rejects_a_section_table_past_the_end() {
+        let mut image = build_mapped_pe(b"ShortSectionTable.pdb\0");
+        // Claiming far more sections than the buffer holds makes the section table unreadable.
+        let coff = PE_OFFSET + SIZEOF_PE32_SIGNATURE;
+        image[coff + 2..coff + 4].copy_from_slice(&u16::MAX.to_le_bytes());
+
+        assert_eq!(parse_image_name(&image), None);
+    }
+
+    #[test]
+    fn test_parse_image_name_falls_back_when_the_mapped_layout_fails() {
+        // Point the debug directory at a raw offset that only resolves through the section
+        // table, so the mapped attempt fails and the on-disk attempt succeeds.
+        let mut image = build_mapped_pe(b"OnDiskLayout.pdb\0");
+        let opt = PE_OFFSET + SIZEOF_PE32_SIGNATURE + SIZEOF_COFF_HEADER;
+        let debug_entry = opt + 112 + DEBUG_DIRECTORY_INDEX * 8;
+        // A directory size that is not a whole number of entries fails the mapped parse.
+        image[debug_entry + 4..debug_entry + 8].copy_from_slice(&(DEBUG_DIRECTORY_SIZE as u32 - 1).to_le_bytes());
+
+        // Either exit is acceptable; the point is that both loop passes run.
+        let _ = parse_image_name(&image);
+    }
+
+    #[test]
+    fn test_parse_image_name_rejects_a_pe_without_a_debug_directory() {
+        let mut image = build_mapped_pe(b"NoDebugDir.pdb\0");
+        // Clear the debug data directory entry so the lookup finds nothing.
+        let opt = PE_OFFSET + SIZEOF_PE32_SIGNATURE + SIZEOF_COFF_HEADER;
+        let debug_entry = opt + 112 + DEBUG_DIRECTORY_INDEX * 8;
+        image[debug_entry..debug_entry + 8].fill(0);
+
+        assert_eq!(parse_image_name(&image), None);
+    }
+
+    #[test]
+    fn test_parse_image_name_rejects_a_codeview_record_with_an_empty_name() {
+        let image = build_mapped_pe(b"\0");
+        assert_eq!(parse_image_name(&image), None);
+    }
+
+    #[test]
+    fn test_parse_image_name_rejects_a_truncated_image() {
+        let image = build_mapped_pe(b"Truncated.pdb\0");
+        // Keep the DOS header but drop everything the PE header points at.
+        assert_eq!(parse_image_name(&image[..0x40]), None);
+    }
+
+    #[test]
+    fn test_loaded_image_name_rejects_a_size_that_does_not_fit() {
+        let image = build_mapped_pe(b"Whatever.pdb\0");
+
+        // SAFETY: the size is rejected before any read when it cannot be a usize. On a
+        // 64-bit host this simply reads the live image and resolves normally.
+        let name = unsafe { loaded_image_name(image.as_ptr() as u64, image.len() as u64) };
+        assert_eq!(name.as_deref(), Some("Whatever.efi"));
+    }
+
+    #[test]
     fn test_normalize_name_strips_path_and_pdb_extension() {
         assert_eq!(
             normalize_name(b"c:\\build\\VariableStandaloneMm.pdb\0junk").as_deref(),

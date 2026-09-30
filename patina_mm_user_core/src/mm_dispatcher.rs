@@ -638,6 +638,7 @@ mod tests {
 
     #[test]
     fn test_an_unsatisfied_depex_holds_the_driver_back() {
+        crate::test_support::init_test_logger();
         let hobs = HobListBuffer::new()
             .module(MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, DRIVER_A, entry_of(driver_a))
             .guid_hob(MM_SUPERVISOR_DEPEX_HOB_GUID, &depex_payload(DRIVER_A, &depex_push(MISSING_PROTOCOL)))
@@ -741,7 +742,37 @@ mod tests {
     }
 
     #[test]
+    fn test_driver_entry_describe_uses_the_module_name_when_known() {
+        let guid = DRIVER_A.into_inner();
+        let named = DriverEntry {
+            file_name: guid,
+            module_name: Some(String::from("VariableStandaloneMm.efi")),
+            entry_point: 0x1000,
+            image_base: 0x2000,
+            image_size: 0x3000,
+            depex: None,
+        };
+        let anonymous = DriverEntry { module_name: None, ..named_clone(&named) };
+
+        assert!(named.describe().starts_with("VariableStandaloneMm.efi ["));
+        assert!(anonymous.describe().starts_with('['));
+    }
+
+    /// Clones the scalar fields of `entry`; `Depex` is not `Clone`, so it is dropped.
+    fn named_clone(entry: &DriverEntry) -> DriverEntry {
+        DriverEntry {
+            file_name: entry.file_name,
+            module_name: entry.module_name.clone(),
+            entry_point: entry.entry_point,
+            image_base: entry.image_base,
+            image_size: entry.image_size,
+            depex: None,
+        }
+    }
+
+    #[test]
     fn test_a_driver_that_fails_is_still_consumed() {
+        crate::test_support::init_test_logger();
         let hobs = HobListBuffer::new()
             .module(MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, DRIVER_A, entry_of(failing_driver))
             .build();

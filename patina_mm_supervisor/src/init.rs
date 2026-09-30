@@ -993,6 +993,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             return Err(PolicyInitError::InvalidPolicyData);
         }
 
+        // The payload was checked to be at least `PROCESSOR_INFO_BUFFER_OFFSET` bytes above,
+        // so reading the leading count cannot fail. The reasons are still reported in case a
+        // future change loosens that guard.
         let number_of_cpus = u64::from_le_bytes(
             data.get(0..8)
                 .ok_or_else(|| {
@@ -1014,6 +1017,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             return Err(PolicyInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS });
         }
 
+        // `cpu_count` is bounded by `MAX_CPUS`, so the offsets below cannot overflow today.
         let processor_info_size = cpu_count.checked_mul(PROCESSOR_INFO_ENTRY_SIZE).ok_or_else(|| {
             log::error!("MP Information HOB: {cpu_count} processor entries overflow the payload size");
             PolicyInitError::InvalidPolicyData
@@ -1459,6 +1463,7 @@ unsafe fn init_user_comm_buffer(data: *mut u8, data_len: usize) -> Result<(u64, 
 mod tests {
     use super::*;
     use core::{alloc::Layout, mem::size_of, ptr::NonNull};
+
     use std::{
         alloc::{alloc_zeroed, dealloc, handle_alloc_error},
         panic::{AssertUnwindSafe, catch_unwind},
@@ -2110,6 +2115,39 @@ mod tests {
     }
 
     #[test]
+    fn test_init_policy_from_hob_list_names_each_missing_required_hob() {
+        crate::test_support::init_test_logger();
+        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+
+        // Each list below carries every HOB up to the one under test, so initialization
+        // reaches that lookup and stops there.
+        let mut without_pass_down = RawHobList::new();
+        without_pass_down.push_guid_hob(crate::MP_INFORMATION_HOB_GUID, &mp_information_hob_data(2));
+        let without_pass_down = without_pass_down.finish();
+
+        let mut without_common_region = RawHobList::new();
+        without_common_region.push_guid_hob(crate::MP_INFORMATION_HOB_GUID, &mp_information_hob_data(2));
+        without_common_region
+            .push_guid_hob(crate::MM_SUPV_PASS_DOWN_HOB_GUID, &pass_down_hob_data(&valid_pass_down_hob()));
+        let without_common_region = without_common_region.finish();
+
+        let mut without_comm_buffer = RawHobList::new();
+        without_comm_buffer.push_guid_hob(crate::MP_INFORMATION_HOB_GUID, &mp_information_hob_data(2));
+        without_comm_buffer
+            .push_guid_hob(crate::MM_SUPV_PASS_DOWN_HOB_GUID, &pass_down_hob_data(&valid_pass_down_hob()));
+        without_comm_buffer
+            .push_guid_hob(crate::MM_COMMON_REGION_HOB_GUID, &supv_comm_buffer_hob_data(0x10_0000, 2, 0x20_0000));
+        let without_comm_buffer = without_comm_buffer.finish();
+
+        for hob_list in [&without_pass_down, &without_common_region, &without_comm_buffer] {
+            let mut services = RecordingPolicyServices::successful();
+            // SAFETY: each list is a valid contiguous HOB list whose payloads remain live.
+            let result = unsafe { supervisor.init_policy_from_hob_list(hob_list.as_ptr(), &mut services) };
+            assert_eq!(result, Err(PolicyInitError::HobNotFound));
+        }
+    }
+
+    #[test]
     fn test_init_policy_from_hob_list_propagates_service_failures() {
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
 
@@ -2179,6 +2217,7 @@ mod tests {
 
     #[test]
     fn test_init_policy_and_validate_panics_on_initialization_failure() {
+        crate::test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let hob_list = RawHobList::new().finish();
         let mut services = RecordingPolicyServices::successful();
@@ -2580,6 +2619,7 @@ mod tests {
 
     #[test]
     fn test_parse_mp_information_hob_rejects_invalid_size() {
+        crate::test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let mut data = [0_u8; 16 + PROCESSOR_INFO_ENTRY_SIZE];
 
@@ -2591,6 +2631,7 @@ mod tests {
 
     #[test]
     fn test_parse_mp_information_hob_rejects_invalid_cpu_count() {
+        crate::test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let mut data = [0_u8; 16];
 

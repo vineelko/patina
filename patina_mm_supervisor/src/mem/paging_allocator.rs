@@ -320,6 +320,28 @@ mod tests {
     }
 
     #[test]
+    fn test_paging_allocator_init_rejects_a_pool_size_that_overflows() {
+        let mut buffer = Box::new(AlignedBuffer([0xA5; TEST_BUFFER_BYTES]));
+        let base = buffer.0.as_mut_ptr() as u64;
+
+        // SAFETY: the page count is rejected before the allocator touches the buffer.
+        unsafe {
+            assert_eq!(PagingPoolAllocator::new().init(base, usize::MAX), Err(PagingAllocError::PoolTooSmall));
+        }
+    }
+
+    #[test]
+    fn test_paging_allocator_init_rejects_a_pool_that_wraps_the_address_space() {
+        // A base near the top of the address space cannot hold a one page pool.
+        let base = u64::MAX - UEFI_PAGE_SIZE as u64 + 1;
+
+        // SAFETY: the range check fails before the allocator writes anything.
+        unsafe {
+            assert_eq!(PagingPoolAllocator::new().init(base, 2), Err(PagingAllocError::PoolTooSmall));
+        }
+    }
+
+    #[test]
     fn test_paging_allocator_init_validates_parameters() {
         let mut buffer = Box::new(AlignedBuffer([0xA5; TEST_BUFFER_BYTES]));
         let base = buffer.0.as_mut_ptr() as u64;

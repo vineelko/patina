@@ -833,6 +833,105 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn test_log_save_state_map_does_nothing_when_debug_is_disabled() {
+        crate::test_support::init_test_logger();
+        let smram = FakeSmram::new(2);
+        log::set_max_level(log::LevelFilter::Info);
+
+        // SAFETY: the level check short-circuits before the SMBASE array is read.
+        unsafe { log_save_state_map(smram.info()) };
+
+        log::set_max_level(log::LevelFilter::Trace);
+    }
+
+    #[test]
+    #[serial]
+    fn test_log_save_state_map_walks_every_cpu() {
+        crate::test_support::init_test_logger();
+        let smram = FakeSmram::new(3);
+
+        // SAFETY: `smram` owns a live SMBASE array of three entries for the call.
+        unsafe { log_save_state_map(smram.info()) };
+    }
+
+    #[test]
+    #[serial]
+    fn test_log_save_state_map_reports_an_smbase_that_overflows() {
+        crate::test_support::init_test_logger();
+        let mut smram = FakeSmram::new(1);
+        smram.set_smbase(0, u64::MAX);
+
+        // SAFETY: the SMBASE array is still a live one-entry array; only its value is bogus.
+        unsafe { log_save_state_map(smram.info()) };
+    }
+
+    #[test]
+    #[serial]
+    fn test_log_save_state_map_skips_a_null_smbase_array() {
+        crate::test_support::init_test_logger();
+
+        // SAFETY: the null base is rejected before any read.
+        unsafe { log_save_state_map(SaveStateInfo { number_of_cpus: 4, sm_base: 0 }) };
+    }
+
+    #[test]
+    #[serial]
+    fn test_log_save_state_map_skips_an_unusable_cpu_count() {
+        crate::test_support::init_test_logger();
+        let smram = FakeSmram::new(1);
+        let mut info = smram.info();
+        // A count this large cannot be turned into a byte length, so nothing is read.
+        info.number_of_cpus = u64::MAX;
+
+        // SAFETY: the count is rejected before the SMBASE array is touched.
+        unsafe { log_save_state_map(info) };
+    }
+
+    #[test]
+    fn test_read_register_field_rejects_a_short_split_buffer() {
+        // A split 8-byte read writes two adjacent u32, so both halves check the buffer.
+        let map = new_save_state_map();
+        let view = view_over(&map[..]);
+        let info = save_state::register_info(MmSaveStateRegister::Rax).expect("RAX has a register entry");
+
+        // Too short for the low half.
+        let mut low_half = [0u8; 2];
+        assert_eq!(
+            read_register_field(&view, MmSaveStateRegister::Rax, info, 8, &mut low_half),
+            Err(Status::BUFFER_TOO_SMALL)
+        );
+
+        // Room for the low half only, so the high half is refused.
+        let mut high_half = [0u8; 4];
+        assert_eq!(
+            read_register_field(&view, MmSaveStateRegister::Rax, info, 8, &mut high_half),
+            Err(Status::BUFFER_TOO_SMALL)
+        );
+    }
+
+    #[test]
+    fn test_read_lma_register_rejects_short_buffers() {
+        let map = new_save_state_map();
+        let view = view_over(&map[..]);
+
+        let mut small = [0u8; 2];
+        assert_eq!(read_lma_register(&view, 4, &mut small), Err(Status::BUFFER_TOO_SMALL));
+
+        let mut medium = [0u8; 4];
+        assert_eq!(read_lma_register(&view, 8, &mut medium), Err(Status::BUFFER_TOO_SMALL));
+    }
+
+    #[test]
+    fn test_read_lma_register_rejects_an_unsupported_width() {
+        let map = new_save_state_map();
+        let view = view_over(&map[..]);
+
+        let mut out = [0u8; 8];
+        assert_eq!(read_lma_register(&view, 2, &mut out), Err(Status::INVALID_PARAMETER));
+    }
+
+    #[test]
     fn test_register_from_u64() {
         assert_eq!(MmSaveStateRegister::from_u64(38), Some(MmSaveStateRegister::Rax));
         assert_eq!(MmSaveStateRegister::from_u64(512), Some(MmSaveStateRegister::Io));

@@ -768,25 +768,6 @@ mod tests {
     const MEMORY_DESCRIPTOR_ATTRIBUTE_OFFSET: usize = 32;
     const IDENTIFIER_GUID_OFFSET: usize = 40;
 
-    struct SilentLogger;
-
-    impl log::Log for SilentLogger {
-        fn enabled(&self, _metadata: &log::Metadata<'_>) -> bool {
-            true
-        }
-
-        fn log(&self, _record: &log::Record<'_>) {}
-
-        fn flush(&self) {}
-    }
-
-    static SILENT_LOGGER: SilentLogger = SilentLogger;
-
-    fn enable_test_logging() {
-        let _ = log::set_logger(&SILENT_LOGGER);
-        log::set_max_level(log::LevelFilter::Trace);
-    }
-
     #[derive(Clone, Copy)]
     enum TestQueryResult {
         Mapped(MemoryAttributes),
@@ -888,7 +869,7 @@ mod tests {
     }
 
     fn create_test_tracker() -> UnblockedMemoryTracker {
-        enable_test_logging();
+        crate::test_support::init_test_logger();
         UnblockedMemoryTracker::new()
     }
 
@@ -905,7 +886,7 @@ mod tests {
         attribute: u64,
         valid_guid: bool,
     ) -> [u8; REQUEST_SIZE] {
-        enable_test_logging();
+        crate::test_support::init_test_logger();
         let mut buffer = [0u8; REQUEST_SIZE];
         let payload_offset = MmSupervisorRequestHeader::SIZE;
         write_u64(&mut buffer, payload_offset + MEMORY_DESCRIPTOR_PHYSICAL_START_OFFSET, physical_start);
@@ -920,7 +901,7 @@ mod tests {
     }
 
     fn validated_request(is_supervisor_page: bool) -> ValidatedUnblockRequest {
-        enable_test_logging();
+        crate::test_support::init_test_logger();
         ValidatedUnblockRequest {
             physical_start: 0x2000,
             number_of_pages: 2,

@@ -399,6 +399,20 @@ mod tests {
     static GUID_X: efi::Guid = efi::Guid::from_fields(0x1111_0001, 0, 0, 0, 0, &[0, 0, 0, 0, 0, 1]);
     static GUID_Y: efi::Guid = efi::Guid::from_fields(0x2222_0002, 0, 0, 0, 0, &[0, 0, 0, 0, 0, 2]);
 
+    #[test]
+    fn test_mmi_manage_reports_that_no_handler_is_registered() {
+        crate::test_support::init_test_logger();
+        let db = MmiDatabase::new();
+
+        // Nothing is registered for this type, so the dispatch reports not found.
+        let status = db.mmi_manage(Some(&GUID_X), core::ptr::null(), core::ptr::null_mut(), core::ptr::null_mut());
+        assert_eq!(status, efi::Status::NOT_FOUND);
+
+        // The root chain is empty too.
+        let status = db.mmi_manage(None, core::ptr::null(), core::ptr::null_mut(), core::ptr::null_mut());
+        assert_eq!(status, efi::Status::NOT_FOUND);
+    }
+
     /// The database the re-entrant handlers below reach back into. One per test process.
     static DB: MmiDatabase = MmiDatabase::new();
     /// Tags recorded by each handler as it runs, in dispatch order.

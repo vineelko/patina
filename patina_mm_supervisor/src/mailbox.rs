@@ -357,6 +357,26 @@ mod tests {
     }
 
     #[test]
+    fn test_mailbox_manager_rejects_an_unknown_cpu_index() {
+        let manager: MailboxManager<4> = MailboxManager::new();
+        let command = ApCommand::RunProcedure { procedure: 0x1000, argument: 0x2000 };
+
+        // Slot 4 is past the end of a four slot manager.
+        assert_eq!(manager.send_command(4, command), Err(()));
+        assert_eq!(manager.check_mailbox(4), None);
+    }
+
+    #[test]
+    fn test_mailbox_manager_rejects_a_second_pending_command() {
+        let manager: MailboxManager<4> = MailboxManager::new();
+        let command = ApCommand::RunProcedure { procedure: 0x1000, argument: 0x2000 };
+
+        assert!(manager.send_command(2, command).is_ok());
+        // The slot already holds a command that the AP has not taken yet.
+        assert_eq!(manager.send_command(2, command), Err(()));
+    }
+
+    #[test]
     fn test_mailbox_manager() {
         let manager: MailboxManager<4> = MailboxManager::new();
 

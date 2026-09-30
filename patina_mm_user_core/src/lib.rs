@@ -56,6 +56,8 @@ pub mod mm_services;
 pub mod mmi;
 pub mod pool_allocator;
 pub mod protocol_db;
+#[cfg(test)]
+mod test_support;
 
 use core::{
     ffi::c_void,

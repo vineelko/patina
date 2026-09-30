@@ -594,6 +594,7 @@ mod tests {
 
     #[test]
     fn test_display_not_dispatched_reports_pending_and_rejected_components() {
+        crate::test_support::init_test_logger();
         let mut dispatcher = MmComponentDispatcher::new();
         dispatcher.insert_component(0, NeedsGreeter.into_component());
         dispatcher.insert_component(1, ConflictingComponent.into_component());

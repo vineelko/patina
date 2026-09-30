@@ -693,11 +693,15 @@ impl PageAllocator {
     /// region to host the bookkeeping, and verifies that region is large enough
     /// to hold it. Returns `(bookkeeping_base, bookkeeping_pages)`.
     fn calculate_bookkeeping(regions: &[SmramRegion]) -> Result<(u64, usize), PageAllocError> {
-        // `init_from_regions` sums the same page counts first and logs any failure, so the
-        // two folds below stay quiet.
         let total_pages = regions.iter().try_fold(0usize, |total, region| {
-            let pages = Self::page_count(region.size).ok_or(PageAllocError::OutOfMemory)?;
-            total.checked_add(pages).ok_or(PageAllocError::OutOfMemory)
+            let pages = Self::page_count(region.size).ok_or_else(|| {
+                log::error!("Bookkeeping sizing failed: region size 0x{:x} does not fit a page count", region.size);
+                PageAllocError::OutOfMemory
+            })?;
+            total.checked_add(pages).ok_or_else(|| {
+                log::error!("Bookkeeping sizing failed: total page count overflows at 0x{:016x}", region.base);
+                PageAllocError::OutOfMemory
+            })
         })?;
 
         let header_size = size_of::<AllocatorState>();
@@ -1280,6 +1284,7 @@ mod tests {
 
     #[test]
     fn test_page_allocator_initialization_reserves_bookkeeping() {
+        crate::test_support::init_test_logger();
         let fixture = AllocatorFixture::new();
 
         assert!(fixture.allocator.is_initialized());
@@ -1376,6 +1381,7 @@ mod tests {
 
     #[test]
     fn test_page_allocator_checked_free_is_atomic_on_type_mismatch() {
+        crate::test_support::init_test_logger();
         let fixture = AllocatorFixture::new();
         let mut state = fixture.allocator.lock_state();
         let user = state.allocate(2, AllocationType::User).unwrap();
@@ -1390,7 +1396,110 @@ mod tests {
     }
 
     #[test]
+    fn test_page_allocator_rejects_a_free_whose_page_count_overflows() {
+        let fixture = AllocatorFixture::new();
+        let mut state = fixture.allocator.lock_state();
+
+        // Starting one page into the region makes the page index plus the count overflow.
+        let second_page = fixture.base + UEFI_PAGE_SIZE as u64;
+        assert_eq!(state.free(second_page, usize::MAX), Err(PageAllocError::InvalidAddress));
+    }
+
+    #[test]
+    fn test_page_allocator_rejects_a_free_outside_every_region() {
+        let fixture = AllocatorFixture::new();
+        let mut state = fixture.allocator.lock_state();
+
+        // An address below the region start belongs to no region at all.
+        assert_eq!(state.free(UEFI_PAGE_SIZE as u64, 1), Err(PageAllocError::InvalidAddress));
+    }
+
+    #[test]
+    fn test_page_allocator_public_free_rejects_unaligned_addresses() {
+        let fixture = AllocatorFixture::new();
+        let unaligned = fixture.base + 1;
+
+        assert_eq!(fixture.allocator.free_pages(unaligned, 1), Err(PageAllocError::NotAligned));
+        assert_eq!(
+            fixture.allocator.free_pages_checked(unaligned, 1, AllocationType::User),
+            Err(PageAllocError::NotAligned)
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_public_free_reports_pages_that_are_not_allocated() {
+        crate::test_support::init_test_logger();
+        let fixture = AllocatorFixture::new();
+        let last_page = fixture.base + (TEST_REGION_PAGES - 1) as u64 * UEFI_PAGE_SIZE as u64;
+
+        assert_eq!(fixture.allocator.free_pages(last_page, 1), Err(PageAllocError::NotAllocated));
+        assert_eq!(
+            fixture.allocator.free_pages_checked(last_page, 1, AllocationType::User),
+            Err(PageAllocError::NotAllocated)
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_marks_pre_allocated_regions_as_used() {
+        crate::test_support::init_test_logger();
+        let mut memory = Box::new(AlignedRegion([0u8; TEST_REGION_BYTES]));
+        let base = memory.0.as_mut_ptr() as u64;
+        let half = (TEST_REGION_BYTES / 2) as u64;
+        let allocator = PageAllocator::new();
+        // The second half is handed over pre-allocated, so none of it is available.
+        let regions = [SmramRegion::new(base, half, false), SmramRegion::new(base + half, half, true)];
+
+        // SAFETY: `memory` is page-aligned, owned by this test, and covers both regions.
+        unsafe { allocator.init_from_regions(&regions).unwrap() };
+
+        assert_eq!(allocator.region_count(), 2);
+        assert_eq!(allocator.total_page_count(), TEST_REGION_PAGES);
+        // Every pre-allocated page plus the bookkeeping page is charged to the supervisor.
+        assert_eq!(allocator.allocated_page_count(AllocationType::Supervisor), TEST_REGION_PAGES / 2 + 1);
+        assert_eq!(allocator.free_page_count(), TEST_REGION_PAGES / 2 - 1);
+    }
+
+    #[test]
+    fn test_page_allocator_rejects_an_empty_allocation_request() {
+        let fixture = AllocatorFixture::new();
+
+        assert_eq!(
+            fixture.allocator.allocate_pages_with_type(0, AllocationType::User),
+            Err(PageAllocError::OutOfMemory)
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_reports_an_allocation_larger_than_the_region() {
+        let fixture = AllocatorFixture::new();
+
+        assert_eq!(
+            fixture.allocator.allocate_pages_with_type(TEST_REGION_PAGES + 1, AllocationType::User),
+            Err(PageAllocError::OutOfMemory)
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_rejects_a_null_hob_list() {
+        let allocator = PageAllocator::new();
+
+        // SAFETY: the null pointer is rejected before any dereference.
+        let result = unsafe { allocator.init_from_hob_list(core::ptr::null()) };
+        assert_eq!(result.map(|_| ()), Err(PageAllocError::NotInitialized));
+    }
+
+    #[test]
+    fn test_page_allocator_rejects_an_empty_region_list() {
+        let allocator = PageAllocator::new();
+
+        // SAFETY: an empty list is rejected before any region is read.
+        let result = unsafe { allocator.init_from_regions(&[]) };
+        assert_eq!(result, Err(PageAllocError::NotInitialized));
+    }
+
+    #[test]
     fn test_page_allocator_rejects_free_crossing_region_end() {
+        crate::test_support::init_test_logger();
         let fixture = AllocatorFixture::new();
         let mut state = fixture.allocator.lock_state();
         let allocation = state.allocate(TEST_REGION_PAGES - 1, AllocationType::User).unwrap();

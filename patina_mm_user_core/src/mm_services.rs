@@ -54,9 +54,9 @@ pub(crate) fn init_mm_services(provider: &'static dyn MmServices) {
 
 /// Records a failure that a thunk itself detected, before any service ran.
 ///
-/// Only the thunk's own argument checks report through here. A status produced
-/// deeper in the core is passed back untouched, because the layer that detected
-/// it already logged the reason and named the service.
+/// Only the thunk's own argument checks report through here, and they only do so on a
+/// failure. A status produced deeper in the core is passed back untouched, because the
+/// layer that detected it already logged the reason and named the service.
 ///
 /// `NOT_FOUND`, `UNSUPPORTED` and `BUFFER_TOO_SMALL` are how drivers probe for
 /// optional protocols and size their buffers, so they are recorded at debug
@@ -907,6 +907,26 @@ mod tests {
             mm_allocate_pool_impl(efi::RUNTIME_SERVICES_DATA, usize::MAX, &raw mut buffer),
             efi::Status::INVALID_PARAMETER
         );
+    }
+
+    #[test]
+    fn test_allocate_pool_reports_a_request_the_heap_cannot_satisfy() {
+        services();
+        let mut buffer: *mut c_void = core::ptr::null_mut();
+
+        // The largest size that still forms a valid layout, which no heap can supply.
+        let too_large = (isize::MAX as usize) - 7;
+        assert_eq!(
+            mm_allocate_pool_impl(efi::RUNTIME_SERVICES_DATA, too_large, &raw mut buffer),
+            efi::Status::OUT_OF_RESOURCES
+        );
+        assert!(buffer.is_null());
+    }
+
+    #[test]
+    fn test_report_passes_success_through_untouched() {
+        // Only failures are reported, so a success status is returned as-is.
+        assert_eq!(report("MmTest", efi::Status::SUCCESS), efi::Status::SUCCESS);
     }
 
     #[test]

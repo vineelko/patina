@@ -60,6 +60,8 @@ mod semaphore;
 mod smrr;
 mod state;
 mod supervisor_handlers;
+#[cfg(test)]
+mod test_support;
 
 use cpu::CpuManager;
 use intrinsics::{get_current_cpu_id, is_bsp};
