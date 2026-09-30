@@ -87,11 +87,13 @@ impl<const MAX_CPUS: usize> SyscallInterface<MAX_CPUS> {
     pub fn init(&self, num_cpus: usize, cpl3_stack_base: u64, stack_size: usize) -> Result<(), SyscallSetupError> {
         // Check if already initialized
         if self.initialized.swap(true, Ordering::SeqCst) {
+            log::error!("Syscall interface init rejected: already initialized");
             return Err(SyscallSetupError::AlreadyInitialized);
         }
 
         if num_cpus == 0 || num_cpus > MAX_CPUS {
             self.initialized.store(false, Ordering::SeqCst);
+            log::error!("Syscall interface init rejected: {num_cpus} CPUs is outside the range 1..={MAX_CPUS}");
             return Err(SyscallSetupError::InvalidCpuIndex);
         }
 
