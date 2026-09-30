@@ -11,6 +11,8 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
+use core::sync::atomic::Ordering;
+
 use patina::standard::efi;
 use patina::{
     management_mode::{MmCommBufferStatus, supervisor::UserCommandType},
@@ -121,15 +123,17 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let is_bsp = is_bsp();
 
         if is_bsp {
-            log::info!("BSP (CPU {cpu_id}) waiting for APs to arrive...");
+            let mmi_number = self.mmi_count.fetch_add(1, Ordering::Relaxed) + 1;
+            let expected_aps = self.cpu_manager.registered_count().saturating_sub(1);
+
+            log::info!("MMI #{mmi_number}: BSP (CPU {cpu_id}) entered MM, waiting for {expected_aps} AP(s)");
 
             // Wait for all registered APs to check in (set state to InHoldingPen).
-            let expected_aps = self.cpu_manager.registered_count().saturating_sub(1);
             self.wait_for_ap_arrival(expected_aps);
 
             // Every registered AP is now in MM - service the request.
             log::trace!("BSP (CPU {cpu_id}) entering request serving routine...");
-            self.bsp_request_loop(cpu_index);
+            let target = self.bsp_request_loop(cpu_index);
 
             // Exit barrier: release every penned AP and wait for each to acknowledge it has left.
             log::trace!("BSP (CPU {cpu_id}) releasing all APs from the holding pen...");
@@ -137,10 +141,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             self.cpu_manager.wait_for_ap_exit_acks(expected_aps);
 
             self.mailbox_manager.reset_all();
+
+            log::info!("MMI #{mmi_number}: BSP (CPU {cpu_id}) leaving MM, serviced {target:?} request");
         } else {
             // AP: check in by marking state, then enter holding pen.
             self.cpu_manager.set_ap_state(cpu_id, ApState::InHoldingPen);
-            log::info!("AP (CPU {cpu_id}) checked in, entering holding pen...");
+            log::trace!("AP (CPU {cpu_id}) checked in, entering holding pen...");
             self.ap_holding_pen(cpu_id);
 
             // Check out: clear the InHoldingPen state now that this AP has left the pen and let BSP know we are out.
@@ -171,7 +177,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         });
 
         if all_arrived {
-            log::info!("All {expected_aps} APs arrived");
+            log::trace!("All {expected_aps} AP(s) arrived");
         } else {
             // All cores have to rendezvous in the holding pen before the BSP services a request. If any core
             // fails to arrive within the window, this is a security-fatal condition.
@@ -194,19 +200,22 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// - If targeting User: copies user comm buffer to internal, then demotes to user entry point
     /// - If targeting Supervisor: dispatches to the request dispatcher
-    fn bsp_request_loop(&self, cpu_index: usize) {
+    ///
+    /// Returns the target that was serviced, or [`RequestTarget::None`] when there was
+    /// nothing to do.
+    fn bsp_request_loop(&self, cpu_index: usize) -> crate::RequestTarget {
         // Get communication buffer configuration
         let config = match security_state().comm_buffer_config() {
             Some(c) => c,
             None => {
                 // Not yet initialized, nothing to process
-                return;
+                return crate::RequestTarget::None;
             }
         };
 
         // Bail out only if neither status mailbox is wired up yet.
         if config.user_status_buffer == 0 && config.supv_status_buffer == 0 {
-            return;
+            return crate::RequestTarget::None;
         }
 
         // Read both status mailboxes. A buffer that hasn't been published yet
@@ -248,6 +257,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 self.process_supervisor_request(config, &supv_status, cpu_index);
             }
         }
+
+        target
     }
 
     /// Process a request targeting the User module.
@@ -260,7 +271,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// 5. Demotes to the user entry point via `invoke_demoted_routine`
     /// 6. On return, copies back the user comm buffer and reads the updated status
     fn process_user_request(&self, config: &CommBufferConfig, status: &MmCommBufferStatus, cpu_index: usize) {
-        log::info!("Processing User request...");
+        log::trace!("Processing User request on CPU {cpu_index} (synchronous: {})", status.is_comm_buffer_valid != 0);
 
         // Validate buffers
         if config.user_comm_buffer == 0 || config.user_comm_buffer_internal == 0 {
@@ -358,8 +369,6 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             );
         }
 
-        log::info!("User request is synchronous: {}", sync_mmi != 0);
-
         // Invoke the demoted user entry point with:
         //   arg1: UserCommandType::UserRequest (command type)
         //   arg2: supv_to_user_buffer (pointer to EfiMmEntryContext + MmCommBufferStatus)
@@ -378,7 +387,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 context_size as u64,
             )
         };
-        log::info!("Returned from user request with value: 0x{ret}");
+        log::trace!("Returned from user request on CPU {cpu_index} with value: 0x{ret:016x}");
 
         // Copy the response from the internal buffer back to the user buffer
         if sync_mmi != 0 {
@@ -598,7 +607,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             core::hint::spin_loop();
         }
 
-        log::info!("AP (CPU {cpu_id}) exiting holding pen");
+        log::trace!("AP (CPU {cpu_id}) exiting holding pen");
     }
 
     /// Execute a command received by an AP.
@@ -917,7 +926,7 @@ mod tests {
     fn test_bsp_request_loop_returns_before_the_comm_buffer_is_published() {
         // The PassDown HOB has not been processed, so there is no configuration to act on.
         assert!(security_state().comm_buffer_config().is_none());
-        TestCore::new().bsp_request_loop(0);
+        assert_eq!(TestCore::new().bsp_request_loop(0), crate::RequestTarget::None);
     }
 
     #[test]
@@ -929,7 +938,7 @@ mod tests {
         security_state().set_comm_buffer_config(config);
 
         HANDLER_RESPONSE_SIZE.store(4, Ordering::SeqCst);
-        TestCore::new().bsp_request_loop(0);
+        assert_eq!(TestCore::new().bsp_request_loop(0), crate::RequestTarget::Supervisor);
 
         assert_eq!(HANDLER_CALLS.load(Ordering::SeqCst), 1);
         assert_eq!(buffers.supv_status.is_comm_buffer_valid, 0);
@@ -944,7 +953,7 @@ mod tests {
         config.supv_status_buffer = 0;
         security_state().set_comm_buffer_config(config);
 
-        TestCore::new().bsp_request_loop(0);
+        assert_eq!(TestCore::new().bsp_request_loop(0), crate::RequestTarget::None);
         assert_eq!(HANDLER_CALLS.load(Ordering::SeqCst), 0);
     }
 
@@ -959,7 +968,7 @@ mod tests {
         security_state().set_comm_buffer_config(config);
 
         HANDLER_RESPONSE_SIZE.store(4, Ordering::SeqCst);
-        TestCore::new().bsp_request_loop(0);
+        assert_eq!(TestCore::new().bsp_request_loop(0), crate::RequestTarget::Supervisor);
 
         assert_eq!(HANDLER_CALLS.load(Ordering::SeqCst), 1);
     }
@@ -985,7 +994,7 @@ mod tests {
             0
         });
 
-        core.bsp_request_loop(0);
+        assert_eq!(core.bsp_request_loop(0), crate::RequestTarget::User);
         mock::clear();
 
         assert_eq!(calls.get(), 1);

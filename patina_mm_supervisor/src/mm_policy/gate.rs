@@ -74,6 +74,7 @@ impl PolicyGate {
     /// that remains valid for the lifetime of this `PolicyGate`.
     pub unsafe fn new(policy_ptr: *const u8) -> Result<Self, PolicyError> {
         if policy_ptr.is_null() {
+            log::error!("Policy gate creation failed: policy buffer pointer is null");
             return Err(PolicyError::NullPointer);
         }
 
@@ -82,6 +83,11 @@ impl PolicyGate {
         // read its version is sound.
         let policy = unsafe { &*(policy_ptr as *const SecurePolicyDataV1_0) };
         if !policy.is_valid_version() {
+            log::error!(
+                "Policy gate creation failed: unsupported policy version {}.{}",
+                policy.version_major,
+                policy.version_minor
+            );
             return Err(PolicyError::InvalidVersion);
         }
 
@@ -134,6 +140,7 @@ impl PolicyGate {
     pub fn is_io_allowed(&self, io_address: u32, width: IoWidth, access_type: AccessType) -> Result<(), PolicyError> {
         // Validate access type (must be read or write, not execute)
         if access_type == AccessType::Execute {
+            log::error!("Rejecting IO access: port=0x{io_address:x} requested Execute access");
             return Err(PolicyError::InvalidAccessMask);
         }
 
@@ -141,11 +148,13 @@ impl PolicyGate {
 
         // Validate I/O address range (16-bit port space)
         if io_address > u32::from(u16::MAX) {
+            log::error!("Rejecting IO access: port 0x{io_address:x} is outside the 16-bit I/O space");
             return Err(PolicyError::InvalidIoAddress);
         }
 
         // Check for overflow (MAX_UINT16 + 1 is valid for end address)
         if io_address.saturating_add(io_size) > u32::from(u16::MAX) + 1 {
+            log::error!("Rejecting IO access: port 0x{io_address:x} with width {io_size} runs past the I/O space");
             return Err(PolicyError::InvalidIoRange);
         }
 
@@ -216,6 +225,7 @@ impl PolicyGate {
     pub fn is_msr_allowed(&self, msr_address: u32, access_type: AccessType) -> Result<(), PolicyError> {
         // Validate access type
         if access_type == AccessType::Execute {
+            log::error!("Rejecting MSR access: address=0x{msr_address:x} requested Execute access");
             return Err(PolicyError::InvalidAccessMask);
         }
 
@@ -268,6 +278,10 @@ impl PolicyGate {
         let instruction_index = instruction.as_index();
 
         if instruction_index >= Instruction::COUNT {
+            log::error!(
+                "Rejecting instruction execution: index {instruction_index} is outside 0..{}",
+                Instruction::COUNT
+            );
             return Err(PolicyError::InvalidInstructionIndex);
         }
 
