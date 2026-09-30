@@ -384,8 +384,12 @@ impl LockedState<'_> {
         let bit_range = self.allocation_bit_range(addr, num_pages)?;
 
         // Verify all pages are allocated
-        for bit in bit_range.clone() {
+        for (page_offset, bit) in bit_range.clone().enumerate() {
             if !self.is_bit_allocated(bit) {
+                log::error!(
+                    "Cannot free 0x{:016x}: page is not allocated",
+                    addr + uefi_pages_to_size!(page_offset) as u64
+                );
                 return Err(PageAllocError::NotAllocated);
             }
         }
@@ -409,11 +413,15 @@ impl LockedState<'_> {
         // Verify all pages are allocated with the expected type
         for (page_offset, bit) in bit_range.clone().enumerate() {
             if !self.is_bit_allocated(bit) {
+                log::error!(
+                    "Cannot free 0x{:016x}: page is not allocated",
+                    addr + uefi_pages_to_size!(page_offset) as u64
+                );
                 return Err(PageAllocError::NotAllocated);
             }
             if self.bit_type(bit) != expected_type {
-                log::warn!(
-                    "Type mismatch at 0x{:016x}: expected {:?}, got {:?}",
+                log::error!(
+                    "Cannot free 0x{:016x}: expected {:?}, got {:?}",
                     addr + uefi_pages_to_size!(page_offset) as u64,
                     expected_type,
                     self.bit_type(bit)
@@ -432,20 +440,43 @@ impl LockedState<'_> {
     /// Returns the global bitmap range for a page-aligned allocation range.
     fn allocation_bit_range(&self, addr: u64, num_pages: usize) -> Result<core::ops::Range<usize>, PageAllocError> {
         if num_pages == 0 {
+            log::error!("0x{addr:016x}: page count is 0");
             return Err(PageAllocError::InvalidAddress);
         }
 
-        let (region_index, page_in_region) =
-            self.find_region_for_address(addr).ok_or(PageAllocError::InvalidAddress)?;
-        let region = self.regions().get(region_index).ok_or(PageAllocError::InvalidAddress)?;
-        let end_page = page_in_region.checked_add(num_pages).ok_or(PageAllocError::InvalidAddress)?;
+        let Some((region_index, page_in_region)) = self.find_region_for_address(addr) else {
+            log::error!("0x{addr:016x} is not inside any known MMRAM region");
+            return Err(PageAllocError::InvalidAddress);
+        };
+        let Some(region) = self.regions().get(region_index) else {
+            log::error!("0x{addr:016x} resolved to region {region_index}, which is out of range");
+            return Err(PageAllocError::InvalidAddress);
+        };
+        let Some(end_page) = page_in_region.checked_add(num_pages) else {
+            log::error!("0x{addr:016x} plus {num_pages} page(s) overflows the region page index");
+            return Err(PageAllocError::InvalidAddress);
+        };
         if end_page > region.total_pages {
+            log::error!(
+                "0x{addr:016x} plus {num_pages} page(s) runs past the end of region {region_index} ({} pages)",
+                region.total_pages
+            );
             return Err(PageAllocError::InvalidAddress);
         }
 
-        let first_bit = region.bitmap_start_bit.checked_add(page_in_region).ok_or(PageAllocError::InvalidAddress)?;
-        let end_bit = first_bit.checked_add(num_pages).ok_or(PageAllocError::InvalidAddress)?;
+        let Some(first_bit) = region.bitmap_start_bit.checked_add(page_in_region) else {
+            log::error!("0x{addr:016x} overflows the allocation bitmap start bit");
+            return Err(PageAllocError::InvalidAddress);
+        };
+        let Some(end_bit) = first_bit.checked_add(num_pages) else {
+            log::error!("0x{addr:016x} plus {num_pages} page(s) overflows the allocation bitmap");
+            return Err(PageAllocError::InvalidAddress);
+        };
         if end_bit > self.total_pages {
+            log::error!(
+                "0x{addr:016x} plus {num_pages} page(s) runs past the end of the allocation bitmap ({} pages)",
+                self.total_pages
+            );
             return Err(PageAllocError::InvalidAddress);
         }
 
@@ -503,16 +534,33 @@ impl LockedState<'_> {
         // Fill in per-region metadata and assign each region its bitmap range.
         let mut bitmap_start_bit = 0usize;
         for (region, scanned_region) in self.regions_mut().iter_mut().zip(scanned.iter()) {
-            let pages = PageAllocator::page_count(scanned_region.size).ok_or(PageAllocError::OutOfMemory)?;
+            let pages = PageAllocator::page_count(scanned_region.size).ok_or_else(|| {
+                log::error!(
+                    "Allocator init failed: region 0x{:016x} size 0x{:x} does not fit a page count",
+                    scanned_region.base,
+                    scanned_region.size
+                );
+                PageAllocError::OutOfMemory
+            })?;
             region.base = scanned_region.base;
             region.total_pages = pages;
             region.bitmap_start_bit = bitmap_start_bit;
-            bitmap_start_bit = bitmap_start_bit.checked_add(pages).ok_or(PageAllocError::OutOfMemory)?;
+            bitmap_start_bit = bitmap_start_bit.checked_add(pages).ok_or_else(|| {
+                log::error!("Allocator init failed: bitmap start bit overflows at 0x{:016x}", scanned_region.base);
+                PageAllocError::OutOfMemory
+            })?;
         }
 
         // Mark pre-allocated regions and the bookkeeping pages as allocated (supervisor).
         for (i, scanned_region) in scanned.iter().enumerate() {
-            let pages = PageAllocator::page_count(scanned_region.size).ok_or(PageAllocError::OutOfMemory)?;
+            let pages = PageAllocator::page_count(scanned_region.size).ok_or_else(|| {
+                log::error!(
+                    "Allocator init failed: region 0x{:016x} size 0x{:x} does not fit a page count",
+                    scanned_region.base,
+                    scanned_region.size
+                );
+                PageAllocError::OutOfMemory
+            })?;
             let Some(start_bit) = self.regions().get(i).map(|region| region.bitmap_start_bit) else {
                 continue;
             };
@@ -646,18 +694,31 @@ impl PageAllocator {
     /// to hold it. Returns `(bookkeeping_base, bookkeeping_pages)`.
     fn calculate_bookkeeping(regions: &[SmramRegion]) -> Result<(u64, usize), PageAllocError> {
         let total_pages = regions.iter().try_fold(0usize, |total, region| {
-            let pages = Self::page_count(region.size).ok_or(PageAllocError::OutOfMemory)?;
-            total.checked_add(pages).ok_or(PageAllocError::OutOfMemory)
+            let pages = Self::page_count(region.size).ok_or_else(|| {
+                log::error!("Bookkeeping sizing failed: region size 0x{:x} does not fit a page count", region.size);
+                PageAllocError::OutOfMemory
+            })?;
+            total.checked_add(pages).ok_or_else(|| {
+                log::error!("Bookkeeping sizing failed: total page count overflows at 0x{:016x}", region.base);
+                PageAllocError::OutOfMemory
+            })
         })?;
 
         let header_size = size_of::<AllocatorState>();
-        let regions_size = regions.len().checked_mul(size_of::<RegionInfo>()).ok_or(PageAllocError::OutOfMemory)?;
+        let regions_size = regions.len().checked_mul(size_of::<RegionInfo>()).ok_or_else(|| {
+            log::error!("Bookkeeping sizing failed: {} regions overflow the region table", regions.len());
+            PageAllocError::OutOfMemory
+        })?;
         let bitmap_bytes = total_pages.div_ceil(BITS_PER_BYTE);
-        let bitmaps_size = bitmap_bytes.checked_mul(2).ok_or(PageAllocError::OutOfMemory)?;
-        let total_bytes = header_size
-            .checked_add(regions_size)
-            .and_then(|size| size.checked_add(bitmaps_size))
-            .ok_or(PageAllocError::OutOfMemory)?;
+        let bitmaps_size = bitmap_bytes.checked_mul(2).ok_or_else(|| {
+            log::error!("Bookkeeping sizing failed: {bitmap_bytes} bitmap bytes overflow when doubled");
+            PageAllocError::OutOfMemory
+        })?;
+        let total_bytes =
+            header_size.checked_add(regions_size).and_then(|size| size.checked_add(bitmaps_size)).ok_or_else(|| {
+                log::error!("Bookkeeping sizing failed: header, regions and bitmaps overflow a usize");
+                PageAllocError::OutOfMemory
+            })?;
         let bookkeeping_pages = total_bytes.div_ceil(UEFI_PAGE_SIZE);
 
         log::info!(
@@ -720,8 +781,10 @@ impl PageAllocator {
             return Ok(());
         }
 
-        let (header, descriptor_bytes) =
-            SmramReserveHobData::read_from_prefix(data).map_err(|_| PageAllocError::InvalidAddress)?;
+        let (header, descriptor_bytes) = SmramReserveHobData::read_from_prefix(data).map_err(|_| {
+            log::error!("SMRAM HOB payload of {} bytes could not be parsed", data.len());
+            PageAllocError::InvalidAddress
+        })?;
 
         // Clamp the declared count to what the payload can actually hold, so the descriptor
         // bytes below are guaranteed in-bounds even if the HOB is malformed.
@@ -802,6 +865,7 @@ impl PageAllocator {
         hob_list: *const c_void,
     ) -> Result<([SmramRegion; MAX_TEMP_REGIONS], usize), PageAllocError> {
         if hob_list.is_null() {
+            log::error!("Page allocator init failed: HOB list pointer is null");
             return Err(PageAllocError::NotInitialized);
         }
 
@@ -821,7 +885,10 @@ impl PageAllocator {
             return Err(PageAllocError::NotInitialized);
         }
 
-        let scanned = regions.get(..count).ok_or(PageAllocError::NotInitialized)?;
+        let scanned = regions.get(..count).ok_or_else(|| {
+            log::error!("Page allocator init failed: scanned region count {count} exceeds {MAX_TEMP_REGIONS}");
+            PageAllocError::NotInitialized
+        })?;
         // SAFETY: the HOB-list contract above requires the discovered free regions to be
         // valid and exclusively owned SMRAM.
         unsafe {
@@ -840,38 +907,59 @@ impl PageAllocator {
     /// additionally be exclusively owned.
     unsafe fn init_from_regions(&self, scanned: &[SmramRegion]) -> Result<(), PageAllocError> {
         if scanned.is_empty() {
+            log::error!("Page allocator init failed: no SMRAM regions were supplied");
             return Err(PageAllocError::NotInitialized);
         }
 
         for (index, region) in scanned.iter().enumerate() {
-            if !region.base.is_multiple_of(UEFI_PAGE_SIZE as u64) || !region.size.is_multiple_of(UEFI_PAGE_SIZE as u64)
-            {
+            let is_page_aligned =
+                region.base.is_multiple_of(UEFI_PAGE_SIZE as u64) && region.size.is_multiple_of(UEFI_PAGE_SIZE as u64);
+            if !is_page_aligned {
+                log::error!("SMRAM region {index} [0x{:016x}, +0x{:x}) is not page aligned", region.base, region.size);
                 return Err(PageAllocError::NotAligned);
             }
-            let region_end = region
-                .base
-                .checked_add(region.size)
-                .filter(|_| region.size != 0)
-                .ok_or(PageAllocError::InvalidAddress)?;
-            let previous_regions = scanned.get(..index).ok_or(PageAllocError::InvalidAddress)?;
-            if previous_regions.iter().any(|previous| {
+            let Some(region_end) = region.base.checked_add(region.size).filter(|_| region.size != 0) else {
+                log::error!(
+                    "SMRAM region {index} [0x{:016x}, +0x{:x}) is empty or overflows",
+                    region.base,
+                    region.size
+                );
+                return Err(PageAllocError::InvalidAddress);
+            };
+            let Some(previous_regions) = scanned.get(..index) else {
+                log::error!("SMRAM region {index} is out of range while checking for overlap");
+                return Err(PageAllocError::InvalidAddress);
+            };
+            let overlaps_earlier_region = previous_regions.iter().any(|previous| {
                 previous
                     .base
                     .checked_add(previous.size)
                     .is_some_and(|previous_end| region.base < previous_end && previous.base < region_end)
-            }) {
+            });
+            if overlaps_earlier_region {
+                log::error!(
+                    "SMRAM region {index} [0x{:016x}, 0x{region_end:016x}) overlaps an earlier region",
+                    region.base
+                );
                 return Err(PageAllocError::InvalidAddress);
             }
         }
 
         let guard = self.state.lock();
         if self.initialized.load(Ordering::Acquire) {
+            log::error!("Page allocator init failed: the allocator is already initialized");
             return Err(PageAllocError::AlreadyInitialized);
         }
 
         let total_pages = scanned.iter().try_fold(0usize, |total, region| {
-            let pages = Self::page_count(region.size).ok_or(PageAllocError::OutOfMemory)?;
-            total.checked_add(pages).ok_or(PageAllocError::OutOfMemory)
+            let pages = Self::page_count(region.size).ok_or_else(|| {
+                log::error!("SMRAM region size 0x{:x} does not fit a page count", region.size);
+                PageAllocError::OutOfMemory
+            })?;
+            total.checked_add(pages).ok_or_else(|| {
+                log::error!("Total SMRAM page count overflows at region base 0x{:016x}", region.base);
+                PageAllocError::OutOfMemory
+            })
         })?;
 
         // Determine where the bookkeeping structures live and how large they are.
@@ -929,16 +1017,21 @@ impl PageAllocator {
         alloc_type: AllocationType,
     ) -> Result<u64, PageAllocError> {
         if !self.is_initialized() {
+            log::error!("Page allocation of {num_pages} page(s) rejected: allocator is not initialized");
             return Err(PageAllocError::NotInitialized);
         }
 
         if num_pages == 0 {
+            log::error!("Page allocation rejected: page count is 0");
             return Err(PageAllocError::OutOfMemory);
         }
 
         // Reserve pages under the state lock, then release it before touching the
         // page table (which takes its own lock).
-        let addr = self.lock_state().allocate(num_pages, alloc_type).ok_or(PageAllocError::OutOfMemory)?;
+        let addr = self.lock_state().allocate(num_pages, alloc_type).ok_or_else(|| {
+            log::error!("Page allocation of {num_pages} {alloc_type:?} page(s) failed: no free run that large");
+            PageAllocError::OutOfMemory
+        })?;
 
         // For supervisor allocations, update page table attributes to mark as
         // supervisor-owned data pages (R/W/NX/S), otherwise they would
@@ -1007,13 +1100,16 @@ impl PageAllocator {
     /// (Supervisor + `ReadProtect` + `ExecuteProtect`) to prevent use-after-free.
     pub fn free_pages(&self, addr: u64, num_pages: usize) -> Result<(), PageAllocError> {
         if !self.is_initialized() {
+            log::error!("Free of 0x{addr:016x} ({num_pages} pages) rejected: allocator is not initialized");
             return Err(PageAllocError::NotInitialized);
         }
 
         if !addr.is_multiple_of(UEFI_PAGE_SIZE as u64) {
+            log::error!("Free of 0x{addr:016x} ({num_pages} pages) rejected: address is not page aligned");
             return Err(PageAllocError::NotAligned);
         }
 
+        // `free` logs the address and the reason when it rejects the request.
         self.lock_state().free(addr, num_pages)?;
 
         // Mark freed pages as inaccessible in the page table.
@@ -1033,13 +1129,16 @@ impl PageAllocator {
         expected_type: AllocationType,
     ) -> Result<(), PageAllocError> {
         if !self.is_initialized() {
+            log::error!("Checked free of 0x{addr:016x} ({num_pages} pages) rejected: allocator is not initialized");
             return Err(PageAllocError::NotInitialized);
         }
 
         if !addr.is_multiple_of(UEFI_PAGE_SIZE as u64) {
+            log::error!("Checked free of 0x{addr:016x} ({num_pages} pages) rejected: address is not page aligned");
             return Err(PageAllocError::NotAligned);
         }
 
+        // `free_checked` logs the address and the reason when it rejects the request.
         self.lock_state().free_checked(addr, num_pages, expected_type)?;
 
         // Mark freed pages as inaccessible in the page table.
@@ -1185,6 +1284,7 @@ mod tests {
 
     #[test]
     fn test_page_allocator_initialization_reserves_bookkeeping() {
+        crate::test_support::init_test_logger();
         let fixture = AllocatorFixture::new();
 
         assert!(fixture.allocator.is_initialized());
@@ -1281,6 +1381,7 @@ mod tests {
 
     #[test]
     fn test_page_allocator_checked_free_is_atomic_on_type_mismatch() {
+        crate::test_support::init_test_logger();
         let fixture = AllocatorFixture::new();
         let mut state = fixture.allocator.lock_state();
         let user = state.allocate(2, AllocationType::User).unwrap();
@@ -1295,7 +1396,110 @@ mod tests {
     }
 
     #[test]
+    fn test_page_allocator_rejects_a_free_whose_page_count_overflows() {
+        let fixture = AllocatorFixture::new();
+        let mut state = fixture.allocator.lock_state();
+
+        // Starting one page into the region makes the page index plus the count overflow.
+        let second_page = fixture.base + UEFI_PAGE_SIZE as u64;
+        assert_eq!(state.free(second_page, usize::MAX), Err(PageAllocError::InvalidAddress));
+    }
+
+    #[test]
+    fn test_page_allocator_rejects_a_free_outside_every_region() {
+        let fixture = AllocatorFixture::new();
+        let mut state = fixture.allocator.lock_state();
+
+        // An address below the region start belongs to no region at all.
+        assert_eq!(state.free(UEFI_PAGE_SIZE as u64, 1), Err(PageAllocError::InvalidAddress));
+    }
+
+    #[test]
+    fn test_page_allocator_public_free_rejects_unaligned_addresses() {
+        let fixture = AllocatorFixture::new();
+        let unaligned = fixture.base + 1;
+
+        assert_eq!(fixture.allocator.free_pages(unaligned, 1), Err(PageAllocError::NotAligned));
+        assert_eq!(
+            fixture.allocator.free_pages_checked(unaligned, 1, AllocationType::User),
+            Err(PageAllocError::NotAligned)
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_public_free_reports_pages_that_are_not_allocated() {
+        crate::test_support::init_test_logger();
+        let fixture = AllocatorFixture::new();
+        let last_page = fixture.base + (TEST_REGION_PAGES - 1) as u64 * UEFI_PAGE_SIZE as u64;
+
+        assert_eq!(fixture.allocator.free_pages(last_page, 1), Err(PageAllocError::NotAllocated));
+        assert_eq!(
+            fixture.allocator.free_pages_checked(last_page, 1, AllocationType::User),
+            Err(PageAllocError::NotAllocated)
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_marks_pre_allocated_regions_as_used() {
+        crate::test_support::init_test_logger();
+        let mut memory = Box::new(AlignedRegion([0u8; TEST_REGION_BYTES]));
+        let base = memory.0.as_mut_ptr() as u64;
+        let half = (TEST_REGION_BYTES / 2) as u64;
+        let allocator = PageAllocator::new();
+        // The second half is handed over pre-allocated, so none of it is available.
+        let regions = [SmramRegion::new(base, half, false), SmramRegion::new(base + half, half, true)];
+
+        // SAFETY: `memory` is page-aligned, owned by this test, and covers both regions.
+        unsafe { allocator.init_from_regions(&regions).unwrap() };
+
+        assert_eq!(allocator.region_count(), 2);
+        assert_eq!(allocator.total_page_count(), TEST_REGION_PAGES);
+        // Every pre-allocated page plus the bookkeeping page is charged to the supervisor.
+        assert_eq!(allocator.allocated_page_count(AllocationType::Supervisor), TEST_REGION_PAGES / 2 + 1);
+        assert_eq!(allocator.free_page_count(), TEST_REGION_PAGES / 2 - 1);
+    }
+
+    #[test]
+    fn test_page_allocator_rejects_an_empty_allocation_request() {
+        let fixture = AllocatorFixture::new();
+
+        assert_eq!(
+            fixture.allocator.allocate_pages_with_type(0, AllocationType::User),
+            Err(PageAllocError::OutOfMemory)
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_reports_an_allocation_larger_than_the_region() {
+        let fixture = AllocatorFixture::new();
+
+        assert_eq!(
+            fixture.allocator.allocate_pages_with_type(TEST_REGION_PAGES + 1, AllocationType::User),
+            Err(PageAllocError::OutOfMemory)
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_rejects_a_null_hob_list() {
+        let allocator = PageAllocator::new();
+
+        // SAFETY: the null pointer is rejected before any dereference.
+        let result = unsafe { allocator.init_from_hob_list(core::ptr::null()) };
+        assert_eq!(result.map(|_| ()), Err(PageAllocError::NotInitialized));
+    }
+
+    #[test]
+    fn test_page_allocator_rejects_an_empty_region_list() {
+        let allocator = PageAllocator::new();
+
+        // SAFETY: an empty list is rejected before any region is read.
+        let result = unsafe { allocator.init_from_regions(&[]) };
+        assert_eq!(result, Err(PageAllocError::NotInitialized));
+    }
+
+    #[test]
     fn test_page_allocator_rejects_free_crossing_region_end() {
+        crate::test_support::init_test_logger();
         let fixture = AllocatorFixture::new();
         let mut state = fixture.allocator.lock_state();
         let allocation = state.allocate(TEST_REGION_PAGES - 1, AllocationType::User).unwrap();
