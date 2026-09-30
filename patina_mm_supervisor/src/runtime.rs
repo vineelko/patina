@@ -11,8 +11,6 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
-use core::sync::atomic::Ordering;
-
 use patina::standard::efi;
 use patina::{
     management_mode::{MmCommBufferStatus, supervisor::UserCommandType},
@@ -123,17 +121,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let is_bsp = is_bsp();
 
         if is_bsp {
-            let mmi_number = self.mmi_count.fetch_add(1, Ordering::Relaxed) + 1;
             let expected_aps = self.cpu_manager.registered_count().saturating_sub(1);
-
-            log::info!("MMI #{mmi_number}: BSP (CPU {cpu_id}) entered MM, waiting for {expected_aps} AP(s)");
 
             // Wait for all registered APs to check in (set state to InHoldingPen).
             self.wait_for_ap_arrival(expected_aps);
 
             // Every registered AP is now in MM - service the request.
             log::trace!("BSP (CPU {cpu_id}) entering request serving routine...");
-            let target = self.bsp_request_loop(cpu_index);
+            self.bsp_request_loop(cpu_index);
 
             // Exit barrier: release every penned AP and wait for each to acknowledge it has left.
             log::trace!("BSP (CPU {cpu_id}) releasing all APs from the holding pen...");
@@ -141,8 +136,6 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             self.cpu_manager.wait_for_ap_exit_acks(expected_aps);
 
             self.mailbox_manager.reset_all();
-
-            log::info!("MMI #{mmi_number}: BSP (CPU {cpu_id}) leaving MM, serviced {target:?} request");
         } else {
             // AP: check in by marking state, then enter holding pen.
             self.cpu_manager.set_ap_state(cpu_id, ApState::InHoldingPen);
