@@ -345,7 +345,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             with_user_access(|| {
                 // Copy the EfiMmEntryContext to the start of the supervisor-to-user buffer
                 core::ptr::copy_nonoverlapping(
-                    &raw const entry_context as *const u8,
+                    (&raw const entry_context).cast::<u8>(),
                     config.supv_to_user_buffer as *mut u8,
                     context_size,
                 );
@@ -426,7 +426,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // inside that user range.
         let returned_status = unsafe {
             with_user_access(|| {
-                core::ptr::read((config.supv_to_user_buffer as *const u8).add(context_size) as *const MmCommBufferStatus)
+                core::ptr::read(
+                    (config.supv_to_user_buffer as *const u8).add(context_size).cast::<MmCommBufferStatus>(),
+                )
             })
         };
 
@@ -1285,7 +1287,7 @@ mod tests {
 
             // SAFETY: the supervisor placed an `MmCommBufferStatus` right after the context.
             unsafe {
-                let status = (supv_to_user as *mut u8).add(context_size) as *mut MmCommBufferStatus;
+                let status = (supv_to_user as *mut u8).add(context_size).cast::<MmCommBufferStatus>();
                 (*status).return_status = efi::Status::SUCCESS.as_usize() as u64;
                 (*status).return_buffer_size = 4;
             }
@@ -1325,7 +1327,7 @@ mod tests {
         mock::set_handler(move |_cpu, _entry, _stack, _arg_count, _command, _buffer, _size| {
             // SAFETY: the supervisor placed an `MmCommBufferStatus` right after the context.
             unsafe {
-                let status = (supv_to_user as *mut u8).add(context_size) as *mut MmCommBufferStatus;
+                let status = (supv_to_user as *mut u8).add(context_size).cast::<MmCommBufferStatus>();
                 (*status).return_status = efi::Status::SUCCESS.as_usize() as u64;
                 (*status).return_buffer_size = u64::MAX;
             }
@@ -1355,7 +1357,7 @@ mod tests {
         mock::set_handler(move |_cpu, _entry, _stack, _arg_count, _command, _buffer, _size| {
             // SAFETY: the supervisor placed an `MmCommBufferStatus` right after the context.
             unsafe {
-                let status = (supv_to_user as *mut u8).add(context_size) as *mut MmCommBufferStatus;
+                let status = (supv_to_user as *mut u8).add(context_size).cast::<MmCommBufferStatus>();
                 (*status).return_buffer_size = 256;
             }
             0
