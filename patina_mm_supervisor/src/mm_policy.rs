@@ -414,7 +414,7 @@ impl SecurePolicyDataV1_0 {
         let base = core::ptr::from_ref::<Self>(self).cast::<u8>();
         // SAFETY: per this function's contract `self` is part of a valid policy buffer, so
         // `policy_root_offset` stays within that buffer. This only computes a pointer (no deref).
-        unsafe { base.add(self.policy_root_offset as usize) as *const PolicyRootV1 }
+        unsafe { base.add(self.policy_root_offset as usize).cast::<PolicyRootV1>() }
     }
 
     /// Gets a slice of policy roots.
@@ -443,7 +443,7 @@ impl PolicyRootV1 {
     pub unsafe fn get_descriptors_ptr<T>(&self, policy_base: *const u8) -> *const T {
         // SAFETY: per this function's contract `policy_base` points to a valid policy buffer, so
         // `offset` stays within it. This only computes a pointer (no deref).
-        unsafe { policy_base.add(self.offset as usize) as *const T }
+        unsafe { policy_base.add(self.offset as usize).cast::<T>() }
     }
 
     /// Gets memory descriptors from this policy root.

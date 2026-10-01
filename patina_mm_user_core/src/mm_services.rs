@@ -189,7 +189,7 @@ extern "efiapi" fn mm_allocate_pool_impl(
         Ok(ptr) => {
             // SAFETY: `buffer` was null-checked above; the C caller guarantees it references a writable
             // `*mut c_void` out-parameter. Written exactly once.
-            unsafe { *buffer = ptr as *mut c_void };
+            unsafe { *buffer = ptr.cast::<c_void>() };
             efi::Status::SUCCESS
         }
         Err(status) => status,
@@ -197,7 +197,7 @@ extern "efiapi" fn mm_allocate_pool_impl(
 }
 
 extern "efiapi" fn mm_free_pool_impl(buffer: *mut c_void) -> efi::Status {
-    match MM_SERVICES.free_pool(buffer as *mut u8) {
+    match MM_SERVICES.free_pool(buffer.cast::<u8>()) {
         Ok(()) => efi::Status::SUCCESS,
         Err(status) => status,
     }
