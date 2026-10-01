@@ -281,7 +281,7 @@ impl LockedState<'_> {
             return &[];
         }
 
-        let regions_ptr = (self.state as *const u8).wrapping_add(size_of::<AllocatorState>()) as *const RegionInfo;
+        let regions_ptr = (self.state as *const u8).wrapping_add(size_of::<AllocatorState>()).cast::<RegionInfo>();
         // SAFETY: `regions_ptr` points to the `RegionInfo` array of `region_count` entries that
         // immediately follows the header within the bookkeeping allocation; we hold the lock so
         // no other reference is live.
@@ -294,7 +294,7 @@ impl LockedState<'_> {
             return &mut [];
         }
 
-        let regions_ptr = (self.state as *mut u8).wrapping_add(size_of::<AllocatorState>()) as *mut RegionInfo;
+        let regions_ptr = self.state.cast::<u8>().wrapping_add(size_of::<AllocatorState>()).cast::<RegionInfo>();
         // SAFETY: as `regions`, plus we hold `&mut self` and the lock, so this is the only live
         // reference to the array.
         unsafe { slice::from_raw_parts_mut(regions_ptr, self.region_count) }
@@ -337,7 +337,7 @@ impl LockedState<'_> {
             return (&mut [], &mut []);
         }
         let (offset, bitmap_bytes) = self.bitmap_offset_len();
-        let ptr = (self.state as *mut u8).wrapping_add(offset);
+        let ptr = self.state.cast::<u8>().wrapping_add(offset);
         // SAFETY: the allocation and type bitmaps are two contiguous `bitmap_bytes`-sized ranges
         // within the bookkeeping allocation. Materialize both as one slice; we hold `&mut self`
         // and the lock, so no other reference exists.
@@ -970,9 +970,8 @@ impl PageAllocator {
 
         // SAFETY: per this function's contract, a non-null `hob_list` points to a valid HOB
         // list whose first entry is the Phase Handoff Information Table.
-        let hob_list_info = unsafe {
-            (hob_list as *const PhaseHandoffInformationTable).as_ref().ok_or(PageAllocError::NotInitialized)?
-        };
+        let hob_list_info =
+            unsafe { hob_list.cast::<PhaseHandoffInformationTable>().as_ref().ok_or(PageAllocError::NotInitialized)? };
 
         let mut regions = [SmramRegion::default(); MAX_TEMP_REGIONS];
         let mut count = 0usize;

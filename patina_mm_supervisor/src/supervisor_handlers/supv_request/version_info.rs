@@ -46,7 +46,7 @@ pub(super) fn handle_version_info(comm_buffer: *mut u8, comm_buffer_size: &mut u
     // SAFETY: The buffer is non-null and large enough for the header and payload. The unaligned
     // write supports communication buffers without natural `MmSupervisorVersionInfo` alignment.
     unsafe {
-        let payload_ptr = comm_buffer.add(MmSupervisorRequestHeader::SIZE) as *mut MmSupervisorVersionInfo;
+        let payload_ptr = comm_buffer.add(MmSupervisorRequestHeader::SIZE).cast::<MmSupervisorVersionInfo>();
         payload_ptr.write_unaligned(version_info);
     }
 
