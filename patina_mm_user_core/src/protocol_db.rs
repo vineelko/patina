@@ -67,7 +67,7 @@ struct PendingNotify {
 fn notify_identity(notify: &ProtocolNotify) -> usize {
     match notify {
         ProtocolNotify::Efi(callback) => *callback as usize,
-        ProtocolNotify::Native(callback) => core::ptr::from_ref(*callback) as *const () as usize,
+        ProtocolNotify::Native(callback) => core::ptr::from_ref(*callback).cast::<()>() as usize,
     }
 }
 

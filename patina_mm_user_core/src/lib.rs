@@ -329,7 +329,7 @@ impl MmUserCore {
         // Parse the HOB list
         // SAFETY: The supervisor passes a non-null pointer to the HOB list it built, which
         // outlives this call. The null case was rejected above.
-        let Some(hob_list_info) = (unsafe { (hob_list as *const PhaseHandoffInformationTable).as_ref() }) else {
+        let Some(hob_list_info) = (unsafe { hob_list.cast::<PhaseHandoffInformationTable>().as_ref() }) else {
             log::error!("Failed to read HOB list header.");
             return efi::Status::INVALID_PARAMETER.as_usize() as u64;
         };
@@ -442,7 +442,7 @@ impl MmUserCore {
         // SAFETY: The supervisor places an `MmCommBufferStatus` at `context_size` bytes into the
         // same buffer, per the `UserRequest` calling convention.
         let comm_status = unsafe {
-            core::ptr::read((supv_to_user_buffer as *const u8).add(context_size as usize) as *const MmCommBufferStatus)
+            core::ptr::read((supv_to_user_buffer as *const u8).add(context_size as usize).cast::<MmCommBufferStatus>())
         };
 
         // ---- Synchronous MMI dispatch ----
@@ -478,7 +478,7 @@ impl MmUserCore {
         // SAFETY: Writing back to the same `MmCommBufferStatus` slot that was read above.
         unsafe {
             core::ptr::write(
-                (supv_to_user_buffer as *mut u8).add(context_size as usize) as *mut MmCommBufferStatus,
+                (supv_to_user_buffer as *mut u8).add(context_size as usize).cast::<MmCommBufferStatus>(),
                 updated_status,
             );
         }
@@ -545,7 +545,7 @@ impl MmUserCore {
             // GUID to dispatch is `message_guid` in V3
             let guid_offset =
                 core::mem::offset_of!(patina::pi::protocol::communication3::EfiMmCommunicateHeader, message_guid);
-            let guid_ptr = (comm_buffer_base as *const u8).wrapping_add(guid_offset) as *const efi::Guid;
+            let guid_ptr = (comm_buffer_base as *const u8).wrapping_add(guid_offset).cast::<efi::Guid>();
             (guid_ptr, header_size, total - header_size)
         } else {
             // Legacy header. `message_length` comes from the buffer, so the available space is
@@ -574,7 +574,7 @@ impl MmUserCore {
 
         // Dispatch the GUID-specific handler.
         // SAFETY: `comm_header_size` is within the buffer, whose size was checked above.
-        let comm_data_ptr = unsafe { (comm_buffer_base as *mut u8).add(comm_header_size) as *mut c_void };
+        let comm_data_ptr = unsafe { (comm_buffer_base as *mut u8).add(comm_header_size).cast::<c_void>() };
 
         let status = unsafe {
             // SAFETY: `comm_guid_ptr` references the message GUID parsed from the validated comm
@@ -820,8 +820,9 @@ mod tests {
         fn status(&self) -> MmCommBufferStatus {
             // SAFETY: the status block was written by `new` and is only updated in place.
             unsafe {
-                core::ptr::read((self.storage.as_ptr().cast::<u8>()).add(size_of::<EfiMmEntryContext>())
-                    as *const MmCommBufferStatus)
+                core::ptr::read(
+                    self.storage.as_ptr().cast::<u8>().add(size_of::<EfiMmEntryContext>()).cast::<MmCommBufferStatus>(),
+                )
             }
         }
     }
@@ -1113,7 +1114,7 @@ mod tests {
         // SAFETY: the buffer owns `total` bytes.
         let tail = unsafe {
             core::slice::from_raw_parts(
-                (buffer.as_ptr() as *const u8).add(EfiMmCommunicateHeader::size() + message.len()),
+                buffer.as_ptr().cast::<u8>().add(EfiMmCommunicateHeader::size() + message.len()),
                 total - EfiMmCommunicateHeader::size() - message.len(),
             )
         };

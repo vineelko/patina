@@ -1079,7 +1079,7 @@ mod tests {
     fn gate_over(policy: &[u64]) -> PolicyGate {
         // SAFETY: `build_policy` produced a valid, aligned V1.0 policy buffer that the caller
         // keeps alive for the gate's lifetime.
-        unsafe { PolicyGate::new(policy.as_ptr() as *const u8, core::mem::size_of_val(policy)) }
+        unsafe { PolicyGate::new(policy.as_ptr().cast::<u8>(), core::mem::size_of_val(policy)) }
             .expect("valid policy buffer")
     }
 

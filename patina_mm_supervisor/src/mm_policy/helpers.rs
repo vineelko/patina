@@ -52,7 +52,7 @@ pub unsafe fn dump_policy(policy_ptr: *const u8) {
 
     // SAFETY: `policy_ptr` is non-null (checked above) and, per this function's contract, points
     // to a valid policy buffer, so the header can be reborrowed for reading.
-    let policy = unsafe { &*(policy_ptr as *const SecurePolicyDataV1_0) };
+    let policy = unsafe { &*policy_ptr.cast::<SecurePolicyDataV1_0>() };
 
     let len = policy.size as usize;
     if len < size_of::<SecurePolicyDataV1_0>() {
@@ -242,7 +242,7 @@ pub unsafe fn security_policy_check(policy_ptr: *const u8) -> Result<(), PolicyC
 
     // SAFETY: `policy_ptr` is non-null (checked above) and, per this function's contract, points
     // to a valid policy buffer, so the header can be reborrowed for reading.
-    let policy = unsafe { &*(policy_ptr as *const SecurePolicyDataV1_0) };
+    let policy = unsafe { &*policy_ptr.cast::<SecurePolicyDataV1_0>() };
 
     let len = policy.size as usize;
     if len < size_of::<SecurePolicyDataV1_0>() {

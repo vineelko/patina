@@ -549,7 +549,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // contents are consumed below.
         // SAFETY: `hob_list` was checked non-null by `entry_point` and points to
         // a valid HOB list for the duration of BSP initialization.
-        let handoff = unsafe { (hob_list as *const PhaseHandoffInformationTable).as_ref() }
+        let handoff = unsafe { hob_list.cast::<PhaseHandoffInformationTable>().as_ref() }
             .expect("BSP initialization requires a non-null HOB list");
         if let Err(e) =
             hob_validation::validate_incoming_hobs_pre_paging_init(handoff, scanned_regions, |base, size| {
@@ -674,7 +674,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     unsafe fn discover_and_store_user_entry(&self, hob_list: *const c_void, state: &crate::state::InitState) {
         // SAFETY: `hob_list` is a valid HOB list per this function's contract, so it
         // points to a readable handoff table for the duration of initialization.
-        let entry = unsafe { (hob_list as *const PhaseHandoffInformationTable).as_ref() }
+        let entry = unsafe { hob_list.cast::<PhaseHandoffInformationTable>().as_ref() }
             .and_then(|handoff| {
                 find_module(&Hob::Handoff(handoff), MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_USER_GUID)
             })
@@ -701,7 +701,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// [`hob_validation::validate_incoming_hobs_pre_paging_init`] has accepted its module allocations.
     unsafe fn discover_and_store_init_region(&self, hob_list: *const c_void, state: &crate::state::InitState) {
         // SAFETY: the caller provides the original HOB list before publication reclaims its pages.
-        let handoff = unsafe { (hob_list as *const PhaseHandoffInformationTable).as_ref() }
+        let handoff = unsafe { hob_list.cast::<PhaseHandoffInformationTable>().as_ref() }
             .expect("MM Init discovery requires a non-null HOB list");
         let hobs = Hob::Handoff(handoff);
         let Some(module) = find_module(&hobs, HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID) else {
@@ -1074,7 +1074,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // SAFETY: `hob_list` was checked non-null above and, per this function's contract, points
         // to a valid HOB list, so taking a shared reference to the handoff table header is sound.
         let hob_list_info =
-            unsafe { (hob_list as *const PhaseHandoffInformationTable).as_ref().ok_or(PolicyInitError::NullHobList)? };
+            unsafe { hob_list.cast::<PhaseHandoffInformationTable>().as_ref().ok_or(PolicyInitError::NullHobList)? };
 
         // 1. Process the MP Information HOB (`gMpInformationHobGuid`) for the CPU count. It sizes
         //    the Ring 3 stack array the PassDown HOB describes, so it is needed first.
