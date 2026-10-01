@@ -184,7 +184,7 @@ impl MmConfigurationTableDb {
         } else {
             let boxed: Box<[efi::ConfigurationTable]> = inner.entries.clone().into_boxed_slice();
             let len = boxed.len();
-            let ptr = Box::into_raw(boxed) as *mut efi::ConfigurationTable;
+            let ptr = Box::into_raw(boxed).cast::<efi::ConfigurationTable>();
 
             inner.leaked_ptr = ptr;
             inner.leaked_len = len;

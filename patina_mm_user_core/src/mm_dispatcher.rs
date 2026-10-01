@@ -200,7 +200,7 @@ impl MmDispatcher {
                                 None
                             } else {
                                 // Check the name matches the expected depex HOB GUID before parsing.
-                                let depex_hob_data = <[u8]>::as_ptr(data) as *const DepexHobData;
+                                let depex_hob_data = <[u8]>::as_ptr(data).cast::<DepexHobData>();
                                 // SAFETY: We trust that the supervisor correctly formats the depex HOB data
                                 let depex_hob_data = unsafe { &*depex_hob_data };
                                 assert!(
