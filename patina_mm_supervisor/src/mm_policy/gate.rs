@@ -61,7 +61,7 @@ unsafe fn validate_policy_layout(policy_ptr: *const u8, buffer_size: usize) -> R
 
     // SAFETY: the buffer was just verified to hold a complete header, and the caller guarantees
     // `policy_ptr` is readable for `buffer_size` bytes.
-    let policy = unsafe { &*(policy_ptr as *const SecurePolicyDataV1_0) };
+    let policy = unsafe { &*policy_ptr.cast::<SecurePolicyDataV1_0>() };
 
     if !policy.is_valid_version() {
         log::error!(
@@ -196,7 +196,7 @@ impl PolicyGate {
     /// Gets a reference to the policy header.
     fn policy(&self) -> &SecurePolicyDataV1_0 {
         // SAFETY: Constructor validated the pointer
-        unsafe { &*(self.policy_ptr as *const SecurePolicyDataV1_0) }
+        unsafe { &*self.policy_ptr.cast::<SecurePolicyDataV1_0>() }
     }
 
     /// Finds a policy root by type.
@@ -677,7 +677,8 @@ impl PolicyGate {
         // SAFETY: `root_offset` and `root_count` came from the header just copied from the blob,
         // and construction validated that the roots array they describe ends within the blob's
         // declared size - which is `fw_size`, itself within the `total_bytes` copied above.
-        let roots = unsafe { core::slice::from_raw_parts_mut(dest.add(root_offset) as *mut PolicyRootV1, root_count) };
+        let roots =
+            unsafe { core::slice::from_raw_parts_mut(dest.add(root_offset).cast::<PolicyRootV1>(), root_count) };
 
         // Find the TYPE_MEM policy root and patch its offset/count.
         let Some(mem_root) = roots.iter_mut().find(|r| r.policy_type == TYPE_MEM) else {
@@ -691,7 +692,7 @@ impl PolicyGate {
         // 4. Update the total size and clear the legacy memory_policy_count.
         //
         // SAFETY: `dest` holds a valid `SecurePolicyDataV1_0` header (see above).
-        let header = unsafe { &mut *(dest as *mut SecurePolicyDataV1_0) };
+        let header = unsafe { &mut *dest.cast::<SecurePolicyDataV1_0>() };
         header.size = total_bytes as u32;
         header.memory_policy_count = 0;
 
@@ -1214,7 +1215,7 @@ mod tests {
 
         // SAFETY: `fetch_n_update_policy` wrote a complete, aligned policy blob into `dest_bytes`.
         let (header, roots) = unsafe {
-            let header = &*(dest_bytes.as_ptr() as *const SecurePolicyDataV1_0);
+            let header = &*dest_bytes.as_ptr().cast::<SecurePolicyDataV1_0>();
             (header, header.get_policy_roots())
         };
         assert_eq!(header.size as usize, written);
