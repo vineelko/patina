@@ -433,7 +433,7 @@ trait PolicyInitServices {
     ) -> Result<CommBufferInitResult, PolicyInitError>;
     fn allocate_supv_to_user_buffer(&mut self) -> Result<u64, PolicyInitError>;
     fn set_comm_buffer_config(&mut self, config: CommBufferConfig);
-    fn validate_policy(&mut self) -> Option<Result<(), Self::PolicyCheckError>>;
+    fn validate_policy(&mut self) -> Result<(), Self::PolicyCheckError>;
 }
 
 struct RuntimePolicyInitServices<'a, P: PlatformInfo, const MAX_CPUS: usize> {
@@ -496,12 +496,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> PolicyInitServices for RuntimePolic
         security_state().set_comm_buffer_config(config);
     }
 
-    fn validate_policy(&mut self) -> Option<Result<(), Self::PolicyCheckError>> {
-        security_state().policy_gate().map(|gate| {
-            // SAFETY: `gate.as_ptr()` returns the resident firmware policy buffer pointer
-            // validated while constructing the policy gate.
-            unsafe { mm_policy::helpers::security_policy_check(gate.as_ptr()) }
-        })
+    fn validate_policy(&mut self) -> Result<(), Self::PolicyCheckError> {
+        let gate =
+            security_state().policy_gate().expect("Policy gate must be initialized before policy validation runs");
+        // SAFETY: `gate.as_ptr()` returns the resident firmware policy buffer pointer
+        // validated while constructing the policy gate.
+        unsafe { mm_policy::helpers::security_policy_check(gate.as_ptr()) }
     }
 }
 
@@ -755,19 +755,18 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// # Panics
     ///
-    /// Panics if policy initialization or the initial security-policy validation fails.
+    /// Panics if policy initialization or the initial security-policy validation fails, or if the
+    /// policy gate was not initialized before validation runs.
     unsafe fn init_policy_and_validate<S: PolicyInitServices>(&self, hob_list: *const c_void, services: &mut S) {
         // SAFETY: `hob_list` is a valid HOB list per this function's contract.
         if let Err(e) = unsafe { self.init_policy_from_hob_list(hob_list, services) } {
             panic!("Failed to initialize policy gate: {e:?}");
         }
 
-        if let Some(result) = services.validate_policy() {
-            if let Err(e) = result {
-                panic!("Security policy check failed during init: {e:?}");
-            }
-            log::info!("Security policy check passed");
+        if let Err(e) = services.validate_policy() {
+            panic!("Security policy check failed during init: {e:?}");
         }
+        log::info!("Security policy check passed");
     }
 
     /// Publishes a read-only copy of the HOB list for the demoted user core and returns its
@@ -1903,7 +1902,7 @@ mod tests {
         supv_result: Result<CommBufferInitResult, PolicyInitError>,
         user_result: Result<CommBufferInitResult, PolicyInitError>,
         allocation_result: Result<u64, PolicyInitError>,
-        policy_validation: Option<Result<(), &'static str>>,
+        policy_validation: Result<(), &'static str>,
         pass_down_cpu_count: Option<u64>,
         save_state_info: Option<SaveStateInfo>,
         mseg_base: Option<u64>,
@@ -1919,7 +1918,7 @@ mod tests {
                 supv_result: Ok((0x1000, 0x2000, 0x3000, 0x4000)),
                 user_result: Ok((0x5000, 0x6000, 0x7000, 0x8000)),
                 allocation_result: Ok(0x9000),
-                policy_validation: None,
+                policy_validation: Ok(()),
                 pass_down_cpu_count: None,
                 save_state_info: None,
                 mseg_base: None,
@@ -1986,7 +1985,7 @@ mod tests {
             self.config = Some(config);
         }
 
-        fn validate_policy(&mut self) -> Option<Result<(), Self::PolicyCheckError>> {
+        fn validate_policy(&mut self) -> Result<(), Self::PolicyCheckError> {
             self.calls.push("validate");
             self.policy_validation
         }
@@ -3119,7 +3118,6 @@ mod tests {
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let hob_list = policy_hob_list(true);
         let mut services = RecordingPolicyServices::successful();
-        services.policy_validation = Some(Ok(()));
 
         // SAFETY: `hob_list` is a valid contiguous HOB list.
         unsafe { supervisor.init_policy_and_validate(hob_list.as_ptr(), &mut services) };
@@ -3134,7 +3132,6 @@ mod tests {
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let hob_list = RawHobList::new().finish();
         let mut services = RecordingPolicyServices::successful();
-        services.policy_validation = Some(Ok(()));
 
         let result = catch_unwind(AssertUnwindSafe(|| {
             // SAFETY: `hob_list` is a valid contiguous HOB list.
@@ -3164,24 +3161,12 @@ mod tests {
     }
 
     #[test]
-    fn test_init_policy_and_validate_tolerates_absent_policy() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
-        let hob_list = policy_hob_list(true);
-        let mut services = RecordingPolicyServices::successful();
-
-        // SAFETY: `hob_list` is a valid contiguous HOB list.
-        unsafe { supervisor.init_policy_and_validate(hob_list.as_ptr(), &mut services) };
-
-        assert_eq!(services.calls.last(), Some(&"validate"));
-    }
-
-    #[test]
     #[should_panic(expected = "Security policy check failed during init")]
     fn test_init_policy_and_validate_panics_when_policy_check_fails() {
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let hob_list = policy_hob_list(true);
         let mut services = RecordingPolicyServices::successful();
-        services.policy_validation = Some(Err("invalid policy"));
+        services.policy_validation = Err("invalid policy");
 
         // SAFETY: `hob_list` is a valid contiguous HOB list.
         unsafe { supervisor.init_policy_and_validate(hob_list.as_ptr(), &mut services) };
