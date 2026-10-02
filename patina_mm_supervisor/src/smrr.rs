@@ -16,6 +16,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
+use crate::error::MmSupervisorResult;
 use crate::intrinsics::CPUID_VERSION_INFO;
 use crate::intrinsics::read_msr;
 use crate::intrinsics::write_msr;
@@ -46,6 +47,64 @@ const PHYS_ADDR_MASK: u64 = 0xFFFF_F000; // bits [31:12]
 const MEMTYPE_MASK: u64 = 0x0000_00FF; // bits [7:0]
 const MASK_BIT_10: u64 = 1 << 10;
 const MASK_VALID_BIT: u64 = 1 << 11;
+
+/// Why the SMRRs cannot be programmed to protect MMRAM.
+///
+/// Every one of these is fatal. The SMRRs are what keep MMRAM inaccessible from outside MM, so a
+/// range that cannot be programmed must never be treated as merely unprotected and carried on
+/// from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmrrError {
+    /// The CPU does not report MTRR support.
+    MtrrUnsupported,
+    /// The CPU does not report SMRR support.
+    SmrrUnsupported,
+    /// The CPU does not report the extended SMRR capability.
+    SmrrExtUnsupported,
+    /// The CPU does not report SMM Code Access Check support.
+    SmmCodeAccessCheckUnsupported,
+    /// The region lies outside the 4 GiB the 32-bit SMRR registers can describe.
+    ///
+    /// Truncating would program a different region than the one handed in and leave the real
+    /// MMRAM unprotected, so this is fatal rather than narrowed.
+    RangeNotAddressable {
+        /// Base address of the region that did not fit.
+        base: u64,
+        /// Size of the region that did not fit.
+        size: u64,
+    },
+    /// The region is not a power-of-two size of at least 4 KiB on a naturally aligned base.
+    RangeNotAligned {
+        /// Base address that failed the check.
+        base: u32,
+        /// Size that failed the check.
+        size: u32,
+    },
+}
+
+impl core::error::Error for SmrrError {}
+
+impl core::fmt::Display for SmrrError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::MtrrUnsupported => write!(f, "unsupported CPU: MTRRs are not supported"),
+            Self::SmrrUnsupported => write!(f, "unsupported CPU: SMRRs are not supported"),
+            Self::SmrrExtUnsupported => {
+                write!(f, "unsupported CPU: the extended SMRR capability is not supported")
+            }
+            Self::SmmCodeAccessCheckUnsupported => {
+                write!(f, "unsupported CPU: SMM Code Access Check is not supported")
+            }
+            Self::RangeNotAddressable { base, size } => {
+                write!(f, "SMRAM region [0x{base:x}, +0x{size:x}) does not fit the 32-bit SMRR registers")
+            }
+            Self::RangeNotAligned { base, size } => write!(
+                f,
+                "SMRAM region base 0x{base:x} size 0x{size:x} does not meet the SMRR alignment and size requirements"
+            ),
+        }
+    }
+}
 
 /// A region of SMRAM: a physical base address, a size in bytes, and whether it
 /// was reported as pre-allocated in the HOB list.
@@ -104,7 +163,7 @@ pub(crate) fn configure_smm_code_access() {
     // SAFETY: MSR_SMM_MCA_CAP is a read-only architectural capability MSR that is
     // valid on all CPUs targeted by this code; reading it has no side effects.
     let mca_cap = unsafe { read_msr(MSR_SMM_MCA_CAP) };
-    assert!(smm_code_access_supported(mca_cap), "Unsupported CPU: SMM Code Access Check not supported");
+    assert!(smm_code_access_supported(mca_cap), "{}", SmrrError::SmmCodeAccessCheckUnsupported);
 
     // SAFETY: MSR_SMM_FEATURE_CONTROL is an architectural MSR; reading it has no
     // side effects.
@@ -220,36 +279,43 @@ const fn smrr_base_value(raw: u64, smrr_base: u32) -> u64 {
 /// for the BSP, which configures its own SMRR during one-time initialization and reaches
 /// per-core initialization with the range already locked.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if the CPU does not support MTRRs, SMRRs, or the extended SMRR
-/// capability, if `range` does not fit the 32-bit SMRR registers, or if it
-/// fails [`verify_smrr_base_size`].
+/// Returns [`SmrrError::MtrrUnsupported`], [`SmrrError::SmrrUnsupported`], or
+/// [`SmrrError::SmrrExtUnsupported`] when the CPU does not report the required capability,
+/// [`SmrrError::RangeNotAddressable`] when `range` does not fit the 32-bit SMRR registers, and
+/// [`SmrrError::RangeNotAligned`] when it fails [`verify_smrr_base_size`]. The registers are left
+/// untouched in every one of those cases.
 #[cfg_attr(coverage, coverage(off))]
-pub(crate) fn smrr_initialize(range: SmramRegion) {
-    assert!(is_mtrr_supported(), "Unsupported CPU: MTRR not supported");
+pub(crate) fn smrr_initialize(range: SmramRegion) -> MmSupervisorResult<()> {
+    if !is_mtrr_supported() {
+        return Err(SmrrError::MtrrUnsupported.into());
+    }
 
-    assert!(is_smrr_supported(), "Unsupported CPU: SMRR not supported");
+    if !is_smrr_supported() {
+        return Err(SmrrError::SmrrUnsupported.into());
+    }
 
-    assert!(is_smrr_ext_supported(), "Unsupported CPU: SMRR extended capability not supported");
+    if !is_smrr_ext_supported() {
+        return Err(SmrrError::SmrrExtUnsupported.into());
+    }
 
     // SAFETY: SMRR support was verified above, so MSR_SMRR_MASK is a valid architectural MSR and
     // reading it has no side effects.
     if mask_reg_bit10_set(unsafe { read_msr(MSR_SMRR_MASK) }) {
-        return;
+        return Ok(());
     }
 
     // SMRR_BASE and SMRR_MASK only describe addresses below 4 GiB. Truncating here would
     // validate and program a completely different region than the one handed in, leaving the
     // real MMRAM unprotected, so a region that does not fit is fatal rather than narrowed.
     let (Ok(smrr_base), Ok(smrr_size)) = (u32::try_from(range.base), u32::try_from(range.size)) else {
-        panic!("SMRAM region does not fit the 32-bit SMRR registers! Base: {:#X}, Size: {:#X}", range.base, range.size);
+        return Err(SmrrError::RangeNotAddressable { base: range.base, size: range.size }.into());
     };
 
-    assert!(
-        verify_smrr_base_size(smrr_base, smrr_size),
-        "SMM Base/Size does not meet alignment/size requirement! Base: {smrr_base:#X}, Size: {smrr_size:#X}"
-    );
+    if !verify_smrr_base_size(smrr_base, smrr_size) {
+        return Err(SmrrError::RangeNotAligned { base: smrr_base, size: smrr_size }.into());
+    }
 
     // SAFETY: SMRR support was verified above, so MSR_SMRR_BASE/MSR_SMRR_MASK
     // are valid architectural MSRs. `smrr_base`/`smrr_size` were validated by
@@ -262,6 +328,8 @@ pub(crate) fn smrr_initialize(range: SmramRegion) {
         let mask = mask_reg_set_mask(read_msr(MSR_SMRR_MASK), smrr_size);
         write_msr(MSR_SMRR_MASK, mask);
     }
+
+    Ok(())
 }
 
 /// Returns the value to write to `MSR_SMRR_MASK` to enable and finalize the range,
@@ -300,6 +368,28 @@ pub(crate) fn smrr_enable() {
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_smrr_error_displays_each_variant() {
+        assert_eq!(format!("{}", SmrrError::MtrrUnsupported), "unsupported CPU: MTRRs are not supported");
+        assert_eq!(format!("{}", SmrrError::SmrrUnsupported), "unsupported CPU: SMRRs are not supported");
+        assert_eq!(
+            format!("{}", SmrrError::SmrrExtUnsupported),
+            "unsupported CPU: the extended SMRR capability is not supported"
+        );
+        assert_eq!(
+            format!("{}", SmrrError::SmmCodeAccessCheckUnsupported),
+            "unsupported CPU: SMM Code Access Check is not supported"
+        );
+        assert_eq!(
+            format!("{}", SmrrError::RangeNotAddressable { base: 0x1_0000_0000, size: 0x80_0000 }),
+            "SMRAM region [0x100000000, +0x800000) does not fit the 32-bit SMRR registers"
+        );
+        assert_eq!(
+            format!("{}", SmrrError::RangeNotAligned { base: 0x801000, size: 0x800000 }),
+            "SMRAM region base 0x801000 size 0x800000 does not meet the SMRR alignment and size requirements"
+        );
+    }
 
     #[test]
     fn test_smrr_verify_accepts_minimum_size() {

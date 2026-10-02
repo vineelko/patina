@@ -14,31 +14,51 @@ use core::fmt::Debug;
 use patina::standard::efi;
 
 use crate::{
+    error::MmSupervisorError,
     intrinsics::read_cr3,
-    is_buffer_inside_mmram,
-    mm_policy::{PolicyError, PolicyGate},
+    mem::mmram_placement::is_buffer_inside_mmram,
+    mm_policy::PolicyGate,
     state::{InitState, init_state, security_state},
     supervisor_handlers::UnblockedMemoryTracker,
 };
 
+/// The state the Ready-to-Lock transition reads and the two effects it has.
+///
+/// The transition is a sequence of decisions over supervisor-global state: whether a policy gate
+/// exists, whether it is already locked, and whether a snapshot can be taken. Naming that state
+/// as a trait keeps [`process_mm_ready_to_lock`] free of global access, so each ordering it
+/// enforces can be driven directly in a test.
+///
+/// `Gate` is the policy gate the implementation holds, and `SnapshotError` is whatever its
+/// snapshot reports; the transition only logs that error and maps it to a status, so it does not
+/// constrain the type beyond [`Debug`].
 trait ReadyToLockContext {
+    /// The policy gate type this context supplies.
     type Gate;
+    /// What a failed snapshot reports.
     type SnapshotError: Debug;
 
+    /// Returns the policy gate, or `None` when none was installed.
     fn policy_gate(&self) -> Option<&Self::Gate>;
+    /// Returns whether the gate has already been locked, which makes the transition a no-op.
     fn is_locked(&self, gate: &Self::Gate) -> bool;
+    /// Records the memory policy baseline later fetches are compared against.
     fn take_snapshot(&self, gate: &Self::Gate) -> Result<(), Self::SnapshotError>;
+    /// Refuses any further unblock requests.
     fn lock_unblocked_memory(&self);
 }
 
+/// The live [`ReadyToLockContext`], reading the supervisor's own global state.
 struct SupervisorReadyToLockContext<'a> {
+    /// The installed policy gate, if initialization got far enough to install one.
     gate: Option<&'a PolicyGate>,
+    /// The tracker that stops accepting unblock requests once the transition completes.
     unblocked_tracker: &'a UnblockedMemoryTracker,
 }
 
 impl ReadyToLockContext for SupervisorReadyToLockContext<'_> {
     type Gate = PolicyGate;
-    type SnapshotError = PolicyError;
+    type SnapshotError = MmSupervisorError;
 
     fn policy_gate(&self) -> Option<&Self::Gate> {
         self.gate
@@ -75,6 +95,12 @@ pub(crate) fn mm_ready_to_lock_handler(_comm_buffer: *mut u8, _comm_buffer_size:
     process_mm_ready_to_lock(&context)
 }
 
+/// Runs the Ready-to-Lock transition against `context`.
+///
+/// Reports `NOT_READY` when no policy gate is installed, `SUCCESS` without repeating the work
+/// when the gate is already locked, and `DEVICE_ERROR` when the snapshot fails. The unblocked
+/// memory tracker is locked only after a successful snapshot, so a failure leaves the supervisor
+/// in the state it was in rather than half locked.
 fn process_mm_ready_to_lock<C: ReadyToLockContext>(context: &C) -> efi::Status {
     let gate = if let Some(gate) = context.policy_gate() {
         gate
@@ -113,6 +139,10 @@ pub(crate) fn mm_exit_boot_services_handler(_comm_buffer: *mut u8, _comm_buffer_
     process_mm_exit_boot_services(init_state())
 }
 
+/// Marks the supervisor as being at runtime.
+///
+/// Always reports `SUCCESS`. A repeat notification is logged and otherwise ignored, because the
+/// flag is one-way and the producer is outside the supervisor's trust boundary.
 fn process_mm_exit_boot_services(state: &InitState) -> efi::Status {
     // Idempotent: if ExitBootServices was already signaled, warn and succeed
     // without re-arming so duplicate notifications are tolerated.
@@ -129,7 +159,7 @@ mod tests {
     use core::cell::Cell;
 
     use super::*;
-    use crate::mm_policy::SecurePolicyDataV1_0;
+    use crate::mm_policy::{PolicyGateError, SecurePolicyDataV1_0};
 
     #[derive(Clone, Copy, Debug)]
     struct TestSnapshotError;
@@ -229,7 +259,7 @@ mod tests {
 
         let context_gate = context.policy_gate().expect("test context must expose its policy gate");
         assert!(!context.is_locked(context_gate));
-        assert_eq!(context.take_snapshot(context_gate), Err(PolicyError::InternalError));
+        assert_eq!(context.take_snapshot(context_gate), Err(PolicyGateError::InternalError.into()));
         assert!(!tracker.is_core_init_complete());
         context.lock_unblocked_memory();
         assert!(tracker.is_core_init_complete());

@@ -27,7 +27,7 @@ pub enum RequestTarget {
 impl RequestTarget {
     /// Selects the dispatch target based on the two parallel status mailboxes.
     ///
-    /// The user mailbox is checked first — if its `is_comm_buffer_valid` flag
+    /// The user mailbox is checked first - if its `is_comm_buffer_valid` flag
     /// is set, the request belongs to the user module. Otherwise the
     /// supervisor mailbox is consulted. When neither mailbox is valid the
     /// request is treated as an asynchronous MMI, which is still dispatched
@@ -38,7 +38,7 @@ impl RequestTarget {
         } else if supv_status.is_comm_buffer_valid != 0 {
             RequestTarget::Supervisor
         } else {
-            // Async MMI — user-core's async dispatcher runs unconditionally
+            // Async MMI - user-core's async dispatcher runs unconditionally
             // once we demote, so route through the user path.
             RequestTarget::User
         }

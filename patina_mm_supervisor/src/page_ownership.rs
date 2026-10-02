@@ -42,6 +42,11 @@ pub(crate) fn query_address_ownership(address: u64, size: u64) -> Option<PageOwn
     })
 }
 
+/// Decides ownership from the attributes `query` reports for the page-aligned range.
+///
+/// Taking the lookup as a closure keeps the alignment and bounds handling testable without a live
+/// page table. Returns `None` for an empty range, a range whose end overflows, a range that
+/// cannot be aligned, and whatever `query` could not answer.
 fn query_address_ownership_with(
     address: u64,
     size: u64,

@@ -14,26 +14,45 @@ use patina::{
 };
 
 use crate::{
+    error::{MmSupervisorError, MmSupervisorResult},
     intrinsics::read_cr3,
-    is_buffer_inside_mmram,
-    mm_policy::{MemDescriptorV1_0, PolicyError, PolicyGate},
+    mem::mmram_placement::is_buffer_inside_mmram,
+    mm_policy::{MemDescriptorV1_0, PolicyGate, PolicyGateError},
     state::security_state,
     supervisor_handlers::UnblockedMemoryTracker,
 };
 
+/// The state a `FETCH_POLICY` request reads and the effects it has.
+///
+/// The request has two shapes depending on whether the gate is already locked, and both of them
+/// touch supervisor-global state. Naming that state as a trait keeps
+/// [`process_fetch_policy`] free of global access and of `unsafe`, so the lock-then-fetch ordering
+/// can be driven directly in a test.
+///
+/// `Gate` is the policy gate the implementation supplies.
 trait FetchPolicyContext {
+    /// The policy gate type this context supplies.
     type Gate;
 
+    /// Returns the policy gate, or `None` when none was installed.
     fn policy_gate(&self) -> Option<&Self::Gate>;
+    /// Returns whether the gate is locked, which selects verify over snapshot.
     fn is_locked(&self, gate: &Self::Gate) -> bool;
-    fn take_snapshot(&self, gate: &Self::Gate) -> Result<(), PolicyError>;
+    /// Records the memory policy baseline on the first fetch, before the gate locks.
+    fn take_snapshot(&self, gate: &Self::Gate) -> MmSupervisorResult<()>;
+    /// Refuses any further unblock requests.
     fn lock_unblocked_memory(&self);
+    /// Re-walks the page table and compares it against the recorded baseline.
     fn verify_snapshot(&self, gate: &Self::Gate) -> Result<(), efi::Status>;
-    fn fetch_policy(&self, gate: &Self::Gate, destination: &mut [u8]) -> Result<usize, PolicyError>;
+    /// Writes the merged firmware and memory policy into `destination`, returning the byte count.
+    fn fetch_policy(&self, gate: &Self::Gate, destination: &mut [u8]) -> MmSupervisorResult<usize>;
 }
 
+/// The live [`FetchPolicyContext`], reading the supervisor's own global state.
 struct SupervisorFetchPolicyContext<'a> {
+    /// The installed policy gate, if initialization got far enough to install one.
     gate: Option<&'a PolicyGate>,
+    /// The tracker that stops accepting unblock requests once the gate locks.
     unblocked_tracker: &'a UnblockedMemoryTracker,
 }
 
@@ -48,7 +67,7 @@ impl FetchPolicyContext for SupervisorFetchPolicyContext<'_> {
         gate.is_locked()
     }
 
-    fn take_snapshot(&self, gate: &Self::Gate) -> Result<(), PolicyError> {
+    fn take_snapshot(&self, gate: &Self::Gate) -> MmSupervisorResult<()> {
         // SAFETY: CR3 points to the active PML4 table inside MM, and the memory policy buffer was
         // configured during initialization.
         unsafe { gate.take_snapshot(read_cr3(), is_buffer_inside_mmram) }.map(|_| ())
@@ -62,21 +81,33 @@ impl FetchPolicyContext for SupervisorFetchPolicyContext<'_> {
         verify_policy_snapshot(gate, read_cr3())
     }
 
-    fn fetch_policy(&self, gate: &Self::Gate, destination: &mut [u8]) -> Result<usize, PolicyError> {
+    fn fetch_policy(&self, gate: &Self::Gate, destination: &mut [u8]) -> MmSupervisorResult<usize> {
         // SAFETY: `destination` is a live mutable slice and therefore writable for its full length.
         unsafe { gate.fetch_n_update_policy(destination.as_mut_ptr(), destination.len()) }
     }
 }
 
+/// The scratch allocation and comparison a snapshot verification needs.
+///
+/// Verification has to allocate a page-aligned buffer, walk the page table into it, and free it
+/// again whether or not the comparison passed. Naming those four steps as a trait keeps that
+/// free-on-every-path ordering testable without a live page allocator.
 trait SnapshotVerificationContext {
+    /// Returns how many descriptors the recorded baseline holds, or `None` when there is none.
     fn snapshot_count(&self) -> Option<usize>;
+    /// Allocates `pages` of scratch for a fresh page table walk.
     fn allocate_scratch(&self, pages: usize) -> Result<u64, ()>;
-    fn verify_snapshot(&self, scratch: *mut MemDescriptorV1_0, max_count: usize) -> Result<(), PolicyError>;
+    /// Walks the page table into `scratch` and compares it against the baseline.
+    fn verify_snapshot(&self, scratch: *mut MemDescriptorV1_0, max_count: usize) -> MmSupervisorResult<()>;
+    /// Returns the scratch pages, which runs whether or not the comparison passed.
     fn free_scratch(&self, base: u64, pages: usize) -> Result<(), ()>;
 }
 
+/// The live [`SnapshotVerificationContext`], allocating from the supervisor's page allocator.
 struct SupervisorSnapshotVerificationContext<'a> {
+    /// The gate holding the baseline to compare against.
     gate: &'a PolicyGate,
+    /// The active page table root for this MM invocation.
     cr3: u64,
 }
 
@@ -91,7 +122,7 @@ impl SnapshotVerificationContext for SupervisorSnapshotVerificationContext<'_> {
         })
     }
 
-    fn verify_snapshot(&self, scratch: *mut MemDescriptorV1_0, max_count: usize) -> Result<(), PolicyError> {
+    fn verify_snapshot(&self, scratch: *mut MemDescriptorV1_0, max_count: usize) -> MmSupervisorResult<()> {
         // SAFETY: `scratch` was allocated by the page allocator for `max_count` descriptors, and
         // CR3 identifies the active, stable page table for this MM invocation.
         unsafe { self.gate.verify_snapshot(self.cr3, is_buffer_inside_mmram, scratch, max_count) }
@@ -151,6 +182,14 @@ pub(super) fn handle_fetch_policy(comm_buffer: *mut u8, comm_buffer_size: &mut u
     status
 }
 
+/// Serves a `FETCH_POLICY` request into `comm_buffer`, returning the status and the number of
+/// bytes the response occupies.
+///
+/// Takes the snapshot and locks the gate on the first call, and verifies the page table against
+/// the recorded baseline on every call after that. Reports `BUFFER_TOO_SMALL` when the buffer
+/// cannot hold the header or the merged policy, `NOT_READY` when no policy gate is installed, and
+/// `SECURITY_VIOLATION` when a later walk disagrees with the baseline. Every failure reports a
+/// response size of just the header, so a caller never reads a payload that was not written.
 fn process_fetch_policy<C: FetchPolicyContext>(comm_buffer: &mut [u8], context: &C) -> (efi::Status, usize) {
     let Some(payload) = comm_buffer.get_mut(MmSupervisorRequestHeader::SIZE..) else {
         log::error!("FETCH_POLICY: communication buffer is too small for the request header");
@@ -183,7 +222,7 @@ fn process_fetch_policy<C: FetchPolicyContext>(comm_buffer: &mut [u8], context: 
     // -- 3. Write the merged policy into the comm buffer (after the header) -
     let payload_written = match context.fetch_policy(gate, payload) {
         Ok(n) => n,
-        Err(PolicyError::InternalError) => {
+        Err(MmSupervisorError::PolicyGate(PolicyGateError::InternalError)) => {
             // Could be buffer-too-small, size overflow, or missing snapshot.
             log::error!("FETCH_POLICY: fetch_n_update_policy failed");
             return (efi::Status::BUFFER_TOO_SMALL, MmSupervisorRequestHeader::SIZE);
@@ -224,6 +263,12 @@ fn verify_policy_snapshot(gate: &PolicyGate, cr3: u64) -> Result<(), efi::Status
     verify_policy_snapshot_with_context(&context)
 }
 
+/// Runs a snapshot verification against `context`.
+///
+/// Reports `SECURITY_VIOLATION` when the gate is locked without a baseline behind it, since
+/// having nothing to compare against is not a pass, and when the fresh walk disagrees with the
+/// baseline. The scratch pages are freed on every path, and a failure to free them is reported as
+/// `DEVICE_ERROR` only after the comparison result has been accounted for.
 fn verify_policy_snapshot_with_context<C: SnapshotVerificationContext>(context: &C) -> Result<(), efi::Status> {
     let Some(saved_count) = context.snapshot_count() else {
         // Reaching here means the gate reported itself locked without a snapshot behind it.
@@ -278,9 +323,9 @@ mod tests {
 
     struct TestFetchPolicyContext {
         gate: Option<TestGate>,
-        snapshot_result: Result<(), PolicyError>,
+        snapshot_result: MmSupervisorResult<()>,
         verification_result: Result<(), efi::Status>,
-        fetch_result: Result<usize, PolicyError>,
+        fetch_result: MmSupervisorResult<usize>,
         payload: &'static [u8],
         gate_lookups: Cell<usize>,
         snapshot_calls: Cell<usize>,
@@ -292,7 +337,7 @@ mod tests {
     struct TestSnapshotVerificationContext {
         snapshot_count: Option<usize>,
         allocation_result: Result<u64, ()>,
-        verification_result: Result<(), PolicyError>,
+        verification_result: MmSupervisorResult<()>,
         free_result: Result<(), ()>,
         allocated_pages: Cell<Option<usize>>,
         scratch: Cell<Option<(*mut MemDescriptorV1_0, usize)>>,
@@ -323,7 +368,7 @@ mod tests {
             self.allocation_result
         }
 
-        fn verify_snapshot(&self, scratch: *mut MemDescriptorV1_0, max_count: usize) -> Result<(), PolicyError> {
+        fn verify_snapshot(&self, scratch: *mut MemDescriptorV1_0, max_count: usize) -> MmSupervisorResult<()> {
             self.scratch.set(Some((scratch, max_count)));
             self.verification_result
         }
@@ -363,7 +408,7 @@ mod tests {
             gate.locked
         }
 
-        fn take_snapshot(&self, _gate: &Self::Gate) -> Result<(), PolicyError> {
+        fn take_snapshot(&self, _gate: &Self::Gate) -> MmSupervisorResult<()> {
             self.snapshot_calls.set(self.snapshot_calls.get() + 1);
             self.snapshot_result
         }
@@ -377,7 +422,7 @@ mod tests {
             self.verification_result
         }
 
-        fn fetch_policy(&self, _gate: &Self::Gate, destination: &mut [u8]) -> Result<usize, PolicyError> {
+        fn fetch_policy(&self, _gate: &Self::Gate, destination: &mut [u8]) -> MmSupervisorResult<usize> {
             self.fetch_calls.set(self.fetch_calls.get() + 1);
             if let Ok(written) = self.fetch_result {
                 let Some(source) = self.payload.get(..written) else {
@@ -430,9 +475,9 @@ mod tests {
         let mut destination = [0u8; 40];
 
         assert!(!context.is_locked(context_gate));
-        assert_eq!(context.take_snapshot(context_gate), Err(PolicyError::InternalError));
+        assert_eq!(context.take_snapshot(context_gate), Err(PolicyGateError::InternalError.into()));
         assert_eq!(context.verify_snapshot(context_gate), Err(efi::Status::SECURITY_VIOLATION));
-        assert_eq!(context.fetch_policy(context_gate, &mut destination), Err(PolicyError::InternalError));
+        assert_eq!(context.fetch_policy(context_gate, &mut destination), Err(PolicyGateError::InternalError.into()));
         assert!(!tracker.is_core_init_complete());
         context.lock_unblocked_memory();
         assert!(tracker.is_core_init_complete());
@@ -440,7 +485,10 @@ mod tests {
         let verification_context = SupervisorSnapshotVerificationContext { gate: context_gate, cr3: 0 };
         assert_eq!(verification_context.snapshot_count(), None);
         assert_eq!(verification_context.allocate_scratch(0), Err(()));
-        assert_eq!(verification_context.verify_snapshot(core::ptr::null_mut(), 0), Err(PolicyError::InternalError));
+        assert_eq!(
+            verification_context.verify_snapshot(core::ptr::null_mut(), 0),
+            Err(PolicyGateError::InternalError.into())
+        );
         assert_eq!(verification_context.free_scratch(1, 0), Err(()));
     }
 
@@ -497,7 +545,7 @@ mod tests {
     #[test]
     fn snapshot_verification_prioritizes_a_policy_mismatch_over_cleanup_failure() {
         let mut context = TestSnapshotVerificationContext::new(Some(1));
-        context.verification_result = Err(PolicyError::AccessDenied);
+        context.verification_result = Err(PolicyGateError::AccessDenied.into());
         context.free_result = Err(());
 
         assert_eq!(verify_policy_snapshot_with_context(&context), Err(efi::Status::SECURITY_VIOLATION));
@@ -544,7 +592,7 @@ mod tests {
     #[test]
     fn reports_snapshot_failures_without_writing_a_policy() {
         let mut context = TestFetchPolicyContext::unlocked();
-        context.snapshot_result = Err(PolicyError::InternalError);
+        context.snapshot_result = Err(PolicyGateError::InternalError.into());
         let mut buffer = [0u8; MmSupervisorRequestHeader::SIZE];
 
         assert_eq!(
@@ -577,7 +625,7 @@ mod tests {
     #[test]
     fn maps_internal_policy_copy_errors_to_buffer_too_small() {
         let mut context = TestFetchPolicyContext::unlocked();
-        context.fetch_result = Err(PolicyError::InternalError);
+        context.fetch_result = Err(PolicyGateError::InternalError.into());
         let mut buffer = [0u8; MmSupervisorRequestHeader::SIZE];
 
         assert_eq!(
@@ -592,7 +640,7 @@ mod tests {
     #[test]
     fn maps_unexpected_policy_copy_errors_to_device_error() {
         let mut context = TestFetchPolicyContext::unlocked();
-        context.fetch_result = Err(PolicyError::PolicyRootNotFound);
+        context.fetch_result = Err(PolicyGateError::PolicyRootNotFound.into());
         let mut buffer = [0u8; MmSupervisorRequestHeader::SIZE];
 
         assert_eq!(

@@ -1,8 +1,8 @@
-//! MM Supervisor Core Runtime Dispatch
+//! `MmSupervisorCore` Runtime Phase
 //!
-//! This module contains the runtime request processing logic for the MM Supervisor Core,
-//! including the BSP request loop, user/supervisor request dispatch, AP holding pen,
-//! and AP procedure management.
+//! The dispatch loop the BSP runs and the holding pen the APs wait in, entered on every MMI after
+//! the first. Nothing here returns to the caller: a core either serves requests until the next
+//! `RSM` or waits for work from the BSP.
 //!
 //! ## License
 //!
@@ -17,101 +17,28 @@ use patina::{
     pi::{mm_cis::EfiMmEntryContext, protocol::communication::EfiMmCommunicateHeader},
 };
 
+use crate::request_target::RequestTarget;
 use crate::{
-    AP_ARRIVAL_TIMEOUT_US, AP_EXIT_TIMEOUT_US, AP_TIMEOUT_US, CommBufferConfig, MmSupervisorCore, PageOwnership,
-    PlatformInfo,
+    MmSupervisorCore, PlatformInfo,
+    comm_buffer::CommBufferConfig,
     cpu::ApState,
     intrinsics::is_bsp,
     mailbox::{ApCommand, ApResponse},
+    page_ownership::PageOwnership,
+    page_ownership::query_address_ownership,
     privilege_mgmt::invoke_demoted_routine,
-    query_address_ownership,
     state::{DEFAULT_SUPERVISOR_MMI_HANDLERS, init_state, security_state},
+    user_access_guard::with_user_access,
 };
 
-/// Helper function to disable the SMAP bit in EFLAGS to allow supervisor code to access user memory when needed.
-///
-/// ## Safety
-///
-/// Disabling SMAP removes the hardware barrier that stops the supervisor (Ring 0) from
-/// reading or writing user-owned (Ring 3) memory. The caller must re-enable SMAP via
-/// [`enable_smap`] once the user-memory access completes, and must ensure every access
-/// performed while SMAP is lifted targets valid, correctly-owned user memory. Prefer
-/// [`with_user_access`], which guarantees the disable/enable pair is balanced.
-unsafe fn disable_smap() {
-    // SAFETY: `stac` only sets the AC flag in EFLAGS; it touches no memory and clobbers
-    // no registers (hence `nostack, preserves_flags`). It is a privileged instruction that
-    // is valid in the Ring 0 supervisor context this code always runs in.
-    #[cfg(not(test))]
-    unsafe {
-        core::arch::asm!(
-            "stac", // Set AC flag to enable access to user memory
-            options(nostack, preserves_flags)
-        );
-    }
-}
+/// Timeout for waiting for APs to arrive in the holding pen (1 second).
+const AP_ARRIVAL_TIMEOUT_US: u64 = 1_000_000;
 
-/// Helper function to re-enable the SMAP bit in EFLAGS after accessing user memory.
-///
-/// ## Safety
-///
-/// This mutates the privileged EFLAGS.AC state and must only be called to close a region
-/// opened by [`disable_smap`]. Callers must ensure no further user-memory access that
-/// relies on SMAP being lifted happens after this returns. Prefer [`with_user_access`],
-/// which guarantees the disable/enable pair is balanced.
-unsafe fn enable_smap() {
-    // SAFETY: `clac` only clears the AC flag in EFLAGS; it touches no memory and clobbers
-    // no registers (hence `nostack, preserves_flags`). It is a privileged instruction that
-    // is valid in the Ring 0 supervisor context this code always runs in.
-    #[cfg(not(test))]
-    unsafe {
-        core::arch::asm!(
-            "clac", // Clear AC flag to re-enable SMAP protections
-            options(nostack, preserves_flags)
-        );
-    }
-}
+/// Timeout for waiting for released APs to acknowledge leaving the holding pen (1 second).
+const AP_EXIT_TIMEOUT_US: u64 = 1_000_000;
 
-/// Keeps SMAP disabled while the guard is alive and restores it when dropped.
-#[must_use = "SMAP is re-enabled when the guard is dropped"]
-struct UserAccessGuard;
-
-impl UserAccessGuard {
-    /// Disables SMAP until the returned guard is dropped.
-    ///
-    /// ## Safety
-    ///
-    /// The guarded scope must only access valid, correctly-owned user memory. Guards must
-    /// not be nested, and the guard must remain on the CPU where it was created.
-    unsafe fn new() -> Self {
-        // SAFETY: the caller upholds the user-memory access requirements for the guard's lifetime.
-        unsafe { disable_smap() };
-        Self
-    }
-}
-
-impl Drop for UserAccessGuard {
-    fn drop(&mut self) {
-        // SAFETY: this guard can only be constructed by `new`, which disables SMAP once.
-        unsafe { enable_smap() };
-    }
-}
-
-/// Runs `access` with SMAP temporarily disabled so the supervisor can read or
-/// write user-owned memory, restoring SMAP protection when the guard is dropped.
-///
-/// ## Safety
-///
-/// Lifting SMAP removes the hardware barrier that stops Ring 0 from touching user-owned
-/// memory, so the caller must ensure that every access `access` performs targets a valid,
-/// correctly-owned user range that it has already validated (for example through
-/// [`query_address_ownership`]). Calls must not be nested, and `access` must not migrate
-/// to another CPU or return while a further access still depends on SMAP being lifted.
-pub(crate) unsafe fn with_user_access<R>(access: impl FnOnce() -> R) -> R {
-    // SAFETY: the closure is scoped to the guard's lifetime, and the caller guarantees it only
-    // accesses valid, correctly-owned user memory.
-    let _user_access = unsafe { UserAccessGuard::new() };
-    access()
-}
+/// Timeout for waiting for an AP to complete a dispatched procedure (10 seconds).
+const AP_TIMEOUT_US: u64 = 10_000_000;
 
 impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// Enter runtime mode (called on subsequent entries after init is complete).
@@ -199,7 +126,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// The main request serving loop for the BSP.
     /// It manages other CPUs and processes pending requests from the communication buffer.
     ///
-    /// Two parallel `MmCommBufferStatus` mailboxes are consulted — one for the
+    /// Two parallel `MmCommBufferStatus` mailboxes are consulted - one for the
     /// user channel and one for the supervisor channel. The user mailbox is
     /// checked first; if neither mailbox is valid the request is treated as
     /// an asynchronous MMI and dispatched through the user path so the
@@ -210,39 +137,39 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// Returns the target that was serviced, or [`RequestTarget::None`] when there was
     /// nothing to do.
-    fn bsp_request_loop(&self, cpu_index: usize) -> crate::RequestTarget {
+    fn bsp_request_loop(&self, cpu_index: usize) -> RequestTarget {
         // Get communication buffer configuration
         let config = match security_state().comm_buffer_config() {
             Some(c) => c,
             None => {
                 // Not yet initialized, nothing to process
-                return crate::RequestTarget::None;
+                return RequestTarget::None;
             }
         };
 
         // Bail out only if neither status mailbox is wired up yet.
-        if config.user_status_buffer == 0 && config.supv_status_buffer == 0 {
-            return crate::RequestTarget::None;
+        if config.user.status == 0 && config.supervisor.status == 0 {
+            return RequestTarget::None;
         }
 
         // Read both status mailboxes. A buffer that hasn't been published yet
         // is treated as an all-zero (idle) status.
-        let user_status = if config.user_status_buffer != 0 {
+        let user_status = if config.user.status != 0 {
             // SAFETY: `user_status_buffer` is non-zero here and, provided by the MM IPL, references
             // an MMRAM-resident `MmCommBufferStatus`, so the volatile read is valid.
-            unsafe { core::ptr::read_volatile(config.user_status_buffer as *const MmCommBufferStatus) }
+            unsafe { core::ptr::read_volatile(config.user.status as *const MmCommBufferStatus) }
         } else {
             MmCommBufferStatus::new()
         };
-        let supv_status = if config.supv_status_buffer != 0 {
+        let supv_status = if config.supervisor.status != 0 {
             // SAFETY: `supv_status_buffer` is non-zero here and, provided by the MM IPL, references
             // an MMRAM-resident `MmCommBufferStatus`, so the volatile read is valid.
-            unsafe { core::ptr::read_volatile(config.supv_status_buffer as *const MmCommBufferStatus) }
+            unsafe { core::ptr::read_volatile(config.supervisor.status as *const MmCommBufferStatus) }
         } else {
             MmCommBufferStatus::new()
         };
 
-        let target = crate::RequestTarget::select(&user_status, &supv_status);
+        let target = RequestTarget::select(&user_status, &supv_status);
 
         log::trace!(
             "Processing request: user_valid={}, supv_valid={}, target={:?}",
@@ -252,14 +179,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         );
 
         match target {
-            crate::RequestTarget::None => {
+            RequestTarget::None => {
                 // No pending request
             }
-            crate::RequestTarget::User => {
+            RequestTarget::User => {
                 // Request targets the User module (sync user MMI or async dispatch)
                 self.process_user_request(config, &user_status, cpu_index);
             }
-            crate::RequestTarget::Supervisor => {
+            RequestTarget::Supervisor => {
                 // Request targets the Supervisor
                 self.process_supervisor_request(config, &supv_status, cpu_index);
             }
@@ -281,7 +208,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         log::trace!("Processing User request on CPU {cpu_index} (synchronous: {})", status.is_comm_buffer_valid != 0);
 
         // Validate buffers
-        if config.user_comm_buffer == 0 || config.user_comm_buffer_internal == 0 {
+        if config.user.external == 0 || config.user.internal == 0 {
             log::error!("User communication buffer not configured");
             return;
         }
@@ -311,7 +238,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // Build a fresh EfiMmEntryContext with only the fields the user actually needs.
         // The legacy C structure carried pointers (mm_startup_this_ap, cpu_save_state,
-        // cpu_save_state_size) that are meaningless in the Rust supervisor model — the
+        // cpu_save_state_size) that are meaningless in the Rust supervisor model - the
         // user module accesses those services through syscalls instead.
         let entry_context = EfiMmEntryContext {
             mm_startup_this_ap: 0,
@@ -370,17 +297,17 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             unsafe {
                 with_user_access(|| {
                     core::ptr::copy_nonoverlapping(
-                        config.user_comm_buffer as *const u8,
-                        config.user_comm_buffer_internal as *mut u8,
-                        config.user_comm_buffer_size as usize,
+                        config.user.external as *const u8,
+                        config.user.internal as *mut u8,
+                        config.user.size as usize,
                     );
                 });
             }
             log::trace!(
                 "Copied {} bytes from user buffer 0x{:x} to internal 0x{:x}",
-                config.user_comm_buffer_size,
-                config.user_comm_buffer,
-                config.user_comm_buffer_internal
+                config.user.size,
+                config.user.external,
+                config.user.internal
             );
         }
 
@@ -411,9 +338,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             unsafe {
                 with_user_access(|| {
                     core::ptr::copy_nonoverlapping(
-                        config.user_comm_buffer_internal as *const u8,
-                        config.user_comm_buffer as *mut u8,
-                        config.user_comm_buffer_size as usize,
+                        config.user.internal as *const u8,
+                        config.user.external as *mut u8,
+                        config.user.size as usize,
                     );
                 });
             }
@@ -442,11 +369,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // response the caller can be given any part of: the supervisor cannot tell which bytes
         // the user module meant, so truncating would hand back a prefix of something it never
         // agreed to send. Report the failure instead and return nothing.
-        if final_status.return_buffer_size > config.user_comm_buffer_size {
+        if final_status.return_buffer_size > config.user.size {
             log::error!(
                 "User module reported a 0x{:x}-byte response for a 0x{:x}-byte communication buffer; rejecting",
                 final_status.return_buffer_size,
-                config.user_comm_buffer_size
+                config.user.size
             );
             final_status.return_status = efi::Status::BAD_BUFFER_SIZE.as_usize() as u64;
             final_status.return_buffer_size = 0;
@@ -454,7 +381,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // SAFETY: user_status_buffer is valid and writable
         unsafe {
-            let status_ptr = config.user_status_buffer as *mut MmCommBufferStatus;
+            let status_ptr = config.user.status as *mut MmCommBufferStatus;
             core::ptr::write_volatile(status_ptr, final_status);
         }
     }
@@ -490,20 +417,20 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         }
 
         // Validate buffers
-        if config.supv_comm_buffer == 0 || config.supv_comm_buffer_internal == 0 {
+        if config.supervisor.external == 0 || config.supervisor.internal == 0 {
             log::error!("Supervisor communication buffer not configured");
             return;
         }
 
-        let buffer_size = config.supv_comm_buffer_size as usize;
+        let buffer_size = config.supervisor.size as usize;
 
         // Zero the internal buffer then copy the external supervisor buffer into it
         // SAFETY: Buffers are provided by MM IPL and are guaranteed valid and non-overlapping
         unsafe {
-            core::ptr::write_bytes(config.supv_comm_buffer_internal as *mut u8, 0, buffer_size);
+            core::ptr::write_bytes(config.supervisor.internal as *mut u8, 0, buffer_size);
             core::ptr::copy_nonoverlapping(
-                config.supv_comm_buffer as *const u8,
-                config.supv_comm_buffer_internal as *mut u8,
+                config.supervisor.external as *const u8,
+                config.supervisor.internal as *mut u8,
                 buffer_size,
             );
         }
@@ -521,8 +448,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // SAFETY: We verified the buffer is large enough for the header.
         // The header is packed so we use read_unaligned.
-        let header =
-            unsafe { core::ptr::read_unaligned(config.supv_comm_buffer_internal as *const EfiMmCommunicateHeader) };
+        let header = unsafe { core::ptr::read_unaligned(config.supervisor.internal as *const EfiMmCommunicateHeader) };
 
         let message_length = header.message_length();
 
@@ -541,7 +467,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // SAFETY: `supv_comm_buffer_internal` is a valid buffer of `buffer_size` bytes, and we
         // verified above that `buffer_size >= EfiMmCommunicateHeader::size()`, so offsetting by
         // the header size stays within the same allocation.
-        let data_ptr = unsafe { (config.supv_comm_buffer_internal as *mut u8).add(EfiMmCommunicateHeader::size()) };
+        let data_ptr = unsafe { (config.supervisor.internal as *mut u8).add(EfiMmCommunicateHeader::size()) };
         let mut data_size = message_length;
 
         // Dispatch: iterate the default handlers followed by the platform handlers to find a match
@@ -587,16 +513,16 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // both allocations.
         unsafe {
             core::ptr::copy_nonoverlapping(
-                config.supv_comm_buffer_internal as *const u8,
-                config.supv_comm_buffer as *mut u8,
+                config.supervisor.internal as *const u8,
+                config.supervisor.external as *mut u8,
                 total_response_size,
             );
         }
         log::trace!(
             "Copied {} bytes from internal buffer 0x{:x} back to external 0x{:x}",
             total_response_size,
-            config.supv_comm_buffer_internal,
-            config.supv_comm_buffer
+            config.supervisor.internal,
+            config.supervisor.external
         );
 
         // Update the status buffer with return status and response size
@@ -618,7 +544,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ) {
         // SAFETY: supv_status_buffer is valid and writable, set up by MM IPL
         unsafe {
-            let status_ptr = config.supv_status_buffer as *mut MmCommBufferStatus;
+            let status_ptr = config.supervisor.status as *mut MmCommBufferStatus;
             let updated = MmCommBufferStatus {
                 is_comm_buffer_valid: 0,
                 _padding: [0; 7],
@@ -769,8 +695,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
     /// Type-erased trampoline for AP startup, called from the syscall dispatcher.
     ///
-    /// This function is conformed for the concrete `P: PlatformInfo` type
-    /// and stored as a `fn(u64, u64, u64) -> u64` in [`AP_STARTUP_FN`].
+    /// This function is conformed for the concrete `P: PlatformInfo` type and stored as a
+    /// `fn(u64, u64, u64) -> u64` through
+    /// [`InitState::set_ap_startup_fn`](crate::state::InitState::set_ap_startup_fn), which is how
+    /// the dispatcher reaches the supervisor without naming its generic parameters.
     pub(crate) fn start_ap_procedure_trampoline(cpu_index: u64, procedure: u64, argument: u64) -> u64 {
         let core = Self::instance();
         core.start_ap_procedure(cpu_index, procedure, argument)
@@ -785,7 +713,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// 4. Procedure pointer is non-null
     /// 5. Sends the command via the mailbox (fails if AP is busy)
     /// 6. Waits for the AP to complete (blocking)
-    fn start_ap_procedure(&self, cpu_index: u64, procedure: u64, argument: u64) -> u64 {
+    pub(crate) fn start_ap_procedure(&self, cpu_index: u64, procedure: u64, argument: u64) -> u64 {
         let cpu_index = cpu_index as usize;
 
         // 1. Validate CPU index is within registered count
@@ -851,10 +779,18 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
-    use super::*;
+    use crate::cpu::ApState;
+    use crate::mailbox::{ApCommand, ApResponse};
+    use crate::state::{init_state, security_state};
+    use crate::{
+        MmSupervisorCore, comm_buffer::CommBufferConfig, comm_buffer::CommChannel, request_target::RequestTarget,
+    };
     use crate::{SupervisorMmiHandler, privilege_mgmt::mock};
     use core::sync::atomic::{AtomicUsize, Ordering};
     use patina::Guid;
+    use patina::management_mode::{MmCommBufferStatus, supervisor::UserCommandType};
+    use patina::pi::{mm_cis::EfiMmEntryContext, protocol::communication::EfiMmCommunicateHeader};
+    use patina::standard::efi;
 
     /// GUID claimed by [`TestPlatform`]'s MMI handler; distinct from every default handler.
     const TEST_HANDLER_GUID: efi::Guid =
@@ -916,14 +852,18 @@ mod tests {
 
         fn config(&mut self) -> CommBufferConfig {
             CommBufferConfig {
-                supv_comm_buffer: self.supv_external.as_mut_ptr() as u64,
-                supv_comm_buffer_internal: self.supv_internal.as_mut_ptr() as u64,
-                supv_comm_buffer_size: self.supv_external.len() as u64,
-                user_comm_buffer: self.user_external.as_mut_ptr() as u64,
-                user_comm_buffer_internal: self.user_internal.as_mut_ptr() as u64,
-                user_comm_buffer_size: self.user_external.len() as u64,
-                user_status_buffer: core::ptr::from_mut(self.user_status.as_mut()) as u64,
-                supv_status_buffer: core::ptr::from_mut(self.supv_status.as_mut()) as u64,
+                supervisor: CommChannel {
+                    external: self.supv_external.as_mut_ptr() as u64,
+                    internal: self.supv_internal.as_mut_ptr() as u64,
+                    size: self.supv_external.len() as u64,
+                    status: core::ptr::from_mut(self.supv_status.as_mut()) as u64,
+                },
+                user: CommChannel {
+                    external: self.user_external.as_mut_ptr() as u64,
+                    internal: self.user_internal.as_mut_ptr() as u64,
+                    size: self.user_external.len() as u64,
+                    status: core::ptr::from_mut(self.user_status.as_mut()) as u64,
+                },
                 supv_to_user_buffer: self.supv_to_user.as_mut_ptr() as u64,
                 supv_to_user_buffer_size: self.supv_to_user.len() as u64,
             }
@@ -943,16 +883,6 @@ mod tests {
     }
 
     #[test]
-    fn test_with_user_access_runs_the_closure_and_restores_smap() {
-        // SAFETY: the closures touch no memory at all, so there is no user range to validate.
-        unsafe {
-            assert_eq!(with_user_access(|| 42), 42);
-            // The guard is reusable because it is balanced on drop.
-            assert_eq!(with_user_access(|| 7), 7);
-        }
-    }
-
-    #[test]
     fn test_wait_for_ap_arrival_returns_immediately_with_no_aps() {
         let core = TestCore::new();
         core.wait_for_ap_arrival(0);
@@ -961,9 +891,9 @@ mod tests {
     #[test]
     fn test_wait_for_ap_arrival_succeeds_once_every_ap_checks_in() {
         let core = TestCore::new();
-        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
-        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Some(1));
-        assert_eq!(core.cpu_manager.register_cpu(2, 2, false), Some(2));
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
+        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Ok(1));
+        assert_eq!(core.cpu_manager.register_cpu(2, 2, false), Ok(2));
         assert!(core.cpu_manager.set_ap_state(1, ApState::InHoldingPen));
         assert!(core.cpu_manager.set_ap_state(2, ApState::InHoldingPen));
 
@@ -974,8 +904,8 @@ mod tests {
     #[should_panic(expected = "fail-secure")]
     fn test_wait_for_ap_arrival_halts_when_an_ap_is_missing() {
         let core = TestCore::new();
-        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
-        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Some(1));
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
+        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Ok(1));
 
         // The AP never reaches the holding pen, so the arrival window expires.
         core.wait_for_ap_arrival(1);
@@ -985,7 +915,7 @@ mod tests {
     fn test_bsp_request_loop_returns_before_the_comm_buffer_is_published() {
         // The PassDown HOB has not been processed, so there is no configuration to act on.
         assert!(security_state().comm_buffer_config().is_none());
-        assert_eq!(TestCore::new().bsp_request_loop(0), crate::RequestTarget::None);
+        assert_eq!(TestCore::new().bsp_request_loop(0), RequestTarget::None);
     }
 
     #[test]
@@ -997,7 +927,7 @@ mod tests {
         security_state().set_comm_buffer_config(config);
 
         HANDLER_RESPONSE_SIZE.store(4, Ordering::SeqCst);
-        assert_eq!(TestCore::new().bsp_request_loop(0), crate::RequestTarget::Supervisor);
+        assert_eq!(TestCore::new().bsp_request_loop(0), RequestTarget::Supervisor);
 
         assert_eq!(HANDLER_CALLS.load(Ordering::SeqCst), 1);
         assert_eq!(buffers.supv_status.is_comm_buffer_valid, 0);
@@ -1008,11 +938,11 @@ mod tests {
     fn test_bsp_request_loop_ignores_unpublished_status_mailboxes() {
         let mut buffers = TestBuffers::new(256);
         let mut config = buffers.config();
-        config.user_status_buffer = 0;
-        config.supv_status_buffer = 0;
+        config.user.status = 0;
+        config.supervisor.status = 0;
         security_state().set_comm_buffer_config(config);
 
-        assert_eq!(TestCore::new().bsp_request_loop(0), crate::RequestTarget::None);
+        assert_eq!(TestCore::new().bsp_request_loop(0), RequestTarget::None);
         assert_eq!(HANDLER_CALLS.load(Ordering::SeqCst), 0);
     }
 
@@ -1023,11 +953,11 @@ mod tests {
         buffers.write_supv_request(TEST_HANDLER_GUID, 4, &[1, 2, 3, 4]);
         let mut config = buffers.config();
         // Only the supervisor channel is published; the user mailbox reads as all-zero.
-        config.user_status_buffer = 0;
+        config.user.status = 0;
         security_state().set_comm_buffer_config(config);
 
         HANDLER_RESPONSE_SIZE.store(4, Ordering::SeqCst);
-        assert_eq!(TestCore::new().bsp_request_loop(0), crate::RequestTarget::Supervisor);
+        assert_eq!(TestCore::new().bsp_request_loop(0), RequestTarget::Supervisor);
 
         assert_eq!(HANDLER_CALLS.load(Ordering::SeqCst), 1);
     }
@@ -1042,7 +972,7 @@ mod tests {
         let mut config = buffers.config();
         // Neither mailbox is valid, so the request is an async MMI. Drop the supervisor
         // mailbox so the user channel is the only published one.
-        config.supv_status_buffer = 0;
+        config.supervisor.status = 0;
         security_state().set_comm_buffer_config(config);
 
         let calls = std::rc::Rc::new(core::cell::Cell::new(0));
@@ -1053,7 +983,7 @@ mod tests {
             0
         });
 
-        assert_eq!(core.bsp_request_loop(0), crate::RequestTarget::User);
+        assert_eq!(core.bsp_request_loop(0), RequestTarget::User);
         mock::clear();
 
         assert_eq!(calls.get(), 1);
@@ -1065,7 +995,7 @@ mod tests {
         let core = TestCore::new();
         let mut buffers = TestBuffers::new(256);
         let mut config = buffers.config();
-        config.supv_comm_buffer = 0;
+        config.supervisor.external = 0;
 
         core.process_supervisor_request(&config, &valid_status(), 0);
         // The early return leaves the mailbox untouched.
@@ -1208,11 +1138,11 @@ mod tests {
         let mut buffers = TestBuffers::new(256);
 
         let mut no_comm = buffers.config();
-        no_comm.user_comm_buffer = 0;
+        no_comm.user.external = 0;
         core.process_user_request(&no_comm, &valid_status(), 0);
 
         let mut no_internal = buffers.config();
-        no_internal.user_comm_buffer_internal = 0;
+        no_internal.user.internal = 0;
         core.process_user_request(&no_internal, &valid_status(), 0);
 
         let mut no_supv_to_user = buffers.config();
@@ -1268,7 +1198,7 @@ mod tests {
         init_state().set_user_entry_point(0x4000);
         let core = TestCore::new();
         core.syscall_interface.init(4, 0x8000, 0x1000).expect("syscall interface initializes");
-        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
 
         let mut buffers = TestBuffers::new(256);
         buffers.user_external[..4].copy_from_slice(&[1, 2, 3, 4]);
@@ -1315,7 +1245,7 @@ mod tests {
         init_state().set_user_entry_point(0x4000);
         let core = TestCore::new();
         core.syscall_interface.init(4, 0x8000, 0x1000).expect("syscall interface initializes");
-        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
 
         let mut buffers = TestBuffers::new(256);
         let config = buffers.config();
@@ -1346,7 +1276,7 @@ mod tests {
         init_state().set_user_entry_point(0x4000);
         let core = TestCore::new();
         core.syscall_interface.init(4, 0x8000, 0x1000).expect("syscall interface initializes");
-        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
 
         let mut buffers = TestBuffers::new(256);
         let config = buffers.config();
@@ -1394,8 +1324,8 @@ mod tests {
     #[test]
     fn test_ap_holding_pen_exits_once_released() {
         static CORE: TestCore = TestCore::new();
-        assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Some(0));
-        assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Some(1));
+        assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Ok(0));
+        assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Ok(1));
         // The BSP has already signalled the exit barrier, so the pen drains on the first poll.
         CORE.cpu_manager.release_all_aps();
 
@@ -1405,8 +1335,8 @@ mod tests {
     #[test]
     fn test_ap_holding_pen_services_a_pending_command_before_exiting() {
         static CORE: TestCore = TestCore::new();
-        assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Some(0));
-        assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Some(1));
+        assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Ok(0));
+        assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Ok(1));
         // A null procedure is rejected by the AP, which still posts a response.
         CORE.mailbox_manager.send_command(1, ApCommand::RunProcedure { procedure: 0, argument: 0 }).unwrap();
         CORE.cpu_manager.release_all_aps();
@@ -1420,7 +1350,7 @@ mod tests {
     #[test]
     fn test_execute_ap_command_restores_the_holding_pen_state() {
         let core = TestCore::new();
-        assert_eq!(core.cpu_manager.register_cpu(1, 0, false), Some(0));
+        assert_eq!(core.cpu_manager.register_cpu(1, 0, false), Ok(0));
 
         let response = core.execute_ap_command(1, &ApCommand::RunProcedure { procedure: 0, argument: 0 });
 
@@ -1453,8 +1383,8 @@ mod tests {
         // No CPUs are registered yet, so every index is out of range.
         assert_eq!(core.start_ap_procedure(0, 0x1000, 0), invalid);
 
-        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
-        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Some(1));
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
+        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Ok(1));
 
         // Index 0 is the BSP, which cannot be told to run an AP procedure.
         assert_eq!(core.start_ap_procedure(0, 0x1000, 0), invalid);
@@ -1468,7 +1398,7 @@ mod tests {
     fn test_start_ap_procedure_rejects_an_unpopulated_slot() {
         let core = TestCore::new();
         // Registering out of order leaves slot 0 empty while raising the registered count.
-        assert_eq!(core.cpu_manager.register_cpu(7, 1, false), Some(1));
+        assert_eq!(core.cpu_manager.register_cpu(7, 1, false), Ok(1));
 
         assert_eq!(core.start_ap_procedure(0, 0x1000, 0), efi::Status::INVALID_PARAMETER.as_usize() as u64);
     }
@@ -1476,8 +1406,8 @@ mod tests {
     #[test]
     fn test_start_ap_procedure_rejects_a_busy_mailbox() {
         let core = TestCore::new();
-        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
-        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Some(1));
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
+        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Ok(1));
         // Occupy the mailbox so the dispatch has nowhere to post.
         core.mailbox_manager.send_command(1, ApCommand::RunProcedure { procedure: 0x2000, argument: 0 }).unwrap();
 
@@ -1487,8 +1417,8 @@ mod tests {
     #[test]
     fn test_start_ap_procedure_reports_the_ap_response() {
         static CORE: TestCore = TestCore::new();
-        assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Some(0));
-        assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Some(1));
+        assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Ok(0));
+        assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Ok(1));
 
         for (posted, expected) in [
             (ApResponse::Success, efi::Status::SUCCESS.as_usize() as u64),

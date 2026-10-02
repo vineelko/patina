@@ -37,8 +37,8 @@ use patina::management_mode::protocol::mm_supervisor_request::{
 };
 
 use crate::{
-    mm_policy,
-    mm_policy::{MemDescriptorV1_0, RESOURCE_ATTR_EXECUTE, RESOURCE_ATTR_READ, RESOURCE_ATTR_WRITE},
+    error::{MmSupervisorError, MmSupervisorResult},
+    mm_policy::{self, MemDescriptorV1_0, RESOURCE_ATTR_EXECUTE, RESOURCE_ATTR_READ, RESOURCE_ATTR_WRITE},
     state::security_state,
 };
 
@@ -64,6 +64,25 @@ pub enum UnblockError {
     InvalidParameter,
     /// The region's address + size would overflow.
     AddressOverflow,
+}
+
+impl core::error::Error for UnblockError {}
+
+impl core::fmt::Display for UnblockError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::AlreadyInitialized => write!(f, "the unblocked memory tracker is already initialized"),
+            Self::TooManyRegions => {
+                write!(f, "the request exceeds the {MAX_UNBLOCKED_REGIONS} tracked unblocked regions")
+            }
+            Self::OverlapsWithMmram => write!(f, "the requested region overlaps MMRAM"),
+            Self::ConflictingAttributes => {
+                write!(f, "the requested region overlaps an unblocked region with different attributes")
+            }
+            Self::InvalidParameter => write!(f, "the request has a null pointer or a zero length"),
+            Self::AddressOverflow => write!(f, "the requested region's address plus size overflows"),
+        }
+    }
 }
 
 /// A single entry in the unblocked memory region list.
@@ -132,9 +151,16 @@ struct UnblockedMemoryState {
     count: usize,
 }
 
+/// Whether tracking a region added a new entry or found one already recorded.
+///
+/// The two are kept apart because a repeated unblock request for a region already recorded must
+/// succeed without touching the page table again, while a new entry means the mapping still has
+/// to be made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TrackOutcome {
+    /// The region was not recorded before, so a new entry was taken.
     Added,
+    /// The region was already recorded with the same base, size and attributes.
     Existing,
 }
 
@@ -150,7 +176,7 @@ impl UnblockedMemoryState {
     }
 
     /// Adds a new entry if there's space.
-    fn add_entry(&mut self, base: u64, size: u64, attributes: u32) -> Result<(), UnblockError> {
+    fn add_entry(&mut self, base: u64, size: u64, attributes: u32) -> MmSupervisorResult<()> {
         let capacity = self.entries.len();
         let slot = self.entries.get_mut(self.count).ok_or_else(|| {
             log::debug!("Cannot track unblocked region 0x{base:016x} (+0x{size:x}): all {capacity} slots are in use");
@@ -192,11 +218,11 @@ impl UnblockedMemoryTracker {
     /// This should be called once during BSP initialization after the memory
     /// policy has been generated from the page table walk. Returns an error if the tracker is
     /// already initialized or if there are too many descriptors to track.
-    pub fn init_from_descriptors(&self, descriptors: &[MemDescriptorV1_0]) -> Result<(), UnblockError> {
+    pub fn init_from_descriptors(&self, descriptors: &[MemDescriptorV1_0]) -> MmSupervisorResult<()> {
         // Check if already initialized
         if self.initialized.swap(true, Ordering::SeqCst) {
             log::error!("UnblockedMemoryTracker init rejected: already initialized");
-            return Err(UnblockError::AlreadyInitialized);
+            return Err(UnblockError::AlreadyInitialized.into());
         }
 
         let mut state = self.state.lock();
@@ -232,11 +258,11 @@ impl UnblockedMemoryTracker {
     /// The caller must ensure:
     /// - `buffer` points to a valid array of `MemDescriptorV1_0` structures
     /// - `count` is the number of valid entries in the buffer
-    pub unsafe fn init_from_buffer(&self, buffer: *const MemDescriptorV1_0, count: usize) -> Result<(), UnblockError> {
+    pub unsafe fn init_from_buffer(&self, buffer: *const MemDescriptorV1_0, count: usize) -> MmSupervisorResult<()> {
         if buffer.is_null() || count == 0 {
             // Empty initialization is valid
             if self.initialized.swap(true, Ordering::SeqCst) {
-                return Err(UnblockError::AlreadyInitialized);
+                return Err(UnblockError::AlreadyInitialized.into());
             }
             log::info!("UnblockedMemoryTracker initialized with 0 regions (empty)");
             return Ok(());
@@ -268,20 +294,35 @@ impl UnblockedMemoryTracker {
     /// - The region is not already unblocked with different attributes
     /// - Identical unblock requests are allowed (idempotent)
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn unblock_memory(&self, base: u64, size: u64, attributes: u32) -> Result<(), UnblockError> {
+    pub fn unblock_memory(&self, base: u64, size: u64, attributes: u32) -> MmSupervisorResult<()> {
         self.track_unblocked_memory(base, size, attributes).map(|_| ())
     }
 
-    fn track_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> Result<TrackOutcome, UnblockError> {
+    /// Records a region as unblocked, reporting whether it was newly added.
+    ///
+    /// An identical request for a region already recorded reports
+    /// [`TrackOutcome::Existing`] rather than failing, so a repeated unblock is harmless. The
+    /// same base and size with different attributes is a conflict, not a repeat.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnblockError::InvalidParameter`] for a zero size,
+    /// [`AddressOverflow`](UnblockError::AddressOverflow) when the range wraps,
+    /// [`OverlapsWithMmram`](UnblockError::OverlapsWithMmram) when any of it lies inside MMRAM,
+    /// and [`TooManyRegions`](UnblockError::TooManyRegions) when no slot is free.
+    /// [`ConflictingAttributes`](UnblockError::ConflictingAttributes) covers both ways a region
+    /// can disagree with one already recorded: the same base and size with different attributes,
+    /// and a partial overlap with any recorded entry.
+    fn track_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> MmSupervisorResult<TrackOutcome> {
         // Validate parameters. The caller logs the range and the returned variant, so the
         // two rejections below stay quiet.
         if size == 0 {
-            return Err(UnblockError::InvalidParameter);
+            return Err(UnblockError::InvalidParameter.into());
         }
 
         // Check for address overflow
         if base.checked_add(size).is_none() {
-            return Err(UnblockError::AddressOverflow);
+            return Err(UnblockError::AddressOverflow.into());
         }
 
         // Check if the region overlaps with MMRAM
@@ -291,7 +332,7 @@ impl UnblockedMemoryTracker {
                 base,
                 base.saturating_add(size)
             );
-            return Err(UnblockError::OverlapsWithMmram);
+            return Err(UnblockError::OverlapsWithMmram.into());
         }
 
         let mut state = self.state.lock();
@@ -316,7 +357,7 @@ impl UnblockedMemoryTracker {
                 existing.attributes,
                 attributes
             );
-            return Err(UnblockError::ConflictingAttributes);
+            return Err(UnblockError::ConflictingAttributes.into());
         }
 
         // Check for partial overlaps (not allowed)
@@ -337,7 +378,7 @@ impl UnblockedMemoryTracker {
         }
 
         if has_overlap {
-            return Err(UnblockError::ConflictingAttributes);
+            return Err(UnblockError::ConflictingAttributes.into());
         }
 
         // No conflicts - add the new entry
@@ -353,6 +394,12 @@ impl UnblockedMemoryTracker {
         Ok(TrackOutcome::Added)
     }
 
+    /// Removes the entry matching `base`, `size` and `attributes` exactly.
+    ///
+    /// Returns whether an entry was removed. Used to undo a tracked region when the mapping that
+    /// should have followed it failed, so all three values must match to avoid dropping a
+    /// neighbouring entry. The last entry is moved into the freed slot, so the recorded order is
+    /// not preserved.
     fn remove_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> bool {
         let mut state = self.state.lock();
         let Some(index) = state
@@ -461,33 +508,84 @@ impl UnblockedMemoryTracker {
     }
 }
 
+/// An unblock request whose bounds and placement have already been checked.
+///
+/// Parsing and validation produce this, so the steps that record the region and change the page
+/// table work from checked values rather than re-reading the Ring 3 request. The page count and
+/// the byte size are both kept because the request states the first and the mapping needs the
+/// second, and the conversion between them has already been shown not to overflow.
 #[derive(Clone, Copy, Debug)]
 struct ValidatedUnblockRequest {
+    /// Base address of the region, page aligned and outside MMRAM.
     physical_start: u64,
+    /// Region length in pages, as the request stated it.
     number_of_pages: u64,
+    /// The same length in bytes, known not to overflow.
     region_size: u64,
+    /// Whether the region is to be mapped supervisor-only rather than user accessible.
     is_supervisor_page: bool,
+    /// Attributes recorded with the tracked entry, used to match a later removal.
     track_attributes: u32,
 }
 
+/// Why the page table could not be updated for an unblock request.
+///
+/// These describe a single step of one request. The caller sees them widened into
+/// [`MmSupervisorError`](crate::error::MmSupervisorError); the request handler converts them to an
+/// `efi::Status` for Ring 3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PageUpdateError {
+pub enum PageUpdateError {
+    /// The page table is not installed yet, so no mapping can be changed.
     PageTableNotReady,
+    /// The region is already mapped, so unblocking it again would change attributes in place.
     AlreadyMapped,
+    /// The region's current attributes could not be read from the page table.
     QueryFailed,
+    /// The region could not be mapped with the requested attributes.
     MapFailed,
 }
 
-trait UnblockMemoryContext {
-    fn is_locked(&self) -> bool;
-    fn is_inside_mmram(&self, base: u64, size: u64) -> bool;
-    fn track_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> Result<TrackOutcome, UnblockError>;
-    fn remove_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> bool;
-    fn update_page_table(&self, request: &ValidatedUnblockRequest) -> Result<(), PageUpdateError>;
+impl core::error::Error for PageUpdateError {}
+
+impl core::fmt::Display for PageUpdateError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::PageTableNotReady => write!(f, "the page table is not installed yet"),
+            Self::AlreadyMapped => write!(f, "the region is already mapped"),
+            Self::QueryFailed => write!(f, "the region's current attributes could not be read"),
+            Self::MapFailed => write!(f, "the region could not be mapped with the requested attributes"),
+        }
+    }
 }
 
+/// The state an unblock request reads and the effects it has.
+///
+/// A request consults the lock, checks the region against MMRAM, records it, and changes the
+/// mapping, all of which reach supervisor-global state. Naming them as a trait keeps
+/// [`process_unblock_mem`] free of global access, so the rollback ordering, where a failed
+/// mapping must remove the entry that was just recorded, can be driven in a test.
+trait UnblockMemoryContext {
+    /// Returns whether unblocking has been closed off by the Ready-to-Lock transition.
+    fn is_locked(&self) -> bool;
+    /// Returns whether the region lies inside MMRAM, which no request may unblock.
+    fn is_inside_mmram(&self, base: u64, size: u64) -> bool;
+    /// Records the region, reporting whether it was newly added or already present.
+    fn track_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> MmSupervisorResult<TrackOutcome>;
+    /// Removes a recorded region, used to undo a tracked entry when the mapping fails.
+    fn remove_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> bool;
+    /// Maps the region with the attributes the request asked for.
+    fn update_page_table(&self, request: &ValidatedUnblockRequest) -> MmSupervisorResult<()>;
+}
+
+/// The two page table operations an unblock needs.
+///
+/// Narrowing [`PageTable`] to a query and a map lets the mapping step be exercised against a
+/// stand-in, including the error paths a real page table will not produce on demand. The blanket
+/// implementation means any real page table satisfies it.
 trait UnblockPageTable {
+    /// Returns the attributes currently mapped over the region, or [`PtError::NoMapping`].
     fn query_region(&self, base: u64, size: u64) -> Result<MemoryAttributes, PtError>;
+    /// Maps the region with `attributes`.
     fn map_region(&mut self, base: u64, size: u64, attributes: MemoryAttributes) -> Result<(), PtError>;
 }
 
@@ -501,7 +599,9 @@ impl<T: PageTable> UnblockPageTable for T {
     }
 }
 
+/// The live [`UnblockMemoryContext`], reading the supervisor's own global state.
 struct SupervisorUnblockMemoryContext<'a> {
+    /// The tracker holding the regions unblocked so far, and the lock flag.
     unblocked_tracker: &'a UnblockedMemoryTracker,
 }
 
@@ -514,7 +614,7 @@ impl UnblockMemoryContext for SupervisorUnblockMemoryContext<'_> {
         security_state().page_allocator().is_region_inside_mmram(base, size)
     }
 
-    fn track_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> Result<TrackOutcome, UnblockError> {
+    fn track_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> MmSupervisorResult<TrackOutcome> {
         self.unblocked_tracker.track_unblocked_memory(base, size, attributes)
     }
 
@@ -522,21 +622,32 @@ impl UnblockMemoryContext for SupervisorUnblockMemoryContext<'_> {
         self.unblocked_tracker.remove_unblocked_memory(base, size, attributes)
     }
 
-    fn update_page_table(&self, request: &ValidatedUnblockRequest) -> Result<(), PageUpdateError> {
+    fn update_page_table(&self, request: &ValidatedUnblockRequest) -> MmSupervisorResult<()> {
         let mut page_table = security_state().lock_page_table();
         let Some(page_table) = page_table.as_mut() else {
             log::error!("UNBLOCK_MEM: page table not initialized");
-            return Err(PageUpdateError::PageTableNotReady);
+            return Err(PageUpdateError::PageTableNotReady.into());
         };
 
         update_unblocked_page_table(page_table, request)
     }
 }
 
+/// Makes the region present with the attributes the request asked for.
+///
+/// Only a region with no mapping may be unblocked. A region already present is refused rather
+/// than having its attributes changed in place, because that would let a second request widen
+/// access to memory the first one already published.
+///
+/// # Errors
+///
+/// Returns [`PageUpdateError::AlreadyMapped`] when the region is already present,
+/// [`QueryFailed`](PageUpdateError::QueryFailed) when its current attributes cannot be read, and
+/// [`MapFailed`](PageUpdateError::MapFailed) when the mapping itself fails.
 fn update_unblocked_page_table<P: UnblockPageTable>(
     page_table: &mut P,
     request: &ValidatedUnblockRequest,
-) -> Result<(), PageUpdateError> {
+) -> MmSupervisorResult<()> {
     match page_table.query_region(request.physical_start, request.region_size) {
         Ok(current_attrs) => {
             log::error!(
@@ -544,7 +655,7 @@ fn update_unblocked_page_table<P: UnblockPageTable>(
                  Only not-present pages may be unblocked.",
                 request.physical_start
             );
-            return Err(PageUpdateError::AlreadyMapped);
+            return Err(PageUpdateError::AlreadyMapped.into());
         }
         Err(PtError::NoMapping) => {}
         Err(e) => {
@@ -553,7 +664,7 @@ fn update_unblocked_page_table<P: UnblockPageTable>(
                 request.physical_start,
                 request.physical_start + request.region_size,
             );
-            return Err(PageUpdateError::QueryFailed);
+            return Err(PageUpdateError::QueryFailed.into());
         }
     }
 
@@ -568,7 +679,7 @@ fn update_unblocked_page_table<P: UnblockPageTable>(
             request.physical_start,
             request.physical_start + request.region_size,
         );
-        PageUpdateError::MapFailed
+        PageUpdateError::MapFailed.into()
     })
 }
 
@@ -606,6 +717,12 @@ pub(crate) fn handle_unblock_mem(comm_buffer: *mut u8, comm_buffer_size: &mut us
     status
 }
 
+/// Serves an `UNBLOCK_MEM` request against `context`.
+///
+/// Rejects everything with `ACCESS_DENIED` once the Ready-to-Lock transition has run. A region
+/// already unblocked with the same attributes reports `SUCCESS` without touching the page table.
+/// When the mapping fails, the entry recorded just before it is removed, so a failed request
+/// leaves nothing behind claiming the region is unblocked.
 fn process_unblock_mem<C: UnblockMemoryContext>(comm_buffer: &[u8], context: &C) -> efi::Status {
     // After core initialization is complete, unblock requests are rejected.
     // This mirrors the C `mMmReadyToLockDone` guard.
@@ -648,7 +765,7 @@ fn process_unblock_mem<C: UnblockMemoryContext>(comm_buffer: &[u8], context: &C)
     let track_outcome =
         match context.track_unblocked_memory(request.physical_start, request.region_size, request.track_attributes) {
             Ok(outcome) => outcome,
-            Err(UnblockError::ConflictingAttributes) => {
+            Err(MmSupervisorError::Unblock(UnblockError::ConflictingAttributes)) => {
                 log::error!(
                     "UNBLOCK_MEM: region 0x{:016x}-0x{:016x} conflicts with existing entry",
                     request.physical_start,
@@ -685,9 +802,9 @@ fn process_unblock_mem<C: UnblockMemoryContext>(comm_buffer: &[u8], context: &C)
         }
 
         return match error {
-            PageUpdateError::PageTableNotReady => efi::Status::NOT_READY,
-            PageUpdateError::AlreadyMapped => efi::Status::SECURITY_VIOLATION,
-            PageUpdateError::QueryFailed | PageUpdateError::MapFailed => efi::Status::DEVICE_ERROR,
+            MmSupervisorError::PageUpdate(PageUpdateError::PageTableNotReady) => efi::Status::NOT_READY,
+            MmSupervisorError::PageUpdate(PageUpdateError::AlreadyMapped) => efi::Status::SECURITY_VIOLATION,
+            _ => efi::Status::DEVICE_ERROR,
         };
     }
 
@@ -702,6 +819,10 @@ fn process_unblock_mem<C: UnblockMemoryContext>(comm_buffer: &[u8], context: &C)
     efi::Status::SUCCESS
 }
 
+/// Reads the request parameters that follow the request header.
+///
+/// Returns `BUFFER_TOO_SMALL` when the buffer does not hold a complete parameter structure. The
+/// values are not checked here; that is [`validate_unblock_request`].
 fn parse_unblock_request(comm_buffer: &[u8]) -> Result<MmSupervisorUnblockMemoryParams, efi::Status> {
     let min_size = MmSupervisorRequestHeader::SIZE + MmSupervisorUnblockMemoryParams::SIZE;
     let Some(payload) = comm_buffer.get(MmSupervisorRequestHeader::SIZE..min_size) else {
@@ -715,6 +836,12 @@ fn parse_unblock_request(comm_buffer: &[u8]) -> Result<MmSupervisorUnblockMemory
     Ok(unsafe { payload.as_ptr().cast::<MmSupervisorUnblockMemoryParams>().read_unaligned() })
 }
 
+/// Checks the request parameters and derives the values the later steps work from.
+///
+/// Reports `INVALID_PARAMETER` for a zero identifier GUID, a base that is not page aligned, a
+/// page count of zero, and a length or end address that overflows. The `EFI_MEMORY_SP` attribute
+/// selects a supervisor-only mapping, and the tracked attributes recorded alongside the region
+/// are derived here so a later removal can match on them.
 fn validate_unblock_request(params: &MmSupervisorUnblockMemoryParams) -> Result<ValidatedUnblockRequest, efi::Status> {
     let physical_start = params.memory_descriptor.physical_start;
     let number_of_pages = params.memory_descriptor.number_of_pages;
@@ -759,6 +886,8 @@ fn validate_unblock_request(params: &MmSupervisorUnblockMemoryParams) -> Result<
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use core::cell::Cell;
+
+    use crate::test_support;
 
     use super::*;
 
@@ -809,8 +938,8 @@ mod tests {
     struct TestUnblockMemoryContext {
         locked: bool,
         inside_mmram: bool,
-        track_result: Result<TrackOutcome, UnblockError>,
-        page_update_result: Result<(), PageUpdateError>,
+        track_result: MmSupervisorResult<TrackOutcome>,
+        page_update_result: MmSupervisorResult<()>,
         rollback_result: bool,
         mmram_checks: Cell<usize>,
         track_calls: Cell<usize>,
@@ -846,12 +975,7 @@ mod tests {
             self.inside_mmram
         }
 
-        fn track_unblocked_memory(
-            &self,
-            _base: u64,
-            _size: u64,
-            _attributes: u32,
-        ) -> Result<TrackOutcome, UnblockError> {
+        fn track_unblocked_memory(&self, _base: u64, _size: u64, _attributes: u32) -> MmSupervisorResult<TrackOutcome> {
             self.track_calls.set(self.track_calls.get() + 1);
             self.track_result
         }
@@ -861,7 +985,7 @@ mod tests {
             self.rollback_result
         }
 
-        fn update_page_table(&self, request: &ValidatedUnblockRequest) -> Result<(), PageUpdateError> {
+        fn update_page_table(&self, request: &ValidatedUnblockRequest) -> MmSupervisorResult<()> {
             self.page_update_calls.set(self.page_update_calls.get() + 1);
             self.last_request.set(Some(*request));
             self.page_update_result
@@ -869,7 +993,7 @@ mod tests {
     }
 
     fn create_test_tracker() -> UnblockedMemoryTracker {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         UnblockedMemoryTracker::new()
     }
 
@@ -886,7 +1010,7 @@ mod tests {
         attribute: u64,
         valid_guid: bool,
     ) -> [u8; REQUEST_SIZE] {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let mut buffer = [0u8; REQUEST_SIZE];
         let payload_offset = MmSupervisorRequestHeader::SIZE;
         write_u64(&mut buffer, payload_offset + MEMORY_DESCRIPTOR_PHYSICAL_START_OFFSET, physical_start);
@@ -901,7 +1025,7 @@ mod tests {
     }
 
     fn validated_request(is_supervisor_page: bool) -> ValidatedUnblockRequest {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         ValidatedUnblockRequest {
             physical_start: 0x2000,
             number_of_pages: 2,
@@ -1010,7 +1134,7 @@ mod tests {
     #[test]
     fn process_maps_tracker_conflicts_to_security_violations() {
         let mut context = TestUnblockMemoryContext::new();
-        context.track_result = Err(UnblockError::ConflictingAttributes);
+        context.track_result = Err(UnblockError::ConflictingAttributes.into());
         let buffer = request_buffer(0x1000, 1, 0, true);
 
         assert_eq!(process_unblock_mem(&buffer, &context), efi::Status::SECURITY_VIOLATION);
@@ -1020,7 +1144,7 @@ mod tests {
     #[test]
     fn process_maps_other_tracker_failures_to_invalid_parameter() {
         let mut context = TestUnblockMemoryContext::new();
-        context.track_result = Err(UnblockError::TooManyRegions);
+        context.track_result = Err(UnblockError::TooManyRegions.into());
         let buffer = request_buffer(0x1000, 1, 0, true);
 
         assert_eq!(process_unblock_mem(&buffer, &context), efi::Status::INVALID_PARAMETER);
@@ -1039,7 +1163,7 @@ mod tests {
 
         for (page_error, expected_status) in cases {
             let mut context = TestUnblockMemoryContext::new();
-            context.page_update_result = Err(page_error);
+            context.page_update_result = Err(page_error.into());
 
             assert_eq!(process_unblock_mem(&buffer, &context), expected_status);
             assert_eq!(context.page_update_calls.get(), 1);
@@ -1101,7 +1225,10 @@ mod tests {
         let context = SupervisorUnblockMemoryContext { unblocked_tracker: &tracker };
         *security_state().lock_page_table() = None;
 
-        assert_eq!(context.update_page_table(&validated_request(false)), Err(PageUpdateError::PageTableNotReady));
+        assert_eq!(
+            context.update_page_table(&validated_request(false)),
+            Err(PageUpdateError::PageTableNotReady.into())
+        );
     }
 
     #[test]
@@ -1110,7 +1237,7 @@ mod tests {
 
         assert_eq!(
             update_unblocked_page_table(&mut page_table, &validated_request(false)),
-            Err(PageUpdateError::AlreadyMapped)
+            Err(PageUpdateError::AlreadyMapped.into())
         );
         assert!(page_table.mapped.is_none());
     }
@@ -1149,7 +1276,7 @@ mod tests {
 
         assert_eq!(
             update_unblocked_page_table(&mut page_table, &validated_request(false)),
-            Err(PageUpdateError::QueryFailed)
+            Err(PageUpdateError::QueryFailed.into())
         );
         assert!(page_table.mapped.is_none());
     }
@@ -1161,7 +1288,7 @@ mod tests {
 
         assert_eq!(
             update_unblocked_page_table(&mut page_table, &validated_request(false)),
-            Err(PageUpdateError::MapFailed)
+            Err(PageUpdateError::MapFailed.into())
         );
         assert!(page_table.mapped.is_none());
     }
@@ -1284,7 +1411,7 @@ mod tests {
         // Same region with different attributes should fail
         assert_eq!(
             tracker.unblock_memory(0x1000, 0x1000, RESOURCE_ATTR_READ | RESOURCE_ATTR_WRITE),
-            Err(UnblockError::ConflictingAttributes)
+            Err(UnblockError::ConflictingAttributes.into())
         );
     }
 
@@ -1298,7 +1425,7 @@ mod tests {
         // Overlapping unblock should fail
         assert_eq!(
             tracker.unblock_memory(0x1800, 0x1000, RESOURCE_ATTR_READ),
-            Err(UnblockError::ConflictingAttributes)
+            Err(UnblockError::ConflictingAttributes.into())
         );
     }
 
@@ -1308,10 +1435,13 @@ mod tests {
         tracker.set_core_init_complete();
 
         // Zero size
-        assert_eq!(tracker.unblock_memory(0x1000, 0, RESOURCE_ATTR_READ), Err(UnblockError::InvalidParameter));
+        assert_eq!(tracker.unblock_memory(0x1000, 0, RESOURCE_ATTR_READ), Err(UnblockError::InvalidParameter.into()));
 
         // Overflow
-        assert_eq!(tracker.unblock_memory(u64::MAX, 0x1000, RESOURCE_ATTR_READ), Err(UnblockError::AddressOverflow));
+        assert_eq!(
+            tracker.unblock_memory(u64::MAX, 0x1000, RESOURCE_ATTR_READ),
+            Err(UnblockError::AddressOverflow.into())
+        );
     }
 
     #[test]
@@ -1338,7 +1468,7 @@ mod tests {
 
         assert_eq!(
             tracker.track_unblocked_memory(0x10_0000, 0x1000, RESOURCE_ATTR_READ),
-            Err(UnblockError::TooManyRegions)
+            Err(UnblockError::TooManyRegions.into())
         );
     }
 
@@ -1368,7 +1498,7 @@ mod tests {
 
         assert_eq!(tracker.init_from_descriptors(&descriptors), Ok(()));
         assert_eq!(tracker.region_count(), 2);
-        assert_eq!(tracker.init_from_descriptors(&[]), Err(UnblockError::AlreadyInitialized));
+        assert_eq!(tracker.init_from_descriptors(&[]), Err(UnblockError::AlreadyInitialized.into()));
         tracker.dump_regions();
     }
 
@@ -1384,7 +1514,7 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(tracker.init_from_descriptors(&descriptors), Err(UnblockError::TooManyRegions));
+        assert_eq!(tracker.init_from_descriptors(&descriptors), Err(UnblockError::TooManyRegions.into()));
         assert_eq!(tracker.region_count(), MAX_UNBLOCKED_REGIONS);
     }
 
@@ -1394,9 +1524,12 @@ mod tests {
 
         // SAFETY: A null buffer with zero entries is explicitly supported as empty initialization.
         assert_eq!(unsafe { tracker.init_from_buffer(core::ptr::null(), 0) }, Ok(()));
-        // SAFETY: A null buffer with zero entries remains a valid request and reaches the
-        // already-initialized check.
-        assert_eq!(unsafe { tracker.init_from_buffer(core::ptr::null(), 0) }, Err(UnblockError::AlreadyInitialized));
+        assert_eq!(
+            // SAFETY: A null buffer with zero entries remains a valid request and reaches the
+            // already-initialized check.
+            unsafe { tracker.init_from_buffer(core::ptr::null(), 0) },
+            Err(UnblockError::AlreadyInitialized.into())
+        );
     }
 
     #[test]
