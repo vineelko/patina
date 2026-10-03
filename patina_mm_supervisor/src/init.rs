@@ -192,9 +192,9 @@ pub struct MmSupvPassDownHobData {
     /// Reserved for future use
     pub reserved: u32,
     /// Base address of CPL3 stack for MM Supervisor
-    pub mm_supervisor_cpl3_stack_base: u64,
+    pub cpl3_stack_base: u64,
     /// Per-CPU stack size for CPL3
-    pub mm_supervisor_cpl3_per_core_stack_size: u64,
+    pub cpl3_stack_size: u64,
     /// Pointer to the per-CPU SMBASE array (`u64[number_of_cpus]`), indexed by the
     /// UEFI processor index (the same `cpu_index` the supervisor registers).
     ///
@@ -205,11 +205,11 @@ pub struct MmSupvPassDownHobData {
     /// MM Initialized buffer base address
     pub mm_initialized_buffer: u64,
     /// MM Supervisor firmware policy buffer base address
-    pub mm_supv_firmware_policy_buffer: u64,
+    pub firmware_policy_buffer: u64,
     /// Size of MM Supervisor firmware policy buffer
-    pub mm_supv_firmware_policy_buffer_size: u64,
+    pub firmware_policy_buffer_size: u64,
     /// Size of the MMI entry point structure (for validating against expected size in supervisor)
-    pub mmi_entrypoint_size: u64,
+    pub mmi_entry_size: u64,
 }
 
 /// Per-core MMI entry structure header.
@@ -1232,12 +1232,16 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     unsafe fn init_from_pass_down_hob(&self, data: &[u8], number_of_cpus: u64) -> Result<(u64, u64), PolicyInitError> {
         let pass_down = parse_pass_down_hob(data)?;
 
-        let mm_initialized_buffer = pass_down.mm_initialized_buffer;
-        let firmware_policy_buffer = pass_down.mm_supv_firmware_policy_buffer;
-        let cpl3_stack_buffer = pass_down.mm_supervisor_cpl3_stack_base;
-        let cpl3_stack_buffer_size = pass_down.mm_supervisor_cpl3_per_core_stack_size;
-        let mmi_entry_size = pass_down.mmi_entrypoint_size;
-        let sm_base = pass_down.sm_base;
+        let MmSupvPassDownHobData {
+            mm_initialized_buffer,
+            firmware_policy_buffer,
+            cpl3_stack_base,
+            cpl3_stack_size,
+            mmi_entry_size,
+            sm_base,
+            firmware_policy_buffer_size,
+            ..
+        } = pass_down;
 
         // Store bounded per-core initialized slots.
         if mm_initialized_buffer != 0 {
@@ -1283,8 +1287,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             PolicyInitError::MemoryAllocationFailed
         })?;
 
-        let policy_buffer_size = usize::try_from(pass_down.mm_supv_firmware_policy_buffer_size)
-            .map_err(|_| PolicyInitError::InvalidPolicyData)?;
+        let policy_buffer_size =
+            usize::try_from(firmware_policy_buffer_size).map_err(|_| PolicyInitError::InvalidPolicyData)?;
 
         // SAFETY: `policy_ptr` is the firmware policy buffer from the PassDown HOB, validated
         // non-zero above, and stays resident for the supervisor's lifetime. The HOB's reported
@@ -1313,15 +1317,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         self.syscall_interface
             .init(
                 number_of_cpus.try_into().unwrap_or_else(|err| panic!("Invalid CPU count: {err:?}")),
-                cpl3_stack_buffer,
-                cpl3_stack_buffer_size
-                    .try_into()
-                    .unwrap_or_else(|err| panic!("Invalid CPL3 stack buffer size: {err:?}")),
+                cpl3_stack_base,
+                cpl3_stack_size.try_into().unwrap_or_else(|err| panic!("Invalid CPL3 stack buffer size: {err:?}")),
             )
             .unwrap_or_else(|err| panic!("Failed to initialize syscall interface: {err:?}"));
 
         // Done before the policy walk below so the generated descriptors see the final attributes.
-        self.map_cpl3_stacks_to_user(cpl3_stack_buffer, cpl3_stack_buffer_size, number_of_cpus);
+        self.map_cpl3_stacks_to_user(cpl3_stack_base, cpl3_stack_size, number_of_cpus);
 
         // Walk page table and generate memory policy
         let cr3 = read_cr3();
@@ -1371,12 +1373,12 @@ fn parse_pass_down_hob(data: &[u8]) -> Result<MmSupvPassDownHobData, PolicyInitE
         });
     }
 
-    if pass_down.mm_supv_firmware_policy_buffer == 0 || pass_down.mm_supv_firmware_policy_buffer_size == 0 {
+    if pass_down.firmware_policy_buffer == 0 || pass_down.firmware_policy_buffer_size == 0 {
         log::error!("Firmware policy buffer is null or empty");
         return Err(PolicyInitError::NullFirmwarePolicyBuffer);
     }
 
-    if pass_down.mm_supv_firmware_policy_buffer.checked_add(pass_down.mm_supv_firmware_policy_buffer_size).is_none() {
+    if pass_down.firmware_policy_buffer.checked_add(pass_down.firmware_policy_buffer_size).is_none() {
         log::error!("Firmware policy buffer address range overflows");
         return Err(PolicyInitError::InvalidPolicyData);
     }
@@ -2029,13 +2031,13 @@ mod tests {
         data[4..8].copy_from_slice(&pass_down.reserved.to_ne_bytes());
 
         let fields = [
-            pass_down.mm_supervisor_cpl3_stack_base,
-            pass_down.mm_supervisor_cpl3_per_core_stack_size,
+            pass_down.cpl3_stack_base,
+            pass_down.cpl3_stack_size,
             pass_down.sm_base,
             pass_down.mm_initialized_buffer,
-            pass_down.mm_supv_firmware_policy_buffer,
-            pass_down.mm_supv_firmware_policy_buffer_size,
-            pass_down.mmi_entrypoint_size,
+            pass_down.firmware_policy_buffer,
+            pass_down.firmware_policy_buffer_size,
+            pass_down.mmi_entry_size,
         ];
         for (index, field) in fields.into_iter().enumerate() {
             let offset = 8 + index * size_of::<u64>();
@@ -2049,13 +2051,13 @@ mod tests {
         MmSupvPassDownHobData {
             revision: crate::MM_SUPV_PASS_DOWN_HOB_REVISION,
             reserved: 0,
-            mm_supervisor_cpl3_stack_base: 0x10_0000,
-            mm_supervisor_cpl3_per_core_stack_size: 0x4000,
+            cpl3_stack_base: 0x10_0000,
+            cpl3_stack_size: 0x4000,
             sm_base: 0x20_0000,
             mm_initialized_buffer: 0x30_0000,
-            mm_supv_firmware_policy_buffer: 0x40_0000,
-            mm_supv_firmware_policy_buffer_size: 0x2000,
-            mmi_entrypoint_size: 0x100,
+            firmware_policy_buffer: 0x40_0000,
+            firmware_policy_buffer_size: 0x2000,
+            mmi_entry_size: 0x100,
         }
     }
 
@@ -3306,10 +3308,10 @@ mod tests {
         let parsed = parse_pass_down_hob(&pass_down_hob_data(&expected)).expect("valid PassDown HOB should parse");
 
         assert_eq!(parsed.revision, expected.revision);
-        assert_eq!(parsed.mm_supervisor_cpl3_stack_base, expected.mm_supervisor_cpl3_stack_base);
+        assert_eq!(parsed.cpl3_stack_base, expected.cpl3_stack_base);
         assert_eq!(parsed.sm_base, expected.sm_base);
-        assert_eq!(parsed.mm_supv_firmware_policy_buffer, expected.mm_supv_firmware_policy_buffer);
-        assert_eq!(parsed.mmi_entrypoint_size, expected.mmi_entrypoint_size);
+        assert_eq!(parsed.firmware_policy_buffer, expected.firmware_policy_buffer);
+        assert_eq!(parsed.mmi_entry_size, expected.mmi_entry_size);
     }
 
     #[test]
@@ -3345,8 +3347,8 @@ mod tests {
             (u64::MAX - 0xFFF, 0x1000, PolicyInitError::InvalidPolicyData),
         ] {
             let mut pass_down = valid_pass_down_hob();
-            pass_down.mm_supv_firmware_policy_buffer = address;
-            pass_down.mm_supv_firmware_policy_buffer_size = size;
+            pass_down.firmware_policy_buffer = address;
+            pass_down.firmware_policy_buffer_size = size;
 
             assert_eq!(
                 parse_pass_down_hob(&pass_down_hob_data(&pass_down)).expect_err("invalid policy buffer should fail"),

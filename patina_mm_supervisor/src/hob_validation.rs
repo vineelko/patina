@@ -428,18 +428,10 @@ fn validate_pass_down_pointers(
     }
 
     let checks: [(&'static str, u64, u64); 4] = [
-        (
-            "mm_supervisor_cpl3_stack_base",
-            pass_down.mm_supervisor_cpl3_stack_base,
-            pass_down.mm_supervisor_cpl3_per_core_stack_size.max(1),
-        ),
+        ("cpl3_stack_base", pass_down.cpl3_stack_base, pass_down.cpl3_stack_size.max(1)),
         ("sm_base", pass_down.sm_base, core::mem::size_of::<u64>() as u64),
         ("mm_initialized_buffer", pass_down.mm_initialized_buffer, 1),
-        (
-            "mm_supv_firmware_policy_buffer",
-            pass_down.mm_supv_firmware_policy_buffer,
-            pass_down.mm_supv_firmware_policy_buffer_size.max(1),
-        ),
+        ("firmware_policy_buffer", pass_down.firmware_policy_buffer, pass_down.firmware_policy_buffer_size.max(1)),
     ];
 
     for (field, addr, size) in checks {
@@ -1054,13 +1046,13 @@ mod tests {
         MmSupvPassDownHobData {
             revision: crate::MM_SUPV_PASS_DOWN_HOB_REVISION,
             reserved: 0,
-            mm_supervisor_cpl3_stack_base: 0x1000,
-            mm_supervisor_cpl3_per_core_stack_size: 0x1000,
+            cpl3_stack_base: 0x1000,
+            cpl3_stack_size: 0x1000,
             sm_base: 0x2000,
             mm_initialized_buffer: 0x3000,
-            mm_supv_firmware_policy_buffer: 0x4000,
-            mm_supv_firmware_policy_buffer_size: 0x1000,
-            mmi_entrypoint_size: 0x100,
+            firmware_policy_buffer: 0x4000,
+            firmware_policy_buffer_size: 0x1000,
+            mmi_entry_size: 0x100,
         }
     }
 
@@ -1140,13 +1132,13 @@ mod tests {
         let mut bytes = Vec::with_capacity(size_of::<MmSupvPassDownHobData>());
         bytes.extend_from_slice(&pass_down.revision.to_ne_bytes());
         bytes.extend_from_slice(&pass_down.reserved.to_ne_bytes());
-        bytes.extend_from_slice(&pass_down.mm_supervisor_cpl3_stack_base.to_ne_bytes());
-        bytes.extend_from_slice(&pass_down.mm_supervisor_cpl3_per_core_stack_size.to_ne_bytes());
+        bytes.extend_from_slice(&pass_down.cpl3_stack_base.to_ne_bytes());
+        bytes.extend_from_slice(&pass_down.cpl3_stack_size.to_ne_bytes());
         bytes.extend_from_slice(&pass_down.sm_base.to_ne_bytes());
         bytes.extend_from_slice(&pass_down.mm_initialized_buffer.to_ne_bytes());
-        bytes.extend_from_slice(&pass_down.mm_supv_firmware_policy_buffer.to_ne_bytes());
-        bytes.extend_from_slice(&pass_down.mm_supv_firmware_policy_buffer_size.to_ne_bytes());
-        bytes.extend_from_slice(&pass_down.mmi_entrypoint_size.to_ne_bytes());
+        bytes.extend_from_slice(&pass_down.firmware_policy_buffer.to_ne_bytes());
+        bytes.extend_from_slice(&pass_down.firmware_policy_buffer_size.to_ne_bytes());
+        bytes.extend_from_slice(&pass_down.mmi_entry_size.to_ne_bytes());
         bytes
     }
 
@@ -1791,10 +1783,10 @@ mod tests {
     fn test_mm_supervisor_hob_validation_pass_down_all_null_pointers_ok() {
         // Null pointers are skipped, so an all-null (correct-revision) HOB validates.
         let mut pd = pass_down();
-        pd.mm_supervisor_cpl3_stack_base = 0;
+        pd.cpl3_stack_base = 0;
         pd.sm_base = 0;
         pd.mm_initialized_buffer = 0;
-        pd.mm_supv_firmware_policy_buffer = 0;
+        pd.firmware_policy_buffer = 0;
         assert_eq!(validate_pass_down_pointers(&pd, |_, _| false), Ok(()));
     }
 
@@ -1839,7 +1831,7 @@ mod tests {
         assert_eq!(
             result,
             Err(HobValidationError::PassDownPointerOutsideMmram {
-                field: "mm_supervisor_cpl3_stack_base",
+                field: "cpl3_stack_base",
                 addr: 0x1000,
                 size: 0x1000,
             })
@@ -1859,8 +1851,8 @@ mod tests {
     #[test]
     fn test_mm_supervisor_hob_validation_pass_down_pointer_sizes() {
         let mut pd = pass_down();
-        pd.mm_supervisor_cpl3_per_core_stack_size = 0;
-        pd.mm_supv_firmware_policy_buffer_size = 0;
+        pd.cpl3_stack_size = 0;
+        pd.firmware_policy_buffer_size = 0;
         let checks = RefCell::new(Vec::new());
 
         assert_eq!(
