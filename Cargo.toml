@@ -109,9 +109,6 @@ iter_without_into_iter = "allow"
 large_stack_arrays = "allow"
 # pedantic::manual_let_else - Temporarily allowed until all cases are updated.
 manual_let_else = "allow"
-# pedantic::match_wild_err_arm - Temporarily allowed until further review of each instance is completed to determine
-#                                if the wildcard arm is appropriate or not.
-match_wild_err_arm = "allow"
 # pedantic::missing_errors_doc - Temporarily allowed until all cases are updated (each fix needs a lot of attention).
 missing_errors_doc = "allow"
 # pedantic::missing_panics_doc - Temporarily allowed until all cases are updated. Each fix needs a lot of attention to

@@ -3157,8 +3157,8 @@ fn test_descriptor_iterator() {
         for desc_result in GCD.iter(0x1000, 0x1000) {
             match desc_result {
                 Ok(desc) => descriptors.push(desc),
-                Err(_e) => {
-                    panic!("Should not get error for existing descriptor");
+                Err(e) => {
+                    panic!("Should not get error for existing descriptor: {e:?}");
                 }
             }
         }
@@ -3187,8 +3187,8 @@ fn test_descriptor_iterator() {
         for desc_result in GCD.iter(0x5000, 0x4000) {
             match desc_result {
                 Ok(desc) => descriptors.push(desc),
-                Err(_e) => {
-                    panic!("Should not get error for existing descriptor");
+                Err(e) => {
+                    panic!("Should not get error for existing descriptor: {e:?}");
                 }
             }
         }

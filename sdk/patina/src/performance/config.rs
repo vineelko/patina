@@ -13,7 +13,7 @@
 use crate::{BinaryGuid, component::hob::FromHob, performance::Measurement};
 
 /// The configuration for performance measurement.
-#[derive(Debug, Clone, Copy, zerocopy_derive::FromBytes)]
+#[derive(Debug, Clone, Copy, zerocopy_derive::FromBytes, zerocopy_derive::KnownLayout)]
 #[repr(C, packed)]
 pub struct PerformanceConfig {
     /// Indicates whether performance measurement is enabled.
@@ -56,8 +56,8 @@ impl FromHob for PerformanceConfig {
     fn parse(bytes: &[u8]) -> Self {
         match <Self as zerocopy::FromBytes>::read_from_prefix(bytes) {
             Ok((config, _)) => config,
-            Err(_) => panic!(
-                "Guided Hob [{:#?}] parse failed. Buffer too small for type {}",
+            Err(e) => panic!(
+                "Guided Hob [{:#?}] parse failed. Buffer too small for type {}: {e}",
                 Self::HOB_GUID,
                 core::any::type_name::<Self>()
             ),

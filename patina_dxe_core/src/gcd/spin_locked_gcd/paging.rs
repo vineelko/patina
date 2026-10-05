@@ -461,9 +461,9 @@ impl SpinLockedGcd {
             // we cannot rely on this to be section aligned, as some compilers rely on the loader to align this
             let aligned_virtual_size = match align_up(section.virtual_size, pe_info.section_alignment) {
                 Ok(size) => u64::from(size),
-                Err(_) => {
+                Err(e) => {
                     panic!(
-                        "Failed to align section size {:#x?} with alignment {:#x?}",
+                        "Failed to align section size {:#x?} with alignment {:#x?}: {e:?}",
                         section.virtual_size, pe_info.section_alignment
                     );
                 }

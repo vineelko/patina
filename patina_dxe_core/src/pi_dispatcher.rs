@@ -557,7 +557,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
         //Note: runs at TPL_CALLBACK
         match PROTOCOL_DB.locate_handles(Some(firmware_volume_block::PROTOCOL_GUID.into_inner())) {
             Ok(fv_handles) => pd.add_fv_handles(fv_handles).expect("Error adding FV handles"),
-            Err(_) => panic!("could not locate handles in protocol call back"),
+            Err(e) => panic!("could not locate handles in protocol call back: {e:?}"),
         }
     }
 }
@@ -683,9 +683,9 @@ impl DispatcherContext {
                 let fvb_ptr = match PROTOCOL_DB
                     .get_interface_for_handle(handle, firmware_volume_block::PROTOCOL_GUID.into_inner())
                 {
-                    Err(_) => {
+                    Err(e) => {
                         panic!(
-                            "get_interface_for_handle failed to return an interface on a handle where it should have existed"
+                            "get_interface_for_handle failed to return an interface on a handle where it should have existed: {e:?}"
                         )
                     }
                     Ok(protocol) => protocol.cast::<firmware_volume_block::FirmwareVolumeBlockProtocol>(),

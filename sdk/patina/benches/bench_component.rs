@@ -65,7 +65,7 @@ impl Scheduler {
             let len = self.components.len();
             self.components.retain_mut(|component| !match component.run(&mut self.storage) {
                 Ok(false) => panic!("Did not run in this test"),
-                Err(_) => panic!("Failed"),
+                Err(e) => panic!("Failed: {e:?}"),
                 Ok(true) => true,
             });
             if self.components.len() == len {
