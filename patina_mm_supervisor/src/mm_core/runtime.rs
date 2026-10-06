@@ -115,7 +115,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// The main request serving loop for the BSP.
     /// It manages other CPUs and processes pending requests from the communication buffer.
     ///
-    /// Two parallel `MmCommBufferStatus` mailboxes are consulted — one for the
+    /// Two parallel `MmCommBufferStatus` mailboxes are consulted - one for the
     /// user channel and one for the supervisor channel. The user mailbox is
     /// checked first; if neither mailbox is valid the request is treated as
     /// an asynchronous MMI and dispatched through the user path so the
@@ -232,7 +232,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // Build a fresh EfiMmEntryContext with only the fields the user actually needs.
         // The legacy C structure carried pointers (mm_startup_this_ap, cpu_save_state,
-        // cpu_save_state_size) that are meaningless in the Rust supervisor model — the
+        // cpu_save_state_size) that are meaningless in the Rust supervisor model - the
         // user module accesses those services through syscalls instead.
         let entry_context = EfiMmEntryContext {
             mm_startup_this_ap: 0,

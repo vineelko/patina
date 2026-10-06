@@ -2,7 +2,7 @@
 //!
 //! Every syscall handler in [`super::syscall_dispatcher`] follows the same shape: validate the
 //! request coming from Ring 3, ask the firmware policy whether it is permitted, and only then
-//! perform a privileged action — executing an instruction, touching an I/O port or MSR, or
+//! perform a privileged action - executing an instruction, touching an I/O port or MSR, or
 //! consulting supervisor-global state.
 //!
 //! This module isolates that second half behind the [`SyscallOps`] trait so that:

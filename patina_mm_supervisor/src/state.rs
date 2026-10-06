@@ -3,9 +3,9 @@
 //! This module collapses what used to be a dozen-plus free-standing `static`
 //! variables into two cohesive, non-generic structures:
 //!
-//! - [`InitState`] — boot/synchronization flags and the type-erased entry-point
+//! - [`InitState`] - boot/synchronization flags and the type-erased entry-point
 //!   handles used while bringing cores online.
-//! - [`SecurityState`] — the security-relevant state (policy gate, page table,
+//! - [`SecurityState`] - the security-relevant state (policy gate, page table,
 //!   allocators, unblocked-memory tracker, communication-buffer configuration and
 //!   the save-state hand-off) that the syscall dispatcher and request handlers
 //!   validate against.

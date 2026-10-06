@@ -64,7 +64,7 @@ unsafe impl Send for StatePtr {}
 /// Obtaining a `LockedState` requires holding the state mutex (it owns the
 /// guard), so every method is guaranteed exclusive access to the SMRAM
 /// bookkeeping. Because the region/bitmap slices borrow from `&self` / `&mut
-/// self`, the borrow checker — not convention — prevents mutable and shared
+/// self`, the borrow checker - not convention - prevents mutable and shared
 /// views from overlapping.
 pub(crate) struct LockedState<'a> {
     /// State pointer copied out of the guard. Null until the allocator is initialized.

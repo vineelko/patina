@@ -20,12 +20,12 @@ use patina::management_mode::supervisor::UserCommandType;
 use patina::pi::hob::PhaseHandoffInformationTable;
 use spin::Mutex;
 
+use super::{is_core_initialized, mark_core_initialized};
 use crate::{
     CpuManager, MailboxManager, MmSupervisorCore, PlatformInfo, SyscallInterface,
     error::{MmSupervisorError, MmSupervisorResult},
     init::CoreInitError,
     intrinsics::{current_apic_id, is_bsp},
-    is_core_initialized, mark_core_initialized,
     privilege_mgmt::invoke_demoted_routine,
     smrr::smrr_enable,
     state::init_state,

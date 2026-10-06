@@ -529,9 +529,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// Initializes services from the HOB list.
     ///
     /// Discovers and processes the following HOBs in sequence:
-    /// 1. `MM_SUPV_PASS_DOWN_HOB_GUID` — policy gate, syscall interface, memory policy, IDT patching
-    /// 2. `MM_COMMON_REGION_HOB_GUID` — supervisor communication buffer
-    /// 3. `MM_COMM_BUFFER_HOB_GUID` — user communication buffer + status buffer
+    /// 1. `MM_SUPV_PASS_DOWN_HOB_GUID` - policy gate, syscall interface, memory policy, IDT patching
+    /// 2. `MM_COMMON_REGION_HOB_GUID` - supervisor communication buffer
+    /// 3. `MM_COMM_BUFFER_HOB_GUID` - user communication buffer + status buffer
     ///
     /// Finally, allocates the supervisor-to-user data buffer and stores the
     /// assembled [`CommBufferConfig`].

@@ -267,7 +267,7 @@ pub(crate) fn establish_mmram_bound(
 /// a dedicated `MmCommBufferStatus` mailbox in `status_addr`. The layout
 /// matches the C `MM_COMM_REGION_HOB` from `MmCommonRegion.h`; the
 /// `region_type` discriminator exists for C ABI parity but is always
-/// `MM_SUPERVISOR_BUFFER_T` (0) in practice — the user channel uses the
+/// `MM_SUPERVISOR_BUFFER_T` (0) in practice - the user channel uses the
 /// separate `gMmCommBufferHobGuid` HOB.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, FromBytes, Immutable)]

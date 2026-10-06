@@ -55,7 +55,7 @@ use crate::{
 /// Size in bytes of one `SMRAM_SAVE_STATE_MAP` region.
 ///
 /// The relocation code sets every CPU's save-state size to
-/// `sizeof(SMRAM_SAVE_STATE_MAP)` — a fixed 0x400-byte region spanning
+/// `sizeof(SMRAM_SAVE_STATE_MAP)` - a fixed 0x400-byte region spanning
 /// SMBASE+0x7C00..SMBASE+0x8000 (Intel SDM Vol 3C, §34.4). Because it is
 /// identical for every CPU, it is a constant here rather than a per-CPU array
 /// passed through the HOB.
@@ -290,7 +290,7 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
     })?;
 
     if holder.register == MmSaveStateRegister::ProcessorId {
-        // Special case: PROCESSOR_ID — always allowed, no policy check.
+        // Special case: PROCESSOR_ID - always allowed, no policy check.
         read_processor_id(holder.cpu_index, out)?;
     } else {
         let view = get_save_state_view(save_state_info()?, holder.cpu_index).inspect_err(|status| {

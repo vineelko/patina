@@ -73,25 +73,17 @@ use mem::{AllocationType, SharedPagingAllocator, mmram_placement::MmramPlacement
 
 use privilege_mgmt::syscall_setup::SyscallInterface;
 
-use spin::Mutex;
-
-use core::sync::atomic::{AtomicBool, Ordering};
-
-use state::{init_state, security_state};
+use state::security_state;
 
 // Publicly re-export the handler types since platform-specific handlers will need to reference these for
 // their function signatures and return types.
 pub use comm_buffer::CommBufferConfig;
 pub use init::PolicyInitError;
+pub use mm_core::MmSupervisorCore;
 pub use request_target::RequestTarget;
 pub use supervisor_handlers::SupervisorMmiHandler;
 
 pub(crate) use page_ownership::{PageOwnership, query_address_ownership};
-
-use crate::{
-    error::{MmSupervisorError, MmSupervisorResult},
-    init::CoreInitError,
-};
 
 // The entry-point shim references `rust_main`, which is provided by the platform binary, and is
 // only meaningful on the firmware (UEFI) target. Exclude it from host builds (tests, doctests)
@@ -166,60 +158,6 @@ pub trait PlatformInfo: 'static {
     }
 }
 
-/// The MM Supervisor Core responsible for managing the standalone MM environment.
-///
-/// This struct is generic over the [`PlatformInfo`] trait, which provides platform-specific
-/// configuration including compile-time constants for array sizes.
-///
-/// The supervisor manages:
-/// - BSP initialization and request handling
-/// - AP management through the holding pen and mailbox system
-/// - Request dispatching and response handling
-///
-/// ## Memory Model
-///
-/// This struct does not perform heap allocation. All internal structures use fixed-size
-/// arrays sized by the `MAX_CPUS` const generic parameter.
-///
-/// ## Usage
-///
-/// Create a static instance of the supervisor and call `entry_point` from all cores:
-///
-/// ```rust,no_run
-/// # #[cfg(target_arch = "x86_64")]
-/// # mod example {
-/// use core::ffi::c_void;
-/// use patina_mm_supervisor::*;
-///
-/// struct MyPlatform;
-///
-/// impl PlatformInfo for MyPlatform {}
-///
-/// // The const generic argument is the maximum CPU count used to size internal arrays.
-/// static SUPERVISOR: MmSupervisorCore<MyPlatform, 8> = MmSupervisorCore::new();
-///
-/// // The MM IPL invokes this entry point on every core.
-/// pub extern "efiapi" fn mm_entry(cpu_index: usize, hob_list: *const c_void) {
-///     // SAFETY: invoked once per core by the MM environment with a valid HOB list.
-///     unsafe { SUPERVISOR.entry_point(cpu_index, hob_list) };
-/// }
-/// # }
-/// ```
-pub struct MmSupervisorCore<P: PlatformInfo, const MAX_CPUS: usize> {
-    /// Manager for CPU-related operations.
-    cpu_manager: CpuManager<MAX_CPUS>,
-    /// Manager for AP mailboxes.
-    mailbox_manager: MailboxManager<MAX_CPUS>,
-    /// Syscall interface for privilege transitions.
-    syscall_interface: SyscallInterface<MAX_CPUS>,
-    /// Flag indicating if the core has been initialized.
-    initialized: AtomicBool,
-    /// TESTING: serializes per-core initialization so only one core runs it at a time.
-    init_lock: Mutex<()>,
-    /// Phantom data for the platform type.
-    _phantom: core::marker::PhantomData<fn() -> P>,
-}
-
 /// Returns whether `[base, base + size)` lies entirely inside MMRAM.
 ///
 /// Reports `false` before the regions are known, since nothing can be shown to be inside MMRAM
@@ -241,61 +179,12 @@ pub(crate) fn buffer_overlaps_mmram(base: u64, size: u64) -> bool {
     !matches!(security_state().page_allocator().classify_mmram(base, size), Some(MmramPlacement::Outside))
 }
 
-/// Checks if a specific core has completed initialization.
-///
-/// Reads the 1-byte slot at `mm_initialized_buffer + cpu_index`.
-/// A non-zero value indicates the core has completed initialization.
-///
-/// Returns [`CoreInitError::InitializedBufferUnavailable`] when the initialized buffer has not been
-/// published yet, and [`CoreInitError::CpuIndexOutOfRange`] when `cpu_index` is outside it. Callers
-/// that need a definitive answer should handle those cases explicitly and pick their own fallback,
-/// typically failing closed by treating the core as uninitialized.
-fn is_core_initialized(cpu_index: usize) -> MmSupervisorResult<bool> {
-    let buffer = init_state()
-        .mm_initialized_buffer()
-        .ok_or(MmSupervisorError::from(CoreInitError::InitializedBufferUnavailable))?;
-
-    let slot = buffer
-        .get(cpu_index)
-        .ok_or(MmSupervisorError::from(CoreInitError::CpuIndexOutOfRange { index: cpu_index, len: buffer.len() }))?;
-
-    Ok(slot.load(Ordering::Acquire) != 0)
-}
-
-/// Marks a specific core as initialized.
-///
-/// Writes a non-zero value to the 1-byte slot at `mm_initialized_buffer + cpu_index`.
-///
-/// Returns [`CoreInitError::InitializedBufferUnavailable`] when the initialized buffer has not been
-/// published yet, and [`CoreInitError::CpuIndexOutOfRange`] when `cpu_index` is outside it. In
-/// either case the core's slot is left unwritten, so the caller must not treat the core as
-/// initialized.
-fn mark_core_initialized(cpu_index: usize) -> MmSupervisorResult<()> {
-    let buffer = init_state()
-        .mm_initialized_buffer()
-        .ok_or(MmSupervisorError::from(CoreInitError::InitializedBufferUnavailable))?;
-
-    let slot = buffer
-        .get(cpu_index)
-        .ok_or(MmSupervisorError::from(CoreInitError::CpuIndexOutOfRange { index: cpu_index, len: buffer.len() }))?;
-
-    slot.store(1, Ordering::Release);
-    Ok(())
-}
-
-impl<P: PlatformInfo, const MAX_CPUS: usize> Default for MmSupervisorCore<P, MAX_CPUS> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
-    use core::sync::atomic::AtomicU8;
+    use core::sync::atomic::Ordering;
     use patina::standard::efi;
-    use serial_test::serial;
 
     struct TestPlatform;
 
@@ -368,40 +257,5 @@ mod tests {
         // supervisor is asked to treat as non-MM memory is reported as overlapping instead.
         assert!(buffer_overlaps_mmram(0x1000, 0x1000));
         assert!(buffer_overlaps_mmram(u64::MAX, 1));
-    }
-
-    #[test]
-    #[serial]
-    fn test_core_initialization_functions_handle_state_values_and_bounds() {
-        static SLOTS: [AtomicU8; 2] = [AtomicU8::new(0), AtomicU8::new(0)];
-
-        assert!(init_state().mm_initialized_buffer().is_none());
-        assert_eq!(is_core_initialized(0), Err(CoreInitError::InitializedBufferUnavailable.into()));
-        // Before the buffer is published the mark is reported rather than silently dropped.
-        assert_eq!(mark_core_initialized(0), Err(CoreInitError::InitializedBufferUnavailable.into()));
-
-        init_state().set_mm_initialized_buffer(&SLOTS);
-        assert_eq!(is_core_initialized(0), Ok(false));
-        assert_eq!(is_core_initialized(1), Ok(false));
-
-        SLOTS[1].store(0xFF, Ordering::Relaxed);
-        assert_eq!(is_core_initialized(1), Ok(true));
-        SLOTS[1].store(0, Ordering::Relaxed);
-
-        assert_eq!(mark_core_initialized(1), Ok(()));
-        assert_eq!(is_core_initialized(0), Ok(false));
-        assert_eq!(is_core_initialized(1), Ok(true));
-
-        // An out-of-range mark fails instead of corrupting a neighbouring slot.
-        assert_eq!(
-            mark_core_initialized(SLOTS.len()),
-            Err(CoreInitError::CpuIndexOutOfRange { index: SLOTS.len(), len: SLOTS.len() }.into())
-        );
-        assert_eq!(
-            is_core_initialized(SLOTS.len()),
-            Err(CoreInitError::CpuIndexOutOfRange { index: SLOTS.len(), len: SLOTS.len() }.into())
-        );
-        assert_eq!(is_core_initialized(0), Ok(false));
-        assert_eq!(is_core_initialized(1), Ok(true));
     }
 }
