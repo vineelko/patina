@@ -63,7 +63,7 @@ use patina_paging::{MemoryAttributes, PageTable};
 use zerocopy::FromBytes;
 
 use crate::error::MmSupervisorResult;
-use crate::pass_down_hob::MmSupvPassDownHobData;
+use crate::pass_down_hob::{MmSupvPassDownHobData, PassDownHobError};
 use crate::smrr::SmramRegion;
 use crate::state::security_state;
 
@@ -204,26 +204,6 @@ pub enum HobValidationError {
         /// The reported attributes.
         attributes: u64,
     },
-    /// The `PassDown` HOB was not present in the HOB list.
-    PassDownHobMissing,
-    /// The `PassDown` HOB payload was smaller than its defined structure.
-    PassDownHobTooSmall,
-    /// The `PassDown` HOB reported an unexpected revision.
-    PassDownInvalidRevision {
-        /// The revision found in the HOB.
-        found: u32,
-        /// The revision the supervisor expected.
-        expected: u32,
-    },
-    /// A pointer reported in the `PassDown` HOB references memory outside MMRAM.
-    PassDownPointerOutsideMmram {
-        /// Name of the offending `PassDown` field.
-        field: &'static str,
-        /// The reported address.
-        addr: u64,
-        /// The size that was checked for containment.
-        size: u64,
-    },
     /// The HOB list itself does not lie inside MMRAM.
     HobListOutsideMmram {
         /// Address the HOB list starts at.
@@ -317,14 +297,6 @@ impl fmt::Display for HobValidationError {
             ),
             Self::V2IoAttributesNotZero { base, attributes } => {
                 write!(f, "V2 I/O resource descriptor at 0x{base:x} has non-zero attributes (0x{attributes:x})")
-            }
-            Self::PassDownHobMissing => write!(f, "PassDown HOB is missing from the HOB list"),
-            Self::PassDownHobTooSmall => write!(f, "PassDown HOB payload is too small"),
-            Self::PassDownInvalidRevision { found, expected } => {
-                write!(f, "PassDown HOB revision {found} does not match expected {expected}")
-            }
-            Self::PassDownPointerOutsideMmram { field, addr, size } => {
-                write!(f, "PassDown pointer `{field}` = 0x{addr:x} (size 0x{size:x}) is outside MMRAM")
             }
             Self::HobListOutsideMmram { base, size } => {
                 write!(f, "HOB list at 0x{base:x} (size 0x{size:x}) is not inside MMRAM")
@@ -423,7 +395,7 @@ fn validate_pass_down_pointers(
     is_inside_mmram: impl Fn(u64, u64) -> bool,
 ) -> MmSupervisorResult<()> {
     if pass_down.revision != crate::MM_SUPV_PASS_DOWN_HOB_REVISION {
-        return Err(HobValidationError::PassDownInvalidRevision {
+        return Err(PassDownHobError::InvalidRevision {
             found: pass_down.revision,
             expected: crate::MM_SUPV_PASS_DOWN_HOB_REVISION,
         }
@@ -439,7 +411,7 @@ fn validate_pass_down_pointers(
 
     for (field, addr, size) in checks {
         if addr != 0 && !is_inside_mmram(addr, size) {
-            return Err(HobValidationError::PassDownPointerOutsideMmram { field, addr, size }.into());
+            return Err(PassDownHobError::PointerOutsideMmram { field, addr, size }.into());
         }
     }
 
@@ -812,9 +784,8 @@ fn validate_pass_down<'a>(
             Hob::GuidHob(guid_hob, data) if guid_hob.name == crate::MM_SUPV_PASS_DOWN_HOB_GUID => Some(data),
             _ => None,
         })
-        .ok_or(HobValidationError::PassDownHobMissing)?;
-    let (pass_down, _) =
-        MmSupvPassDownHobData::read_from_prefix(data).map_err(|_| HobValidationError::PassDownHobTooSmall)?;
+        .ok_or(PassDownHobError::Missing)?;
+    let (pass_down, _) = MmSupvPassDownHobData::read_from_prefix(data).map_err(|_| PassDownHobError::TooSmall)?;
     validate_pass_down_pointers(&pass_down, is_inside_mmram)
 }
 
@@ -878,9 +849,7 @@ pub(crate) fn validate_incoming_hobs_post_paging_init(
     handoff: &PhaseHandoffInformationTable,
 ) -> MmSupervisorResult<()> {
     let hob = Hob::Handoff(handoff);
-    verify_module_page_protections(&hob)?;
-
-    Ok(())
+    verify_module_page_protections(&hob)
 }
 
 /// Verifies the page protections of the MM Supervisor Core and User modules.
@@ -1897,12 +1866,7 @@ mod tests {
         let result = validate_pass_down_pointers(&pass_down(), |_, _| false);
         assert_eq!(
             result,
-            Err(HobValidationError::PassDownPointerOutsideMmram {
-                field: "cpl3_stack_base",
-                addr: 0x1000,
-                size: 0x1000,
-            }
-            .into())
+            Err(PassDownHobError::PointerOutsideMmram { field: "cpl3_stack_base", addr: 0x1000, size: 0x1000 }.into())
         );
     }
 
@@ -1912,7 +1876,7 @@ mod tests {
         pd.revision = crate::MM_SUPV_PASS_DOWN_HOB_REVISION + 1;
         assert!(matches!(
             validate_pass_down_pointers(&pd, |_, _| true),
-            Err(MmSupervisorError::HobValidation(HobValidationError::PassDownInvalidRevision { .. }))
+            Err(MmSupervisorError::PassDownHob(PassDownHobError::InvalidRevision { .. }))
         ));
     }
 
@@ -1942,14 +1906,14 @@ mod tests {
         let unrelated = guid_hob(MM_SUPERVISOR_CORE_GUID, data.len());
         assert_eq!(
             validate_pass_down([Hob::GuidHob(&unrelated, &data)], |_, _| true),
-            Err(HobValidationError::PassDownHobMissing.into())
+            Err(PassDownHobError::Missing.into())
         );
 
         let short_data = [0u8; 4];
         let short = guid_hob(crate::MM_SUPV_PASS_DOWN_HOB_GUID, short_data.len());
         assert_eq!(
             validate_pass_down([Hob::GuidHob(&short, &short_data)], |_, _| true),
-            Err(HobValidationError::PassDownHobTooSmall.into())
+            Err(PassDownHobError::TooSmall.into())
         );
     }
 
@@ -2171,10 +2135,6 @@ mod tests {
             HobValidationError::V2ContainsUceAttribute { base: 0x1000, attributes: 0x1 },
             HobValidationError::V2InvalidCacheability { base: 0x1000, attributes: 0 },
             HobValidationError::V2IoAttributesNotZero { base: 0x1000, attributes: 0x4 },
-            HobValidationError::PassDownHobMissing,
-            HobValidationError::PassDownHobTooSmall,
-            HobValidationError::PassDownInvalidRevision { found: 3, expected: 2 },
-            HobValidationError::PassDownPointerOutsideMmram { field: "sm_base", addr: 0x1000, size: 8 },
             HobValidationError::HobListOutsideMmram { base: 0x1000, size: 0x40 },
             HobValidationError::PageTableUnavailable,
             HobValidationError::PageAttributeQueryFailed { addr: 0x1000 },

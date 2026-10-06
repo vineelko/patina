@@ -25,28 +25,10 @@ pub enum PolicyInitError {
     NullHobList,
     /// Some HOB not found.
     HobNotFound,
-    /// Invalid `PassDown` HOB revision.
-    InvalidRevision {
-        /// The revision value found in the `PassDown` HOB.
-        found: u32,
-        /// The revision value the supervisor expected.
-        expected: u32,
-    },
-    /// Firmware policy buffer is null or empty.
-    NullFirmwarePolicyBuffer,
     /// Invalid policy data.
     InvalidPolicyData,
-    /// The MP Information HOB reports an unsupported CPU count.
-    InvalidCpuCount {
-        /// CPU count reported by the HOB.
-        found: u64,
-        /// Maximum CPU count supported by this supervisor instance.
-        maximum: usize,
-    },
     /// Memory allocation failed for policy buffers.
     MemoryAllocationFailed,
-    /// The `PassDown` HOB does not describe usable per-CPU save-state regions.
-    InvalidSaveStateRegions,
 }
 
 impl core::error::Error for PolicyInitError {}
@@ -56,18 +38,8 @@ impl fmt::Display for PolicyInitError {
         match self {
             Self::NullHobList => write!(f, "the HOB list pointer is null"),
             Self::HobNotFound => write!(f, "a required HOB was not found in the HOB list"),
-            Self::InvalidRevision { found, expected } => {
-                write!(f, "the PassDown HOB reports revision {found}, but revision {expected} was expected")
-            }
-            Self::NullFirmwarePolicyBuffer => write!(f, "the firmware policy buffer is null or empty"),
             Self::InvalidPolicyData => write!(f, "the policy data is malformed or truncated"),
-            Self::InvalidCpuCount { found, maximum } => {
-                write!(f, "the MP Information HOB reports {found} CPUs, more than the supported maximum of {maximum}")
-            }
             Self::MemoryAllocationFailed => write!(f, "a policy buffer allocation failed"),
-            Self::InvalidSaveStateRegions => {
-                write!(f, "the PassDown HOB does not describe usable per-CPU save-state regions")
-            }
         }
     }
 }
@@ -92,24 +64,8 @@ mod tests {
     fn test_policy_init_error_displays_each_variant() {
         assert_eq!(format!("{}", PolicyInitError::NullHobList), "the HOB list pointer is null");
         assert_eq!(format!("{}", PolicyInitError::HobNotFound), "a required HOB was not found in the HOB list");
-        assert_eq!(
-            format!("{}", PolicyInitError::InvalidRevision { found: 2, expected: 3 }),
-            "the PassDown HOB reports revision 2, but revision 3 was expected"
-        );
-        assert_eq!(
-            format!("{}", PolicyInitError::NullFirmwarePolicyBuffer),
-            "the firmware policy buffer is null or empty"
-        );
         assert_eq!(format!("{}", PolicyInitError::InvalidPolicyData), "the policy data is malformed or truncated");
-        assert_eq!(
-            format!("{}", PolicyInitError::InvalidCpuCount { found: 9, maximum: 4 }),
-            "the MP Information HOB reports 9 CPUs, more than the supported maximum of 4"
-        );
         assert_eq!(format!("{}", PolicyInitError::MemoryAllocationFailed), "a policy buffer allocation failed");
-        assert_eq!(
-            format!("{}", PolicyInitError::InvalidSaveStateRegions),
-            "the PassDown HOB does not describe usable per-CPU save-state regions"
-        );
     }
 
     #[test]

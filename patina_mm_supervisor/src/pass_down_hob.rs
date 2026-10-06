@@ -15,10 +15,70 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
+use core::fmt;
+
 use zerocopy::FromBytes;
 use zerocopy_derive::Immutable;
 
-use crate::{error::MmSupervisorResult, init::PolicyInitError};
+use crate::error::MmSupervisorResult;
+
+/// Why the MM Supervisor `PassDown` HOB could not be used.
+///
+/// The MM IPL produces this HOB outside the supervisor's trust boundary, so its revision,
+/// payload length, and every pointer it carries are checked before any field is acted on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassDownHobError {
+    /// The `PassDown` HOB was not present in the HOB list.
+    Missing,
+    /// The `PassDown` HOB payload was smaller than its defined structure.
+    TooSmall,
+    /// The `PassDown` HOB reported an unexpected revision.
+    InvalidRevision {
+        /// The revision found in the HOB.
+        found: u32,
+        /// The revision the supervisor expected.
+        expected: u32,
+    },
+    /// A pointer reported in the `PassDown` HOB references memory outside MMRAM.
+    PointerOutsideMmram {
+        /// Name of the offending `PassDown` field.
+        field: &'static str,
+        /// The reported address.
+        addr: u64,
+        /// The size that was checked for containment.
+        size: u64,
+    },
+    /// The firmware policy buffer pointer or its size is zero.
+    NullFirmwarePolicyBuffer,
+    /// The firmware policy buffer address plus its size overflows.
+    FirmwarePolicyBufferOverflows {
+        /// Base address the HOB reported.
+        base: u64,
+        /// Size the HOB reported.
+        size: u64,
+    },
+}
+
+impl core::error::Error for PassDownHobError {}
+
+impl fmt::Display for PassDownHobError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing => write!(f, "PassDown HOB is missing from the HOB list"),
+            Self::TooSmall => write!(f, "PassDown HOB payload is too small"),
+            Self::InvalidRevision { found, expected } => {
+                write!(f, "PassDown HOB revision {found} does not match expected {expected}")
+            }
+            Self::PointerOutsideMmram { field, addr, size } => {
+                write!(f, "PassDown pointer `{field}` = 0x{addr:x} (size 0x{size:x}) is outside MMRAM")
+            }
+            Self::NullFirmwarePolicyBuffer => write!(f, "the firmware policy buffer is null or empty"),
+            Self::FirmwarePolicyBufferOverflows { base, size } => {
+                write!(f, "the firmware policy buffer at 0x{base:x} plus size 0x{size:x} overflows")
+            }
+        }
+    }
+}
 
 /// MM Supervisor `PassDown` HOB Data Structure
 ///
@@ -59,7 +119,7 @@ pub(crate) struct MmSupvPassDownHobData {
 pub(crate) fn parse_pass_down_hob(data: &[u8]) -> MmSupervisorResult<MmSupvPassDownHobData> {
     let (pass_down, _) = MmSupvPassDownHobData::read_from_prefix(data).map_err(|_| {
         log::error!("PassDown HOB data too small: {} < {}", data.len(), core::mem::size_of::<MmSupvPassDownHobData>());
-        PolicyInitError::InvalidPolicyData
+        PassDownHobError::TooSmall
     })?;
 
     if pass_down.revision != crate::MM_SUPV_PASS_DOWN_HOB_REVISION {
@@ -68,7 +128,7 @@ pub(crate) fn parse_pass_down_hob(data: &[u8]) -> MmSupervisorResult<MmSupvPassD
             pass_down.revision,
             crate::MM_SUPV_PASS_DOWN_HOB_REVISION
         );
-        return Err(PolicyInitError::InvalidRevision {
+        return Err(PassDownHobError::InvalidRevision {
             found: pass_down.revision,
             expected: crate::MM_SUPV_PASS_DOWN_HOB_REVISION,
         }
@@ -77,12 +137,16 @@ pub(crate) fn parse_pass_down_hob(data: &[u8]) -> MmSupervisorResult<MmSupvPassD
 
     if pass_down.firmware_policy_buffer == 0 || pass_down.firmware_policy_buffer_size == 0 {
         log::error!("Firmware policy buffer is null or empty");
-        return Err(PolicyInitError::NullFirmwarePolicyBuffer.into());
+        return Err(PassDownHobError::NullFirmwarePolicyBuffer.into());
     }
 
     if pass_down.firmware_policy_buffer.checked_add(pass_down.firmware_policy_buffer_size).is_none() {
         log::error!("Firmware policy buffer address range overflows");
-        return Err(PolicyInitError::InvalidPolicyData.into());
+        return Err(PassDownHobError::FirmwarePolicyBufferOverflows {
+            base: pass_down.firmware_policy_buffer,
+            size: pass_down.firmware_policy_buffer_size,
+        }
+        .into());
     }
 
     Ok(pass_down)
@@ -113,7 +177,7 @@ mod tests {
 
         assert_eq!(
             parse_pass_down_hob(&data[..data.len() - 1]).expect_err("truncated PassDown HOB should fail"),
-            PolicyInitError::InvalidPolicyData.into()
+            PassDownHobError::TooSmall.into()
         );
     }
 
@@ -125,7 +189,7 @@ mod tests {
         assert_eq!(
             parse_pass_down_hob(&pass_down_hob_data(&pass_down))
                 .expect_err("invalid PassDown HOB revision should fail"),
-            PolicyInitError::InvalidRevision {
+            PassDownHobError::InvalidRevision {
                 found: pass_down.revision,
                 expected: crate::MM_SUPV_PASS_DOWN_HOB_REVISION,
             }
@@ -136,9 +200,13 @@ mod tests {
     #[test]
     fn test_parse_pass_down_hob_rejects_invalid_policy_buffer() {
         for (address, size, expected) in [
-            (0, 0x1000, PolicyInitError::NullFirmwarePolicyBuffer),
-            (0x1000, 0, PolicyInitError::NullFirmwarePolicyBuffer),
-            (u64::MAX - 0xFFF, 0x1000, PolicyInitError::InvalidPolicyData),
+            (0, 0x1000, PassDownHobError::NullFirmwarePolicyBuffer),
+            (0x1000, 0, PassDownHobError::NullFirmwarePolicyBuffer),
+            (
+                u64::MAX - 0xFFF,
+                0x1000,
+                PassDownHobError::FirmwarePolicyBufferOverflows { base: u64::MAX - 0xFFF, size: 0x1000 },
+            ),
         ] {
             let mut pass_down = valid_pass_down_hob();
             pass_down.firmware_policy_buffer = address;
@@ -148,6 +216,20 @@ mod tests {
                 parse_pass_down_hob(&pass_down_hob_data(&pass_down)).expect_err("invalid policy buffer should fail"),
                 expected.into()
             );
+        }
+    }
+    #[test]
+    fn test_pass_down_hob_error_displays_each_variant() {
+        let errors = [
+            PassDownHobError::Missing,
+            PassDownHobError::TooSmall,
+            PassDownHobError::InvalidRevision { found: 3, expected: 2 },
+            PassDownHobError::PointerOutsideMmram { field: "sm_base", addr: 0x1000, size: 8 },
+            PassDownHobError::NullFirmwarePolicyBuffer,
+            PassDownHobError::FirmwarePolicyBufferOverflows { base: u64::MAX - 0xFFF, size: 0x1000 },
+        ];
+        for err in errors {
+            assert!(!format!("{err}").is_empty(), "every variant must render a message");
         }
     }
 }

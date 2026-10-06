@@ -628,7 +628,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         if data.len() < PROCESSOR_INFO_BUFFER_OFFSET {
             log::error!("MP Information HOB too small: {} < {}", data.len(), PROCESSOR_INFO_BUFFER_OFFSET);
-            return Err(PolicyInitError::InvalidPolicyData.into());
+            return Err(CoreInitError::MpInformationHobMalformed.into());
         }
 
         // The payload was checked to be at least `PROCESSOR_INFO_BUFFER_OFFSET` bytes above,
@@ -638,38 +638,38 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             data.get(0..8)
                 .ok_or_else(|| {
                     log::error!("MP Information HOB has no processor count field");
-                    PolicyInitError::InvalidPolicyData
+                    CoreInitError::MpInformationHobMalformed
                 })?
                 .try_into()
                 .map_err(|_| {
                     log::error!("MP Information HOB processor count field is not 8 bytes");
-                    PolicyInitError::InvalidPolicyData
+                    CoreInitError::MpInformationHobMalformed
                 })?,
         );
         let cpu_count: usize = number_of_cpus.try_into().map_err(|_| {
             log::error!("MP Information HOB CPU count {number_of_cpus} does not fit the target architecture");
-            PolicyInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }
+            CoreInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }
         })?;
         if cpu_count == 0 || cpu_count > MAX_CPUS {
             log::error!("MP Information HOB CPU count {cpu_count} is outside the supported range 1..={MAX_CPUS}");
-            return Err(PolicyInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }.into());
+            return Err(CoreInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }.into());
         }
 
         // `cpu_count` is bounded by `MAX_CPUS`, so the offsets below cannot overflow today.
         let processor_info_size = cpu_count.checked_mul(PROCESSOR_INFO_ENTRY_SIZE).ok_or_else(|| {
             log::error!("MP Information HOB: {cpu_count} processor entries overflow the payload size");
-            PolicyInitError::InvalidPolicyData
+            CoreInitError::MpInformationHobMalformed
         })?;
         let processor_info_end = PROCESSOR_INFO_BUFFER_OFFSET.checked_add(processor_info_size).ok_or_else(|| {
             log::error!("MP Information HOB: processor info end offset overflows");
-            PolicyInitError::InvalidPolicyData
+            CoreInitError::MpInformationHobMalformed
         })?;
         data.get(PROCESSOR_INFO_BUFFER_OFFSET..processor_info_end).ok_or_else(|| {
             log::error!(
                 "MP Information HOB holds {} bytes but {cpu_count} processor entries need {processor_info_end}",
                 data.len()
             );
-            PolicyInitError::InvalidPolicyData
+            CoreInitError::MpInformationHobMalformed
         })?;
 
         Ok(number_of_cpus)
@@ -711,18 +711,18 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         if mm_initialized_buffer != 0 {
             let cpu_count: usize = number_of_cpus
                 .try_into()
-                .map_err(|_| PolicyInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS })?;
+                .map_err(|_| CoreInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS })?;
             if cpu_count == 0 || cpu_count > MAX_CPUS {
-                return Err(PolicyInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }.into());
+                return Err(CoreInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }.into());
             }
             if !is_buffer_inside_mmram(mm_initialized_buffer, number_of_cpus) {
                 log::error!(
                     "MM initialized buffer at 0x{mm_initialized_buffer:016x} does not contain {cpu_count} slot(s) in MMRAM"
                 );
-                return Err(PolicyInitError::InvalidPolicyData.into());
+                return Err(CoreInitError::InitializedBufferInvalid.into());
             }
             let buffer_address =
-                usize::try_from(mm_initialized_buffer).map_err(|_| PolicyInitError::InvalidPolicyData)?;
+                usize::try_from(mm_initialized_buffer).map_err(|_| CoreInitError::InitializedBufferInvalid)?;
             let buffer_ptr = core::ptr::with_exposed_provenance::<AtomicU8>(buffer_address);
             // SAFETY: The PassDown HOB was validated before this routine is called and this
             // function's contract requires its buffer pointers to remain valid. The validated
@@ -736,13 +736,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // The save-state syscall reads these regions on Ring 3's behalf, so every entry is proven
         // to be inside MMRAM and supervisor-only now rather than trusted at each read.
-        let validation = validate_save_state_regions(sm_base, number_of_cpus, is_buffer_inside_mmram, |base, size| {
+        validate_save_state_regions(sm_base, number_of_cpus, is_buffer_inside_mmram, |base, size| {
             matches!(query_address_ownership(base, size), Some(PageOwnership::Supervisor))
-        });
-        if let Err(e) = validation {
-            log::error!("PassDown HOB does not describe usable save-state regions: {e:?}");
-            return Err(PolicyInitError::InvalidSaveStateRegions.into());
-        }
+        })
+        .inspect_err(|e| log::error!("PassDown HOB does not describe usable save-state regions: {e}"))?;
         log::info!("Validated save-state regions for {number_of_cpus} CPU(s) from SMBASE array at 0x{sm_base:016x}");
 
         let policy_ptr = firmware_policy_buffer as *const u8;
@@ -772,7 +769,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             }
             Err(e) => {
                 log::error!("Failed to create policy gate: {e:?}");
-                return Err(PolicyInitError::InvalidPolicyData.into());
+                return Err(CoreInitError::MpInformationHobMalformed.into());
             }
         }
 
@@ -1307,10 +1304,13 @@ mod tests {
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let mut data = [0_u8; 16 + PROCESSOR_INFO_ENTRY_SIZE];
 
-        assert_eq!(supervisor.parse_mp_information_hob(&data[..15]), Err(PolicyInitError::InvalidPolicyData.into()));
+        assert_eq!(
+            supervisor.parse_mp_information_hob(&data[..15]),
+            Err(CoreInitError::MpInformationHobMalformed.into())
+        );
 
         data[..8].copy_from_slice(&2_u64.to_le_bytes());
-        assert_eq!(supervisor.parse_mp_information_hob(&data), Err(PolicyInitError::InvalidPolicyData.into()));
+        assert_eq!(supervisor.parse_mp_information_hob(&data), Err(CoreInitError::MpInformationHobMalformed.into()));
     }
 
     #[test]
@@ -1323,7 +1323,7 @@ mod tests {
             data[..8].copy_from_slice(&cpu_count.to_le_bytes());
             assert_eq!(
                 supervisor.parse_mp_information_hob(&data),
-                Err(PolicyInitError::InvalidCpuCount { found: cpu_count, maximum: 4 }.into())
+                Err(CoreInitError::InvalidCpuCount { found: cpu_count, maximum: 4 }.into())
             );
         }
     }

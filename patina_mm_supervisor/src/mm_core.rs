@@ -69,6 +69,18 @@ pub enum CoreInitError {
     /// `validate_incoming_hobs_pre_paging_init` already rejects a HOB list missing this module, so
     /// reaching this means discovery ran against a list that validation never accepted.
     InitModuleRegionMissing,
+    /// The MP Information HOB is too short, or its processor entries do not fit its payload.
+    MpInformationHobMalformed,
+    /// The CPU count the producer reported cannot be used to size the per-core arrays.
+    InvalidCpuCount {
+        /// CPU count reported by the HOB.
+        found: u64,
+        /// Maximum CPU count this supervisor instance supports.
+        maximum: usize,
+    },
+    /// The per-core initialized buffer the `PassDown` HOB describes is not usable: its address
+    /// does not fit the target architecture, or it does not hold one slot per CPU inside MMRAM.
+    InitializedBufferInvalid,
     /// The interrupt manager could not be initialized.
     InterruptManagerInit(EfiError),
 }
@@ -99,6 +111,15 @@ impl fmt::Display for CoreInitError {
             }
             Self::UserEntryPointMissing => write!(f, "no user entry point is configured for the BSP to demote to"),
             Self::InitModuleRegionMissing => write!(f, "the HOB list described no MM Init module allocation"),
+            Self::MpInformationHobMalformed => {
+                write!(f, "the MP Information HOB is too short or its processor entries do not fit")
+            }
+            Self::InvalidCpuCount { found, maximum } => {
+                write!(f, "the producer reported {found} CPUs, more than the supported maximum of {maximum}")
+            }
+            Self::InitializedBufferInvalid => {
+                write!(f, "the per-core initialized buffer is not addressable or not resident in MMRAM")
+            }
             Self::InterruptManagerInit(err) => write!(f, "the interrupt manager could not be initialized: {err}"),
         }
     }
@@ -204,6 +225,18 @@ mod tests {
         assert_eq!(
             format!("{}", CoreInitError::InitModuleRegionMissing),
             "the HOB list described no MM Init module allocation"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::MpInformationHobMalformed),
+            "the MP Information HOB is too short or its processor entries do not fit"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::InvalidCpuCount { found: 9, maximum: 4 }),
+            "the producer reported 9 CPUs, more than the supported maximum of 4"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::InitializedBufferInvalid),
+            "the per-core initialized buffer is not addressable or not resident in MMRAM"
         );
         assert_eq!(
             format!("{}", CoreInitError::InterruptManagerInit(EfiError::Unsupported)),

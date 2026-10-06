@@ -34,6 +34,7 @@ use crate::{
         helpers::{PageTableWalkError, PolicyValidationError},
     },
     mmram_bound::MmramBoundError,
+    pass_down_hob::PassDownHobError,
     privilege_mgmt::{call_gate::CallGateError, syscall_setup::SyscallSetupError},
     save_state::SaveStateValidationError,
     smrr::SmrrError,
@@ -55,6 +56,8 @@ pub enum MmSupervisorError {
     PolicyInit(PolicyInitError),
     /// A communication buffer could not be adopted from the HOB list.
     CommBuffer(CommBufferError),
+    /// The `PassDown` HOB could not be used.
+    PassDownHob(PassDownHobError),
     /// Per-core bring-up failed on the BSP or an AP.
     CoreInit(CoreInitError),
     /// A page or paging-structure allocation or free request failed.
@@ -93,6 +96,7 @@ impl core::error::Error for MmSupervisorError {
             Self::HobValidation(err) => Some(err),
             Self::PolicyInit(err) => Some(err),
             Self::CommBuffer(err) => Some(err),
+            Self::PassDownHob(err) => Some(err),
             Self::CoreInit(err) => Some(err),
             Self::Alloc(err) => Some(err),
             Self::PolicyGate(err) => Some(err),
@@ -119,6 +123,7 @@ impl fmt::Display for MmSupervisorError {
             Self::HobValidation(err) => write!(f, "HOB validation: {err}"),
             Self::PolicyInit(err) => write!(f, "Policy initialization: {err}"),
             Self::CommBuffer(err) => write!(f, "Communication buffer: {err}"),
+            Self::PassDownHob(err) => write!(f, "PassDown HOB: {err}"),
             Self::CoreInit(err) => write!(f, "Core bring-up: {err}"),
             Self::Alloc(err) => write!(f, "Alloc allocation: {err}"),
             Self::PolicyGate(err) => write!(f, "Policy gate: {err}"),
@@ -153,6 +158,12 @@ impl From<PolicyInitError> for MmSupervisorError {
 impl From<CommBufferError> for MmSupervisorError {
     fn from(error: CommBufferError) -> Self {
         Self::CommBuffer(error)
+    }
+}
+
+impl From<PassDownHobError> for MmSupervisorError {
+    fn from(error: PassDownHobError) -> Self {
+        Self::PassDownHob(error)
     }
 }
 
@@ -264,6 +275,10 @@ mod tests {
         assert_eq!(
             MmSupervisorError::from(CommBufferError::Missing),
             MmSupervisorError::CommBuffer(CommBufferError::Missing)
+        );
+        assert_eq!(
+            MmSupervisorError::from(PassDownHobError::TooSmall),
+            MmSupervisorError::PassDownHob(PassDownHobError::TooSmall)
         );
         assert_eq!(
             MmSupervisorError::from(CoreInitError::InitializedBufferUnavailable),
