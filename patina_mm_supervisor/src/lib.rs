@@ -94,7 +94,8 @@ pub use supervisor_handlers::SupervisorMmiHandler;
 pub(crate) use page_ownership::{PageOwnership, query_address_ownership};
 
 use crate::{
-    error::{CoreInitError, MmSupervisorError, MmSupervisorResult},
+    error::{MmSupervisorError, MmSupervisorResult},
+    init::CoreInitError,
     smrr::smrr_enable,
 };
 
