@@ -35,6 +35,14 @@ use crate::{
 /// field is checked before the internal copy is allocated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommBufferError {
+    /// The communication buffer HOB was not present in the HOB list.
+    HobMissing,
+    /// The MM Common Region HOB, which describes the supervisor channel, was not present in
+    /// the HOB list.
+    CommRegionHobMissing,
+    /// The MM Communication Buffer HOB, which describes the user channel, was not present in
+    /// the HOB list.
+    CommunicationBufferHobMissing,
     /// The HOB payload is smaller than the structure it must contain.
     HobTooSmall {
         /// Bytes the HOB actually carries.
@@ -59,6 +67,11 @@ impl core::error::Error for CommBufferError {}
 impl fmt::Display for CommBufferError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::HobMissing => write!(f, "the communication buffer HOB is missing from the HOB list"),
+            Self::CommRegionHobMissing => write!(f, "the MM Common Region HOB is missing from the HOB list"),
+            Self::CommunicationBufferHobMissing => {
+                write!(f, "the MM Communication Buffer HOB is missing from the HOB list")
+            }
             Self::HobTooSmall { found, expected } => {
                 write!(f, "the HOB payload is {found} bytes, but {expected} are required")
             }
@@ -581,6 +594,21 @@ mod tests {
                 parse_user_comm_buffer_hob(&user_comm_buffer_hob_data(address, pages, 0x20_0000)),
                 Err(CommBufferError::InvalidSize { pages }.into())
             );
+        }
+    }
+    #[test]
+    fn test_comm_buffer_error_displays_each_variant() {
+        let errors = [
+            CommBufferError::HobMissing,
+            CommBufferError::CommRegionHobMissing,
+            CommBufferError::CommunicationBufferHobMissing,
+            CommBufferError::HobTooSmall { found: 31, expected: 32 },
+            CommBufferError::InvalidSize { pages: 0 },
+            CommBufferError::AllocationFailed,
+            CommBufferError::Missing,
+        ];
+        for err in errors {
+            assert!(!format!("{err}").is_empty(), "every variant must render a message");
         }
     }
 }

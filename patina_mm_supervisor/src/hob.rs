@@ -15,8 +15,6 @@
 
 use patina::pi::hob::{self, Hob, PhaseHandoffInformationTable};
 
-use crate::{error::MmSupervisorResult, init::PolicyInitError};
-
 pub(crate) fn find_module<'a>(
     hobs: impl IntoIterator<Item = Hob<'a>>,
     allocation_name: patina::BinaryGuid,
@@ -62,26 +60,6 @@ pub(crate) fn find_guid_hob_in<'a>(
         }
     }
     None
-}
-
-// TODO: `find_required_hob` reports a miss as an init-phase error, so this
-// module depends on `crate::init::PolicyInitError`. That points the wrong way
-// for a general lookup helper and should be replaced with an error owned here,
-// or by moving the decision back to the caller.
-
-/// Locates a HOB that initialization cannot continue without.
-///
-/// [`PolicyInitError::HobNotFound`] carries no payload and is returned for
-/// several different HOBs, so `description` names the missing one in the log.
-pub(crate) fn find_required_hob<'a>(
-    hob_list_info: &'a PhaseHandoffInformationTable,
-    target_guid: patina::BinaryGuid,
-    description: &str,
-) -> MmSupervisorResult<&'a [u8]> {
-    find_guid_hob(hob_list_info, target_guid).ok_or_else(|| {
-        log::error!("Required {description} HOB ({}) is missing from the HOB list", target_guid.as_guid());
-        PolicyInitError::HobNotFound.into()
-    })
 }
 
 #[cfg(test)]

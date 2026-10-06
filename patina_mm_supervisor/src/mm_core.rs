@@ -69,6 +69,8 @@ pub enum CoreInitError {
     /// `validate_incoming_hobs_pre_paging_init` already rejects a HOB list missing this module, so
     /// reaching this means discovery ran against a list that validation never accepted.
     InitModuleRegionMissing,
+    /// The MP Information HOB was not present in the HOB list.
+    MpInformationHobMissing,
     /// The MP Information HOB is too short, or its processor entries do not fit its payload.
     MpInformationHobMalformed,
     /// The CPU count the producer reported cannot be used to size the per-core arrays.
@@ -111,6 +113,7 @@ impl fmt::Display for CoreInitError {
             }
             Self::UserEntryPointMissing => write!(f, "no user entry point is configured for the BSP to demote to"),
             Self::InitModuleRegionMissing => write!(f, "the HOB list described no MM Init module allocation"),
+            Self::MpInformationHobMissing => write!(f, "the MP Information HOB is missing from the HOB list"),
             Self::MpInformationHobMalformed => {
                 write!(f, "the MP Information HOB is too short or its processor entries do not fit")
             }
@@ -225,6 +228,10 @@ mod tests {
         assert_eq!(
             format!("{}", CoreInitError::InitModuleRegionMissing),
             "the HOB list described no MM Init module allocation"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::MpInformationHobMissing),
+            "the MP Information HOB is missing from the HOB list"
         );
         assert_eq!(
             format!("{}", CoreInitError::MpInformationHobMalformed),

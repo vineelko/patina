@@ -54,12 +54,12 @@ use crate::{
 };
 
 use super::CoreInitError;
-use crate::hob::{find_guid_hob, find_module, find_required_hob};
+use crate::hob::{find_guid_hob, find_module};
 use crate::init::PolicyInitError;
 use crate::init::smi_idt_patch::patch_smi_handler_idt;
 use crate::mmram_bound::{establish_mmram_bound, supervisor_image_anchor};
 use crate::mseg::parse_mseg_smram_hob;
-use crate::pass_down_hob::{MmSupvPassDownHobData, parse_pass_down_hob};
+use crate::pass_down_hob::{MmSupvPassDownHobData, PassDownHobError, parse_pass_down_hob};
 
 pub(crate) fn validate_init_code_page(address: u64, attributes: MemoryAttributes) {
     if attributes.contains(MemoryAttributes::ExecuteProtect) {
@@ -523,12 +523,15 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     fn init_policy_from_hob_list(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
         // 1. Process the MP Information HOB (`gMpInformationHobGuid`) for the CPU count. It sizes
         //    the Ring 3 stack array the PassDown HOB describes, so it is needed first.
-        let mp_information = find_required_hob(hob_hand_off_table, crate::MP_INFORMATION_HOB_GUID, "MP Information")?;
+        let mp_information = find_guid_hob(hob_hand_off_table, crate::MP_INFORMATION_HOB_GUID)
+            .ok_or(CoreInitError::MpInformationHobMissing)?;
+
         let number_of_cpus = self.parse_mp_information_hob(mp_information)?;
 
         // 1b. Process the PassDown HOB (policy, syscall, memory policy)
         let pass_down_data =
-            find_required_hob(hob_hand_off_table, crate::MM_SUPV_PASS_DOWN_HOB_GUID, "MM Supervisor PassDown")?;
+            find_guid_hob(hob_hand_off_table, crate::MM_SUPV_PASS_DOWN_HOB_GUID).ok_or(PassDownHobError::Missing)?;
+
         // SAFETY: `pass_down_data` is a slice into the validated HOB list, so the buffer pointers
         // it carries reference live memory as `init_from_pass_down_hob` requires.
         let (sm_base, mmi_entry_size) = unsafe { self.init_from_pass_down_hob(pass_down_data, number_of_cpus)? };
@@ -560,8 +563,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // 2. Process the supervisor communication buffer HOB. Only one
         //    MM_COMM_REGION_HOB is published (the supervisor one); the user
         //    channel flows through MM_COMM_BUFFER_HOB_GUID below.
-        let supv_region_data =
-            find_required_hob(hob_hand_off_table, crate::MM_COMMON_REGION_HOB_GUID, "MM Common Region")?;
+        let supv_region_data = find_guid_hob(hob_hand_off_table, crate::MM_COMMON_REGION_HOB_GUID)
+            .ok_or(CommBufferError::CommRegionHobMissing)?;
         let (supv_comm_buffer, supv_comm_buffer_size, supv_comm_buffer_internal, supv_status_buffer) =
             init_supv_comm_buffer(supv_region_data).inspect_err(|e| {
                 log::error!("Failed to initialize supervisor communication buffer: {e}");
@@ -572,7 +575,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         //    keeps working (see the HACKHACK at the tail of
         //    init_user_comm_buffer).
         let (user_buffer_data, user_buffer_data_len) = {
-            let data = find_required_hob(hob_hand_off_table, MM_COMM_BUFFER_HOB_GUID, "MM Communication Buffer")?;
+            let data = find_guid_hob(hob_hand_off_table, MM_COMM_BUFFER_HOB_GUID)
+                .ok_or(CommBufferError::CommunicationBufferHobMissing)?;
             (data.as_ptr().cast_mut(), data.len())
         };
         // SAFETY: the pointer and length identify the original HOB payload in the writable live
@@ -587,7 +591,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let supv_to_user_buffer =
             security_state().page_allocator().allocate_pages_with_type(1, AllocationType::User).map_err(|e| {
                 log::error!("Failed to allocate page for supervisor-to-user buffer: {e}");
-                MmSupervisorError::from(CommBufferError::AllocationFailed)
+                CommBufferError::AllocationFailed
             })?;
 
         // Validate all buffers are non-zero
@@ -1241,7 +1245,7 @@ mod tests {
         // A null list is no longer representable: the handoff table is taken by reference.
         let hob_list = RawHobList::new().finish();
         let result = supervisor.init_policy_from_hob_list(hob_list.handoff());
-        assert_eq!(result, Err(PolicyInitError::HobNotFound.into()));
+        assert_eq!(result, Err(CoreInitError::MpInformationHobMissing.into()));
     }
 
     #[test]
@@ -1257,7 +1261,7 @@ mod tests {
         let without_pass_down = without_pass_down.finish();
 
         let result = supervisor.init_policy_from_hob_list(without_pass_down.handoff());
-        assert_eq!(result, Err(PolicyInitError::HobNotFound.into()));
+        assert_eq!(result, Err(PassDownHobError::Missing.into()));
     }
 
     #[test]
@@ -1268,7 +1272,7 @@ mod tests {
 
         let result = supervisor.init_policy_and_validate(hob_list.handoff());
 
-        assert_eq!(result, Err(PolicyInitError::HobNotFound.into()));
+        assert_eq!(result, Err(CoreInitError::MpInformationHobMissing.into()));
     }
 
     #[test]

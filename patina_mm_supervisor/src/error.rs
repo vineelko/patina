@@ -269,8 +269,8 @@ mod tests {
             MmSupervisorError::HobValidation(HobValidationError::NoMmramRegions)
         );
         assert_eq!(
-            MmSupervisorError::from(PolicyInitError::NullHobList),
-            MmSupervisorError::PolicyInit(PolicyInitError::NullHobList)
+            MmSupervisorError::from(PolicyInitError::InvalidPolicyData),
+            MmSupervisorError::PolicyInit(PolicyInitError::InvalidPolicyData)
         );
         assert_eq!(
             MmSupervisorError::from(CommBufferError::Missing),
@@ -392,7 +392,7 @@ mod tests {
         // Every variant wraps a subsystem error, so a source is always reachable.
         let errors = [
             MmSupervisorError::from(HobValidationError::NoMmramRegions),
-            MmSupervisorError::from(PolicyInitError::NullHobList),
+            MmSupervisorError::from(PolicyInitError::MemoryAllocationFailed),
             MmSupervisorError::from(CoreInitError::UserEntryPointMissing),
             MmSupervisorError::from(AllocError::OutOfMemory),
             MmSupervisorError::from(PolicyGateError::AccessDenied),

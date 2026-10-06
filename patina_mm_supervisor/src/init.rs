@@ -18,14 +18,10 @@ pub(crate) mod smi_idt_patch;
 
 pub use smi_idt_patch::{SmiHandlerIdtPatchError, SmiHandlerIdtPatchInputError};
 
-/// Errors that can occur during policy initialization.
+/// Errors that can occur while setting up the firmware policy blob.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyInitError {
-    /// The HOB list pointer is null.
-    NullHobList,
-    /// Some HOB not found.
-    HobNotFound,
-    /// Invalid policy data.
+    /// The policy blob is malformed, truncated, or its size is not addressable.
     InvalidPolicyData,
     /// Memory allocation failed for policy buffers.
     MemoryAllocationFailed,
@@ -36,8 +32,6 @@ impl core::error::Error for PolicyInitError {}
 impl fmt::Display for PolicyInitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NullHobList => write!(f, "the HOB list pointer is null"),
-            Self::HobNotFound => write!(f, "a required HOB was not found in the HOB list"),
             Self::InvalidPolicyData => write!(f, "the policy data is malformed or truncated"),
             Self::MemoryAllocationFailed => write!(f, "a policy buffer allocation failed"),
         }
@@ -62,8 +56,6 @@ mod tests {
 
     #[test]
     fn test_policy_init_error_displays_each_variant() {
-        assert_eq!(format!("{}", PolicyInitError::NullHobList), "the HOB list pointer is null");
-        assert_eq!(format!("{}", PolicyInitError::HobNotFound), "a required HOB was not found in the HOB list");
         assert_eq!(format!("{}", PolicyInitError::InvalidPolicyData), "the policy data is malformed or truncated");
         assert_eq!(format!("{}", PolicyInitError::MemoryAllocationFailed), "a policy buffer allocation failed");
     }
