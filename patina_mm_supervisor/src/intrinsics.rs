@@ -2,8 +2,8 @@
 //!
 //! Provides thin, architecture-specific wrappers around low-level `x86_64`
 //! instructions used by the supervisor: `rdmsr`/`wrmsr` for Model-Specific
-//! Registers and `cpuid`/MSR reads for CPU identification (APIC ID and BSP
-//! detection). Access to individual MSRs is expected to be gated by the syscall
+//! Registers, `cpuid`/MSR reads for CPU identification (APIC ID and BSP
+//! detection), and `sidt` for the interrupt descriptor table pointer. Access to individual MSRs is expected to be gated by the syscall
 //! policy layer.
 //!
 //! ## License
@@ -14,6 +14,20 @@
 //!
 
 use core::arch::x86_64::{__cpuid, CpuidResult};
+
+/// Pointer structure used by the `SIDT` / `LIDT` (and `SGDT` / `LGDT`) instructions.
+///
+/// Layout matches the Intel SDM: a 16-bit limit followed by a 64-bit base.
+/// `packed(2)` produces the expected 10-byte on-the-wire representation with no
+/// internal padding between `limit` and `base`.
+#[repr(C, packed(2))]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DescriptorTablePointer {
+    /// Size of the descriptor table in bytes, minus 1.
+    pub(crate) limit: u16,
+    /// Linear address of the descriptor table.
+    pub(crate) base: u64,
+}
 
 /// CPUID leaf 0x1: Version Information (Type, Family, Model, and Stepping ID).
 pub(crate) const CPUID_VERSION_INFO: u32 = 0x01;
@@ -129,4 +143,47 @@ pub(crate) fn read_cr3() -> u64 {
     }
 
     value
+}
+
+/// Read the current IDT Register (IDTR) via the `SIDT` instruction.
+///
+/// Returns a [`DescriptorTablePointer`] containing the IDT base and limit.
+pub(crate) fn read_idtr() -> DescriptorTablePointer {
+    let rt_descriptor = DescriptorTablePointer { limit: 0, base: 0 };
+
+    // On the real firmware target, populate it via `SIDT`. The asm-free builds
+    // (tests / non-x86_64) keep the zero-initialized value, so no mutable binding
+    // is introduced where it would go unused.
+    #[cfg(not(test))]
+    let rt_descriptor = {
+        let mut descriptor = rt_descriptor;
+        // SAFETY: SIDT stores the 10-byte IDTR pseudo-descriptor to the specified
+        // memory location. This is a read-only operation on CPU state.
+        unsafe {
+            core::arch::asm!(
+                "sidt [{}]",
+                in(reg) &raw mut descriptor,
+                options(nostack, preserves_flags)
+            );
+        }
+        descriptor
+    };
+
+    rt_descriptor
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_read_idtr_is_zeroed_in_unit_tests() {
+        let idtr = read_idtr();
+        let base = idtr.base;
+        let limit = idtr.limit;
+
+        assert_eq!(base, 0);
+        assert_eq!(limit, 0);
+    }
 }

@@ -22,6 +22,7 @@ use zerocopy::FromBytes;
 use zerocopy_derive::Immutable;
 
 use crate::error::MmSupervisorResult;
+use crate::intrinsics::{DescriptorTablePointer, read_idtr};
 use crate::mem::mmram_placement::is_buffer_inside_mmram;
 
 /// Offset from SMBASE where the SMI handler code is located.
@@ -129,20 +130,6 @@ pub(crate) struct PerCoreMmiEntryStructHdr {
     pub(crate) reserved: u32,
 }
 
-/// Pointer structure used by the `SIDT` / `LIDT` (and `SGDT` / `LGDT`) instructions.
-///
-/// Layout matches the Intel SDM: a 16-bit limit followed by a 64-bit base.
-/// `packed(2)` produces the expected 10-byte on-the-wire representation with no
-/// internal padding between `limit` and `base`.
-#[repr(C, packed(2))]
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct DescriptorTablePointer {
-    /// Size of the descriptor table in bytes, minus 1.
-    pub(crate) limit: u16,
-    /// Linear address of the descriptor table.
-    pub(crate) base: u64,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SmiHandlerIdtPatchInputs {
     pub(crate) sm_base_array_size: usize,
@@ -222,33 +209,6 @@ pub(crate) fn parse_smi_handler_idt_descriptor(mmi_entry: &[u8]) -> MmSupervisor
         .ok_or(SmiHandlerIdtPatchError::Fixup64EntryOutOfBounds)?;
 
     Ok(u64::from_ne_bytes(fixup64_entry.try_into().map_err(|_| SmiHandlerIdtPatchError::Fixup64EntryOutOfBounds)?))
-}
-
-/// Read the current IDT Register (IDTR) via the `SIDT` instruction.
-///
-/// Returns a [`DescriptorTablePointer`] containing the IDT base and limit.
-pub(crate) fn read_idtr() -> DescriptorTablePointer {
-    let rt_descriptor = DescriptorTablePointer { limit: 0, base: 0 };
-
-    // On the real firmware target, populate it via `SIDT`. The asm-free builds
-    // (tests / non-x86_64) keep the zero-initialized value, so no mutable binding
-    // is introduced where it would go unused.
-    #[cfg(not(test))]
-    let rt_descriptor = {
-        let mut descriptor = rt_descriptor;
-        // SAFETY: SIDT stores the 10-byte IDTR pseudo-descriptor to the specified
-        // memory location. This is a read-only operation on CPU state.
-        unsafe {
-            core::arch::asm!(
-                "sidt [{}]",
-                in(reg) &raw mut descriptor,
-                options(nostack, preserves_flags)
-            );
-        }
-        descriptor
-    };
-
-    rt_descriptor
 }
 
 /// Patches every core's SMI-handler IDT descriptor to point to the Rust IDT.

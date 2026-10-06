@@ -23,8 +23,8 @@ mod tests {
     use patina::UEFI_PAGE_SIZE;
     use patina_paging::{MemoryAttributes, PageTable};
     use smi_idt_patch::{
-        DescriptorTablePointer, FIXUP64_SMI_HANDLER_IDTR, PerCoreMmiEntryStructHdr, SmiHandlerIdtPatchInputs,
-        parse_smi_handler_idt_descriptor, read_idtr, validate_smi_handler_idt_patch_inputs,
+        FIXUP64_SMI_HANDLER_IDTR, PerCoreMmiEntryStructHdr, SmiHandlerIdtPatchInputs, parse_smi_handler_idt_descriptor,
+        validate_smi_handler_idt_patch_inputs,
     };
 
     use crate::mem::AllocationType;
@@ -158,7 +158,7 @@ mod tests {
         assert_eq!(size_of::<crate::comm_buffer::MmCommonRegionHobData>(), 32);
         assert_eq!(size_of::<crate::pass_down_hob::MmSupvPassDownHobData>(), 64);
         assert_eq!(size_of::<PerCoreMmiEntryStructHdr>(), 22);
-        assert_eq!(size_of::<DescriptorTablePointer>(), 10);
+        assert_eq!(size_of::<crate::intrinsics::DescriptorTablePointer>(), 10);
     }
 
     #[test]
@@ -198,15 +198,5 @@ mod tests {
             parse_smi_handler_idt_descriptor(&out_of_bounds_fixup),
             Err(SmiHandlerIdtPatchError::Fixup64EntryOutOfBounds.into())
         );
-    }
-
-    #[test]
-    fn test_read_idtr_is_zeroed_in_unit_tests() {
-        let idtr = read_idtr();
-        let base = idtr.base;
-        let limit = idtr.limit;
-
-        assert_eq!(base, 0);
-        assert_eq!(limit, 0);
     }
 }
