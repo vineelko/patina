@@ -7,10 +7,9 @@
 //! ## Coverage
 //!
 //! Every error type the supervisor declares is represented here, either as its own variant or
-//! nested inside one. [`MmramBoundError`] is reached through
-//! [`CoreInitError::MmramBoundFailed`], and the external
-//! [`EfiError`](patina::error::EfiError) through [`CoreInitError::InterruptManagerInit`], because
-//! both describe a stage of core bring-up rather than a subsystem of their own.
+//! nested inside one. The external [`EfiError`](patina::error::EfiError) is reached through
+//! [`CoreInitError::InterruptManagerInit`], because it describes a stage of core bring-up rather
+//! than a subsystem of its own.
 //!
 //! ## License
 //!
@@ -67,6 +66,8 @@ pub enum MmSupervisorError {
     SyscallSetup(SyscallSetupError),
     /// The `PassDown` HOB did not describe usable save-state regions.
     SaveStateValidation(SaveStateValidationError),
+    /// The MMRAM bound could not be established from the incoming SMRAM descriptors.
+    MmramBound(MmramBoundError),
     /// The SMRRs could not be programmed to protect MMRAM.
     Smrr(SmrrError),
     /// The GDT privilege transition entries could not be programmed.
@@ -95,6 +96,7 @@ impl core::error::Error for MmSupervisorError {
             Self::PageTableWalk(err) => Some(err),
             Self::SyscallSetup(err) => Some(err),
             Self::SaveStateValidation(err) => Some(err),
+            Self::MmramBound(err) => Some(err),
             Self::Smrr(err) => Some(err),
             Self::CallGate(err) => Some(err),
             Self::SmiHandlerIdtPatch(err) => Some(err),
@@ -119,6 +121,7 @@ impl fmt::Display for MmSupervisorError {
             Self::PageTableWalk(err) => write!(f, "Page table walk: {err}"),
             Self::SyscallSetup(err) => write!(f, "Syscall setup: {err}"),
             Self::SaveStateValidation(err) => write!(f, "Save-state validation: {err}"),
+            Self::MmramBound(err) => write!(f, "MMRAM bound: {err}"),
             Self::Smrr(err) => write!(f, "SMRR Programming: {err}"),
             Self::CallGate(err) => write!(f, "Call gate setup: {err}"),
             Self::SmiHandlerIdtPatch(err) => write!(f, "SMI handler IDT patch: {err}"),
@@ -192,7 +195,7 @@ impl From<SmrrError> for MmSupervisorError {
 
 impl From<MmramBoundError> for MmSupervisorError {
     fn from(error: MmramBoundError) -> Self {
-        Self::CoreInit(CoreInitError::MmramBoundFailed(error))
+        Self::MmramBound(error)
     }
 }
 
@@ -250,6 +253,10 @@ mod tests {
         assert_eq!(
             MmSupervisorError::from(CoreInitError::InitializedBufferUnavailable),
             MmSupervisorError::CoreInit(CoreInitError::InitializedBufferUnavailable)
+        );
+        assert_eq!(
+            MmSupervisorError::from(MmramBoundError::NoSmrrRange),
+            MmSupervisorError::MmramBound(MmramBoundError::NoSmrrRange)
         );
         assert_eq!(MmSupervisorError::from(AllocError::OutOfMemory), MmSupervisorError::Alloc(AllocError::OutOfMemory));
         assert_eq!(

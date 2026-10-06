@@ -81,7 +81,7 @@ pub(crate) fn establish_mmram_bound(
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
-    use crate::init::CoreInitError;
+    use crate::error::MmSupervisorError;
 
     #[test]
     fn test_establish_mmram_bound_returns_the_derived_range() {
@@ -103,10 +103,7 @@ mod tests {
             Some(SmramRegion::new(0x1000, 0x2000, false))
         });
 
-        assert_eq!(
-            result,
-            Err(CoreInitError::MmramBoundFailed(MmramBoundError::AnchorOutsideRegions { anchor: 0x4000 }).into())
-        );
+        assert_eq!(result, Err(MmramBoundError::AnchorOutsideRegions { anchor: 0x4000 }.into()));
         assert!(!derived.get(), "the range was derived from descriptors that had already failed");
     }
 
@@ -119,7 +116,7 @@ mod tests {
         assert!(establish_mmram_bound(&regions, 0x2fff, |_| Some(range)).is_ok());
         assert_eq!(
             establish_mmram_bound(&regions, 0x3000, |_| Some(range)),
-            Err(CoreInitError::MmramBoundFailed(MmramBoundError::AnchorOutsideRegions { anchor: 0x3000 }).into())
+            Err(MmramBoundError::AnchorOutsideRegions { anchor: 0x3000 }.into())
         );
     }
 
@@ -127,10 +124,7 @@ mod tests {
     fn test_establish_mmram_bound_rejects_regions_without_an_smrr_range() {
         let regions = [SmramRegion::new(0x1000, 0x2000, false)];
 
-        assert_eq!(
-            establish_mmram_bound(&regions, 0x1000, |_| None),
-            Err(CoreInitError::MmramBoundFailed(MmramBoundError::NoSmrrRange).into())
-        );
+        assert_eq!(establish_mmram_bound(&regions, 0x1000, |_| None), Err(MmramBoundError::NoSmrrRange.into()));
     }
 
     #[test]

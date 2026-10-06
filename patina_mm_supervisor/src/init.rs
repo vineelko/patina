@@ -26,7 +26,6 @@ use crate::{
     error::MmSupervisorResult,
     mem::AllocationType,
     mm_policy,
-    mmram_bound::MmramBoundError,
     save_state::SaveStateInfo,
     state::{init_state, security_state},
 };
@@ -142,15 +141,12 @@ pub enum CoreInitError {
     InitModuleRegionMissing,
     /// The interrupt manager could not be initialized.
     InterruptManagerInit(EfiError),
-    /// No MMRAM bound could be established from the incoming SMRAM descriptors.
-    MmramBoundFailed(MmramBoundError),
 }
 
 impl core::error::Error for CoreInitError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::InterruptManagerInit(err) => Some(err),
-            Self::MmramBoundFailed(err) => Some(err),
             _ => None,
         }
     }
@@ -174,9 +170,6 @@ impl fmt::Display for CoreInitError {
             Self::UserEntryPointMissing => write!(f, "no user entry point is configured for the BSP to demote to"),
             Self::InitModuleRegionMissing => write!(f, "the HOB list described no MM Init module allocation"),
             Self::InterruptManagerInit(err) => write!(f, "the interrupt manager could not be initialized: {err}"),
-            Self::MmramBoundFailed(err) => {
-                write!(f, "no MMRAM bound could be established from the incoming SMRAM descriptors: {err}")
-            }
         }
     }
 }
@@ -568,11 +561,6 @@ mod tests {
             format!("{}", CoreInitError::InterruptManagerInit(EfiError::Unsupported)),
             format!("the interrupt manager could not be initialized: {}", EfiError::Unsupported)
         );
-        assert_eq!(
-            format!("{}", CoreInitError::MmramBoundFailed(MmramBoundError::NoSmrrRange)),
-            "no MMRAM bound could be established from the incoming SMRAM descriptors: \
-                 no scanned region meets the SMRR base and size requirements"
-        );
     }
 
     #[test]
@@ -581,9 +569,6 @@ mod tests {
 
         let error = CoreInitError::InterruptManagerInit(EfiError::DeviceError);
         assert!(error.source().is_some(), "the wrapped EfiError should be reachable as a source");
-
-        let bound = CoreInitError::MmramBoundFailed(MmramBoundError::AnchorOutsideRegions { anchor: 0x8000 });
-        assert!(bound.source().is_some(), "the wrapped MmramBoundError should be reachable as a source");
 
         // Variants that wrap nothing report no source.
         assert!(CoreInitError::UserEntryPointMissing.source().is_none());
