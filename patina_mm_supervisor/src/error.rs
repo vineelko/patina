@@ -25,7 +25,7 @@
 use crate::{
     comm_buffer::CommBufferError,
     hob_validation::HobValidationError,
-    init::{PolicyInitError, SmiHandlerIdtPatchError, SmiHandlerIdtPatchInputError},
+    init::{SmiHandlerIdtPatchError, SmiHandlerIdtPatchInputError},
     mailbox::MailboxError,
     mem::AllocError,
     mm_core::CoreInitError,
@@ -52,8 +52,6 @@ pub type MmSupervisorResult<T> = Result<T, MmSupervisorError>;
 pub enum MmSupervisorError {
     /// Validation of the incoming HOB list failed.
     HobValidation(HobValidationError),
-    /// Policy or CPU information could not be initialized from the `PassDown` HOB.
-    PolicyInit(PolicyInitError),
     /// A communication buffer could not be adopted from the HOB list.
     CommBuffer(CommBufferError),
     /// The `PassDown` HOB could not be used.
@@ -94,7 +92,6 @@ impl core::error::Error for MmSupervisorError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::HobValidation(err) => Some(err),
-            Self::PolicyInit(err) => Some(err),
             Self::CommBuffer(err) => Some(err),
             Self::PassDownHob(err) => Some(err),
             Self::CoreInit(err) => Some(err),
@@ -121,7 +118,6 @@ impl fmt::Display for MmSupervisorError {
         // The subsystem names the stage that failed; the wrapped error says what went wrong there.
         match self {
             Self::HobValidation(err) => write!(f, "HOB validation: {err}"),
-            Self::PolicyInit(err) => write!(f, "Policy initialization: {err}"),
             Self::CommBuffer(err) => write!(f, "Communication buffer: {err}"),
             Self::PassDownHob(err) => write!(f, "PassDown HOB: {err}"),
             Self::CoreInit(err) => write!(f, "Core bring-up: {err}"),
@@ -146,12 +142,6 @@ impl fmt::Display for MmSupervisorError {
 impl From<HobValidationError> for MmSupervisorError {
     fn from(error: HobValidationError) -> Self {
         Self::HobValidation(error)
-    }
-}
-
-impl From<PolicyInitError> for MmSupervisorError {
-    fn from(error: PolicyInitError) -> Self {
-        Self::PolicyInit(error)
     }
 }
 
@@ -267,10 +257,6 @@ mod tests {
         assert_eq!(
             MmSupervisorError::from(HobValidationError::NoMmramRegions),
             MmSupervisorError::HobValidation(HobValidationError::NoMmramRegions)
-        );
-        assert_eq!(
-            MmSupervisorError::from(PolicyInitError::InvalidPolicyData),
-            MmSupervisorError::PolicyInit(PolicyInitError::InvalidPolicyData)
         );
         assert_eq!(
             MmSupervisorError::from(CommBufferError::Missing),
@@ -392,7 +378,6 @@ mod tests {
         // Every variant wraps a subsystem error, so a source is always reachable.
         let errors = [
             MmSupervisorError::from(HobValidationError::NoMmramRegions),
-            MmSupervisorError::from(PolicyInitError::MemoryAllocationFailed),
             MmSupervisorError::from(CoreInitError::UserEntryPointMissing),
             MmSupervisorError::from(AllocError::OutOfMemory),
             MmSupervisorError::from(PolicyGateError::AccessDenied),
@@ -414,9 +399,9 @@ mod tests {
     }
 
     #[test]
-    fn test_mm_supervisor_error_separates_policy_init_from_core_bring_up() {
+    fn test_mm_supervisor_error_separates_policy_from_core_bring_up() {
         // Both are initialization failures, but they stay distinguishable in the aggregate.
-        let policy = MmSupervisorError::from(PolicyInitError::InvalidPolicyData);
+        let policy = MmSupervisorError::from(PolicyGateError::MalformedPolicy);
         let core = CoreInitError::UserEntryPointMissing.into();
         assert_ne!(policy, core);
 

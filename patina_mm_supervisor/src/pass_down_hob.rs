@@ -50,6 +50,11 @@ pub enum PassDownHobError {
     },
     /// The firmware policy buffer pointer or its size is zero.
     NullFirmwarePolicyBuffer,
+    /// The firmware policy buffer size does not fit the target architecture.
+    FirmwarePolicyBufferSizeUnsupported {
+        /// Size the HOB reported.
+        size: u64,
+    },
     /// The firmware policy buffer address plus its size overflows.
     FirmwarePolicyBufferOverflows {
         /// Base address the HOB reported.
@@ -73,6 +78,9 @@ impl fmt::Display for PassDownHobError {
                 write!(f, "PassDown pointer `{field}` = 0x{addr:x} (size 0x{size:x}) is outside MMRAM")
             }
             Self::NullFirmwarePolicyBuffer => write!(f, "the firmware policy buffer is null or empty"),
+            Self::FirmwarePolicyBufferSizeUnsupported { size } => {
+                write!(f, "the firmware policy buffer size {size} does not fit the target architecture")
+            }
             Self::FirmwarePolicyBufferOverflows { base, size } => {
                 write!(f, "the firmware policy buffer at 0x{base:x} plus size 0x{size:x} overflows")
             }
@@ -226,6 +234,7 @@ mod tests {
             PassDownHobError::InvalidRevision { found: 3, expected: 2 },
             PassDownHobError::PointerOutsideMmram { field: "sm_base", addr: 0x1000, size: 8 },
             PassDownHobError::NullFirmwarePolicyBuffer,
+            PassDownHobError::FirmwarePolicyBufferSizeUnsupported { size: u64::MAX },
             PassDownHobError::FirmwarePolicyBufferOverflows { base: u64::MAX - 0xFFF, size: 0x1000 },
         ];
         for err in errors {

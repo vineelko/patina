@@ -76,7 +76,6 @@ pub use mm_core::MmSupervisorCore;
 // Publicly re-export the handler types since platform-specific handlers will need to reference these for
 // their function signatures and return types.
 pub use comm_buffer::CommBufferConfig;
-pub use init::PolicyInitError;
 pub use request_target::RequestTarget;
 pub use supervisor_handlers::SupervisorMmiHandler;
 

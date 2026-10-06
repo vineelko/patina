@@ -33,7 +33,10 @@ use crate::{PlatformInfo, cpu::CpuManager, mailbox::MailboxManager, privilege_mg
 /// A failure during per-core bring-up, on either the BSP or an AP.
 ///
 /// These describe the state of a single core's entry into the supervisor, as opposed to the
-/// system-wide configuration failures in [`PolicyInitError`].
+/// failures of the artifacts it is handed, which each report through their own type:
+/// [`PassDownHobError`](crate::pass_down_hob::PassDownHobError),
+/// [`CommBufferError`](crate::comm_buffer::CommBufferError), and
+/// [`HobValidationError`](crate::hob_validation::HobValidationError).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreInitError {
     /// The per-core initialized buffer has not been published yet, so no core's initialization

@@ -34,7 +34,7 @@ use patina_paging::{MemoryAttributes, PageTable, PagingType, x64::X64PageTable};
 use crate::{
     CommBufferConfig, MmSupervisorCore, PlatformInfo,
     comm_buffer::{CommBufferError, init_supv_comm_buffer, init_user_comm_buffer},
-    error::{MmSupervisorError, MmSupervisorResult},
+    error::MmSupervisorResult,
     hob_validation::{self, HobValidationError},
     intrinsics::read_cr3,
     mem::AllocationType,
@@ -55,7 +55,6 @@ use crate::{
 
 use super::CoreInitError;
 use crate::hob::{find_guid_hob, find_module};
-use crate::init::PolicyInitError;
 use crate::init::smi_idt_patch::patch_smi_handler_idt;
 use crate::mmram_bound::{establish_mmram_bound, supervisor_image_anchor};
 use crate::mseg::parse_mseg_smram_hob;
@@ -86,8 +85,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// Reports the first stage that fails, so the caller stops before anything further is
     /// programmed. The HOB list is rejected through [`HobValidationError`], the SMRRs through
-    /// [`SmrrError`], the allocators through [`AllocError`], and the module discovery and policy
-    /// setup through [`CoreInitError`] and [`PolicyInitError`].
+    /// [`SmrrError`](crate::smrr::SmrrError), the allocators through
+    /// [`AllocError`](crate::mem::AllocError), and the module discovery and policy
+    /// setup through [`CoreInitError`] and [`PassDownHobError`].
     ///
     /// The MM IPL describes MMRAM and sits outside the supervisor's trust boundary, and the
     /// platform leaves the SMRRs unprogrammed at entry, so no hardware bound is available to check
@@ -162,7 +162,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// # Errors
     ///
-    /// Returns an [`AllocError`] when the regions cannot back the page allocator, when the paging
+    /// Returns an [`AllocError`](crate::mem::AllocError) when the regions cannot back the page
+    /// allocator, when the paging
     /// pool cannot be reserved out of them, or when the paging allocator is already initialized.
     /// The page allocator keeps whatever state it reached, so a failed call leaves the paging
     /// allocator uninitialized rather than half configured.
@@ -315,9 +316,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// # Errors
     ///
-    /// Reports a [`PolicyInitError`] when the `PassDown` HOB cannot be parsed, and a
-    /// [`PolicyValidationError`](mm_policy::helpers::PolicyValidationError) when the policy blob
-    /// itself is rejected. Both were fatal before and still stop initialization; the caller now
+    /// Reports a [`PassDownHobError`] when the `PassDown` HOB cannot be parsed, a
+    /// [`PolicyGateError`](crate::mm_policy::gate::PolicyGateError) when the policy blob cannot
+    /// be read, and a [`PolicyValidationError`](mm_policy::helpers::PolicyValidationError) when
+    /// the blob is rejected. All were fatal before and still stop initialization; the caller now
     /// decides how to fail instead of this function panicking.
     fn init_policy_and_validate(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
         self.init_policy_from_hob_list(hob_hand_off_table)?;
@@ -487,7 +489,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// # Errors
     ///
-    /// Returns an [`SmrrError`] when this processor's SMRRs cannot be programmed. The range is
+    /// Returns an [`SmrrError`](crate::smrr::SmrrError) when this processor's SMRRs cannot be
+    /// programmed. The range is
     /// per-logical-processor, so one core failing does not undo the cores that already succeeded.
     ///
     /// # Panics
@@ -747,35 +750,29 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         log::info!("Validated save-state regions for {number_of_cpus} CPU(s) from SMBASE array at 0x{sm_base:016x}");
 
         let policy_ptr = firmware_policy_buffer as *const u8;
-        let memory_policy_buffer = security_state().page_allocator().allocate_pages(1).map_err(|e| {
-            log::error!("Failed to allocate page for memory policy buffer: {e:?}");
-            PolicyInitError::MemoryAllocationFailed
-        })?;
+        let memory_policy_buffer = security_state()
+            .page_allocator()
+            .allocate_pages(1)
+            .inspect_err(|e| log::error!("Failed to allocate page for memory policy buffer: {e}"))?;
 
-        let policy_buffer_size =
-            usize::try_from(firmware_policy_buffer_size).map_err(|_| PolicyInitError::InvalidPolicyData)?;
+        let policy_buffer_size = usize::try_from(firmware_policy_buffer_size)
+            .map_err(|_| PassDownHobError::FirmwarePolicyBufferSizeUnsupported { size: firmware_policy_buffer_size })?;
 
         // SAFETY: `policy_ptr` is the firmware policy buffer from the PassDown HOB, validated
         // non-zero above, and stays resident for the supervisor's lifetime. The HOB's reported
         // size bounds the blob's own internal offsets.
-        match unsafe { PolicyGate::new(policy_ptr, policy_buffer_size) } {
-            Ok(mut gate) => {
-                log::info!("Policy gate initialized successfully");
-                // SAFETY: `policy_ptr` is the same valid, resident firmware policy buffer.
-                unsafe { dump_policy(policy_ptr) };
+        let mut gate = unsafe { PolicyGate::new(policy_ptr, policy_buffer_size) }
+            .inspect_err(|e| log::error!("Failed to create policy gate: {e}"))?;
+        log::info!("Policy gate initialized successfully");
+        // SAFETY: `policy_ptr` is the same valid, resident firmware policy buffer.
+        unsafe { dump_policy(policy_ptr) };
 
-                mm_policy::audit_boundary_msr_grants(&gate);
-                mm_policy::audit_boundary_io_grants(&gate);
+        mm_policy::audit_boundary_msr_grants(&gate);
+        mm_policy::audit_boundary_io_grants(&gate);
 
-                let mem_policy_max_count = UEFI_PAGE_SIZE / core::mem::size_of::<MemDescriptorV1_0>();
-                gate.set_memory_policy_buffer(memory_policy_buffer as *mut MemDescriptorV1_0, mem_policy_max_count);
-                security_state().set_policy_gate(gate);
-            }
-            Err(e) => {
-                log::error!("Failed to create policy gate: {e:?}");
-                return Err(CoreInitError::MpInformationHobMalformed.into());
-            }
-        }
+        let mem_policy_max_count = UEFI_PAGE_SIZE / core::mem::size_of::<MemDescriptorV1_0>();
+        gate.set_memory_policy_buffer(memory_policy_buffer as *mut MemDescriptorV1_0, mem_policy_max_count);
+        security_state().set_policy_gate(gate);
 
         // Initialize syscall interface. The CPU count bounds `get_cpl3_stack`, so it must be the
         // count the MM IPL sized the stack array for, not the supervisor's `MAX_CPUS` capacity.
