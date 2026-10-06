@@ -11,7 +11,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
-use core::{ffi::c_void, sync::atomic::AtomicU8};
+use core::{ffi::c_void, fmt, sync::atomic::AtomicU8};
 
 use patina::{
     UEFI_PAGE_SIZE, align_range,
@@ -32,13 +32,15 @@ use patina_paging::{
 
 use crate::{
     AllocationType, CommBufferConfig, MmSupervisorCore, PageOwnership, PlatformInfo, SharedPagingAllocator,
-    buffer_overlaps_mmram, hob_validation,
+    buffer_overlaps_mmram,
+    error::{CoreInitError, MmSupervisorError, MmSupervisorResult},
+    hob_validation::{self, HobValidationError},
     intrinsics::{get_current_cpu_id, read_cr3, write_msr},
     is_buffer_inside_mmram,
-    mem::page_allocator::SmramDescriptor,
     mem::{
-        self,
-        page_allocator::{classify_mmram_in_regions, coalesced_smrr_range, regions_contain},
+        self, PageAllocator,
+        mmram_placement::{classify_mmram_in_regions, regions_contain},
+        page_allocator::{SmramDescriptor, coalesced_smrr_range},
     },
     mm_policy::{self, MemDescriptorV1_0, dump_policy, gate::PolicyGate, walk_page_table},
     query_address_ownership,
@@ -91,6 +93,37 @@ pub enum PolicyInitError {
     InvalidSaveStateRegions,
 }
 
+impl core::error::Error for PolicyInitError {}
+
+impl fmt::Display for PolicyInitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NullHobList => write!(f, "the HOB list pointer is null"),
+            Self::HobNotFound => write!(f, "a required HOB was not found in the HOB list"),
+            Self::InvalidRevision { found, expected } => {
+                write!(f, "the PassDown HOB reports revision {found}, but revision {expected} was expected")
+            }
+            Self::NullFirmwarePolicyBuffer => write!(f, "the firmware policy buffer is null or empty"),
+            Self::InvalidPolicyData => write!(f, "the policy data is malformed or truncated"),
+            Self::InvalidCpuCount { found, maximum } => {
+                write!(f, "the MP Information HOB reports {found} CPUs, more than the supported maximum of {maximum}")
+            }
+            Self::InvalidCommunicationBufferSize { pages } => write!(
+                f,
+                "a communication buffer page count of {pages} is zero, too large for the target architecture, \
+                 or overflows its address range"
+            ),
+            Self::MemoryAllocationFailed => write!(f, "a policy buffer allocation failed"),
+            Self::MissingCommunicationBuffer => {
+                write!(f, "one or more communication buffers are not properly initialized")
+            }
+            Self::InvalidSaveStateRegions => {
+                write!(f, "the PassDown HOB does not describe usable per-CPU save-state regions")
+            }
+        }
+    }
+}
+
 /// Offset from SMBASE where the SMI handler code is located.
 const SMM_HANDLER_OFFSET: u64 = 0x8000;
 
@@ -112,7 +145,7 @@ static IMAGE_ANCHOR: u8 = 0;
 
 /// Why the incoming SMRAM descriptors cannot be used as an MMRAM bound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MmramBoundError {
+pub enum MmramBoundError {
     /// The descriptors do not cover an address the CPU proves is MMRAM.
     AnchorOutsideRegions {
         /// The address that was expected to be covered.
@@ -120,6 +153,19 @@ enum MmramBoundError {
     },
     /// No scanned region meets the SMRR base and size requirements.
     NoSmrrRange,
+}
+
+impl core::error::Error for MmramBoundError {}
+
+impl fmt::Display for MmramBoundError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AnchorOutsideRegions { anchor } => {
+                write!(f, "the scanned descriptors do not cover the supervisor image anchor 0x{anchor:016x}")
+            }
+            Self::NoSmrrRange => write!(f, "no scanned region meets the SMRR base and size requirements"),
+        }
+    }
 }
 
 /// Returns an address the CPU proves is inside MMRAM.
@@ -143,9 +189,9 @@ fn establish_mmram_bound(
     scanned: &[SmramRegion],
     anchor: u64,
     derive_smrr_range: impl FnOnce(&[SmramRegion]) -> Option<SmramRegion>,
-) -> Result<SmramRegion, MmramBoundError> {
+) -> MmSupervisorResult<SmramRegion> {
     if !regions_contain(scanned, anchor) {
-        return Err(MmramBoundError::AnchorOutsideRegions { anchor });
+        return Err(MmramBoundError::AnchorOutsideRegions { anchor }.into());
     }
 
     let range = derive_smrr_range(scanned).ok_or(MmramBoundError::NoSmrrRange)?;
@@ -262,23 +308,74 @@ struct DescriptorTablePointer {
     base: u64,
 }
 
+/// Why the MMI entry's embedded IDT fixup structure could not be parsed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SmiHandlerIdtPatchError {
+pub enum SmiHandlerIdtPatchError {
+    /// The MMI entry is too small to hold the trailing structure-size field.
     EntryTooSmall,
+    /// The fixup structure the trailer points at lies outside the MMI entry.
     FixupStructureOutOfBounds,
+    /// The fixup structure is smaller than its own header.
     FixupHeaderTooSmall,
-    Fixup64ArrayTooSmall { found: u8 },
+    /// The Fixup64 array holds fewer entries than the IDTR slot index requires.
+    Fixup64ArrayTooSmall {
+        /// Number of Fixup64 entries the header reported.
+        found: u8,
+    },
+    /// The addressed Fixup64 entry lies outside the MMI entry.
     Fixup64EntryOutOfBounds,
 }
 
+impl core::error::Error for SmiHandlerIdtPatchError {}
+
+impl fmt::Display for SmiHandlerIdtPatchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EntryTooSmall => write!(f, "the MMI entry is too small to hold its trailing structure-size field"),
+            Self::FixupStructureOutOfBounds => {
+                write!(f, "the fixup structure the MMI entry trailer points at lies outside the entry")
+            }
+            Self::FixupHeaderTooSmall => write!(f, "the fixup structure is smaller than its own header"),
+            Self::Fixup64ArrayTooSmall { found } => {
+                write!(f, "the Fixup64 array holds {found} entries, too few for the IDTR slot the supervisor patches")
+            }
+            Self::Fixup64EntryOutOfBounds => write!(f, "the addressed Fixup64 entry lies outside the MMI entry"),
+        }
+    }
+}
+
+/// Why the inputs handed to the SMI handler IDT patch cannot be used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SmiHandlerIdtPatchInputError {
+pub enum SmiHandlerIdtPatchInputError {
+    /// The MMI entry size is zero.
     ZeroEntrySize,
+    /// The SMBASE array pointer is null, or no CPUs were reported.
     MissingSmBaseArray,
+    /// The reported CPU count does not fit the target architecture.
     CpuCountTooLarge,
+    /// The SMBASE array size overflows, so the array cannot be addressed.
     SmBaseArraySizeOverflow,
+    /// The SMBASE array is not entirely inside MMRAM.
     SmBaseArrayOutsideMmram,
+    /// The MMI entry size does not fit the target architecture.
     EntrySizeTooLarge,
+}
+
+impl core::error::Error for SmiHandlerIdtPatchInputError {}
+
+impl fmt::Display for SmiHandlerIdtPatchInputError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ZeroEntrySize => write!(f, "the MMI entry size is zero"),
+            Self::MissingSmBaseArray => write!(f, "the SMBASE array pointer is null, or no CPUs were reported"),
+            Self::CpuCountTooLarge => write!(f, "the reported CPU count does not fit the target architecture"),
+            Self::SmBaseArraySizeOverflow => {
+                write!(f, "the SMBASE array size overflows, so the array cannot be addressed")
+            }
+            Self::SmBaseArrayOutsideMmram => write!(f, "the SMBASE array is not entirely inside MMRAM"),
+            Self::EntrySizeTooLarge => write!(f, "the MMI entry size does not fit the target architecture"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,31 +390,33 @@ fn validate_smi_handler_idt_patch_inputs(
     number_of_cpus: u64,
     mmi_entry_size: u64,
     is_inside_mmram: impl Fn(u64, u64) -> bool,
-) -> Result<SmiHandlerIdtPatchInputs, SmiHandlerIdtPatchInputError> {
+) -> MmSupervisorResult<SmiHandlerIdtPatchInputs> {
     if mmi_entry_size == 0 {
-        return Err(SmiHandlerIdtPatchInputError::ZeroEntrySize);
+        return Err(SmiHandlerIdtPatchInputError::ZeroEntrySize.into());
     }
     if sm_base_array == 0 || number_of_cpus == 0 {
-        return Err(SmiHandlerIdtPatchInputError::MissingSmBaseArray);
+        return Err(SmiHandlerIdtPatchInputError::MissingSmBaseArray.into());
     }
 
-    let cpu_count = usize::try_from(number_of_cpus).map_err(|_| SmiHandlerIdtPatchInputError::CpuCountTooLarge)?;
+    let cpu_count = usize::try_from(number_of_cpus)
+        .map_err(|_| MmSupervisorError::from(SmiHandlerIdtPatchInputError::CpuCountTooLarge))?;
     let sm_base_array_size = cpu_count
         .checked_mul(core::mem::size_of::<u64>())
         .filter(|size| isize::try_from(*size).is_ok())
-        .ok_or(SmiHandlerIdtPatchInputError::SmBaseArraySizeOverflow)?;
-    let sm_base_array_size_u64 =
-        u64::try_from(sm_base_array_size).map_err(|_| SmiHandlerIdtPatchInputError::SmBaseArraySizeOverflow)?;
+        .ok_or(MmSupervisorError::SmiHandlerIdtPatchInput(SmiHandlerIdtPatchInputError::SmBaseArraySizeOverflow))?;
+    let sm_base_array_size_u64 = u64::try_from(sm_base_array_size).map_err(|_| {
+        MmSupervisorError::SmiHandlerIdtPatchInput(SmiHandlerIdtPatchInputError::SmBaseArraySizeOverflow)
+    })?;
     if sm_base_array.checked_add(sm_base_array_size_u64).is_none()
         || !is_inside_mmram(sm_base_array, sm_base_array_size_u64)
     {
-        return Err(SmiHandlerIdtPatchInputError::SmBaseArrayOutsideMmram);
+        return Err(SmiHandlerIdtPatchInputError::SmBaseArrayOutsideMmram.into());
     }
 
     let mmi_entry_size_usize = usize::try_from(mmi_entry_size)
         .ok()
         .filter(|size| isize::try_from(*size).is_ok())
-        .ok_or(SmiHandlerIdtPatchInputError::EntrySizeTooLarge)?;
+        .ok_or(MmSupervisorError::SmiHandlerIdtPatchInput(SmiHandlerIdtPatchInputError::EntrySizeTooLarge))?;
 
     Ok(SmiHandlerIdtPatchInputs {
         sm_base_array_size,
@@ -326,7 +425,7 @@ fn validate_smi_handler_idt_patch_inputs(
     })
 }
 
-fn parse_smi_handler_idt_descriptor(mmi_entry: &[u8]) -> Result<u64, SmiHandlerIdtPatchError> {
+fn parse_smi_handler_idt_descriptor(mmi_entry: &[u8]) -> MmSupervisorResult<u64> {
     const TRAILING_SIZE_FIELD_SIZE: usize = core::mem::size_of::<u32>();
 
     let trailer_start =
@@ -342,7 +441,7 @@ fn parse_smi_handler_idt_descriptor(mmi_entry: &[u8]) -> Result<u64, SmiHandlerI
         .map_err(|_| SmiHandlerIdtPatchError::FixupHeaderTooSmall)?;
 
     if FIXUP64_SMI_HANDLER_IDTR >= usize::from(header.fixup64_num) {
-        return Err(SmiHandlerIdtPatchError::Fixup64ArrayTooSmall { found: header.fixup64_num });
+        return Err(SmiHandlerIdtPatchError::Fixup64ArrayTooSmall { found: header.fixup64_num }.into());
     }
 
     let fixup64_entry_start = usize::from(header.fixup64_offset)
@@ -412,28 +511,22 @@ impl SmiHandlerIdtPatchServices for RuntimeSmiHandlerIdtPatchServices {
     }
 }
 
-type CommBufferInitResult = (u64, u64, u64, u64);
+type CommBufferInitValue = (u64, u64, u64, u64);
 
 trait PolicyInitServices {
-    type PolicyCheckError: core::fmt::Debug;
-
-    unsafe fn init_from_pass_down_hob(
-        &mut self,
-        data: &[u8],
-        number_of_cpus: u64,
-    ) -> Result<(u64, u64), PolicyInitError>;
+    unsafe fn init_from_pass_down_hob(&mut self, data: &[u8], number_of_cpus: u64) -> MmSupervisorResult<(u64, u64)>;
     fn set_save_state_info(&mut self, info: SaveStateInfo);
     fn set_mseg_base(&mut self, base: u64);
     fn patch_smi_handler_idt(&mut self, sm_base: u64, number_of_cpus: u64, mmi_entry_size: u64);
-    fn init_supv_comm_buffer(&mut self, data: &[u8]) -> Result<CommBufferInitResult, PolicyInitError>;
+    fn init_supv_comm_buffer(&mut self, data: &[u8]) -> MmSupervisorResult<CommBufferInitValue>;
     unsafe fn init_user_comm_buffer(
         &mut self,
         data: *mut u8,
         data_len: usize,
-    ) -> Result<CommBufferInitResult, PolicyInitError>;
-    fn allocate_supv_to_user_buffer(&mut self) -> Result<u64, PolicyInitError>;
+    ) -> MmSupervisorResult<CommBufferInitValue>;
+    fn allocate_supv_to_user_buffer(&mut self) -> MmSupervisorResult<u64>;
     fn set_comm_buffer_config(&mut self, config: CommBufferConfig);
-    fn validate_policy(&mut self) -> Result<(), Self::PolicyCheckError>;
+    fn validate_policy(&mut self) -> MmSupervisorResult<()>;
 }
 
 struct RuntimePolicyInitServices<'a, P: PlatformInfo, const MAX_CPUS: usize> {
@@ -441,13 +534,7 @@ struct RuntimePolicyInitServices<'a, P: PlatformInfo, const MAX_CPUS: usize> {
 }
 
 impl<P: PlatformInfo, const MAX_CPUS: usize> PolicyInitServices for RuntimePolicyInitServices<'_, P, MAX_CPUS> {
-    type PolicyCheckError = mm_policy::helpers::PolicyCheckError;
-
-    unsafe fn init_from_pass_down_hob(
-        &mut self,
-        data: &[u8],
-        number_of_cpus: u64,
-    ) -> Result<(u64, u64), PolicyInitError> {
+    unsafe fn init_from_pass_down_hob(&mut self, data: &[u8], number_of_cpus: u64) -> MmSupervisorResult<(u64, u64)> {
         // SAFETY: the caller forwards a validated PassDown HOB payload.
         unsafe { self.supervisor.init_from_pass_down_hob(data, number_of_cpus) }
     }
@@ -472,7 +559,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> PolicyInitServices for RuntimePolic
         );
     }
 
-    fn init_supv_comm_buffer(&mut self, data: &[u8]) -> Result<CommBufferInitResult, PolicyInitError> {
+    fn init_supv_comm_buffer(&mut self, data: &[u8]) -> MmSupervisorResult<CommBufferInitValue> {
         init_supv_comm_buffer(data)
     }
 
@@ -480,15 +567,15 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> PolicyInitServices for RuntimePolic
         &mut self,
         data: *mut u8,
         data_len: usize,
-    ) -> Result<CommBufferInitResult, PolicyInitError> {
+    ) -> MmSupervisorResult<CommBufferInitValue> {
         // SAFETY: the caller forwards the original writable user communication HOB payload.
         unsafe { init_user_comm_buffer(data, data_len) }
     }
 
-    fn allocate_supv_to_user_buffer(&mut self) -> Result<u64, PolicyInitError> {
+    fn allocate_supv_to_user_buffer(&mut self) -> MmSupervisorResult<u64> {
         security_state().page_allocator().allocate_pages_with_type(1, AllocationType::User).map_err(|e| {
-            log::error!("Failed to allocate page for supervisor-to-user buffer: {e:?}");
-            PolicyInitError::MemoryAllocationFailed
+            log::error!("Failed to allocate page for supervisor-to-user buffer: {e}");
+            MmSupervisorError::from(PolicyInitError::MemoryAllocationFailed)
         })
     }
 
@@ -496,7 +583,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> PolicyInitServices for RuntimePolic
         security_state().set_comm_buffer_config(config);
     }
 
-    fn validate_policy(&mut self) -> Result<(), Self::PolicyCheckError> {
+    fn validate_policy(&mut self) -> MmSupervisorResult<()> {
         let gate =
             security_state().policy_gate().expect("Policy gate must be initialized before policy validation runs");
         // SAFETY: `gate.as_ptr()` returns the resident firmware policy buffer pointer
@@ -515,6 +602,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// Returns the address of the read-only HOB list copy to hand the user core.
     ///
+    /// # Errors
+    ///
+    /// Reports the first stage that fails, so the caller stops before anything further is
+    /// programmed. The HOB list is rejected through [`HobValidationError`], the SMRRs through
+    /// [`SmrrError`], the allocators through [`AllocError`], and the module discovery and policy
+    /// setup through [`CoreInitError`] and [`PolicyInitError`].
+    ///
     /// The MM IPL describes MMRAM and sits outside the supervisor's trust boundary, and the
     /// platform leaves the SMRRs unprogrammed at entry, so no hardware bound is available to check
     /// its descriptors against. Ordering carries the weight instead: the descriptors are parsed
@@ -522,47 +616,34 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// the SMRR, and only then is anything written into the memory they name. The extent
     /// of MMRAM still originates with the MM IPL, which remains a platform requirement rather than
     /// something the supervisor can verify.
-    pub(crate) fn bsp_init(&'static self, hob_list: *const c_void) -> u64 {
+    pub(crate) fn bsp_init(
+        &'static self,
+        hob_hand_off_table: &PhaseHandoffInformationTable,
+    ) -> MmSupervisorResult<u64> {
         log::info!("BSP performing one-time initialization...");
 
-        let mut interrupt_manager = Interrupts::new();
-        interrupt_manager.initialize().unwrap_or_else(|err| {
-            panic!("Failed to initialize Interrupt Manager: {err:?}");
-        });
+        Interrupts::new()
+            .initialize()
+            .map_err(|err| MmSupervisorError::from(CoreInitError::InterruptManagerInit(err)))?;
 
         // Parse the producer's SMRAM descriptors into stack metadata. Nothing in MMRAM is written
         // until they have been anchored and validated below.
         // SAFETY: `hob_list` is provided by the MM IPL and is guaranteed to be a
         // valid HOB list (the caller asserts it is non-null before dispatching).
-        let (scanned_regions, region_count) = match unsafe { mem::PageAllocator::scan_hob_list(hob_list) } {
-            Ok(scanned) => scanned,
-            Err(e) => panic!("Failed to scan the SMRAM regions described by the HOB list: {e:?}"),
-        };
+        let (scanned_regions, region_count) = unsafe { PageAllocator::scan_hob_list(hob_hand_off_table)? };
+
         let scanned_regions = scanned_regions.get(..region_count).unwrap_or(&scanned_regions);
 
-        let smrr_range = match establish_mmram_bound(scanned_regions, supervisor_image_anchor(), coalesced_smrr_range) {
-            Ok(range) => range,
-            Err(e) => panic!("Cannot establish an MMRAM bound from the incoming HOB list: {e:?}"),
-        };
+        let smrr_range = establish_mmram_bound(scanned_regions, supervisor_image_anchor(), coalesced_smrr_range)?;
 
-        // Validate the critical incoming HOBs against the scanned metadata, before any of their
-        // contents are consumed below.
-        // SAFETY: `hob_list` was checked non-null by `entry_point` and points to
-        // a valid HOB list for the duration of BSP initialization.
-        let handoff = unsafe { hob_list.cast::<PhaseHandoffInformationTable>().as_ref() }
-            .expect("BSP initialization requires a non-null HOB list");
-        if let Err(e) =
-            hob_validation::validate_incoming_hobs_pre_paging_init(handoff, scanned_regions, |base, size| {
-                classify_mmram_in_regions(scanned_regions, base, size).is_inside(base, size)
-            })
-        {
-            panic!("Incoming HOB validation failed: {e}");
-        }
+        hob_validation::validate_incoming_hobs_pre_paging_init(hob_hand_off_table, scanned_regions, |base, size| {
+            classify_mmram_in_regions(scanned_regions, base, size).is_inside(base, size)
+        })?;
 
         // Program the range before the allocator makes the first write into MMRAM. Enabling it is
         // left to `smrr_enable` on the next SMI entry: finalizing it here makes the range enforcing
         // across the `RSM` back to the non-MM world, which faults that world on this platform.
-        smrr_initialize(smrr_range);
+        smrr_initialize(smrr_range)?;
         init_state().set_smrr_range(smrr_range);
 
         // SAFETY: the descriptors were anchored and validated above, so the free regions they
@@ -572,7 +653,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 scanned_regions,
                 security_state().page_allocator(),
                 security_state().paging_allocator(),
-            );
+            )?;
         }
 
         self.init_page_table();
@@ -580,23 +661,17 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // Validate the incoming HOBs that require an active page table, now
         // that it is available (the remaining checks that only need the page
         // allocator ran above).
-        if let Err(e) = hob_validation::validate_incoming_hobs_post_paging_init(handoff) {
-            panic!("Post-paging HOB validation failed: {e}");
-        }
+        hob_validation::validate_incoming_hobs_post_paging_init(hob_hand_off_table)?;
 
         let mut policy_services = RuntimePolicyInitServices { supervisor: self };
-        // SAFETY: `hob_list` is provided by the MM IPL and is guaranteed to be a
-        // valid HOB list (the caller asserts it is non-null before dispatching).
-        let user_hob_list = unsafe {
-            self.discover_and_store_user_entry(hob_list, init_state());
-            self.discover_and_store_init_region(hob_list, init_state());
-            self.init_policy_and_validate(hob_list, &mut policy_services);
-            // Copied last, so the copy carries the rewrites `init_policy_and_validate` made.
-            self.publish_hob_list_to_user(hob_list)
-        };
+
+        self.discover_and_store_user_entry(hob_hand_off_table, init_state())?;
+        self.discover_and_store_init_region(hob_hand_off_table, init_state())?;
+        self.init_policy_and_validate(hob_hand_off_table, &mut policy_services)?;
+        let user_hob_list = self.publish_hob_list_to_user(hob_hand_off_table)?;
 
         log::info!("BSP one-time initialization complete.");
-        user_hob_list
+        Ok(user_hob_list)
     }
 
     /// Commits the validated SMRAM regions to the page allocator and initializes the paging
@@ -608,26 +683,29 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// ## Safety
     ///
     /// Every non-pre-allocated region in `scanned` must be valid, exclusively owned MMRAM.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`AllocError`] when the regions cannot back the page allocator, when the paging
+    /// pool cannot be reserved out of them, or when the paging allocator is already initialized.
+    /// The page allocator keeps whatever state it reached, so a failed call leaves the paging
+    /// allocator uninitialized rather than half configured.
     unsafe fn init_page_allocators(
         &self,
         scanned: &[SmramRegion],
         page_allocator: &mem::PageAllocator,
         paging_allocator: &mem::PagingPoolAllocator,
-    ) {
+    ) -> MmSupervisorResult<()> {
         // SAFETY: the caller guarantees that the free regions in `scanned` are valid, exclusively
         // owned MMRAM.
-        if let Err(e) = unsafe { page_allocator.init_from_regions(scanned) } {
-            panic!("Failed to initialize page allocator: {e:?}");
+        unsafe {
+            page_allocator.init_from_regions(scanned)?;
         }
 
         // Reserve pages from the page allocator for paging structures. This is
         // done before paging is initialized to avoid a circular dependency.
-        let paging_pool_base = match page_allocator.allocate_pages(mem::DEFAULT_PAGING_POOL_PAGES) {
-            Ok(base) => base,
-            Err(e) => {
-                panic!("Failed to reserve pages for paging structures: {e:?}");
-            }
-        };
+        let paging_pool_base = page_allocator.allocate_pages(mem::DEFAULT_PAGING_POOL_PAGES)?;
+
         log::info!(
             "Reserved {} pages at 0x{:016x} for paging structures",
             mem::DEFAULT_PAGING_POOL_PAGES,
@@ -638,10 +716,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // SAFETY: `paging_pool_base` was just reserved from the page allocator, so it is a
         // page-aligned region of `DEFAULT_PAGING_POOL_PAGES` pages in SMRAM owned exclusively by
         // the paging allocator.
-        let init_result = unsafe { paging_allocator.init(paging_pool_base, mem::DEFAULT_PAGING_POOL_PAGES) };
-        if let Err(e) = init_result {
-            panic!("Failed to initialize paging allocator: {e:?}");
+        unsafe {
+            paging_allocator.init(paging_pool_base, mem::DEFAULT_PAGING_POOL_PAGES)?;
         }
+
+        Ok(())
     }
 
     /// Initializes the global page table from the active CR3.
@@ -668,25 +747,30 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// `MemoryAllocationHeader.Name` is `gMmSupervisorHobMemoryAllocModuleGuid`
     /// and whose `ModuleName` is `gMmSupervisorUserGuid`.
     ///
-    /// ## Safety
+    /// # Errors
     ///
-    /// The caller must ensure that `hob_list` points to a valid HOB list.
-    unsafe fn discover_and_store_user_entry(&self, hob_list: *const c_void, state: &crate::state::InitState) {
-        // SAFETY: `hob_list` is a valid HOB list per this function's contract, so it
-        // points to a readable handoff table for the duration of initialization.
-        let entry = unsafe { hob_list.cast::<PhaseHandoffInformationTable>().as_ref() }
-            .and_then(|handoff| {
-                find_module(&Hob::Handoff(handoff), MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_USER_GUID)
-            })
-            .map(|module| module.entry_point);
+    /// Returns [`CoreInitError::UserEntryPointMissing`] when the HOB list describes no such
+    /// module. The stored entry point is left unset, so no later stage can demote to Ring 3.
+    fn discover_and_store_user_entry(
+        &self,
+        hob_hand_off_table: &PhaseHandoffInformationTable,
+        state: &crate::state::InitState,
+    ) -> MmSupervisorResult<()> {
+        let module = find_module(
+            &Hob::Handoff(hob_hand_off_table),
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_USER_GUID,
+        );
 
-        match entry {
-            Some(entry) => {
-                log::info!("Discovered MM User module entry point: 0x{entry:016x}");
-                state.set_user_entry_point(entry);
-            }
-            None => log::warn!("MM User module entry point not found in HOB list"),
+        if let Some(module) = module {
+            let entry = module.entry_point;
+            log::info!("Discovered MM User module entry point: 0x{entry:016x}");
+            state.set_user_entry_point(entry);
+        } else {
+            return Err(CoreInitError::UserEntryPointMissing.into());
         }
+
+        Ok(())
     }
 
     /// Saves the validated Init image allocation before the producer's HOBs are reclaimed.
@@ -695,21 +779,25 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// `MemoryAllocationHeader.Name` is `gEfiHobMemoryAllocModuleGuid`
     /// and whose `ModuleName` is `gMmSupervisorInitGuid`.
     ///
-    /// ## Safety
+    /// # Errors
     ///
-    /// Call during BSP initialization with the original HOB list after
-    /// [`hob_validation::validate_incoming_hobs_pre_paging_init`] has accepted its module allocations.
-    unsafe fn discover_and_store_init_region(&self, hob_list: *const c_void, state: &crate::state::InitState) {
-        // SAFETY: the caller provides the original HOB list before publication reclaims its pages.
-        let handoff = unsafe { hob_list.cast::<PhaseHandoffInformationTable>().as_ref() }
-            .expect("MM Init discovery requires a non-null HOB list");
-        let hobs = Hob::Handoff(handoff);
-        let Some(module) = find_module(&hobs, HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID) else {
-            log::warn!("MM Init module not found in HOB list");
-            return;
+    /// Returns [`CoreInitError::InitModuleRegionMissing`] when the HOB list describes no Init
+    /// module. Validation already rejects such a list, so reaching this means discovery ran
+    /// against a list that was never accepted.
+    fn discover_and_store_init_region(
+        &self,
+        hob_hand_off_table: &PhaseHandoffInformationTable,
+        state: &crate::state::InitState,
+    ) -> MmSupervisorResult<()> {
+        let Some(module) =
+            find_module(&Hob::Handoff(hob_hand_off_table), HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID)
+        else {
+            return Err(CoreInitError::InitModuleRegionMissing.into());
         };
+
         state
             .set_init_module_region(module.alloc_descriptor.memory_base_address, module.alloc_descriptor.memory_length);
+        Ok(())
     }
 
     /// Frees the saved Init allocation on the first runtime SMI, without accessing any HOBs.
@@ -749,24 +837,23 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// Initializes the policy gate from the `PassDown` HOB and runs an initial
     /// security validation.
     ///
-    /// ## Safety
+    /// # Errors
     ///
-    /// The caller must ensure that `hob_list` points to a valid HOB list.
-    ///
-    /// # Panics
-    ///
-    /// Panics if policy initialization or the initial security-policy validation fails, or if the
-    /// policy gate was not initialized before validation runs.
-    unsafe fn init_policy_and_validate<S: PolicyInitServices>(&self, hob_list: *const c_void, services: &mut S) {
-        // SAFETY: `hob_list` is a valid HOB list per this function's contract.
-        if let Err(e) = unsafe { self.init_policy_from_hob_list(hob_list, services) } {
-            panic!("Failed to initialize policy gate: {e:?}");
-        }
+    /// Reports a [`PolicyInitError`] when the `PassDown` HOB cannot be parsed, and a
+    /// [`PolicyValidationError`](mm_policy::helpers::PolicyValidationError) when the policy blob
+    /// itself is rejected. Both were fatal before and still stop initialization; the caller now
+    /// decides how to fail instead of this function panicking.
+    fn init_policy_and_validate<S: PolicyInitServices>(
+        &self,
+        hob_hand_off_table: &PhaseHandoffInformationTable,
+        services: &mut S,
+    ) -> MmSupervisorResult<()> {
+        self.init_policy_from_hob_list(hob_hand_off_table, services)?;
 
-        if let Err(e) = services.validate_policy() {
-            panic!("Security policy check failed during init: {e:?}");
-        }
+        services.validate_policy()?;
+
         log::info!("Security policy check passed");
+        Ok(())
     }
 
     /// Publishes a read-only copy of the HOB list for the demoted user core and returns its
@@ -778,23 +865,35 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// allocation instead means the only bytes Ring 3 can reach are the HOB list itself and the
     /// zeroed tail of its last page.
     ///
-    /// ## Safety
+    /// # Errors
     ///
-    /// The caller must ensure that `hob_list` points to a valid HOB list.
-    unsafe fn publish_hob_list_to_user(&self, hob_list: *const c_void) -> u64 {
+    /// Returns [`HobValidationError::HobListOutsideMmram`] when the walked list is empty or does
+    /// not lie entirely inside MMRAM, before any of its bytes are read. This was an assertion
+    /// before, so a producer that placed its list outside MMRAM now fails the caller instead of
+    /// halting here.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the list size does not fit the target architecture, if the copy cannot be
+    /// allocated, or if no page table is installed to map the copy read-only. Handing Ring 3 a
+    /// writable copy is worse than stopping, so those remain fail-stop.
+    fn publish_hob_list_to_user(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<u64> {
+        // We need to convert back to *const c_void because
+        // `get_pi_hob_list_size()` do not accept a reference directly.
+        let hob_list: *const c_void = core::ptr::from_ref(hob_hand_off_table).cast();
         let hob_base = hob_list as u64;
         // SAFETY: `hob_list` is a valid HOB list per this function's contract.
         let hob_list_size = unsafe { hob::get_pi_hob_list_size(hob_list) } as u64;
-        assert!(hob_list_size != 0, "HOB list at 0x{hob_base:016x} is empty");
 
-        // The producer named this range, so it is confirmed to be MMRAM before it is read.
-        assert!(
-            is_buffer_inside_mmram(hob_base, hob_list_size),
-            "HOB list at 0x{hob_base:016x} (0x{hob_list_size:x} bytes) is not inside MMRAM"
-        );
+        // A zero-length walk means the list has no HOBs at all, which is not a list. The producer
+        // named this range, so it is confirmed to be MMRAM before it is read.
+        if hob_list_size == 0 || !is_buffer_inside_mmram(hob_base, hob_list_size) {
+            return Err(HobValidationError::HobListOutsideMmram { base: hob_base, size: hob_list_size }.into());
+        }
 
         let size = usize::try_from(hob_list_size)
             .unwrap_or_else(|_| panic!("HOB list size 0x{hob_list_size:x} does not fit the target architecture"));
+
         let pages = size.div_ceil(UEFI_PAGE_SIZE);
         let copy_base = security_state()
             .page_allocator()
@@ -853,7 +952,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             }
         }
 
-        copy_base
+        Ok(copy_base)
     }
 
     /// Maps the per-CPU Ring 3 stacks as user-accessible, writable, non-executable pages.
@@ -1004,7 +1103,17 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// This is called on every core (BSP and APs) during the first entry.
     /// Use this for setting up per-CPU state like syscall MSRs, GS base, etc.
-    pub(crate) fn per_core_init(&'static self, cpu_id: u32, is_bsp: bool) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`SmrrError`] when this processor's SMRRs cannot be programmed. The range is
+    /// per-logical-processor, so one core failing does not undo the cores that already succeeded.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the SMRR range was not determined during BSP initialization, or if the CPU does
+    /// not report SMM Code Access Check support.
+    pub(crate) fn per_core_init(&'static self, cpu_id: u32, is_bsp: bool) -> MmSupervisorResult<()> {
         let core_type = if is_bsp { "BSP" } else { "AP" };
         log::trace!("{core_type} (CPU {cpu_id}) performing per-core initialization...");
 
@@ -1014,10 +1123,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // SMRR is per-logical-processor. The APs program theirs here; the BSP's was done in `bsp_init`.
         let range =
             init_state().smrr_range().expect("SMRR range must be determined during BSP init before per-core init");
-        smrr_initialize(range);
+        smrr_initialize(range)?;
         configure_smm_code_access();
 
         log::trace!("{core_type} (CPU {cpu_id}) per-core initialization complete.");
+        Ok(())
     }
 
     /// Programs this logical processor's `IA32_SMM_MONITOR_CTL` with the MSEG base.
@@ -1056,33 +1166,19 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// Finally, allocates the supervisor-to-user data buffer and stores the
     /// assembled [`CommBufferConfig`].
-    ///
-    /// ## Safety
-    ///
-    /// The caller must ensure that `hob_list` points to a valid HOB list.
-    unsafe fn init_policy_from_hob_list<S: PolicyInitServices>(
+    fn init_policy_from_hob_list<S: PolicyInitServices>(
         &self,
-        hob_list: *const c_void,
+        hob_hand_off_table: &PhaseHandoffInformationTable,
         services: &mut S,
-    ) -> Result<(), PolicyInitError> {
-        if hob_list.is_null() {
-            log::error!("Policy init failed: HOB list pointer is null");
-            return Err(PolicyInitError::NullHobList);
-        }
-
-        // SAFETY: `hob_list` was checked non-null above and, per this function's contract, points
-        // to a valid HOB list, so taking a shared reference to the handoff table header is sound.
-        let hob_list_info =
-            unsafe { hob_list.cast::<PhaseHandoffInformationTable>().as_ref().ok_or(PolicyInitError::NullHobList)? };
-
+    ) -> MmSupervisorResult<()> {
         // 1. Process the MP Information HOB (`gMpInformationHobGuid`) for the CPU count. It sizes
         //    the Ring 3 stack array the PassDown HOB describes, so it is needed first.
-        let mp_information = find_required_hob(hob_list_info, crate::MP_INFORMATION_HOB_GUID, "MP Information")?;
+        let mp_information = find_required_hob(hob_hand_off_table, crate::MP_INFORMATION_HOB_GUID, "MP Information")?;
         let number_of_cpus = self.parse_mp_information_hob(mp_information)?;
 
         // 1b. Process the PassDown HOB (policy, syscall, memory policy)
         let pass_down_data =
-            find_required_hob(hob_list_info, crate::MM_SUPV_PASS_DOWN_HOB_GUID, "MM Supervisor PassDown")?;
+            find_required_hob(hob_hand_off_table, crate::MM_SUPV_PASS_DOWN_HOB_GUID, "MM Supervisor PassDown")?;
         // SAFETY: `pass_down_data` is a slice into the validated HOB list, so the buffer pointers
         // it carries reference live memory as `init_from_pass_down_hob` requires.
         let (sm_base, mmi_entry_size) = unsafe { services.init_from_pass_down_hob(pass_down_data, number_of_cpus)? };
@@ -1094,7 +1190,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         //        MSEG region reserved for an STM. Each core programs the base into
         //        IA32_SMM_MONITOR_CTL during per-core init. Platforms without STM/SEA
         //        integration do not publish this HOB, so its absence is not an error.
-        match find_guid_hob(hob_list_info, crate::MSEG_SMRAM_HOB_GUID).and_then(parse_mseg_smram_hob) {
+        match find_guid_hob(hob_hand_off_table, crate::MSEG_SMRAM_HOB_GUID).and_then(parse_mseg_smram_hob) {
             Some(mseg_base) => {
                 services.set_mseg_base(mseg_base);
                 log::info!("MSEG base 0x{mseg_base:x} discovered from MSEG SMRAM HOB");
@@ -1110,22 +1206,28 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // 2. Process the supervisor communication buffer HOB. Only one
         //    MM_COMM_REGION_HOB is published (the supervisor one); the user
         //    channel flows through MM_COMM_BUFFER_HOB_GUID below.
-        let supv_region_data = find_required_hob(hob_list_info, crate::MM_COMMON_REGION_HOB_GUID, "MM Common Region")?;
+        let supv_region_data =
+            find_required_hob(hob_hand_off_table, crate::MM_COMMON_REGION_HOB_GUID, "MM Common Region")?;
         let (supv_comm_buffer, supv_comm_buffer_size, supv_comm_buffer_internal, supv_status_buffer) =
-            services.init_supv_comm_buffer(supv_region_data)?;
+            services.init_supv_comm_buffer(supv_region_data).inspect_err(|e| {
+                log::error!("Failed to initialize supervisor communication buffer: {e}");
+            })?;
 
         // 3. Process the user communication buffer HOB. This still uses the
         //    legacy `MM_COMM_BUFFER_HOB_GUID` so the user core's own HOB walk
         //    keeps working (see the HACKHACK at the tail of
         //    init_user_comm_buffer).
         let (user_buffer_data, user_buffer_data_len) = {
-            let data = find_required_hob(hob_list_info, MM_COMM_BUFFER_HOB_GUID, "MM Communication Buffer")?;
+            let data = find_required_hob(hob_hand_off_table, MM_COMM_BUFFER_HOB_GUID, "MM Communication Buffer")?;
             (data.as_ptr().cast_mut(), data.len())
         };
         // SAFETY: the pointer and length identify the original HOB payload in the writable live
         // HOB list. The shared slice used to locate it is no longer used while it is rewritten.
-        let (user_comm_buffer, user_comm_buffer_size, user_comm_buffer_internal, user_status_buffer) =
-            unsafe { services.init_user_comm_buffer(user_buffer_data, user_buffer_data_len)? };
+        let (user_comm_buffer, user_comm_buffer_size, user_comm_buffer_internal, user_status_buffer) = unsafe {
+            services.init_user_comm_buffer(user_buffer_data, user_buffer_data_len).inspect_err(|e| {
+                log::error!("Failed to initialize user communication buffer: {e}");
+            })?
+        };
 
         // 4. Allocate the supervisor-to-user data buffer
         let supv_to_user_buffer = services.allocate_supv_to_user_buffer()?;
@@ -1138,7 +1240,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             || supv_to_user_buffer == 0
         {
             log::error!("One or more communication buffers are not properly initialized");
-            return Err(PolicyInitError::MissingCommunicationBuffer);
+            return Err(PolicyInitError::MissingCommunicationBuffer.into());
         }
 
         // Store the assembled communication buffer configuration
@@ -1162,13 +1264,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     }
 
     /// Returns the CPU count from the MP Information HOB.
-    fn parse_mp_information_hob(&self, data: &[u8]) -> Result<u64, PolicyInitError> {
+    fn parse_mp_information_hob(&self, data: &[u8]) -> MmSupervisorResult<u64> {
         /// Offset of `ProcessorInfoBuffer[]` within `MP_INFORMATION_HOB_DATA`.
         const PROCESSOR_INFO_BUFFER_OFFSET: usize = 16;
 
         if data.len() < PROCESSOR_INFO_BUFFER_OFFSET {
             log::error!("MP Information HOB too small: {} < {}", data.len(), PROCESSOR_INFO_BUFFER_OFFSET);
-            return Err(PolicyInitError::InvalidPolicyData);
+            return Err(PolicyInitError::InvalidPolicyData.into());
         }
 
         // The payload was checked to be at least `PROCESSOR_INFO_BUFFER_OFFSET` bytes above,
@@ -1178,38 +1280,38 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             data.get(0..8)
                 .ok_or_else(|| {
                     log::error!("MP Information HOB has no processor count field");
-                    PolicyInitError::InvalidPolicyData
+                    MmSupervisorError::from(PolicyInitError::InvalidPolicyData)
                 })?
                 .try_into()
                 .map_err(|_| {
                     log::error!("MP Information HOB processor count field is not 8 bytes");
-                    PolicyInitError::InvalidPolicyData
+                    MmSupervisorError::from(PolicyInitError::InvalidPolicyData)
                 })?,
         );
         let cpu_count: usize = number_of_cpus.try_into().map_err(|_| {
             log::error!("MP Information HOB CPU count {number_of_cpus} does not fit the target architecture");
-            PolicyInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }
+            MmSupervisorError::from(PolicyInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS })
         })?;
         if cpu_count == 0 || cpu_count > MAX_CPUS {
             log::error!("MP Information HOB CPU count {cpu_count} is outside the supported range 1..={MAX_CPUS}");
-            return Err(PolicyInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS });
+            return Err(PolicyInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }.into());
         }
 
         // `cpu_count` is bounded by `MAX_CPUS`, so the offsets below cannot overflow today.
         let processor_info_size = cpu_count.checked_mul(PROCESSOR_INFO_ENTRY_SIZE).ok_or_else(|| {
             log::error!("MP Information HOB: {cpu_count} processor entries overflow the payload size");
-            PolicyInitError::InvalidPolicyData
+            MmSupervisorError::from(PolicyInitError::InvalidPolicyData)
         })?;
         let processor_info_end = PROCESSOR_INFO_BUFFER_OFFSET.checked_add(processor_info_size).ok_or_else(|| {
             log::error!("MP Information HOB: processor info end offset overflows");
-            PolicyInitError::InvalidPolicyData
+            MmSupervisorError::from(PolicyInitError::InvalidPolicyData)
         })?;
         data.get(PROCESSOR_INFO_BUFFER_OFFSET..processor_info_end).ok_or_else(|| {
             log::error!(
                 "MP Information HOB holds {} bytes but {cpu_count} processor entries need {processor_info_end}",
                 data.len()
             );
-            PolicyInitError::InvalidPolicyData
+            MmSupervisorError::from(PolicyInitError::InvalidPolicyData)
         })?;
 
         Ok(number_of_cpus)
@@ -1229,7 +1331,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// must reference valid memory for their declared sizes and remain resident
     /// for the supervisor's lifetime, as they are dereferenced during setup and
     /// runtime.
-    unsafe fn init_from_pass_down_hob(&self, data: &[u8], number_of_cpus: u64) -> Result<(u64, u64), PolicyInitError> {
+    unsafe fn init_from_pass_down_hob(&self, data: &[u8], number_of_cpus: u64) -> MmSupervisorResult<(u64, u64)> {
         let pass_down = parse_pass_down_hob(data)?;
 
         let MmSupvPassDownHobData {
@@ -1249,13 +1351,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 .try_into()
                 .map_err(|_| PolicyInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS })?;
             if cpu_count == 0 || cpu_count > MAX_CPUS {
-                return Err(PolicyInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS });
+                return Err(PolicyInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }.into());
             }
             if !is_buffer_inside_mmram(mm_initialized_buffer, number_of_cpus) {
                 log::error!(
                     "MM initialized buffer at 0x{mm_initialized_buffer:016x} does not contain {cpu_count} slot(s) in MMRAM"
                 );
-                return Err(PolicyInitError::InvalidPolicyData);
+                return Err(PolicyInitError::InvalidPolicyData.into());
             }
             let buffer_address =
                 usize::try_from(mm_initialized_buffer).map_err(|_| PolicyInitError::InvalidPolicyData)?;
@@ -1277,14 +1379,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         });
         if let Err(e) = validation {
             log::error!("PassDown HOB does not describe usable save-state regions: {e:?}");
-            return Err(PolicyInitError::InvalidSaveStateRegions);
+            return Err(PolicyInitError::InvalidSaveStateRegions.into());
         }
         log::info!("Validated save-state regions for {number_of_cpus} CPU(s) from SMBASE array at 0x{sm_base:016x}");
 
         let policy_ptr = firmware_policy_buffer as *const u8;
         let memory_policy_buffer = security_state().page_allocator().allocate_pages(1).map_err(|e| {
             log::error!("Failed to allocate page for memory policy buffer: {e:?}");
-            PolicyInitError::MemoryAllocationFailed
+            MmSupervisorError::from(PolicyInitError::MemoryAllocationFailed)
         })?;
 
         let policy_buffer_size =
@@ -1308,7 +1410,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             }
             Err(e) => {
                 log::error!("Failed to create policy gate: {e:?}");
-                return Err(PolicyInitError::InvalidPolicyData);
+                return Err(PolicyInitError::InvalidPolicyData.into());
             }
         }
 
@@ -1355,10 +1457,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     }
 }
 
-fn parse_pass_down_hob(data: &[u8]) -> Result<MmSupvPassDownHobData, PolicyInitError> {
+fn parse_pass_down_hob(data: &[u8]) -> MmSupervisorResult<MmSupvPassDownHobData> {
     let (pass_down, _) = MmSupvPassDownHobData::read_from_prefix(data).map_err(|_| {
         log::error!("PassDown HOB data too small: {} < {}", data.len(), core::mem::size_of::<MmSupvPassDownHobData>());
-        PolicyInitError::InvalidPolicyData
+        MmSupervisorError::from(PolicyInitError::InvalidPolicyData)
     })?;
 
     if pass_down.revision != crate::MM_SUPV_PASS_DOWN_HOB_REVISION {
@@ -1370,17 +1472,18 @@ fn parse_pass_down_hob(data: &[u8]) -> Result<MmSupvPassDownHobData, PolicyInitE
         return Err(PolicyInitError::InvalidRevision {
             found: pass_down.revision,
             expected: crate::MM_SUPV_PASS_DOWN_HOB_REVISION,
-        });
+        }
+        .into());
     }
 
     if pass_down.firmware_policy_buffer == 0 || pass_down.firmware_policy_buffer_size == 0 {
         log::error!("Firmware policy buffer is null or empty");
-        return Err(PolicyInitError::NullFirmwarePolicyBuffer);
+        return Err(PolicyInitError::NullFirmwarePolicyBuffer.into());
     }
 
     if pass_down.firmware_policy_buffer.checked_add(pass_down.firmware_policy_buffer_size).is_none() {
         log::error!("Firmware policy buffer address range overflows");
-        return Err(PolicyInitError::InvalidPolicyData);
+        return Err(PolicyInitError::InvalidPolicyData.into());
     }
 
     Ok(pass_down)
@@ -1449,10 +1552,10 @@ fn find_required_hob<'a>(
     hob_list_info: &'a PhaseHandoffInformationTable,
     target_guid: patina::BinaryGuid,
     description: &str,
-) -> Result<&'a [u8], PolicyInitError> {
+) -> MmSupervisorResult<&'a [u8]> {
     find_guid_hob(hob_list_info, target_guid).ok_or_else(|| {
         log::error!("Required {description} HOB ({}) is missing from the HOB list", target_guid.as_guid());
-        PolicyInitError::HobNotFound
+        MmSupervisorError::from(PolicyInitError::HobNotFound)
     })
 }
 
@@ -1496,44 +1599,44 @@ fn parse_comm_buffer_fields(
     pages: u64,
     status_address: u64,
     description: &str,
-) -> Result<ParsedCommBuffer, PolicyInitError> {
+) -> MmSupervisorResult<ParsedCommBuffer> {
     let page_count = usize::try_from(pages).map_err(|_| {
         log::error!("{description} page count {pages} does not fit the target architecture");
-        PolicyInitError::InvalidCommunicationBufferSize { pages }
+        MmSupervisorError::from(PolicyInitError::InvalidCommunicationBufferSize { pages })
     })?;
     let size = pages.checked_mul(UEFI_PAGE_SIZE as u64).filter(|size| *size != 0).ok_or_else(|| {
         log::error!("{description} page count {pages} produces an invalid byte size");
-        PolicyInitError::InvalidCommunicationBufferSize { pages }
+        MmSupervisorError::from(PolicyInitError::InvalidCommunicationBufferSize { pages })
     })?;
     if address.checked_add(size).is_none() {
         log::error!("{description} address 0x{address:016x} plus size 0x{size:x} overflows");
-        return Err(PolicyInitError::InvalidCommunicationBufferSize { pages });
+        return Err(PolicyInitError::InvalidCommunicationBufferSize { pages }.into());
     }
 
     Ok(ParsedCommBuffer { address, page_count, size, status_address })
 }
 
-fn parse_supv_comm_buffer_hob(data: &[u8]) -> Result<ParsedCommBuffer, PolicyInitError> {
+fn parse_supv_comm_buffer_hob(data: &[u8]) -> MmSupervisorResult<ParsedCommBuffer> {
     let (hob, _) = MmCommonRegionHobData::read_from_prefix(data).map_err(|_| {
         log::error!(
             "MM Common Region HOB data too small: {} < {}",
             data.len(),
             core::mem::size_of::<MmCommonRegionHobData>()
         );
-        PolicyInitError::InvalidPolicyData
+        MmSupervisorError::from(PolicyInitError::InvalidPolicyData)
     })?;
 
     parse_comm_buffer_fields(hob.addr, hob.number_of_pages, hob.status_addr, "Supervisor communication buffer")
 }
 
-fn parse_user_comm_buffer_hob(data: &[u8]) -> Result<ParsedCommBuffer, PolicyInitError> {
+fn parse_user_comm_buffer_hob(data: &[u8]) -> MmSupervisorResult<ParsedCommBuffer> {
     let (hob, _) = MmCommonBufferHobData::read_from_prefix(data).map_err(|_| {
         log::error!(
             "MM Communication Buffer HOB data too small: {} < {}",
             data.len(),
             core::mem::size_of::<MmCommonBufferHobData>()
         );
-        PolicyInitError::InvalidPolicyData
+        MmSupervisorError::from(PolicyInitError::InvalidPolicyData)
     })?;
 
     parse_comm_buffer_fields(hob.physical_start, hob.number_of_pages, hob.status_buffer, "User communication buffer")
@@ -1585,7 +1688,19 @@ fn require_external_comm_buffer_with(
 /// Processes the supervisor communication buffer HOB (`MM_COMMON_REGION_HOB_GUID`).
 ///
 /// Returns `(buffer_addr, buffer_size, internal_copy_addr, status_buffer_addr)`.
-fn init_supv_comm_buffer(data: &[u8]) -> Result<(u64, u64, u64, u64), PolicyInitError> {
+///
+/// # Errors
+///
+/// Returns [`PolicyInitError::InvalidPolicyData`] when the HOB payload is too small or describes
+/// an unusable range, and [`PolicyInitError::MemoryAllocationFailed`] when the internal copy
+/// cannot be allocated.
+///
+/// # Panics
+///
+/// Panics if the named buffer overlaps MMRAM or is not mapped supervisor-only. The MM IPL
+/// supplies these addresses from outside the trust boundary, so failing closed is the only safe
+/// outcome; see [`require_external_comm_buffer`].
+fn init_supv_comm_buffer(data: &[u8]) -> MmSupervisorResult<CommBufferInitValue> {
     log::info!("Found MM Common Region HOB (supervisor)");
 
     let buffer = parse_supv_comm_buffer_hob(data)?;
@@ -1603,7 +1718,7 @@ fn init_supv_comm_buffer(data: &[u8]) -> Result<(u64, u64, u64, u64), PolicyInit
         .allocate_pages_with_type(buffer.page_count, AllocationType::Supervisor)
         .map_err(|e| {
             log::error!("Failed to allocate internal supervisor common buffer: {e:?}");
-            PolicyInitError::MemoryAllocationFailed
+            MmSupervisorError::from(PolicyInitError::MemoryAllocationFailed)
         })?;
 
     Ok((buffer.address, buffer.size, supv_comm_buffer_internal, buffer.status_address))
@@ -1618,7 +1733,7 @@ fn init_supv_comm_buffer(data: &[u8]) -> Result<(u64, u64, u64, u64), PolicyInit
 /// `data` must be non-null and point to `data_len` readable, writable bytes in the
 /// original HOB buffer. No references to those bytes may be live while this
 /// function runs because `physical_start` is overwritten in place.
-unsafe fn init_user_comm_buffer(data: *mut u8, data_len: usize) -> Result<(u64, u64, u64, u64), PolicyInitError> {
+unsafe fn init_user_comm_buffer(data: *mut u8, data_len: usize) -> MmSupervisorResult<CommBufferInitValue> {
     log::info!("Found MM Communication Buffer HOB");
 
     let buffer = {
@@ -1641,7 +1756,7 @@ unsafe fn init_user_comm_buffer(data: *mut u8, data_len: usize) -> Result<(u64, 
         .allocate_pages_with_type(buffer.page_count, AllocationType::User)
         .map_err(|e| {
             log::error!("Failed to allocate internal user common buffer: {e:?}");
-            PolicyInitError::MemoryAllocationFailed
+            MmSupervisorError::from(PolicyInitError::MemoryAllocationFailed)
         })?;
 
     // TODO: Remove the logic that overwrites the HOB's physical_start with the internal buffer address
@@ -1706,6 +1821,39 @@ mod tests {
     /// Answers the MMRAM overlap query with a fixed result.
     fn overlaps(value: bool) -> impl FnOnce(u64, u64) -> bool {
         move |_, _| value
+    }
+
+    #[test]
+    fn test_policy_init_error_displays_each_variant() {
+        assert_eq!(format!("{}", PolicyInitError::NullHobList), "the HOB list pointer is null");
+        assert_eq!(format!("{}", PolicyInitError::HobNotFound), "a required HOB was not found in the HOB list");
+        assert_eq!(
+            format!("{}", PolicyInitError::InvalidRevision { found: 2, expected: 3 }),
+            "the PassDown HOB reports revision 2, but revision 3 was expected"
+        );
+        assert_eq!(
+            format!("{}", PolicyInitError::NullFirmwarePolicyBuffer),
+            "the firmware policy buffer is null or empty"
+        );
+        assert_eq!(format!("{}", PolicyInitError::InvalidPolicyData), "the policy data is malformed or truncated");
+        assert_eq!(
+            format!("{}", PolicyInitError::InvalidCpuCount { found: 9, maximum: 4 }),
+            "the MP Information HOB reports 9 CPUs, more than the supported maximum of 4"
+        );
+        assert_eq!(
+            format!("{}", PolicyInitError::InvalidCommunicationBufferSize { pages: 0 }),
+            "a communication buffer page count of 0 is zero, too large for the target architecture, \
+             or overflows its address range"
+        );
+        assert_eq!(format!("{}", PolicyInitError::MemoryAllocationFailed), "a policy buffer allocation failed");
+        assert_eq!(
+            format!("{}", PolicyInitError::MissingCommunicationBuffer),
+            "one or more communication buffers are not properly initialized"
+        );
+        assert_eq!(
+            format!("{}", PolicyInitError::InvalidSaveStateRegions),
+            "the PassDown HOB does not describe usable per-CPU save-state regions"
+        );
     }
 
     #[test]
@@ -1866,6 +2014,14 @@ mod tests {
         fn as_ptr(&self) -> *const c_void {
             self.storage.as_ptr().cast()
         }
+
+        /// Borrows the list's leading Phase Handoff Information Table.
+        ///
+        /// The HOB list always begins with the PHIT, which is what the init helpers now take.
+        fn handoff(&self) -> &PhaseHandoffInformationTable {
+            // SAFETY: `new` pushes a PHIT first, and `storage` outlives the borrow.
+            unsafe { &*self.as_ptr().cast::<PhaseHandoffInformationTable>() }
+        }
     }
 
     struct PageAlignedMemory {
@@ -1900,11 +2056,11 @@ mod tests {
 
     struct RecordingPolicyServices {
         calls: Vec<&'static str>,
-        pass_down_result: Result<(u64, u64), PolicyInitError>,
-        supv_result: Result<CommBufferInitResult, PolicyInitError>,
-        user_result: Result<CommBufferInitResult, PolicyInitError>,
-        allocation_result: Result<u64, PolicyInitError>,
-        policy_validation: Result<(), &'static str>,
+        pass_down_result: MmSupervisorResult<(u64, u64)>,
+        supv_result: MmSupervisorResult<CommBufferInitValue>,
+        user_result: MmSupervisorResult<CommBufferInitValue>,
+        allocation_result: MmSupervisorResult<u64>,
+        policy_validation: MmSupervisorResult<()>,
         pass_down_cpu_count: Option<u64>,
         save_state_info: Option<SaveStateInfo>,
         mseg_base: Option<u64>,
@@ -1931,13 +2087,11 @@ mod tests {
     }
 
     impl PolicyInitServices for RecordingPolicyServices {
-        type PolicyCheckError = &'static str;
-
         unsafe fn init_from_pass_down_hob(
             &mut self,
             data: &[u8],
             number_of_cpus: u64,
-        ) -> Result<(u64, u64), PolicyInitError> {
+        ) -> MmSupervisorResult<(u64, u64)> {
             self.calls.push("pass_down");
             parse_pass_down_hob(data)?;
             self.pass_down_cpu_count = Some(number_of_cpus);
@@ -1959,7 +2113,7 @@ mod tests {
             self.patch_args = Some((sm_base, number_of_cpus, mmi_entry_size));
         }
 
-        fn init_supv_comm_buffer(&mut self, data: &[u8]) -> Result<CommBufferInitResult, PolicyInitError> {
+        fn init_supv_comm_buffer(&mut self, data: &[u8]) -> MmSupervisorResult<CommBufferInitValue> {
             self.calls.push("supv_comm");
             parse_supv_comm_buffer_hob(data)?;
             self.supv_result
@@ -1969,7 +2123,7 @@ mod tests {
             &mut self,
             data: *mut u8,
             data_len: usize,
-        ) -> Result<CommBufferInitResult, PolicyInitError> {
+        ) -> MmSupervisorResult<CommBufferInitValue> {
             self.calls.push("user_comm");
             // SAFETY: the policy initialization method provides the live HOB payload and length.
             let data = unsafe { core::slice::from_raw_parts(data.cast_const(), data_len) };
@@ -1977,7 +2131,7 @@ mod tests {
             self.user_result
         }
 
-        fn allocate_supv_to_user_buffer(&mut self) -> Result<u64, PolicyInitError> {
+        fn allocate_supv_to_user_buffer(&mut self) -> MmSupervisorResult<u64> {
             self.calls.push("allocate");
             self.allocation_result
         }
@@ -1987,7 +2141,7 @@ mod tests {
             self.config = Some(config);
         }
 
-        fn validate_policy(&mut self) -> Result<(), Self::PolicyCheckError> {
+        fn validate_policy(&mut self) -> MmSupervisorResult<()> {
             self.calls.push("validate");
             self.policy_validation
         }
@@ -2191,8 +2345,11 @@ mod tests {
 
     /// Scans `hob_list` into an owned region list, as `bsp_init` does before committing to it.
     fn scan_regions(hob_list: &RawHobList) -> Vec<SmramRegion> {
-        // SAFETY: `hob_list` is a valid contiguous HOB list.
-        let (regions, count) = unsafe { PageAllocator::scan_hob_list(hob_list.as_ptr()) }.expect("scan SMRAM regions");
+        // SAFETY: `hob_list` is a valid contiguous HOB list, so it begins with a Phase Handoff
+        // Information Table that stays live for the borrow.
+        let handoff = unsafe { &*hob_list.as_ptr().cast::<PhaseHandoffInformationTable>() };
+        // SAFETY: `handoff` heads a valid contiguous HOB list.
+        let (regions, count) = unsafe { PageAllocator::scan_hob_list(handoff) }.expect("scan SMRAM regions");
         regions[..count].to_vec()
     }
 
@@ -2216,7 +2373,10 @@ mod tests {
             Some(SmramRegion::new(0x1000, 0x2000, false))
         });
 
-        assert_eq!(result, Err(MmramBoundError::AnchorOutsideRegions { anchor: 0x4000 }));
+        assert_eq!(
+            result,
+            Err(CoreInitError::MmramBoundFailed(MmramBoundError::AnchorOutsideRegions { anchor: 0x4000 }).into())
+        );
         assert!(!derived.get(), "the range was derived from descriptors that had already failed");
     }
 
@@ -2229,7 +2389,7 @@ mod tests {
         assert!(establish_mmram_bound(&regions, 0x2fff, |_| Some(range)).is_ok());
         assert_eq!(
             establish_mmram_bound(&regions, 0x3000, |_| Some(range)),
-            Err(MmramBoundError::AnchorOutsideRegions { anchor: 0x3000 })
+            Err(CoreInitError::MmramBoundFailed(MmramBoundError::AnchorOutsideRegions { anchor: 0x3000 }).into())
         );
     }
 
@@ -2237,7 +2397,10 @@ mod tests {
     fn test_establish_mmram_bound_rejects_regions_without_an_smrr_range() {
         let regions = [SmramRegion::new(0x1000, 0x2000, false)];
 
-        assert_eq!(establish_mmram_bound(&regions, 0x1000, |_| None), Err(MmramBoundError::NoSmrrRange));
+        assert_eq!(
+            establish_mmram_bound(&regions, 0x1000, |_| None),
+            Err(CoreInitError::MmramBoundFailed(MmramBoundError::NoSmrrRange).into())
+        );
     }
 
     #[test]
@@ -2271,7 +2434,8 @@ mod tests {
         let page_allocator = PageAllocator::new();
         let paging_allocator = PagingPoolAllocator::new();
         // SAFETY: the scanned descriptor references the live, exclusively owned `memory`.
-        unsafe { supervisor.init_page_allocators(&scanned, &page_allocator, &paging_allocator) };
+        unsafe { supervisor.init_page_allocators(&scanned, &page_allocator, &paging_allocator) }
+            .expect("the scanned region supports both allocators");
 
         // SAFETY: the same live allocation, read after the allocator has finished with it.
         let after_commit = unsafe { core::slice::from_raw_parts(memory.base() as *const u8, size) };
@@ -2294,7 +2458,8 @@ mod tests {
 
         // SAFETY: the scanned descriptor references the live, exclusively owned page-aligned
         // `memory` allocation.
-        unsafe { supervisor.init_page_allocators(&scanned, &page_allocator, &paging_allocator) };
+        unsafe { supervisor.init_page_allocators(&scanned, &page_allocator, &paging_allocator) }
+            .expect("the scanned region supports both allocators");
 
         assert!(page_allocator.is_initialized());
         assert!(paging_allocator.is_initialized());
@@ -2310,12 +2475,10 @@ mod tests {
         let page_allocator = PageAllocator::new();
         let paging_allocator = PagingPoolAllocator::new();
 
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            // SAFETY: the scanned descriptor references the live `memory` allocation.
-            unsafe { supervisor.init_page_allocators(&scanned, &page_allocator, &paging_allocator) };
-        }));
+        // SAFETY: the scanned descriptor references the live `memory` allocation.
+        let result = unsafe { supervisor.init_page_allocators(&scanned, &page_allocator, &paging_allocator) };
 
-        assert!(result.is_err());
+        assert!(result.is_err(), "a region too small for the paging pool must be reported");
         assert!(page_allocator.is_initialized());
         assert!(!paging_allocator.is_initialized());
     }
@@ -2337,12 +2500,10 @@ mod tests {
         let scanned = scan_regions(&hob_list);
         let page_allocator = PageAllocator::new();
 
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            // SAFETY: the scanned descriptor references the live `memory` allocation.
-            unsafe { supervisor.init_page_allocators(&scanned, &page_allocator, &paging_allocator) };
-        }));
+        // SAFETY: the scanned descriptor references the live `memory` allocation.
+        let result = unsafe { supervisor.init_page_allocators(&scanned, &page_allocator, &paging_allocator) };
 
-        assert!(result.is_err());
+        assert!(result.is_err(), "an already-initialized paging allocator must be reported");
     }
 
     #[test]
@@ -2356,22 +2517,22 @@ mod tests {
             0x1234_5678,
         ));
         let hob_list = hob_list.finish();
-
-        // SAFETY: `hob_list` is a valid contiguous HOB list.
-        unsafe { supervisor.discover_and_store_user_entry(hob_list.as_ptr(), &state) };
+        supervisor
+            .discover_and_store_user_entry(hob_list.handoff(), &state)
+            .expect("the synthetic HOB list is well formed");
 
         assert_eq!(state.user_entry_point(), Some(0x1234_5678));
     }
 
     #[test]
-    fn test_discover_and_store_user_entry_tolerates_missing_module() {
+    fn test_discover_and_store_user_entry_reports_a_missing_module() {
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let state = InitState::new();
         let hob_list = RawHobList::new().finish();
 
-        // SAFETY: `hob_list` is a valid contiguous HOB list.
-        unsafe { supervisor.discover_and_store_user_entry(hob_list.as_ptr(), &state) };
+        let result = supervisor.discover_and_store_user_entry(hob_list.handoff(), &state);
 
+        assert_eq!(result, Err(CoreInitError::UserEntryPointMissing.into()));
         assert_eq!(state.user_entry_point(), None);
     }
 
@@ -2394,11 +2555,9 @@ mod tests {
 
         // SAFETY: the scanned descriptor references the live, exclusively owned `memory`.
         unsafe {
-            supervisor.init_page_allocators(
-                &scanned,
-                security_state().page_allocator(),
-                security_state().paging_allocator(),
-            );
+            supervisor
+                .init_page_allocators(&scanned, security_state().page_allocator(), security_state().paging_allocator())
+                .expect("the scanned region supports both allocators");
         }
 
         let root = security_state().page_allocator().allocate_pages(1).expect("page table root page");
@@ -2434,8 +2593,10 @@ mod tests {
         assert_eq!(reclaimed, 2, "the producer's list must span whole pages for the reclaim to run");
 
         let free_before = security_state().page_allocator().free_page_count();
-        // SAFETY: `producer` now holds a valid HOB list inside the committed MMRAM region.
-        let copy = unsafe { supervisor.publish_hob_list_to_user(producer as *const c_void) };
+        // SAFETY: `producer` now holds a valid HOB list inside the committed MMRAM region, so it
+        // begins with a Phase Handoff Information Table that stays live for the borrow.
+        let handoff = unsafe { &*(producer as *const PhaseHandoffInformationTable) };
+        let copy = supervisor.publish_hob_list_to_user(handoff).expect("publishing the HOB list copy should succeed");
 
         assert_ne!(copy, 0);
         assert_eq!(security_state().page_allocator().get_allocation_type(copy), Some(AllocationType::User));
@@ -2474,8 +2635,10 @@ mod tests {
         // SAFETY: source and destination are separate live allocations of at least `size` bytes.
         unsafe { core::ptr::copy_nonoverlapping(source.as_ptr().cast::<u8>(), staging as *mut u8, size) };
 
-        // SAFETY: `staging` now holds a valid HOB list inside the committed MMRAM region.
-        let copy = unsafe { supervisor.publish_hob_list_to_user(staging as *const c_void) };
+        // SAFETY: `staging` now holds a valid HOB list inside the committed MMRAM region, so it
+        // begins with a Phase Handoff Information Table that stays live for the borrow.
+        let handoff = unsafe { &*(staging as *const PhaseHandoffInformationTable) };
+        let copy = supervisor.publish_hob_list_to_user(handoff).expect("publishing the HOB list copy should succeed");
 
         assert_ne!(copy, 0);
         // The reclaim was refused, so the producer's pages are still marked user-allocated.
@@ -2493,12 +2656,13 @@ mod tests {
         // A list the producer placed outside the regions it described is refused before it is read.
         let outside = padded_hob_list(0);
 
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            // SAFETY: `outside` is a valid HOB list; it is simply not inside MMRAM.
-            unsafe { supervisor.publish_hob_list_to_user(outside.as_ptr()) }
-        }));
+        // The refusal is now reported rather than panicked, so the caller can see why.
+        let result = supervisor.publish_hob_list_to_user(outside.handoff());
 
-        assert!(result.is_err(), "a HOB list outside MMRAM was published to Ring 3");
+        assert!(
+            matches!(result, Err(MmSupervisorError::HobValidation(HobValidationError::HobListOutsideMmram { .. }))),
+            "a HOB list outside MMRAM was published to Ring 3, got {result:?}"
+        );
     }
 
     #[test]
@@ -2511,11 +2675,9 @@ mod tests {
         let scanned = scan_regions(&hob_list);
         // SAFETY: the scanned descriptor references the live, exclusively owned `memory`.
         unsafe {
-            supervisor.init_page_allocators(
-                &scanned,
-                security_state().page_allocator(),
-                security_state().paging_allocator(),
-            );
+            supervisor
+                .init_page_allocators(&scanned, security_state().page_allocator(), security_state().paging_allocator())
+                .expect("the scanned region supports both allocators");
         }
 
         // Without a page table the copy cannot be made read-only, so it must not be handed to
@@ -2528,8 +2690,10 @@ mod tests {
         unsafe { core::ptr::copy_nonoverlapping(source.as_ptr().cast::<u8>(), staging as *mut u8, size) };
 
         let result = catch_unwind(AssertUnwindSafe(|| {
-            // SAFETY: `staging` holds a valid HOB list inside the committed MMRAM region.
-            unsafe { supervisor.publish_hob_list_to_user(staging as *const c_void) }
+            // SAFETY: `staging` holds a valid HOB list inside the committed MMRAM region, so it
+            // begins with a Phase Handoff Information Table that stays live for the borrow.
+            let handoff = unsafe { &*(staging as *const PhaseHandoffInformationTable) };
+            supervisor.publish_hob_list_to_user(handoff)
         }));
 
         assert!(result.is_err(), "the HOB list copy was published without being mapped read-only");
@@ -2639,8 +2803,10 @@ mod tests {
         let state = InitState::new();
         let hob_list = RawHobList::new().finish();
 
-        // SAFETY: the list is readable host memory and contains no module allocations.
-        unsafe { supervisor.discover_and_store_init_region(hob_list.as_ptr(), &state) };
+        // The discovery now reports the missing module rather than leaving the region unset.
+        let result = supervisor.discover_and_store_init_region(hob_list.handoff(), &state);
+        assert_eq!(result, Err(CoreInitError::InitModuleRegionMissing.into()));
+
         assert_eq!(state.init_module_region(), None);
         supervisor.free_init_module(&state);
 
@@ -2712,8 +2878,9 @@ mod tests {
 
         fn free(&self) {
             let hobs = self.hob_list();
-            // SAFETY: the HOB list is readable host memory and describes live synthetic images.
-            unsafe { self.supervisor.discover_and_store_init_region(hobs.as_ptr(), &self.state) };
+            self.supervisor
+                .discover_and_store_init_region(hobs.handoff(), &self.state)
+                .expect("the synthetic HOB list describes an Init module");
             drop(hobs);
             self.supervisor.free_init_module(&self.state);
         }
@@ -2794,11 +2961,15 @@ mod tests {
             size
         };
         let free_before = allocator.free_page_count();
-        // SAFETY: the producer's HOB list and its synthetic image allocations remain live.
-        let user_copy = unsafe {
-            fixture.supervisor.discover_and_store_init_region(producer as *const c_void, &fixture.state);
-            fixture.supervisor.publish_hob_list_to_user(producer as *const c_void)
-        };
+        // SAFETY: the producer's HOB list and its synthetic image allocations remain live, so the
+        // list begins with a Phase Handoff Information Table that outlives the borrow.
+        let handoff = unsafe { &*(producer as *const PhaseHandoffInformationTable) };
+        fixture
+            .supervisor
+            .discover_and_store_init_region(handoff, &fixture.state)
+            .expect("the producer's HOB list describes an Init module");
+        let user_copy =
+            fixture.supervisor.publish_hob_list_to_user(handoff).expect("publishing the HOB list copy should succeed");
 
         let init_base = fixture.init_module.alloc_descriptor.memory_base_address;
         let init_size = fixture.init_module.alloc_descriptor.memory_length;
@@ -2867,14 +3038,6 @@ mod tests {
 
         assert!(fixture.state.is_init_module_freed());
         assert_eq!(security_state().page_allocator().get_allocation_type(base), None);
-    }
-
-    #[test]
-    #[should_panic(expected = "MM Init discovery requires a non-null HOB list")]
-    fn test_discover_init_region_rejects_null_hobs() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
-        // SAFETY: a null pointer is checked before any HOB access.
-        unsafe { supervisor.discover_and_store_init_region(core::ptr::null(), &InitState::new()) };
     }
 
     #[test]
@@ -2966,12 +3129,9 @@ mod tests {
         let hob_list = policy_hob_list(true);
         let mut services = RecordingPolicyServices::successful();
 
-        // SAFETY: `hob_list` is a valid contiguous HOB list whose payloads remain live.
-        unsafe {
-            supervisor
-                .init_policy_from_hob_list(hob_list.as_ptr(), &mut services)
-                .expect("complete policy HOB list should initialize");
-        }
+        supervisor
+            .init_policy_from_hob_list(hob_list.handoff(), &mut services)
+            .expect("complete policy HOB list should initialize");
 
         assert_eq!(
             services.calls,
@@ -3003,28 +3163,21 @@ mod tests {
         let hob_list = policy_hob_list(false);
         let mut services = RecordingPolicyServices::successful();
 
-        // SAFETY: `hob_list` is a valid contiguous HOB list.
-        unsafe {
-            supervisor.init_policy_from_hob_list(hob_list.as_ptr(), &mut services).expect("MSEG HOB is optional");
-        }
+        supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut services).expect("MSEG HOB is optional");
 
         assert_eq!(services.mseg_base, None);
         assert!(!services.calls.contains(&"mseg"));
     }
 
     #[test]
-    fn test_init_policy_from_hob_list_reports_null_and_missing_hobs() {
+    fn test_init_policy_from_hob_list_reports_missing_hobs() {
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let mut services = RecordingPolicyServices::successful();
 
-        // SAFETY: null is explicitly rejected before dereference.
-        let result = unsafe { supervisor.init_policy_from_hob_list(core::ptr::null(), &mut services) };
-        assert_eq!(result, Err(PolicyInitError::NullHobList));
-
+        // A null list is no longer representable: the handoff table is taken by reference.
         let hob_list = RawHobList::new().finish();
-        // SAFETY: `hob_list` is a valid contiguous HOB list.
-        let result = unsafe { supervisor.init_policy_from_hob_list(hob_list.as_ptr(), &mut services) };
-        assert_eq!(result, Err(PolicyInitError::HobNotFound));
+        let result = supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut services);
+        assert_eq!(result, Err(PolicyInitError::HobNotFound.into()));
         assert!(services.calls.is_empty());
     }
 
@@ -3055,9 +3208,8 @@ mod tests {
 
         for hob_list in [&without_pass_down, &without_common_region, &without_comm_buffer] {
             let mut services = RecordingPolicyServices::successful();
-            // SAFETY: each list is a valid contiguous HOB list whose payloads remain live.
-            let result = unsafe { supervisor.init_policy_from_hob_list(hob_list.as_ptr(), &mut services) };
-            assert_eq!(result, Err(PolicyInitError::HobNotFound));
+            let result = supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut services);
+            assert_eq!(result, Err(PolicyInitError::HobNotFound.into()));
         }
     }
 
@@ -3067,26 +3219,23 @@ mod tests {
 
         let hob_list = policy_hob_list(true);
         let mut pass_down_failure = RecordingPolicyServices::successful();
-        pass_down_failure.pass_down_result = Err(PolicyInitError::InvalidPolicyData);
-        // SAFETY: `hob_list` is a valid contiguous HOB list.
-        let result = unsafe { supervisor.init_policy_from_hob_list(hob_list.as_ptr(), &mut pass_down_failure) };
-        assert_eq!(result, Err(PolicyInitError::InvalidPolicyData));
+        pass_down_failure.pass_down_result = Err(PolicyInitError::InvalidPolicyData.into());
+        let result = supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut pass_down_failure);
+        assert_eq!(result, Err(PolicyInitError::InvalidPolicyData.into()));
         assert_eq!(pass_down_failure.calls, ["pass_down"]);
 
         let hob_list = policy_hob_list(true);
         let mut supervisor_buffer_failure = RecordingPolicyServices::successful();
-        supervisor_buffer_failure.supv_result = Err(PolicyInitError::MemoryAllocationFailed);
-        // SAFETY: `hob_list` is a valid contiguous HOB list.
-        let result = unsafe { supervisor.init_policy_from_hob_list(hob_list.as_ptr(), &mut supervisor_buffer_failure) };
-        assert_eq!(result, Err(PolicyInitError::MemoryAllocationFailed));
+        supervisor_buffer_failure.supv_result = Err(PolicyInitError::MemoryAllocationFailed.into());
+        let result = supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut supervisor_buffer_failure);
+        assert_eq!(result, Err(PolicyInitError::MemoryAllocationFailed.into()));
         assert_eq!(supervisor_buffer_failure.calls, ["pass_down", "save_state", "mseg", "patch_idt", "supv_comm"]);
 
         let hob_list = policy_hob_list(true);
         let mut user_buffer_failure = RecordingPolicyServices::successful();
-        user_buffer_failure.user_result = Err(PolicyInitError::InvalidCommunicationBufferSize { pages: 0 });
-        // SAFETY: `hob_list` is a valid contiguous HOB list.
-        let result = unsafe { supervisor.init_policy_from_hob_list(hob_list.as_ptr(), &mut user_buffer_failure) };
-        assert_eq!(result, Err(PolicyInitError::InvalidCommunicationBufferSize { pages: 0 }));
+        user_buffer_failure.user_result = Err(PolicyInitError::InvalidCommunicationBufferSize { pages: 0 }.into());
+        let result = supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut user_buffer_failure);
+        assert_eq!(result, Err(PolicyInitError::InvalidCommunicationBufferSize { pages: 0 }.into()));
         assert_eq!(
             user_buffer_failure.calls,
             ["pass_down", "save_state", "mseg", "patch_idt", "supv_comm", "user_comm"]
@@ -3094,10 +3243,9 @@ mod tests {
 
         let hob_list = policy_hob_list(true);
         let mut allocation_failure = RecordingPolicyServices::successful();
-        allocation_failure.allocation_result = Err(PolicyInitError::MemoryAllocationFailed);
-        // SAFETY: `hob_list` is a valid contiguous HOB list.
-        let result = unsafe { supervisor.init_policy_from_hob_list(hob_list.as_ptr(), &mut allocation_failure) };
-        assert_eq!(result, Err(PolicyInitError::MemoryAllocationFailed));
+        allocation_failure.allocation_result = Err(PolicyInitError::MemoryAllocationFailed.into());
+        let result = supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut allocation_failure);
+        assert_eq!(result, Err(PolicyInitError::MemoryAllocationFailed.into()));
         assert_eq!(allocation_failure.calls.last(), Some(&"allocate"));
         assert!(allocation_failure.config.is_none());
     }
@@ -3108,10 +3256,8 @@ mod tests {
         let hob_list = policy_hob_list(true);
         let mut services = RecordingPolicyServices::successful();
         services.user_result = Ok((0, 0x6000, 0x7000, 0x8000));
-
-        // SAFETY: `hob_list` is a valid contiguous HOB list.
-        let result = unsafe { supervisor.init_policy_from_hob_list(hob_list.as_ptr(), &mut services) };
-        assert_eq!(result, Err(PolicyInitError::MissingCommunicationBuffer));
+        let result = supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut services);
+        assert_eq!(result, Err(PolicyInitError::MissingCommunicationBuffer.into()));
         assert!(services.config.is_none());
     }
 
@@ -3121,41 +3267,36 @@ mod tests {
         let hob_list = policy_hob_list(true);
         let mut services = RecordingPolicyServices::successful();
 
-        // SAFETY: `hob_list` is a valid contiguous HOB list.
-        unsafe { supervisor.init_policy_and_validate(hob_list.as_ptr(), &mut services) };
+        supervisor
+            .init_policy_and_validate(hob_list.handoff(), &mut services)
+            .expect("a complete policy HOB list should validate");
 
         assert_eq!(services.calls.last(), Some(&"validate"));
         assert!(services.config.is_some());
     }
 
     #[test]
-    fn test_init_policy_and_validate_panics_on_initialization_failure() {
+    fn test_init_policy_and_validate_reports_initialization_failure() {
         crate::test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let hob_list = RawHobList::new().finish();
         let mut services = RecordingPolicyServices::successful();
 
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            // SAFETY: `hob_list` is a valid contiguous HOB list.
-            unsafe { supervisor.init_policy_and_validate(hob_list.as_ptr(), &mut services) };
-        }));
+        let result = supervisor.init_policy_and_validate(hob_list.handoff(), &mut services);
 
-        assert!(result.is_err());
+        assert_eq!(result, Err(PolicyInitError::HobNotFound.into()));
         assert!(services.calls.is_empty());
     }
 
     #[test]
-    fn test_init_policy_and_validate_panics_on_invalid_mp_cpu_count() {
+    fn test_init_policy_and_validate_reports_an_invalid_mp_cpu_count() {
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
 
         for cpu_count in [0, 5] {
             let hob_list = policy_hob_list_with_cpu_count(cpu_count, true);
             let mut services = RecordingPolicyServices::successful();
 
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                // SAFETY: `hob_list` is a valid contiguous HOB list.
-                unsafe { supervisor.init_policy_and_validate(hob_list.as_ptr(), &mut services) };
-            }));
+            let result = supervisor.init_policy_and_validate(hob_list.handoff(), &mut services);
 
             assert!(result.is_err(), "CPU count {cpu_count} should fail-stop initialization");
             assert!(services.calls.is_empty());
@@ -3163,15 +3304,17 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Security policy check failed during init")]
-    fn test_init_policy_and_validate_panics_when_policy_check_fails() {
+    fn test_init_policy_and_validate_reports_a_failed_policy_check() {
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let hob_list = policy_hob_list(true);
         let mut services = RecordingPolicyServices::successful();
-        services.policy_validation = Err("invalid policy");
+        let expected = mm_policy::helpers::PolicyValidationError::NullPointer.into();
+        services.policy_validation = Err(expected);
 
-        // SAFETY: `hob_list` is a valid contiguous HOB list.
-        unsafe { supervisor.init_policy_and_validate(hob_list.as_ptr(), &mut services) };
+        let result = supervisor.init_policy_and_validate(hob_list.handoff(), &mut services);
+
+        assert_eq!(result, Err(expected));
+        assert_eq!(services.calls.last(), Some(&"validate"));
     }
 
     #[test]
@@ -3195,31 +3338,31 @@ mod tests {
     fn test_validate_smi_handler_idt_patch_inputs_rejects_invalid_values() {
         assert_eq!(
             validate_smi_handler_idt_patch_inputs(0x1000, 1, 0, |_, _| true),
-            Err(SmiHandlerIdtPatchInputError::ZeroEntrySize)
+            Err(SmiHandlerIdtPatchInputError::ZeroEntrySize.into())
         );
         assert_eq!(
             validate_smi_handler_idt_patch_inputs(0, 1, 0x100, |_, _| true),
-            Err(SmiHandlerIdtPatchInputError::MissingSmBaseArray)
+            Err(SmiHandlerIdtPatchInputError::MissingSmBaseArray.into())
         );
         assert_eq!(
             validate_smi_handler_idt_patch_inputs(0x1000, 0, 0x100, |_, _| true),
-            Err(SmiHandlerIdtPatchInputError::MissingSmBaseArray)
+            Err(SmiHandlerIdtPatchInputError::MissingSmBaseArray.into())
         );
         assert_eq!(
             validate_smi_handler_idt_patch_inputs(0x1000, u64::MAX, 0x100, |_, _| true),
-            Err(SmiHandlerIdtPatchInputError::SmBaseArraySizeOverflow)
+            Err(SmiHandlerIdtPatchInputError::SmBaseArraySizeOverflow.into())
         );
         assert_eq!(
             validate_smi_handler_idt_patch_inputs(0x1000, 1, 0x100, |_, _| false),
-            Err(SmiHandlerIdtPatchInputError::SmBaseArrayOutsideMmram)
+            Err(SmiHandlerIdtPatchInputError::SmBaseArrayOutsideMmram.into())
         );
         assert_eq!(
             validate_smi_handler_idt_patch_inputs(u64::MAX - 3, 1, 0x100, |_, _| true),
-            Err(SmiHandlerIdtPatchInputError::SmBaseArrayOutsideMmram)
+            Err(SmiHandlerIdtPatchInputError::SmBaseArrayOutsideMmram.into())
         );
         assert_eq!(
             validate_smi_handler_idt_patch_inputs(0x1000, 1, isize::MAX as u64 + 1, |_, _| true),
-            Err(SmiHandlerIdtPatchInputError::EntrySizeTooLarge)
+            Err(SmiHandlerIdtPatchInputError::EntrySizeTooLarge.into())
         );
     }
 
@@ -3320,7 +3463,7 @@ mod tests {
 
         assert_eq!(
             parse_pass_down_hob(&data[..data.len() - 1]).expect_err("truncated PassDown HOB should fail"),
-            PolicyInitError::InvalidPolicyData
+            MmSupervisorError::PolicyInit(PolicyInitError::InvalidPolicyData)
         );
     }
 
@@ -3332,10 +3475,10 @@ mod tests {
         assert_eq!(
             parse_pass_down_hob(&pass_down_hob_data(&pass_down))
                 .expect_err("invalid PassDown HOB revision should fail"),
-            PolicyInitError::InvalidRevision {
+            MmSupervisorError::PolicyInit(PolicyInitError::InvalidRevision {
                 found: pass_down.revision,
                 expected: crate::MM_SUPV_PASS_DOWN_HOB_REVISION,
-            }
+            })
         );
     }
 
@@ -3352,7 +3495,7 @@ mod tests {
 
             assert_eq!(
                 parse_pass_down_hob(&pass_down_hob_data(&pass_down)).expect_err("invalid policy buffer should fail"),
-                expected
+                MmSupervisorError::PolicyInit(expected)
             );
         }
     }
@@ -3444,8 +3587,8 @@ mod tests {
         let supv = supv_comm_buffer_hob_data(0x10_0000, 1, 0x20_0000);
         let user = user_comm_buffer_hob_data(0x30_0000, 1, 0x40_0000);
 
-        assert_eq!(parse_supv_comm_buffer_hob(&supv[..supv.len() - 1]), Err(PolicyInitError::InvalidPolicyData));
-        assert_eq!(parse_user_comm_buffer_hob(&user[..user.len() - 1]), Err(PolicyInitError::InvalidPolicyData));
+        assert_eq!(parse_supv_comm_buffer_hob(&supv[..supv.len() - 1]), Err(PolicyInitError::InvalidPolicyData.into()));
+        assert_eq!(parse_user_comm_buffer_hob(&user[..user.len() - 1]), Err(PolicyInitError::InvalidPolicyData.into()));
     }
 
     #[test]
@@ -3453,11 +3596,11 @@ mod tests {
         for (address, pages) in [(0x1000, 0), (0x1000, u64::MAX), (u64::MAX - 0xFFF, 1)] {
             assert_eq!(
                 parse_supv_comm_buffer_hob(&supv_comm_buffer_hob_data(address, pages, 0x20_0000)),
-                Err(PolicyInitError::InvalidCommunicationBufferSize { pages })
+                Err(PolicyInitError::InvalidCommunicationBufferSize { pages }.into())
             );
             assert_eq!(
                 parse_user_comm_buffer_hob(&user_comm_buffer_hob_data(address, pages, 0x20_0000)),
-                Err(PolicyInitError::InvalidCommunicationBufferSize { pages })
+                Err(PolicyInitError::InvalidCommunicationBufferSize { pages }.into())
             );
         }
     }
@@ -3471,30 +3614,33 @@ mod tests {
 
     #[test]
     fn test_parse_smi_handler_idt_descriptor_rejects_malformed_metadata() {
-        assert_eq!(parse_smi_handler_idt_descriptor(&[0; 3]), Err(SmiHandlerIdtPatchError::EntryTooSmall));
+        assert_eq!(parse_smi_handler_idt_descriptor(&[0; 3]), Err(SmiHandlerIdtPatchError::EntryTooSmall.into()));
 
         let mut oversized_structure = [0_u8; 4];
         oversized_structure.copy_from_slice(&1_u32.to_ne_bytes());
         assert_eq!(
             parse_smi_handler_idt_descriptor(&oversized_structure),
-            Err(SmiHandlerIdtPatchError::FixupStructureOutOfBounds)
+            Err(SmiHandlerIdtPatchError::FixupStructureOutOfBounds.into())
         );
 
         let mut short_header = vec![0_u8; 5];
         short_header[1..].copy_from_slice(&1_u32.to_ne_bytes());
-        assert_eq!(parse_smi_handler_idt_descriptor(&short_header), Err(SmiHandlerIdtPatchError::FixupHeaderTooSmall));
+        assert_eq!(
+            parse_smi_handler_idt_descriptor(&short_header),
+            Err(SmiHandlerIdtPatchError::FixupHeaderTooSmall.into())
+        );
 
         let too_few_fixups = mmi_entry(FIXUP64_SMI_HANDLER_IDTR as u8, 0);
         assert_eq!(
             parse_smi_handler_idt_descriptor(&too_few_fixups),
-            Err(SmiHandlerIdtPatchError::Fixup64ArrayTooSmall { found: FIXUP64_SMI_HANDLER_IDTR as u8 })
+            Err(SmiHandlerIdtPatchError::Fixup64ArrayTooSmall { found: FIXUP64_SMI_HANDLER_IDTR as u8 }.into())
         );
 
         let mut out_of_bounds_fixup = mmi_entry((FIXUP64_SMI_HANDLER_IDTR + 1) as u8, 0);
         out_of_bounds_fixup[8 + 6] = u8::MAX;
         assert_eq!(
             parse_smi_handler_idt_descriptor(&out_of_bounds_fixup),
-            Err(SmiHandlerIdtPatchError::Fixup64EntryOutOfBounds)
+            Err(SmiHandlerIdtPatchError::Fixup64EntryOutOfBounds.into())
         );
     }
 
@@ -3528,10 +3674,10 @@ mod tests {
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let mut data = [0_u8; 16 + PROCESSOR_INFO_ENTRY_SIZE];
 
-        assert_eq!(supervisor.parse_mp_information_hob(&data[..15]), Err(PolicyInitError::InvalidPolicyData));
+        assert_eq!(supervisor.parse_mp_information_hob(&data[..15]), Err(PolicyInitError::InvalidPolicyData.into()));
 
         data[..8].copy_from_slice(&2_u64.to_le_bytes());
-        assert_eq!(supervisor.parse_mp_information_hob(&data), Err(PolicyInitError::InvalidPolicyData));
+        assert_eq!(supervisor.parse_mp_information_hob(&data), Err(PolicyInitError::InvalidPolicyData.into()));
     }
 
     #[test]
@@ -3544,7 +3690,7 @@ mod tests {
             data[..8].copy_from_slice(&cpu_count.to_le_bytes());
             assert_eq!(
                 supervisor.parse_mp_information_hob(&data),
-                Err(PolicyInitError::InvalidCpuCount { found: cpu_count, maximum: 4 })
+                Err(PolicyInitError::InvalidCpuCount { found: cpu_count, maximum: 4 }.into())
             );
         }
     }

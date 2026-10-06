@@ -44,6 +44,7 @@
 
 mod comm_buffer;
 mod cpu;
+mod error;
 mod hob_validation;
 mod init;
 mod intrinsics;
@@ -67,7 +68,7 @@ use cpu::CpuManager;
 use intrinsics::{current_apic_id, is_bsp};
 use mailbox::MailboxManager;
 // Re-exported for use by descendant modules via `crate::` paths.
-use mem::{AllocationType, SharedPagingAllocator, page_allocator::MmramPlacement};
+use mem::{AllocationType, SharedPagingAllocator, mmram_placement::MmramPlacement};
 
 use privilege_mgmt::{invoke_demoted_routine, syscall_setup::SyscallInterface};
 
@@ -79,7 +80,7 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use patina::management_mode::supervisor::UserCommandType;
+use patina::{management_mode::supervisor::UserCommandType, pi::hob::PhaseHandoffInformationTable};
 
 use state::{init_state, security_state};
 
@@ -92,7 +93,10 @@ pub use supervisor_handlers::SupervisorMmiHandler;
 
 pub(crate) use page_ownership::{PageOwnership, query_address_ownership};
 
-use crate::smrr::smrr_enable;
+use crate::{
+    error::{CoreInitError, MmSupervisorError, MmSupervisorResult},
+    smrr::smrr_enable,
+};
 
 // The entry-point shim references `rust_main`, which is provided by the platform binary, and is
 // only meaningful on the firmware (UEFI) target. Exclude it from host builds (tests, doctests)
@@ -246,33 +250,42 @@ pub(crate) fn buffer_overlaps_mmram(base: u64, size: u64) -> bool {
 ///
 /// Reads the 1-byte slot at `mm_initialized_buffer + cpu_index`.
 /// A non-zero value indicates the core has completed initialization.
-fn is_core_initialized(cpu_index: usize) -> bool {
-    let Some(buffer) = init_state().mm_initialized_buffer() else {
-        return false;
-    };
+///
+/// Returns [`CoreInitError::InitializedBufferUnavailable`] when the initialized buffer has not been
+/// published yet, and [`CoreInitError::CpuIndexOutOfRange`] when `cpu_index` is outside it. Callers
+/// that need a definitive answer should handle those cases explicitly and pick their own fallback,
+/// typically failing closed by treating the core as uninitialized.
+fn is_core_initialized(cpu_index: usize) -> MmSupervisorResult<bool> {
+    let buffer = init_state()
+        .mm_initialized_buffer()
+        .ok_or(MmSupervisorError::from(CoreInitError::InitializedBufferUnavailable))?;
 
-    let Some(slot) = buffer.get(cpu_index) else {
-        log::error!("Core index {cpu_index} is outside the MM initialized buffer ({} slots)", buffer.len());
-        return false;
-    };
-    slot.load(Ordering::Acquire) != 0
+    let slot = buffer
+        .get(cpu_index)
+        .ok_or(MmSupervisorError::from(CoreInitError::CpuIndexOutOfRange { index: cpu_index, len: buffer.len() }))?;
+
+    Ok(slot.load(Ordering::Acquire) != 0)
 }
 
 /// Marks a specific core as initialized.
 ///
 /// Writes a non-zero value to the 1-byte slot at `mm_initialized_buffer + cpu_index`.
-fn mark_core_initialized(cpu_index: usize) {
-    let Some(buffer) = init_state().mm_initialized_buffer() else {
-        log::error!("MM initialized buffer not set, cannot mark core {cpu_index} as initialized");
-        return;
-    };
+///
+/// Returns [`CoreInitError::InitializedBufferUnavailable`] when the initialized buffer has not been
+/// published yet, and [`CoreInitError::CpuIndexOutOfRange`] when `cpu_index` is outside it. In
+/// either case the core's slot is left unwritten, so the caller must not treat the core as
+/// initialized.
+fn mark_core_initialized(cpu_index: usize) -> MmSupervisorResult<()> {
+    let buffer = init_state()
+        .mm_initialized_buffer()
+        .ok_or(MmSupervisorError::from(CoreInitError::InitializedBufferUnavailable))?;
 
-    let Some(slot) = buffer.get(cpu_index) else {
-        log::error!("Core index {cpu_index} is outside the MM initialized buffer ({} slots)", buffer.len());
-        return;
-    };
+    let slot = buffer
+        .get(cpu_index)
+        .ok_or(MmSupervisorError::from(CoreInitError::CpuIndexOutOfRange { index: cpu_index, len: buffer.len() }))?;
+
     slot.store(1, Ordering::Release);
-    log::trace!("Core {cpu_index} marked as initialized");
+    Ok(())
 }
 
 impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
@@ -332,6 +345,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// Panics if:
     /// - The supervisor instance was already set
     /// - The HOB list pointer is null
+    /// - Any initialization stage reports an error
+    ///
+    /// The last case is what the internal entry point now returns instead of halting on its own.
+    /// This wrapper is the single place that turns those errors into a fail-stop, because the MM
+    /// entry point has no caller that could handle one.
     ///
     /// ## Safety
     ///
@@ -340,6 +358,31 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// but does not validate the entire system state.
     /// `hob_list` must be valid during BSP initialization. It is not accessed on runtime entries.
     pub unsafe fn entry_point(&'static self, cpu_index: usize, hob_list: *const c_void) {
+        // This wrapper ensures that any error from the internal entry point
+        // results in a panic.
+        // SAFETY: Same safety guarantees as `entry_point` apply.
+        if let Err(err) = unsafe { self.entry_point_internal(cpu_index, hob_list) } {
+            panic!("Failed to enter MM Supervisor Core internal entry point: {err:?}");
+        }
+    }
+
+    /// Internal entry point for the MM Supervisor Core.
+    ///
+    /// Returns `Ok(())` on successful entry.
+    ///
+    /// # Errors
+    ///
+    /// Reports the first initialization stage that fails rather than halting, so
+    /// [`entry_point`](Self::entry_point) owns the decision to fail-stop. A core whose index has
+    /// no slot is reported through [`CoreInitError`]; the BSP additionally propagates everything
+    /// `bsp_init` can report.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe for the same reasons as `entry_point`. It assumes the environment
+    /// is properly set up and performs basic sanity checks against the incoming parameters, but
+    /// does not validate the entire system state.
+    unsafe fn entry_point_internal(&'static self, cpu_index: usize, hob_list: *const c_void) -> MmSupervisorResult<()> {
         // Get the current CPU's APIC ID, EBX[31:24] contains the initial APIC ID
         let cpu_id = current_apic_id();
 
@@ -347,8 +390,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let is_bsp = is_bsp();
 
         log::trace!("CPU {cpu_id} (index {cpu_index}) entering MM Supervisor Core (BSP: {is_bsp})");
+        let core_initialized = is_core_initialized(cpu_index)?;
+
         // Check if this core has already completed initialization (per-core check)
-        if is_core_initialized(cpu_index) {
+        if core_initialized {
             // Subsequent entry: go directly to request loop or holding pen (does not return)
             log::trace!("CPU {cpu_id} (index {cpu_index}) re-entering MM Supervisor Core, skipping initialization.");
             smrr_enable();
@@ -357,7 +402,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             }
             self.enter_runtime(cpu_id, cpu_index);
 
-            return;
+            return Ok(());
         }
 
         let _init_guard = self.init_lock.lock();
@@ -371,27 +416,22 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             log::info!("MM Supervisor Core v{}", env!("CARGO_PKG_VERSION"));
             log::info!("BSP (CPU {cpu_id}, index {cpu_index}) starting one-time initialization...");
 
-            self.cpu_manager.register_cpu(cpu_id, cpu_index, true);
+            self.cpu_manager.register_cpu(cpu_id, cpu_index, true)?;
 
             // Perform BSP-only one-time initialization.
-            let user_hob_list = self.bsp_init(hob_list);
+            // SAFETY: `hob_list` is provided by the MM IPL and is guaranteed to
+            // be a valid HOB list (the caller asserts it is non-null before
+            // dispatching).
+            let hob_hand_off_table = unsafe { hob_list.cast::<PhaseHandoffInformationTable>().as_ref_unchecked() };
+            let user_hob_list = self.bsp_init(hob_hand_off_table)?;
 
             // Dispatch to the user level entry point discovered from the HOB list (if found)
-            let user_entry = match init_state().user_entry_point() {
-                Some(entry) if entry != 0 => entry,
-                _ => {
-                    log::error!("User entry point not configured, cannot demote");
-                    return;
-                }
-            };
+            let user_entry = init_state()
+                .user_entry_point()
+                .filter(|&entry| entry != 0)
+                .ok_or(MmSupervisorError::from(CoreInitError::UserEntryPointMissing))?;
 
-            let cpl3_stack = match self.syscall_interface.get_cpl3_stack(cpu_index) {
-                Ok(stack) => stack,
-                Err(e) => {
-                    log::error!("Failed to get CPL3 stack for CPU {cpu_index}: {e:?}");
-                    return;
-                }
-            };
+            let cpl3_stack = self.syscall_interface.get_cpl3_stack(cpu_index)?;
 
             // SAFETY: We are transitioning from the supervisor (CPL0) to the user module (CPL3) for the first time.
             // The entry point and stack have been validated and set up during initialization, and the user module is
@@ -423,14 +463,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 core::hint::spin_loop();
             }
 
-            self.cpu_manager.register_cpu(cpu_id, cpu_index, false);
+            self.cpu_manager.register_cpu(cpu_id, cpu_index, false)?;
         }
 
         // All cores perform per-core initialization
-        self.per_core_init(cpu_id, is_bsp);
+        self.per_core_init(cpu_id, is_bsp)?;
 
         // Mark this core as initialized in the per-core buffer
-        mark_core_initialized(cpu_index);
+        mark_core_initialized(cpu_index)?;
 
         // Track that this core has completed per-core init
         let init_count = init_state().inc_per_core_init_count();
@@ -445,6 +485,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
             log::info!("All {expected_cpus} cores completed initialization, returning to caller.");
         }
+
+        Ok(())
 
         // First entry returns to caller after init is complete
         // (Each core has already marked itself as initialized via mark_core_initialized)
@@ -559,24 +601,32 @@ mod tests {
         static SLOTS: [AtomicU8; 2] = [AtomicU8::new(0), AtomicU8::new(0)];
 
         assert!(init_state().mm_initialized_buffer().is_none());
-        assert!(!is_core_initialized(0));
-        mark_core_initialized(0);
+        assert_eq!(is_core_initialized(0), Err(CoreInitError::InitializedBufferUnavailable.into()));
+        // Before the buffer is published the mark is reported rather than silently dropped.
+        assert_eq!(mark_core_initialized(0), Err(CoreInitError::InitializedBufferUnavailable.into()));
 
         init_state().set_mm_initialized_buffer(&SLOTS);
-        assert!(!is_core_initialized(0));
-        assert!(!is_core_initialized(1));
+        assert_eq!(is_core_initialized(0), Ok(false));
+        assert_eq!(is_core_initialized(1), Ok(false));
 
         SLOTS[1].store(0xFF, Ordering::Relaxed);
-        assert!(is_core_initialized(1));
+        assert_eq!(is_core_initialized(1), Ok(true));
         SLOTS[1].store(0, Ordering::Relaxed);
 
-        mark_core_initialized(1);
-        assert!(!is_core_initialized(0));
-        assert!(is_core_initialized(1));
+        assert_eq!(mark_core_initialized(1), Ok(()));
+        assert_eq!(is_core_initialized(0), Ok(false));
+        assert_eq!(is_core_initialized(1), Ok(true));
 
-        mark_core_initialized(SLOTS.len());
-        assert!(!is_core_initialized(SLOTS.len()));
-        assert!(!is_core_initialized(0));
-        assert!(is_core_initialized(1));
+        // An out-of-range mark fails instead of corrupting a neighbouring slot.
+        assert_eq!(
+            mark_core_initialized(SLOTS.len()),
+            Err(CoreInitError::CpuIndexOutOfRange { index: SLOTS.len(), len: SLOTS.len() }.into())
+        );
+        assert_eq!(
+            is_core_initialized(SLOTS.len()),
+            Err(CoreInitError::CpuIndexOutOfRange { index: SLOTS.len(), len: SLOTS.len() }.into())
+        );
+        assert_eq!(is_core_initialized(0), Ok(false));
+        assert_eq!(is_core_initialized(1), Ok(true));
     }
 }

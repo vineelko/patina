@@ -32,7 +32,10 @@
 //!
 //! SPDX-License-Identifier: Apache-2.0
 
-use crate::mm_policy::{SaveStateCondition, SaveStateField, gate::PolicyGate};
+use crate::{
+    error::MmSupervisorResult,
+    mm_policy::{SaveStateCondition, SaveStateField, gate::PolicyGate},
+};
 use patina::standard::efi::Status;
 use patina_internal_cpu::save_state::{
     self, IA32_EFER_LMA, IO_INFO_SIZE, IO_TYPE_INPUT, LMA_32BIT, LMA_64BIT, MmSaveStateIoInfo, MmSaveStateRegister,
@@ -86,7 +89,7 @@ pub(crate) struct SaveStateInfo {
 
 /// Why the per-CPU save-state regions the `PassDown` HOB describes cannot be used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SaveStateValidationError {
+pub enum SaveStateValidationError {
     /// The SMBASE array is null, empty, misaligned, overflowing, or not entirely inside MMRAM.
     UnusableSmBaseArray {
         /// Base address of the array.
@@ -117,6 +120,35 @@ pub(crate) enum SaveStateValidationError {
     },
 }
 
+impl core::error::Error for SaveStateValidationError {}
+
+impl core::fmt::Display for SaveStateValidationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnusableSmBaseArray { base, count } => write!(
+                f,
+                "the SMBASE array at 0x{base:016x} with {count} entries is null, misaligned, overflowing, \
+                 or not entirely inside MMRAM"
+            ),
+            Self::SmBaseArrayNotSupervisorOwned { base, count } => write!(
+                f,
+                "the SMBASE array at 0x{base:016x} with {count} entries is inside MMRAM but is not mapped \
+                 supervisor-only"
+            ),
+            Self::UnusableSaveStateRegion { cpu_index, smbase } => write!(
+                f,
+                "the save-state region for CPU {cpu_index} at SMBASE 0x{smbase:016x} is null, overflowing, \
+                 or not entirely inside MMRAM"
+            ),
+            Self::SaveStateRegionNotSupervisorOwned { cpu_index, smbase } => write!(
+                f,
+                "the save-state region for CPU {cpu_index} at SMBASE 0x{smbase:016x} is inside MMRAM but is not \
+                 mapped supervisor-only"
+            ),
+        }
+    }
+}
+
 /// Requires every per-CPU save-state region the `PassDown` HOB describes to lie inside MMRAM and
 /// to be mapped supervisor-only.
 ///
@@ -135,7 +167,7 @@ pub(crate) fn validate_save_state_regions(
     number_of_cpus: u64,
     is_inside_mmram: impl Fn(u64, u64) -> bool,
     is_supervisor_owned: impl Fn(u64, u64) -> bool,
-) -> Result<(), SaveStateValidationError> {
+) -> MmSupervisorResult<()> {
     let unusable_array = SaveStateValidationError::UnusableSmBaseArray { base: sm_base, count: number_of_cpus };
 
     let count = usize::try_from(number_of_cpus).map_err(|_| unusable_array)?;
@@ -149,10 +181,12 @@ pub(crate) fn validate_save_state_regions(
         || sm_base.checked_add(array_size).is_none()
         || !is_inside_mmram(sm_base, array_size)
     {
-        return Err(unusable_array);
+        return Err(unusable_array.into());
     }
     if !is_supervisor_owned(sm_base, array_size) {
-        return Err(SaveStateValidationError::SmBaseArrayNotSupervisorOwned { base: sm_base, count: number_of_cpus });
+        return Err(
+            SaveStateValidationError::SmBaseArrayNotSupervisorOwned { base: sm_base, count: number_of_cpus }.into()
+        );
     }
 
     // SAFETY: the checks above establish that `sm_base` is a non-null, aligned array of `count`
@@ -168,10 +202,10 @@ pub(crate) fn validate_save_state_regions(
             .filter(|base| base.checked_add(SMRAM_SAVE_STATE_MAP_SIZE).is_some())
             .filter(|base| is_inside_mmram(*base, SMRAM_SAVE_STATE_MAP_SIZE))
         else {
-            return Err(SaveStateValidationError::UnusableSaveStateRegion { cpu_index, smbase });
+            return Err(SaveStateValidationError::UnusableSaveStateRegion { cpu_index, smbase }.into());
         };
         if !is_supervisor_owned(map_base, SMRAM_SAVE_STATE_MAP_SIZE) {
-            return Err(SaveStateValidationError::SaveStateRegionNotSupervisorOwned { cpu_index, smbase });
+            return Err(SaveStateValidationError::SaveStateRegionNotSupervisorOwned { cpu_index, smbase }.into());
         }
     }
 
@@ -875,7 +909,7 @@ mod tests {
                 inside_any(fake_smram_ranges(&smram)),
                 |_, _| false
             ),
-            Err(SaveStateValidationError::SmBaseArrayNotSupervisorOwned { base: info.sm_base, count: 2 })
+            Err(SaveStateValidationError::SmBaseArrayNotSupervisorOwned { base: info.sm_base, count: 2 }.into())
         );
     }
 
@@ -900,7 +934,8 @@ mod tests {
             Err(SaveStateValidationError::SaveStateRegionNotSupervisorOwned {
                 cpu_index: 0,
                 smbase: smram.sm_bases[0]
-            })
+            }
+            .into())
         );
     }
 
@@ -910,7 +945,7 @@ mod tests {
         // that would fault if the check were done in the wrong order.
         let result = validate_save_state_regions(0xdead_0000, 4, |_, _| false, all_supervisor_owned);
 
-        assert_eq!(result, Err(SaveStateValidationError::UnusableSmBaseArray { base: 0xdead_0000, count: 4 }));
+        assert_eq!(result, Err(SaveStateValidationError::UnusableSmBaseArray { base: 0xdead_0000, count: 4 }.into()));
     }
 
     #[test]
@@ -923,7 +958,7 @@ mod tests {
         for (base, count) in [(0, 2), (sm_base, 0), (u64::MAX - 7, 2)] {
             assert_eq!(
                 validate_save_state_regions(base, count, |_, _| true, all_supervisor_owned),
-                Err(SaveStateValidationError::UnusableSmBaseArray { base, count }),
+                Err(SaveStateValidationError::UnusableSmBaseArray { base, count }.into()),
                 "array at 0x{base:x} with {count} entries should be rejected"
             );
         }
@@ -938,7 +973,7 @@ mod tests {
 
         assert_eq!(
             validate_save_state_regions(base, 2, |_, _| true, all_supervisor_owned),
-            Err(SaveStateValidationError::UnusableSmBaseArray { base, count: 2 })
+            Err(SaveStateValidationError::UnusableSmBaseArray { base, count: 2 }.into())
         );
     }
 
@@ -956,7 +991,7 @@ mod tests {
                 inside_any(fake_smram_ranges(&smram)),
                 all_supervisor_owned
             ),
-            Err(SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 1, smbase: 0x1000 })
+            Err(SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 1, smbase: 0x1000 }.into())
         );
     }
 
@@ -972,7 +1007,7 @@ mod tests {
                 inside_any(fake_smram_ranges(&smram)),
                 all_supervisor_owned
             ),
-            Err(SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 0, smbase: 0 })
+            Err(SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 0, smbase: 0 }.into())
         );
     }
 
@@ -983,7 +1018,7 @@ mod tests {
 
         assert_eq!(
             validate_save_state_regions(smram.info().sm_base, 1, |_, _| true, all_supervisor_owned),
-            Err(SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 0, smbase: u64::MAX })
+            Err(SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 0, smbase: u64::MAX }.into())
         );
     }
 
@@ -1096,7 +1131,7 @@ mod tests {
     fn test_save_state_processor_id_from_cpu_manager() {
         static SUPERVISOR: crate::MmSupervisorCore<TestPlatform, 4> = crate::MmSupervisorCore::new();
 
-        assert_eq!(SUPERVISOR.cpu_manager().register_cpu(0x20, 2, false), Some(2));
+        assert_eq!(SUPERVISOR.cpu_manager().register_cpu(0x20, 2, false), Ok(2));
 
         let mut out = [0u8; 8];
         assert_eq!(read_processor_id(2, &mut out), Err(Status::NOT_READY));

@@ -961,9 +961,9 @@ mod tests {
     #[test]
     fn test_wait_for_ap_arrival_succeeds_once_every_ap_checks_in() {
         let core = TestCore::new();
-        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
-        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Some(1));
-        assert_eq!(core.cpu_manager.register_cpu(2, 2, false), Some(2));
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
+        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Ok(1));
+        assert_eq!(core.cpu_manager.register_cpu(2, 2, false), Ok(2));
         assert!(core.cpu_manager.set_ap_state(1, ApState::InHoldingPen));
         assert!(core.cpu_manager.set_ap_state(2, ApState::InHoldingPen));
 
@@ -974,8 +974,8 @@ mod tests {
     #[should_panic(expected = "fail-secure")]
     fn test_wait_for_ap_arrival_halts_when_an_ap_is_missing() {
         let core = TestCore::new();
-        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
-        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Some(1));
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
+        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Ok(1));
 
         // The AP never reaches the holding pen, so the arrival window expires.
         core.wait_for_ap_arrival(1);
@@ -1268,7 +1268,7 @@ mod tests {
         init_state().set_user_entry_point(0x4000);
         let core = TestCore::new();
         core.syscall_interface.init(4, 0x8000, 0x1000).expect("syscall interface initializes");
-        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
 
         let mut buffers = TestBuffers::new(256);
         buffers.user_external[..4].copy_from_slice(&[1, 2, 3, 4]);
@@ -1315,7 +1315,7 @@ mod tests {
         init_state().set_user_entry_point(0x4000);
         let core = TestCore::new();
         core.syscall_interface.init(4, 0x8000, 0x1000).expect("syscall interface initializes");
-        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
 
         let mut buffers = TestBuffers::new(256);
         let config = buffers.config();
@@ -1346,7 +1346,7 @@ mod tests {
         init_state().set_user_entry_point(0x4000);
         let core = TestCore::new();
         core.syscall_interface.init(4, 0x8000, 0x1000).expect("syscall interface initializes");
-        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
 
         let mut buffers = TestBuffers::new(256);
         let config = buffers.config();
@@ -1394,8 +1394,8 @@ mod tests {
     #[test]
     fn test_ap_holding_pen_exits_once_released() {
         static CORE: TestCore = TestCore::new();
-        assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Some(0));
-        assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Some(1));
+        assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Ok(0));
+        assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Ok(1));
         // The BSP has already signalled the exit barrier, so the pen drains on the first poll.
         CORE.cpu_manager.release_all_aps();
 
@@ -1405,8 +1405,8 @@ mod tests {
     #[test]
     fn test_ap_holding_pen_services_a_pending_command_before_exiting() {
         static CORE: TestCore = TestCore::new();
-        assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Some(0));
-        assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Some(1));
+        assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Ok(0));
+        assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Ok(1));
         // A null procedure is rejected by the AP, which still posts a response.
         CORE.mailbox_manager.send_command(1, ApCommand::RunProcedure { procedure: 0, argument: 0 }).unwrap();
         CORE.cpu_manager.release_all_aps();
@@ -1420,7 +1420,7 @@ mod tests {
     #[test]
     fn test_execute_ap_command_restores_the_holding_pen_state() {
         let core = TestCore::new();
-        assert_eq!(core.cpu_manager.register_cpu(1, 0, false), Some(0));
+        assert_eq!(core.cpu_manager.register_cpu(1, 0, false), Ok(0));
 
         let response = core.execute_ap_command(1, &ApCommand::RunProcedure { procedure: 0, argument: 0 });
 
@@ -1453,8 +1453,8 @@ mod tests {
         // No CPUs are registered yet, so every index is out of range.
         assert_eq!(core.start_ap_procedure(0, 0x1000, 0), invalid);
 
-        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
-        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Some(1));
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
+        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Ok(1));
 
         // Index 0 is the BSP, which cannot be told to run an AP procedure.
         assert_eq!(core.start_ap_procedure(0, 0x1000, 0), invalid);
@@ -1468,7 +1468,7 @@ mod tests {
     fn test_start_ap_procedure_rejects_an_unpopulated_slot() {
         let core = TestCore::new();
         // Registering out of order leaves slot 0 empty while raising the registered count.
-        assert_eq!(core.cpu_manager.register_cpu(7, 1, false), Some(1));
+        assert_eq!(core.cpu_manager.register_cpu(7, 1, false), Ok(1));
 
         assert_eq!(core.start_ap_procedure(0, 0x1000, 0), efi::Status::INVALID_PARAMETER.as_usize() as u64);
     }
@@ -1476,8 +1476,8 @@ mod tests {
     #[test]
     fn test_start_ap_procedure_rejects_a_busy_mailbox() {
         let core = TestCore::new();
-        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Some(0));
-        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Some(1));
+        assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
+        assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Ok(1));
         // Occupy the mailbox so the dispatch has nowhere to post.
         core.mailbox_manager.send_command(1, ApCommand::RunProcedure { procedure: 0x2000, argument: 0 }).unwrap();
 
@@ -1487,8 +1487,8 @@ mod tests {
     #[test]
     fn test_start_ap_procedure_reports_the_ap_response() {
         static CORE: TestCore = TestCore::new();
-        assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Some(0));
-        assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Some(1));
+        assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Ok(0));
+        assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Ok(1));
 
         for (posted, expected) in [
             (ApResponse::Success, efi::Status::SUCCESS.as_usize() as u64),

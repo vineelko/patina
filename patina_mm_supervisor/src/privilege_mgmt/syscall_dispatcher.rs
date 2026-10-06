@@ -640,8 +640,9 @@ pub extern "efiapi" fn syscall_dispatcher(
 mod tests {
     use super::*;
     use crate::CommBufferConfig;
-    use crate::mem::{AllocationType, page_allocator::PageAllocError};
-    use crate::mm_policy::PolicyError;
+    use crate::error::{MmSupervisorError, MmSupervisorResult};
+    use crate::mem::{AllocError, AllocationType};
+    use crate::mm_policy::PolicyGateError;
     use core::cell::RefCell;
 
     /// An action a handler asked its [`SyscallOps`] implementation to perform.
@@ -674,8 +675,8 @@ mod tests {
         msr_value: u64,
         io_value: u64,
         is_bsp: bool,
-        allocate_result: Result<u64, PageAllocError>,
-        free_result: Result<(), PageAllocError>,
+        allocate_result: MmSupervisorResult<u64>,
+        free_result: MmSupervisorResult<()>,
         allocation_type: Option<AllocationType>,
         /// Mapped addresses and their ownership; any other address is treated as unmapped.
         mapped: Vec<(u64, PageOwnership)>,
@@ -762,12 +763,12 @@ mod tests {
             self.is_bsp
         }
 
-        fn allocate_user_pages(&self, page_count: usize) -> Result<u64, PageAllocError> {
+        fn allocate_user_pages(&self, page_count: usize) -> MmSupervisorResult<u64> {
             self.record(Effect::AllocateUserPages(page_count));
             self.allocate_result
         }
 
-        fn free_user_pages(&self, addr: u64, page_count: usize) -> Result<(), PageAllocError> {
+        fn free_user_pages(&self, addr: u64, page_count: usize) -> MmSupervisorResult<()> {
             self.record(Effect::FreeUserPages(addr, page_count));
             self.free_result
         }
@@ -856,7 +857,10 @@ mod tests {
     #[test]
     fn test_check_policy_maps_decisions_to_status() {
         assert_eq!(check_policy("TEST", PolicyDecision::Allowed), Ok(()));
-        assert_eq!(check_policy("TEST", PolicyDecision::Denied(PolicyError::AccessDenied)), Err(Status::ACCESS_DENIED));
+        assert_eq!(
+            check_policy("TEST", PolicyDecision::Denied(MmSupervisorError::PolicyGate(PolicyGateError::AccessDenied))),
+            Err(Status::ACCESS_DENIED)
+        );
         assert_eq!(check_policy("TEST", PolicyDecision::Unavailable), Err(Status::NOT_READY));
     }
 
@@ -1053,8 +1057,10 @@ mod tests {
 
     #[test]
     fn test_rdmsr_denied_by_policy() {
-        let d =
-            dispatcher(MockOps { msr_policy: PolicyDecision::Denied(PolicyError::AccessDenied), ..Default::default() });
+        let d = dispatcher(MockOps {
+            msr_policy: PolicyDecision::Denied(MmSupervisorError::PolicyGate(PolicyGateError::AccessDenied)),
+            ..Default::default()
+        });
 
         assert_eq!(d.handle_rdmsr(&ctx(0, 0x1B, 0, 0)), Err(Status::ACCESS_DENIED));
         // The MSR must not be read once the policy denies the request.
@@ -1082,8 +1088,10 @@ mod tests {
 
     #[test]
     fn test_wrmsr_denied_by_policy() {
-        let d =
-            dispatcher(MockOps { msr_policy: PolicyDecision::Denied(PolicyError::AccessDenied), ..Default::default() });
+        let d = dispatcher(MockOps {
+            msr_policy: PolicyDecision::Denied(MmSupervisorError::PolicyGate(PolicyGateError::AccessDenied)),
+            ..Default::default()
+        });
 
         assert_eq!(d.handle_wrmsr(&ctx(0, 0x1B, 0x5A, 0)), Err(Status::ACCESS_DENIED));
         assert_eq!(d.ops.effects(), vec![Effect::CheckMsr(0x1B, AccessType::Write)]);
@@ -1106,7 +1114,7 @@ mod tests {
     #[test]
     fn test_privileged_instructions_respect_policy_denial() {
         let denied = dispatcher(MockOps {
-            instruction_policy: PolicyDecision::Denied(PolicyError::AccessDenied),
+            instruction_policy: PolicyDecision::Denied(MmSupervisorError::PolicyGate(PolicyGateError::AccessDenied)),
             ..Default::default()
         });
         assert_eq!(denied.handle_instruction(Instruction::Cli), Err(Status::ACCESS_DENIED));
@@ -1145,8 +1153,10 @@ mod tests {
         assert!(d.ops.effects().is_empty());
 
         // Denied by policy.
-        let d =
-            dispatcher(MockOps { io_policy: PolicyDecision::Denied(PolicyError::AccessDenied), ..Default::default() });
+        let d = dispatcher(MockOps {
+            io_policy: PolicyDecision::Denied(MmSupervisorError::PolicyGate(PolicyGateError::AccessDenied)),
+            ..Default::default()
+        });
         assert_eq!(d.handle_io_read(&ctx(0, 0xCF8, MM_IO_UINT8, 0)), Err(Status::ACCESS_DENIED));
         assert_eq!(d.ops.effects(), vec![Effect::CheckIo(0xCF8, IoWidth::Byte, AccessType::Read)]);
     }
@@ -1242,7 +1252,10 @@ mod tests {
 
     #[test]
     fn test_alloc_page_reports_allocator_failure() {
-        let d = dispatcher(MockOps { allocate_result: Err(PageAllocError::OutOfMemory), ..Default::default() });
+        let d = dispatcher(MockOps {
+            allocate_result: Err(MmSupervisorError::Alloc(AllocError::OutOfMemory)),
+            ..Default::default()
+        });
 
         assert_eq!(
             d.handle_alloc_page(&ctx(0, u64::from(ALLOCATE_ANY_PAGES), u64::from(RUNTIME_SERVICES_DATA), 4)),
@@ -1294,7 +1307,10 @@ mod tests {
     #[test]
     fn test_free_page_reports_allocator_failure() {
         // A page in the range belongs to someone else, so the checked free fails.
-        let d = dispatcher(MockOps { free_result: Err(PageAllocError::NotAllocated), ..Default::default() });
+        let d = dispatcher(MockOps {
+            free_result: Err(MmSupervisorError::Alloc(AllocError::NotAllocated)),
+            ..Default::default()
+        });
 
         assert_eq!(d.handle_free_page(&ctx(0, 0x2000, 3, 0)), Err(Status::SECURITY_VIOLATION));
         assert_eq!(d.ops.effects(), vec![Effect::FreeUserPages(0x2000, 3)]);
