@@ -12,8 +12,12 @@
 
 #![cfg_attr(coverage, coverage(off))]
 
+use crate::comm_buffer::{
+    CommBufferInitValue, MmCommonRegionHobData, parse_supv_comm_buffer_hob, parse_user_comm_buffer_hob,
+};
 use crate::init::*;
 use crate::mem::SharedPagingAllocator;
+use crate::pass_down_hob::{MmSupvPassDownHobData, parse_pass_down_hob};
 use crate::{
     CommBufferConfig, MmSupervisorCore, PlatformInfo,
     error::MmSupervisorResult,

@@ -63,7 +63,7 @@ use patina_paging::{MemoryAttributes, PageTable};
 use zerocopy::FromBytes;
 
 use crate::error::MmSupervisorResult;
-use crate::init::MmSupvPassDownHobData;
+use crate::pass_down_hob::MmSupvPassDownHobData;
 use crate::smrr::SmramRegion;
 use crate::state::security_state;
 

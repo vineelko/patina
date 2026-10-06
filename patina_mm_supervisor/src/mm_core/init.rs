@@ -35,7 +35,7 @@ use crate::{
     CommBufferConfig, MmSupervisorCore, PlatformInfo,
     error::MmSupervisorResult,
     hob_validation::{self, HobValidationError},
-    intrinsics::{get_current_cpu_id, read_cr3, write_msr},
+    intrinsics::read_cr3,
     mem::AllocationType,
     mem::SharedPagingAllocator,
     mem::{
@@ -52,12 +52,24 @@ use crate::{
     state::{init_state, security_state},
 };
 
+use crate::hob::{find_guid_hob, find_module, find_required_hob};
 use crate::init::{
-    CoreInitError, IA32_SMM_MONITOR_CTL_MSR, MmSupvPassDownHobData, PolicyInitError, PolicyInitServices,
-    RuntimePolicyInitServices, SMM_MONITOR_CTL_MSEG_BASE_MASK, SMM_MONITOR_CTL_VALID, establish_mmram_bound,
-    find_guid_hob, find_module, find_required_hob, parse_mseg_smram_hob, parse_pass_down_hob, supervisor_image_anchor,
-    validate_init_code_page,
+    CoreInitError, PolicyInitError, PolicyInitServices, RuntimePolicyInitServices, establish_mmram_bound,
+    supervisor_image_anchor,
 };
+use crate::mseg::parse_mseg_smram_hob;
+use crate::pass_down_hob::{MmSupvPassDownHobData, parse_pass_down_hob};
+
+pub(crate) fn validate_init_code_page(address: u64, attributes: MemoryAttributes) {
+    if attributes.contains(MemoryAttributes::ExecuteProtect) {
+        return;
+    }
+    assert!(
+        attributes.contains(MemoryAttributes::Supervisor | MemoryAttributes::ReadOnly)
+            && !attributes.contains(MemoryAttributes::ReadProtect),
+        "MM Init code page at 0x{address:016x} must be supervisor-only, read-only and executable: {attributes:?}"
+    );
+}
 
 impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// BSP-specific initialization.
@@ -488,7 +500,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         log::trace!("{core_type} (CPU {cpu_id}) performing per-core initialization...");
 
         // IA32_SMM_MONITOR_CTL is per-logical-processor, so every core programs it.
-        Self::program_mseg_base(cpu_id);
+        crate::mseg::program_mseg_base(cpu_id);
 
         // SMRR is per-logical-processor. The APs program theirs here; the BSP's was done in `bsp_init`.
         let range =
@@ -498,33 +510,6 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         log::trace!("{core_type} (CPU {cpu_id}) per-core initialization complete.");
         Ok(())
-    }
-
-    /// Programs this logical processor's `IA32_SMM_MONITOR_CTL` with the MSEG base.
-    ///
-    /// The MSEG base discovered from the MSEG SMRAM HOB is written along with the
-    /// Valid bit so an STM can later be activated, and so software can read the region back.
-    ///
-    /// No-op when the platform publishes no MSEG SMRAM HOB.
-    fn program_mseg_base(cpu_id: u32) {
-        let Some(mseg_base) = init_state().mseg_base() else {
-            return;
-        };
-
-        let value = (mseg_base & SMM_MONITOR_CTL_MSEG_BASE_MASK) | SMM_MONITOR_CTL_VALID;
-
-        if (get_current_cpu_id().ecx & (1 << 5)) == 0 {
-            log::warn!("CPU {cpu_id} does not support VMX (CPUID.01H:ECX.VMX=0), cannot program IA32_SMM_MONITOR_CTL");
-            return;
-        }
-
-        // SAFETY: IA32_SMM_MONITOR_CTL is an architectural MSR available whenever VMX is
-        // reported by CPUID.01H:ECX.VMX. After the check above, only the architecturally
-        // defined Valid and MsegBase fields are set; reserved bits are masked off above,
-        // so the write cannot #GP on a reserved-bit violation. The write affects only this
-        // logical processor's MSR.
-        unsafe { write_msr(IA32_SMM_MONITOR_CTL_MSR, value) };
-        log::debug!("CPU {cpu_id} programmed IA32_SMM_MONITOR_CTL = 0x{value:x}");
     }
 
     /// Initializes services from the HOB list.
@@ -1481,6 +1466,18 @@ mod tests {
                 supervisor.parse_mp_information_hob(&data),
                 Err(PolicyInitError::InvalidCpuCount { found: cpu_count, maximum: 4 }.into())
             );
+        }
+    }
+
+    #[test]
+    fn test_validate_init_code_page_requires_supervisor_readonly_executable() {
+        let code = MemoryAttributes::Supervisor | MemoryAttributes::ReadOnly;
+        validate_init_code_page(0x1000, code);
+        validate_init_code_page(0x2000, MemoryAttributes::Supervisor | MemoryAttributes::ExecuteProtect);
+        for attributes in
+            [MemoryAttributes::Supervisor, MemoryAttributes::ReadOnly, code | MemoryAttributes::ReadProtect]
+        {
+            assert!(catch_unwind(|| validate_init_code_page(0x1000, attributes)).is_err());
         }
     }
 }

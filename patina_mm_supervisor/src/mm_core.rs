@@ -21,19 +21,11 @@ pub(crate) mod entry;
 pub(crate) mod init;
 pub(crate) mod runtime;
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::AtomicBool;
 
 use spin::Mutex;
 
-use crate::{
-    PlatformInfo,
-    cpu::CpuManager,
-    error::{MmSupervisorError, MmSupervisorResult},
-    init::CoreInitError,
-    mailbox::MailboxManager,
-    privilege_mgmt::syscall_setup::SyscallInterface,
-    state::init_state,
-};
+use crate::{PlatformInfo, cpu::CpuManager, mailbox::MailboxManager, privilege_mgmt::syscall_setup::SyscallInterface};
 
 /// The MM Supervisor Core responsible for managing the standalone MM environment.
 ///
@@ -95,91 +87,15 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> Default for MmSupervisorCore<P, MAX
     }
 }
 
-/// Checks if a specific core has completed initialization.
-///
-/// Reads the 1-byte slot at `mm_initialized_buffer + cpu_index`.
-/// A non-zero value indicates the core has completed initialization.
-///
-/// Returns [`CoreInitError::InitializedBufferUnavailable`] when the initialized buffer has not been
-/// published yet, and [`CoreInitError::CpuIndexOutOfRange`] when `cpu_index` is outside it. Callers
-/// that need a definitive answer should handle those cases explicitly and pick their own fallback,
-/// typically failing closed by treating the core as uninitialized.
-pub(crate) fn is_core_initialized(cpu_index: usize) -> MmSupervisorResult<bool> {
-    let buffer = init_state().mm_initialized_buffer().ok_or(CoreInitError::InitializedBufferUnavailable)?;
-
-    let slot = buffer
-        .get(cpu_index)
-        .ok_or(MmSupervisorError::from(CoreInitError::CpuIndexOutOfRange { index: cpu_index, len: buffer.len() }))?;
-
-    Ok(slot.load(Ordering::Acquire) != 0)
-}
-
-/// Marks a specific core as initialized.
-///
-/// Writes a non-zero value to the 1-byte slot at `mm_initialized_buffer + cpu_index`.
-///
-/// Returns [`CoreInitError::InitializedBufferUnavailable`] when the initialized buffer has not been
-/// published yet, and [`CoreInitError::CpuIndexOutOfRange`] when `cpu_index` is outside it. In
-/// either case the core's slot is left unwritten, so the caller must not treat the core as
-/// initialized.
-pub(crate) fn mark_core_initialized(cpu_index: usize) -> MmSupervisorResult<()> {
-    let buffer = init_state()
-        .mm_initialized_buffer()
-        .ok_or(MmSupervisorError::from(CoreInitError::InitializedBufferUnavailable))?;
-
-    let slot = buffer
-        .get(cpu_index)
-        .ok_or(MmSupervisorError::from(CoreInitError::CpuIndexOutOfRange { index: cpu_index, len: buffer.len() }))?;
-
-    slot.store(1, Ordering::Release);
-    Ok(())
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
-    use core::sync::atomic::AtomicU8;
-    use serial_test::serial;
+    use core::sync::atomic::Ordering;
 
     struct TestPlatform;
 
     impl PlatformInfo for TestPlatform {}
-
-    #[test]
-    #[serial]
-    fn test_core_initialization_functions_handle_state_values_and_bounds() {
-        static SLOTS: [AtomicU8; 2] = [AtomicU8::new(0), AtomicU8::new(0)];
-
-        assert!(init_state().mm_initialized_buffer().is_none());
-        assert_eq!(is_core_initialized(0), Err(CoreInitError::InitializedBufferUnavailable.into()));
-        // Before the buffer is published the mark is reported rather than silently dropped.
-        assert_eq!(mark_core_initialized(0), Err(CoreInitError::InitializedBufferUnavailable.into()));
-
-        init_state().set_mm_initialized_buffer(&SLOTS);
-        assert_eq!(is_core_initialized(0), Ok(false));
-        assert_eq!(is_core_initialized(1), Ok(false));
-
-        SLOTS[1].store(0xFF, Ordering::Relaxed);
-        assert_eq!(is_core_initialized(1), Ok(true));
-        SLOTS[1].store(0, Ordering::Relaxed);
-
-        assert_eq!(mark_core_initialized(1), Ok(()));
-        assert_eq!(is_core_initialized(0), Ok(false));
-        assert_eq!(is_core_initialized(1), Ok(true));
-
-        // An out-of-range mark fails instead of corrupting a neighbouring slot.
-        assert_eq!(
-            mark_core_initialized(SLOTS.len()),
-            Err(CoreInitError::CpuIndexOutOfRange { index: SLOTS.len(), len: SLOTS.len() }.into())
-        );
-        assert_eq!(
-            is_core_initialized(SLOTS.len()),
-            Err(CoreInitError::CpuIndexOutOfRange { index: SLOTS.len(), len: SLOTS.len() }.into())
-        );
-        assert_eq!(is_core_initialized(0), Ok(false));
-        assert_eq!(is_core_initialized(1), Ok(true));
-    }
 
     #[test]
     fn test_supervisor_default_matches_new() {

@@ -45,6 +45,7 @@
 mod comm_buffer;
 mod cpu;
 mod error;
+mod hob;
 mod hob_validation;
 mod init;
 mod intrinsics;
@@ -52,7 +53,9 @@ mod mailbox;
 mod mem;
 mod mm_core;
 mod mm_policy;
+mod mseg;
 mod page_ownership;
+mod pass_down_hob;
 mod perf_timer;
 mod privilege_mgmt;
 mod request_target;
