@@ -25,13 +25,14 @@
 
 use crate::{
     hob_validation::HobValidationError,
-    init::{CoreInitError, MmramBoundError, PolicyInitError, SmiHandlerIdtPatchError, SmiHandlerIdtPatchInputError},
+    init::{CoreInitError, PolicyInitError, SmiHandlerIdtPatchError, SmiHandlerIdtPatchInputError},
     mailbox::MailboxError,
     mem::AllocError,
     mm_policy::{
         PolicyGateError,
         helpers::{PageTableWalkError, PolicyValidationError},
     },
+    mmram_bound::MmramBoundError,
     privilege_mgmt::{call_gate::CallGateError, syscall_setup::SyscallSetupError},
     save_state::SaveStateValidationError,
     smrr::SmrrError,

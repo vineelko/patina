@@ -53,6 +53,7 @@ mod mailbox;
 mod mem;
 mod mm_core;
 mod mm_policy;
+mod mmram_bound;
 mod mseg;
 mod page_ownership;
 mod pass_down_hob;
