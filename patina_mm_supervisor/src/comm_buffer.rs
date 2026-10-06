@@ -14,6 +14,8 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
+use core::fmt;
+
 use patina::UEFI_PAGE_SIZE;
 use patina::management_mode::{MmCommBufferStatus, comm_buffer_hob::MmCommonBufferHobData};
 use patina_paging::x64::{disable_write_protection, enable_write_protection};
@@ -22,11 +24,50 @@ use zerocopy_derive::Immutable;
 
 use crate::{
     error::MmSupervisorResult,
-    init::PolicyInitError,
     mem::{AllocationType, mmram_placement::buffer_overlaps_mmram},
     page_ownership::{PageOwnership, query_address_ownership},
     state::security_state,
 };
+
+/// Why a communication buffer could not be adopted from the HOB list.
+///
+/// The MM IPL describes both buffers from outside the supervisor's trust boundary, so each
+/// field is checked before the internal copy is allocated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommBufferError {
+    /// The HOB payload is smaller than the structure it must contain.
+    HobTooSmall {
+        /// Bytes the HOB actually carries.
+        found: usize,
+        /// Bytes the structure requires.
+        expected: usize,
+    },
+    /// The page count is zero, does not fit the target architecture, or produces an
+    /// address range that overflows.
+    InvalidSize {
+        /// The page count the HOB reported.
+        pages: u64,
+    },
+    /// The internal copy of a communication buffer could not be allocated.
+    AllocationFailed,
+    /// One or more communication buffers were left at address zero.
+    Missing,
+}
+
+impl core::error::Error for CommBufferError {}
+
+impl fmt::Display for CommBufferError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HobTooSmall { found, expected } => {
+                write!(f, "the HOB payload is {found} bytes, but {expected} are required")
+            }
+            Self::InvalidSize { pages } => write!(f, "the page count {pages} does not describe a usable buffer"),
+            Self::AllocationFailed => write!(f, "the internal copy of the buffer could not be allocated"),
+            Self::Missing => write!(f, "one or more communication buffers are not properly initialized"),
+        }
+    }
+}
 
 /// Communication buffer configuration extracted from `PassDown` HOB.
 #[derive(Debug, Clone, Copy, Default)]
@@ -96,15 +137,15 @@ fn parse_comm_buffer_fields(
 ) -> MmSupervisorResult<ParsedCommBuffer> {
     let page_count = usize::try_from(pages).map_err(|_| {
         log::error!("{description} page count {pages} does not fit the target architecture");
-        PolicyInitError::InvalidCommunicationBufferSize { pages }
+        CommBufferError::InvalidSize { pages }
     })?;
     let size = pages.checked_mul(UEFI_PAGE_SIZE as u64).filter(|size| *size != 0).ok_or_else(|| {
         log::error!("{description} page count {pages} produces an invalid byte size");
-        PolicyInitError::InvalidCommunicationBufferSize { pages }
+        CommBufferError::InvalidSize { pages }
     })?;
     if address.checked_add(size).is_none() {
         log::error!("{description} address 0x{address:016x} plus size 0x{size:x} overflows");
-        return Err(PolicyInitError::InvalidCommunicationBufferSize { pages }.into());
+        return Err(CommBufferError::InvalidSize { pages }.into());
     }
 
     Ok(ParsedCommBuffer { address, page_count, size, status_address })
@@ -117,7 +158,7 @@ pub(crate) fn parse_supv_comm_buffer_hob(data: &[u8]) -> MmSupervisorResult<Pars
             data.len(),
             core::mem::size_of::<MmCommonRegionHobData>()
         );
-        PolicyInitError::InvalidPolicyData
+        CommBufferError::HobTooSmall { found: data.len(), expected: core::mem::size_of::<MmCommonRegionHobData>() }
     })?;
 
     parse_comm_buffer_fields(hob.addr, hob.number_of_pages, hob.status_addr, "Supervisor communication buffer")
@@ -130,7 +171,7 @@ pub(crate) fn parse_user_comm_buffer_hob(data: &[u8]) -> MmSupervisorResult<Pars
             data.len(),
             core::mem::size_of::<MmCommonBufferHobData>()
         );
-        PolicyInitError::InvalidPolicyData
+        CommBufferError::HobTooSmall { found: data.len(), expected: core::mem::size_of::<MmCommonBufferHobData>() }
     })?;
 
     parse_comm_buffer_fields(hob.physical_start, hob.number_of_pages, hob.status_buffer, "User communication buffer")
@@ -185,9 +226,9 @@ fn require_external_comm_buffer_with(
 ///
 /// # Errors
 ///
-/// Returns [`PolicyInitError::InvalidPolicyData`] when the HOB payload is too small or describes
-/// an unusable range, and [`PolicyInitError::MemoryAllocationFailed`] when the internal copy
-/// cannot be allocated.
+/// Returns [`CommBufferError::HobTooSmall`] when the HOB payload is short,
+/// [`CommBufferError::InvalidSize`] when it describes an unusable range, and
+/// [`CommBufferError::AllocationFailed`] when the internal copy cannot be allocated.
 ///
 /// # Panics
 ///
@@ -212,7 +253,7 @@ pub(crate) fn init_supv_comm_buffer(data: &[u8]) -> MmSupervisorResult<CommBuffe
         .allocate_pages_with_type(buffer.page_count, AllocationType::Supervisor)
         .map_err(|e| {
             log::error!("Failed to allocate internal supervisor common buffer: {e:?}");
-            PolicyInitError::MemoryAllocationFailed
+            CommBufferError::AllocationFailed
         })?;
 
     Ok((buffer.address, buffer.size, supv_comm_buffer_internal, buffer.status_address))
@@ -250,7 +291,7 @@ pub(crate) unsafe fn init_user_comm_buffer(data: *mut u8, data_len: usize) -> Mm
         .allocate_pages_with_type(buffer.page_count, AllocationType::User)
         .map_err(|e| {
             log::error!("Failed to allocate internal user common buffer: {e:?}");
-            PolicyInitError::MemoryAllocationFailed
+            CommBufferError::AllocationFailed
         })?;
 
     // TODO: Remove the logic that overwrites the HOB's physical_start with the internal buffer address
@@ -517,8 +558,16 @@ mod tests {
         let supv = supv_comm_buffer_hob_data(0x10_0000, 1, 0x20_0000);
         let user = user_comm_buffer_hob_data(0x30_0000, 1, 0x40_0000);
 
-        assert_eq!(parse_supv_comm_buffer_hob(&supv[..supv.len() - 1]), Err(PolicyInitError::InvalidPolicyData.into()));
-        assert_eq!(parse_user_comm_buffer_hob(&user[..user.len() - 1]), Err(PolicyInitError::InvalidPolicyData.into()));
+        assert_eq!(
+            parse_supv_comm_buffer_hob(&supv[..supv.len() - 1]),
+            Err(CommBufferError::HobTooSmall { found: supv.len() - 1, expected: size_of::<MmCommonRegionHobData>() }
+                .into())
+        );
+        assert_eq!(
+            parse_user_comm_buffer_hob(&user[..user.len() - 1]),
+            Err(CommBufferError::HobTooSmall { found: user.len() - 1, expected: size_of::<MmCommonBufferHobData>() }
+                .into())
+        );
     }
 
     #[test]
@@ -526,11 +575,11 @@ mod tests {
         for (address, pages) in [(0x1000, 0), (0x1000, u64::MAX), (u64::MAX - 0xFFF, 1)] {
             assert_eq!(
                 parse_supv_comm_buffer_hob(&supv_comm_buffer_hob_data(address, pages, 0x20_0000)),
-                Err(PolicyInitError::InvalidCommunicationBufferSize { pages }.into())
+                Err(CommBufferError::InvalidSize { pages }.into())
             );
             assert_eq!(
                 parse_user_comm_buffer_hob(&user_comm_buffer_hob_data(address, pages, 0x20_0000)),
-                Err(PolicyInitError::InvalidCommunicationBufferSize { pages }.into())
+                Err(CommBufferError::InvalidSize { pages }.into())
             );
         }
     }

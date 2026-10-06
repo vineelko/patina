@@ -43,16 +43,8 @@ pub enum PolicyInitError {
         /// Maximum CPU count supported by this supervisor instance.
         maximum: usize,
     },
-    /// A communication buffer page count is zero, cannot fit the target
-    /// architecture, or produces an overflowing address range.
-    InvalidCommunicationBufferSize {
-        /// The invalid page count.
-        pages: u64,
-    },
     /// Memory allocation failed for policy buffers.
     MemoryAllocationFailed,
-    /// One or more communication buffers are not properly initialized.
-    MissingCommunicationBuffer,
     /// The `PassDown` HOB does not describe usable per-CPU save-state regions.
     InvalidSaveStateRegions,
 }
@@ -72,15 +64,7 @@ impl fmt::Display for PolicyInitError {
             Self::InvalidCpuCount { found, maximum } => {
                 write!(f, "the MP Information HOB reports {found} CPUs, more than the supported maximum of {maximum}")
             }
-            Self::InvalidCommunicationBufferSize { pages } => write!(
-                f,
-                "a communication buffer page count of {pages} is zero, too large for the target architecture, \
-                 or overflows its address range"
-            ),
             Self::MemoryAllocationFailed => write!(f, "a policy buffer allocation failed"),
-            Self::MissingCommunicationBuffer => {
-                write!(f, "one or more communication buffers are not properly initialized")
-            }
             Self::InvalidSaveStateRegions => {
                 write!(f, "the PassDown HOB does not describe usable per-CPU save-state regions")
             }
@@ -121,16 +105,7 @@ mod tests {
             format!("{}", PolicyInitError::InvalidCpuCount { found: 9, maximum: 4 }),
             "the MP Information HOB reports 9 CPUs, more than the supported maximum of 4"
         );
-        assert_eq!(
-            format!("{}", PolicyInitError::InvalidCommunicationBufferSize { pages: 0 }),
-            "a communication buffer page count of 0 is zero, too large for the target architecture, \
-                 or overflows its address range"
-        );
         assert_eq!(format!("{}", PolicyInitError::MemoryAllocationFailed), "a policy buffer allocation failed");
-        assert_eq!(
-            format!("{}", PolicyInitError::MissingCommunicationBuffer),
-            "one or more communication buffers are not properly initialized"
-        );
         assert_eq!(
             format!("{}", PolicyInitError::InvalidSaveStateRegions),
             "the PassDown HOB does not describe usable per-CPU save-state regions"

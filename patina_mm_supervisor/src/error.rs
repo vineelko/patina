@@ -23,6 +23,7 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
 use crate::{
+    comm_buffer::CommBufferError,
     hob_validation::HobValidationError,
     init::{PolicyInitError, SmiHandlerIdtPatchError, SmiHandlerIdtPatchInputError},
     mailbox::MailboxError,
@@ -50,9 +51,10 @@ pub type MmSupervisorResult<T> = Result<T, MmSupervisorError>;
 pub enum MmSupervisorError {
     /// Validation of the incoming HOB list failed.
     HobValidation(HobValidationError),
-    /// Policy, communication buffer, or CPU information could not be initialized from the
-    /// `PassDown` HOB.
+    /// Policy or CPU information could not be initialized from the `PassDown` HOB.
     PolicyInit(PolicyInitError),
+    /// A communication buffer could not be adopted from the HOB list.
+    CommBuffer(CommBufferError),
     /// Per-core bring-up failed on the BSP or an AP.
     CoreInit(CoreInitError),
     /// A page or paging-structure allocation or free request failed.
@@ -90,6 +92,7 @@ impl core::error::Error for MmSupervisorError {
         match self {
             Self::HobValidation(err) => Some(err),
             Self::PolicyInit(err) => Some(err),
+            Self::CommBuffer(err) => Some(err),
             Self::CoreInit(err) => Some(err),
             Self::Alloc(err) => Some(err),
             Self::PolicyGate(err) => Some(err),
@@ -115,6 +118,7 @@ impl fmt::Display for MmSupervisorError {
         match self {
             Self::HobValidation(err) => write!(f, "HOB validation: {err}"),
             Self::PolicyInit(err) => write!(f, "Policy initialization: {err}"),
+            Self::CommBuffer(err) => write!(f, "Communication buffer: {err}"),
             Self::CoreInit(err) => write!(f, "Core bring-up: {err}"),
             Self::Alloc(err) => write!(f, "Alloc allocation: {err}"),
             Self::PolicyGate(err) => write!(f, "Policy gate: {err}"),
@@ -143,6 +147,12 @@ impl From<HobValidationError> for MmSupervisorError {
 impl From<PolicyInitError> for MmSupervisorError {
     fn from(error: PolicyInitError) -> Self {
         Self::PolicyInit(error)
+    }
+}
+
+impl From<CommBufferError> for MmSupervisorError {
+    fn from(error: CommBufferError) -> Self {
+        Self::CommBuffer(error)
     }
 }
 
@@ -250,6 +260,10 @@ mod tests {
         assert_eq!(
             MmSupervisorError::from(PolicyInitError::NullHobList),
             MmSupervisorError::PolicyInit(PolicyInitError::NullHobList)
+        );
+        assert_eq!(
+            MmSupervisorError::from(CommBufferError::Missing),
+            MmSupervisorError::CommBuffer(CommBufferError::Missing)
         );
         assert_eq!(
             MmSupervisorError::from(CoreInitError::InitializedBufferUnavailable),

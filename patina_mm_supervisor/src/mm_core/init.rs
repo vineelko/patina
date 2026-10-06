@@ -33,7 +33,7 @@ use patina_paging::{MemoryAttributes, PageTable, PagingType, x64::X64PageTable};
 
 use crate::{
     CommBufferConfig, MmSupervisorCore, PlatformInfo,
-    comm_buffer::{init_supv_comm_buffer, init_user_comm_buffer},
+    comm_buffer::{CommBufferError, init_supv_comm_buffer, init_user_comm_buffer},
     error::{MmSupervisorError, MmSupervisorResult},
     hob_validation::{self, HobValidationError},
     intrinsics::read_cr3,
@@ -587,7 +587,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let supv_to_user_buffer =
             security_state().page_allocator().allocate_pages_with_type(1, AllocationType::User).map_err(|e| {
                 log::error!("Failed to allocate page for supervisor-to-user buffer: {e}");
-                MmSupervisorError::from(PolicyInitError::MemoryAllocationFailed)
+                MmSupervisorError::from(CommBufferError::AllocationFailed)
             })?;
 
         // Validate all buffers are non-zero
@@ -598,7 +598,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             || supv_to_user_buffer == 0
         {
             log::error!("One or more communication buffers are not properly initialized");
-            return Err(PolicyInitError::MissingCommunicationBuffer.into());
+            return Err(CommBufferError::Missing.into());
         }
 
         // Store the assembled communication buffer configuration
