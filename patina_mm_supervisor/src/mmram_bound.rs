@@ -81,7 +81,6 @@ pub(crate) fn establish_mmram_bound(
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
-    use crate::error::MmSupervisorError;
 
     #[test]
     fn test_establish_mmram_bound_returns_the_derived_range() {

@@ -20,11 +20,11 @@ use patina::management_mode::supervisor::UserCommandType;
 use patina::pi::hob::PhaseHandoffInformationTable;
 use spin::Mutex;
 
+use super::CoreInitError;
 use crate::{
     MmSupervisorCore, PlatformInfo,
     cpu::CpuManager,
     error::MmSupervisorResult,
-    init::CoreInitError,
     intrinsics::{current_apic_id, is_bsp},
     mailbox::MailboxManager,
     privilege_mgmt::invoke_demoted_routine,
@@ -296,8 +296,8 @@ mod tests {
 
     use serial_test::serial;
 
+    use super::super::CoreInitError;
     use super::{is_core_initialized, mark_core_initialized};
-    use crate::init::CoreInitError;
     use crate::state::init_state;
     use crate::{MmSupervisorCore, PlatformInfo};
 

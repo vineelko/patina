@@ -24,9 +24,10 @@
 
 use crate::{
     hob_validation::HobValidationError,
-    init::{CoreInitError, PolicyInitError, SmiHandlerIdtPatchError, SmiHandlerIdtPatchInputError},
+    init::{PolicyInitError, SmiHandlerIdtPatchError, SmiHandlerIdtPatchInputError},
     mailbox::MailboxError,
     mem::AllocError,
+    mm_core::CoreInitError,
     mm_policy::{
         PolicyGateError,
         helpers::{PageTableWalkError, PolicyValidationError},

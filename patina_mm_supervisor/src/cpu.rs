@@ -17,7 +17,7 @@
 
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
-use crate::init::CoreInitError;
+use crate::mm_core::CoreInitError;
 use crate::{
     error::MmSupervisorResult,
     semaphore::{sem_signal, sem_try_take},

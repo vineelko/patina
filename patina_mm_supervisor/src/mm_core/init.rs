@@ -52,8 +52,9 @@ use crate::{
     state::{init_state, security_state},
 };
 
+use super::CoreInitError;
 use crate::hob::{find_guid_hob, find_module, find_required_hob};
-use crate::init::{CoreInitError, PolicyInitError, PolicyInitServices, RuntimePolicyInitServices};
+use crate::init::{PolicyInitError, PolicyInitServices, RuntimePolicyInitServices};
 use crate::mmram_bound::{establish_mmram_bound, supervisor_image_anchor};
 use crate::mseg::parse_mseg_smram_hob;
 use crate::pass_down_hob::{MmSupvPassDownHobData, parse_pass_down_hob};

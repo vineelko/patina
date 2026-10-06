@@ -1,8 +1,11 @@
-//! MM Supervisor Core Initialization
+//! MM Supervisor Initialization Services
 //!
-//! This module contains all one-time initialization logic for the MM Supervisor Core,
-//! including BSP initialization, per-core setup, HOB discovery, policy gate initialization,
-//! and SMI handler IDT patching.
+//! Defines the seam the BSP initialization sequence calls through: [`PolicyInitServices`] and
+//! its production implementation [`RuntimePolicyInitServices`], plus the [`PolicyInitError`]
+//! reported when a step fails. Routing every side-effecting step of start-up through one trait
+//! lets the sequence be driven by a recording fake in tests.
+//!
+//! The sequence that calls these services lives in [`crate::mm_core::init`].
 //!
 //! ## License
 //!
@@ -17,8 +20,6 @@ pub(crate) mod smi_idt_patch;
 
 use smi_idt_patch::{RuntimeSmiHandlerIdtPatchServices, patch_smi_handler_idt};
 pub use smi_idt_patch::{SmiHandlerIdtPatchError, SmiHandlerIdtPatchInputError};
-
-use patina::error::EfiError;
 
 use crate::{
     MmSupervisorCore, PlatformInfo,
@@ -96,80 +97,6 @@ impl fmt::Display for PolicyInitError {
             Self::InvalidSaveStateRegions => {
                 write!(f, "the PassDown HOB does not describe usable per-CPU save-state regions")
             }
-        }
-    }
-}
-
-/// A failure during per-core bring-up, on either the BSP or an AP.
-///
-/// These describe the state of a single core's entry into the supervisor, as opposed to the
-/// system-wide configuration failures in [`PolicyInitError`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CoreInitError {
-    /// The per-core initialized buffer has not been published yet, so no core's initialization
-    /// state can be read or recorded.
-    InitializedBufferUnavailable,
-    /// The CPU index is outside the per-core array it selects a slot in.
-    ///
-    /// Used for both the initialized buffer and the [`CpuManager`](crate::cpu::CpuManager) slot
-    /// array, so `len` is the length of whichever array was indexed.
-    CpuIndexOutOfRange {
-        /// The index the core entered with.
-        index: usize,
-        /// Number of slots the indexed array holds.
-        len: usize,
-    },
-    /// The CPU index is in range but its slot is already held by a different APIC ID.
-    ///
-    /// Distinct from [`CoreInitError::CpuIndexOutOfRange`]: the index is valid, but two cores
-    /// claim the same dense processor index. Re-registering the *same* APIC ID is idempotent and
-    /// is not an error.
-    CpuIndexAlreadyRegistered {
-        /// The contested CPU index.
-        index: usize,
-        /// APIC ID already occupying the slot.
-        existing: u32,
-        /// APIC ID that tried to claim it.
-        requested: u32,
-    },
-    /// The BSP found no configured user entry point to demote to.
-    UserEntryPointMissing,
-    /// The HOB list described no MM Init module allocation.
-    ///
-    /// `validate_incoming_hobs_pre_paging_init` already rejects a HOB list missing this module, so
-    /// reaching this means discovery ran against a list that validation never accepted.
-    InitModuleRegionMissing,
-    /// The interrupt manager could not be initialized.
-    InterruptManagerInit(EfiError),
-}
-
-impl core::error::Error for CoreInitError {
-    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
-        match self {
-            Self::InterruptManagerInit(err) => Some(err),
-            _ => None,
-        }
-    }
-}
-
-impl fmt::Display for CoreInitError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InitializedBufferUnavailable => {
-                write!(f, "the per-core initialized buffer has not been published yet")
-            }
-            Self::CpuIndexOutOfRange { index, len } => {
-                write!(f, "CPU index {index} is outside the {len}-slot per-core array")
-            }
-            Self::CpuIndexAlreadyRegistered { index, existing, requested } => {
-                write!(
-                    f,
-                    "CPU index {index} is already registered to APIC {existing}, cannot register APIC {requested}"
-                )
-            }
-            Self::UserEntryPointMissing => write!(f, "no user entry point is configured for the BSP to demote to"),
-            Self::InitModuleRegionMissing => write!(f, "the HOB list described no MM Init module allocation"),
-            Self::InterruptManagerInit(err) => write!(f, "the interrupt manager could not be initialized: {err}"),
         }
     }
 }
@@ -533,64 +460,5 @@ mod tests {
 
         assert_eq!(base, 0);
         assert_eq!(limit, 0);
-    }
-
-    #[test]
-    fn test_core_init_error_displays_each_variant() {
-        assert_eq!(
-            format!("{}", CoreInitError::InitializedBufferUnavailable),
-            "the per-core initialized buffer has not been published yet"
-        );
-        assert_eq!(
-            format!("{}", CoreInitError::CpuIndexOutOfRange { index: 4, len: 2 }),
-            "CPU index 4 is outside the 2-slot per-core array"
-        );
-        assert_eq!(
-            format!("{}", CoreInitError::CpuIndexAlreadyRegistered { index: 1, existing: 0x10, requested: 0x30 }),
-            "CPU index 1 is already registered to APIC 16, cannot register APIC 48"
-        );
-        assert_eq!(
-            format!("{}", CoreInitError::UserEntryPointMissing),
-            "no user entry point is configured for the BSP to demote to"
-        );
-        assert_eq!(
-            format!("{}", CoreInitError::InitModuleRegionMissing),
-            "the HOB list described no MM Init module allocation"
-        );
-        assert_eq!(
-            format!("{}", CoreInitError::InterruptManagerInit(EfiError::Unsupported)),
-            format!("the interrupt manager could not be initialized: {}", EfiError::Unsupported)
-        );
-    }
-
-    #[test]
-    fn test_core_init_error_exposes_its_wrapped_sources() {
-        use core::error::Error;
-
-        let error = CoreInitError::InterruptManagerInit(EfiError::DeviceError);
-        assert!(error.source().is_some(), "the wrapped EfiError should be reachable as a source");
-
-        // Variants that wrap nothing report no source.
-        assert!(CoreInitError::UserEntryPointMissing.source().is_none());
-
-        // The wrapped status is part of the identity.
-        assert_ne!(
-            CoreInitError::InterruptManagerInit(EfiError::DeviceError),
-            CoreInitError::InterruptManagerInit(EfiError::Unsupported)
-        );
-    }
-
-    #[test]
-    fn test_core_init_error_separates_a_claimed_slot_from_a_bad_index() {
-        // An occupied slot is an in-range index, so it must not compare equal to a bounds failure.
-        assert_ne!(
-            CoreInitError::CpuIndexAlreadyRegistered { index: 1, existing: 0x10, requested: 0x30 },
-            CoreInitError::CpuIndexOutOfRange { index: 1, len: 8 }
-        );
-        // The claimant is part of the identity, so two different intruders stay distinguishable.
-        assert_ne!(
-            CoreInitError::CpuIndexAlreadyRegistered { index: 1, existing: 0x10, requested: 0x30 },
-            CoreInitError::CpuIndexAlreadyRegistered { index: 1, existing: 0x10, requested: 0x40 }
-        );
     }
 }
