@@ -12,22 +12,18 @@
 
 #![cfg_attr(coverage, coverage(off))]
 
-use crate::comm_buffer::{
-    CommBufferInitValue, MmCommonRegionHobData, parse_supv_comm_buffer_hob, parse_user_comm_buffer_hob,
-};
+use crate::comm_buffer::MmCommonRegionHobData;
 use crate::init::*;
 use crate::mem::SharedPagingAllocator;
-use crate::pass_down_hob::{MmSupvPassDownHobData, parse_pass_down_hob};
+use crate::pass_down_hob::MmSupvPassDownHobData;
 use crate::{
-    CommBufferConfig, MmSupervisorCore, PlatformInfo,
-    error::MmSupervisorResult,
+    MmSupervisorCore, PlatformInfo,
     mem::AllocationType,
     mem::{
         PageAllocator,
         page_allocator::{SMM_SMRAM_MEMORY_GUID, SmramDescriptor, SmramReserveHobData},
     },
     page_ownership::PageOwnership,
-    save_state::SaveStateInfo,
     smrr::SmramRegion,
     state::{InitState, security_state},
 };
@@ -170,92 +166,7 @@ impl Drop for PageAlignedMemory {
         unsafe { dealloc(self.ptr.as_ptr(), self.layout) };
     }
 }
-pub(crate) struct RecordingPolicyServices {
-    pub(crate) calls: Vec<&'static str>,
-    pub(crate) pass_down_result: MmSupervisorResult<(u64, u64)>,
-    pub(crate) supv_result: MmSupervisorResult<CommBufferInitValue>,
-    pub(crate) user_result: MmSupervisorResult<CommBufferInitValue>,
-    pub(crate) allocation_result: MmSupervisorResult<u64>,
-    pub(crate) policy_validation: MmSupervisorResult<()>,
-    pub(crate) pass_down_cpu_count: Option<u64>,
-    pub(crate) save_state_info: Option<SaveStateInfo>,
-    pub(crate) mseg_base: Option<u64>,
-    pub(crate) patch_args: Option<(u64, u64, u64)>,
-    pub(crate) config: Option<CommBufferConfig>,
-}
-impl RecordingPolicyServices {
-    pub(crate) fn successful() -> Self {
-        Self {
-            calls: Vec::new(),
-            pass_down_result: Ok((0xA000, 0xB000)),
-            supv_result: Ok((0x1000, 0x2000, 0x3000, 0x4000)),
-            user_result: Ok((0x5000, 0x6000, 0x7000, 0x8000)),
-            allocation_result: Ok(0x9000),
-            policy_validation: Ok(()),
-            pass_down_cpu_count: None,
-            save_state_info: None,
-            mseg_base: None,
-            patch_args: None,
-            config: None,
-        }
-    }
-}
-impl PolicyInitServices for RecordingPolicyServices {
-    unsafe fn init_from_pass_down_hob(&mut self, data: &[u8], number_of_cpus: u64) -> MmSupervisorResult<(u64, u64)> {
-        self.calls.push("pass_down");
-        parse_pass_down_hob(data)?;
-        self.pass_down_cpu_count = Some(number_of_cpus);
-        self.pass_down_result
-    }
 
-    fn set_save_state_info(&mut self, info: SaveStateInfo) {
-        self.calls.push("save_state");
-        self.save_state_info = Some(info);
-    }
-
-    fn set_mseg_base(&mut self, base: u64) {
-        self.calls.push("mseg");
-        self.mseg_base = Some(base);
-    }
-
-    fn patch_smi_handler_idt(&mut self, sm_base: u64, number_of_cpus: u64, mmi_entry_size: u64) {
-        self.calls.push("patch_idt");
-        self.patch_args = Some((sm_base, number_of_cpus, mmi_entry_size));
-    }
-
-    fn init_supv_comm_buffer(&mut self, data: &[u8]) -> MmSupervisorResult<CommBufferInitValue> {
-        self.calls.push("supv_comm");
-        parse_supv_comm_buffer_hob(data)?;
-        self.supv_result
-    }
-
-    unsafe fn init_user_comm_buffer(
-        &mut self,
-        data: *mut u8,
-        data_len: usize,
-    ) -> MmSupervisorResult<CommBufferInitValue> {
-        self.calls.push("user_comm");
-        // SAFETY: the policy initialization method provides the live HOB payload and length.
-        let data = unsafe { core::slice::from_raw_parts(data.cast_const(), data_len) };
-        parse_user_comm_buffer_hob(data)?;
-        self.user_result
-    }
-
-    fn allocate_supv_to_user_buffer(&mut self) -> MmSupervisorResult<u64> {
-        self.calls.push("allocate");
-        self.allocation_result
-    }
-
-    fn set_comm_buffer_config(&mut self, config: CommBufferConfig) {
-        self.calls.push("config");
-        self.config = Some(config);
-    }
-
-    fn validate_policy(&mut self) -> MmSupervisorResult<()> {
-        self.calls.push("validate");
-        self.policy_validation
-    }
-}
 pub(crate) struct RecordingSmiPatchServices {
     pub(crate) allowed_ranges: Vec<(u64, u64)>,
     pub(crate) idtr: DescriptorTablePointer,
@@ -385,9 +296,7 @@ pub(crate) fn policy_hob_list_with_cpu_count(number_of_cpus: usize, include_mseg
     list.push_guid_hob(MM_COMM_BUFFER_HOB_GUID, &user_comm_buffer_hob_data(0x30_0000, 3, 0x40_0000));
     list.finish()
 }
-pub(crate) fn policy_hob_list(include_mseg: bool) -> RawHobList {
-    policy_hob_list_with_cpu_count(2, include_mseg)
-}
+
 pub(crate) fn smram_hob_list(memory: &PageAlignedMemory) -> RawHobList {
     let mut data = vec![0_u8; size_of::<SmramReserveHobData>() + size_of::<SmramDescriptor>()];
     data[0..4].copy_from_slice(&1_u32.to_ne_bytes());

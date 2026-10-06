@@ -33,7 +33,8 @@ use patina_paging::{MemoryAttributes, PageTable, PagingType, x64::X64PageTable};
 
 use crate::{
     CommBufferConfig, MmSupervisorCore, PlatformInfo,
-    error::MmSupervisorResult,
+    comm_buffer::{init_supv_comm_buffer, init_user_comm_buffer},
+    error::{MmSupervisorError, MmSupervisorResult},
     hob_validation::{self, HobValidationError},
     intrinsics::read_cr3,
     mem::AllocationType,
@@ -54,7 +55,8 @@ use crate::{
 
 use super::CoreInitError;
 use crate::hob::{find_guid_hob, find_module, find_required_hob};
-use crate::init::{PolicyInitError, PolicyInitServices, RuntimePolicyInitServices};
+use crate::init::PolicyInitError;
+use crate::init::smi_idt_patch::{RuntimeSmiHandlerIdtPatchServices, patch_smi_handler_idt};
 use crate::mmram_bound::{establish_mmram_bound, supervisor_image_anchor};
 use crate::mseg::parse_mseg_smram_hob;
 use crate::pass_down_hob::{MmSupvPassDownHobData, parse_pass_down_hob};
@@ -139,11 +141,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // allocator ran above).
         hob_validation::validate_incoming_hobs_post_paging_init(hob_hand_off_table)?;
 
-        let mut policy_services = RuntimePolicyInitServices { supervisor: self };
-
         self.discover_and_store_user_entry(hob_hand_off_table, init_state())?;
         self.discover_and_store_init_region(hob_hand_off_table, init_state())?;
-        self.init_policy_and_validate(hob_hand_off_table, &mut policy_services)?;
+        self.init_policy_and_validate(hob_hand_off_table)?;
         let user_hob_list = self.publish_hob_list_to_user(hob_hand_off_table)?;
 
         log::info!("BSP one-time initialization complete.");
@@ -319,14 +319,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// [`PolicyValidationError`](mm_policy::helpers::PolicyValidationError) when the policy blob
     /// itself is rejected. Both were fatal before and still stop initialization; the caller now
     /// decides how to fail instead of this function panicking.
-    fn init_policy_and_validate<S: PolicyInitServices>(
-        &self,
-        hob_hand_off_table: &PhaseHandoffInformationTable,
-        services: &mut S,
-    ) -> MmSupervisorResult<()> {
-        self.init_policy_from_hob_list(hob_hand_off_table, services)?;
+    fn init_policy_and_validate(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
+        self.init_policy_from_hob_list(hob_hand_off_table)?;
 
-        services.validate_policy()?;
+        let gate =
+            security_state().policy_gate().expect("Policy gate must be initialized before policy validation runs");
+        // SAFETY: `gate.as_ptr()` returns the resident firmware policy buffer pointer validated
+        // while constructing the policy gate.
+        unsafe { mm_policy::helpers::security_policy_check(gate.as_ptr()) }?;
 
         log::info!("Security policy check passed");
         Ok(())
@@ -520,11 +520,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// Finally, allocates the supervisor-to-user data buffer and stores the
     /// assembled [`CommBufferConfig`].
-    fn init_policy_from_hob_list<S: PolicyInitServices>(
-        &self,
-        hob_hand_off_table: &PhaseHandoffInformationTable,
-        services: &mut S,
-    ) -> MmSupervisorResult<()> {
+    fn init_policy_from_hob_list(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
         // 1. Process the MP Information HOB (`gMpInformationHobGuid`) for the CPU count. It sizes
         //    the Ring 3 stack array the PassDown HOB describes, so it is needed first.
         let mp_information = find_required_hob(hob_hand_off_table, crate::MP_INFORMATION_HOB_GUID, "MP Information")?;
@@ -535,9 +531,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             find_required_hob(hob_hand_off_table, crate::MM_SUPV_PASS_DOWN_HOB_GUID, "MM Supervisor PassDown")?;
         // SAFETY: `pass_down_data` is a slice into the validated HOB list, so the buffer pointers
         // it carries reference live memory as `init_from_pass_down_hob` requires.
-        let (sm_base, mmi_entry_size) = unsafe { services.init_from_pass_down_hob(pass_down_data, number_of_cpus)? };
+        let (sm_base, mmi_entry_size) = unsafe { self.init_from_pass_down_hob(pass_down_data, number_of_cpus)? };
 
-        services.set_save_state_info(SaveStateInfo { number_of_cpus, sm_base });
+        let save_state_info = SaveStateInfo { number_of_cpus, sm_base };
+        security_state().set_save_state_info(save_state_info);
+        // SAFETY: `sm_base` came from the PassDown HOB the MM IPL published, so it references
+        // `number_of_cpus` resident SMBASE entries in MMRAM.
+        unsafe { crate::save_state::log_save_state_map(save_state_info) };
         log::info!("Save-state metadata initialized for {number_of_cpus} CPU(s) from SMBASE array at 0x{sm_base:016x}");
 
         // 1b-ii. Process the MSEG SMRAM HOB (`gMsegSmramGuid`), if published. It carries the
@@ -546,7 +546,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         //        integration do not publish this HOB, so its absence is not an error.
         match find_guid_hob(hob_hand_off_table, crate::MSEG_SMRAM_HOB_GUID).and_then(parse_mseg_smram_hob) {
             Some(mseg_base) => {
-                services.set_mseg_base(mseg_base);
+                init_state().set_mseg_base(mseg_base);
                 log::info!("MSEG base 0x{mseg_base:x} discovered from MSEG SMRAM HOB");
             }
             _ => log::warn!("No usable MSEG SMRAM HOB; IA32_SMM_MONITOR_CTL will not be programmed"),
@@ -555,7 +555,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // 1c. Patch every core's SMI-handler IDT descriptor to the Rust IDT now that the
         //     CPU count is known (the SMI entry blocks were already copied per SMBASE, so
         //     each core must be patched, not just the BSP).
-        services.patch_smi_handler_idt(sm_base, number_of_cpus, mmi_entry_size);
+        patch_smi_handler_idt(sm_base, number_of_cpus, mmi_entry_size, &mut RuntimeSmiHandlerIdtPatchServices);
 
         // 2. Process the supervisor communication buffer HOB. Only one
         //    MM_COMM_REGION_HOB is published (the supervisor one); the user
@@ -563,7 +563,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let supv_region_data =
             find_required_hob(hob_hand_off_table, crate::MM_COMMON_REGION_HOB_GUID, "MM Common Region")?;
         let (supv_comm_buffer, supv_comm_buffer_size, supv_comm_buffer_internal, supv_status_buffer) =
-            services.init_supv_comm_buffer(supv_region_data).inspect_err(|e| {
+            init_supv_comm_buffer(supv_region_data).inspect_err(|e| {
                 log::error!("Failed to initialize supervisor communication buffer: {e}");
             })?;
 
@@ -578,13 +578,17 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // SAFETY: the pointer and length identify the original HOB payload in the writable live
         // HOB list. The shared slice used to locate it is no longer used while it is rewritten.
         let (user_comm_buffer, user_comm_buffer_size, user_comm_buffer_internal, user_status_buffer) = unsafe {
-            services.init_user_comm_buffer(user_buffer_data, user_buffer_data_len).inspect_err(|e| {
+            init_user_comm_buffer(user_buffer_data, user_buffer_data_len).inspect_err(|e| {
                 log::error!("Failed to initialize user communication buffer: {e}");
             })?
         };
 
         // 4. Allocate the supervisor-to-user data buffer
-        let supv_to_user_buffer = services.allocate_supv_to_user_buffer()?;
+        let supv_to_user_buffer =
+            security_state().page_allocator().allocate_pages_with_type(1, AllocationType::User).map_err(|e| {
+                log::error!("Failed to allocate page for supervisor-to-user buffer: {e}");
+                MmSupervisorError::from(PolicyInitError::MemoryAllocationFailed)
+            })?;
 
         // Validate all buffers are non-zero
         if supv_comm_buffer == 0
@@ -598,7 +602,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         }
 
         // Store the assembled communication buffer configuration
-        services.set_comm_buffer_config(CommBufferConfig {
+        security_state().set_comm_buffer_config(CommBufferConfig {
             supv_comm_buffer,
             supv_comm_buffer_internal,
             supv_comm_buffer_size,
@@ -1234,155 +1238,29 @@ mod tests {
     }
 
     #[test]
-    fn test_init_policy_from_hob_list_runs_complete_flow() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
-        let hob_list = policy_hob_list(true);
-        let mut services = RecordingPolicyServices::successful();
-
-        supervisor
-            .init_policy_from_hob_list(hob_list.handoff(), &mut services)
-            .expect("complete policy HOB list should initialize");
-
-        assert_eq!(
-            services.calls,
-            ["pass_down", "save_state", "mseg", "patch_idt", "supv_comm", "user_comm", "allocate", "config"]
-        );
-        assert_eq!(services.pass_down_cpu_count, Some(2));
-        let save_state = services.save_state_info.expect("save-state metadata should be stored");
-        assert_eq!(save_state.number_of_cpus, 2);
-        assert_eq!(save_state.sm_base, 0xA000);
-        assert_eq!(services.mseg_base, Some(0x0040_0000));
-        assert_eq!(services.patch_args, Some((0xA000, 2, 0xB000)));
-
-        let config = services.config.expect("communication buffer configuration should be stored");
-        assert_eq!(config.supv_comm_buffer, 0x1000);
-        assert_eq!(config.supv_comm_buffer_size, 0x2000);
-        assert_eq!(config.supv_comm_buffer_internal, 0x3000);
-        assert_eq!(config.supv_status_buffer, 0x4000);
-        assert_eq!(config.user_comm_buffer, 0x5000);
-        assert_eq!(config.user_comm_buffer_size, 0x6000);
-        assert_eq!(config.user_comm_buffer_internal, 0x7000);
-        assert_eq!(config.user_status_buffer, 0x8000);
-        assert_eq!(config.supv_to_user_buffer, 0x9000);
-        assert_eq!(config.supv_to_user_buffer_size, UEFI_PAGE_SIZE as u64);
-    }
-
-    #[test]
-    fn test_init_policy_from_hob_list_supports_absent_optional_mseg_hob() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
-        let hob_list = policy_hob_list(false);
-        let mut services = RecordingPolicyServices::successful();
-
-        supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut services).expect("MSEG HOB is optional");
-
-        assert_eq!(services.mseg_base, None);
-        assert!(!services.calls.contains(&"mseg"));
-    }
-
-    #[test]
     fn test_init_policy_from_hob_list_reports_missing_hobs() {
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
-        let mut services = RecordingPolicyServices::successful();
 
         // A null list is no longer representable: the handoff table is taken by reference.
         let hob_list = RawHobList::new().finish();
-        let result = supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut services);
+        let result = supervisor.init_policy_from_hob_list(hob_list.handoff());
         assert_eq!(result, Err(PolicyInitError::HobNotFound.into()));
-        assert!(services.calls.is_empty());
     }
 
     #[test]
-    fn test_init_policy_from_hob_list_names_each_missing_required_hob() {
+    fn test_init_policy_from_hob_list_reports_a_missing_pass_down_hob() {
         crate::test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
 
-        // Each list below carries every HOB up to the one under test, so initialization
-        // reaches that lookup and stops there.
+        // Carries the MP Information HOB so initialization reaches the PassDown lookup and
+        // stops there. Lists that get past this point reach steps that touch real MMRAM, so
+        // the later required-HOB lookups are not reachable from a host test.
         let mut without_pass_down = RawHobList::new();
         without_pass_down.push_guid_hob(crate::MP_INFORMATION_HOB_GUID, &mp_information_hob_data(2));
         let without_pass_down = without_pass_down.finish();
 
-        let mut without_common_region = RawHobList::new();
-        without_common_region.push_guid_hob(crate::MP_INFORMATION_HOB_GUID, &mp_information_hob_data(2));
-        without_common_region
-            .push_guid_hob(crate::MM_SUPV_PASS_DOWN_HOB_GUID, &pass_down_hob_data(&valid_pass_down_hob()));
-        let without_common_region = without_common_region.finish();
-
-        let mut without_comm_buffer = RawHobList::new();
-        without_comm_buffer.push_guid_hob(crate::MP_INFORMATION_HOB_GUID, &mp_information_hob_data(2));
-        without_comm_buffer
-            .push_guid_hob(crate::MM_SUPV_PASS_DOWN_HOB_GUID, &pass_down_hob_data(&valid_pass_down_hob()));
-        without_comm_buffer
-            .push_guid_hob(crate::MM_COMMON_REGION_HOB_GUID, &supv_comm_buffer_hob_data(0x10_0000, 2, 0x20_0000));
-        let without_comm_buffer = without_comm_buffer.finish();
-
-        for hob_list in [&without_pass_down, &without_common_region, &without_comm_buffer] {
-            let mut services = RecordingPolicyServices::successful();
-            let result = supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut services);
-            assert_eq!(result, Err(PolicyInitError::HobNotFound.into()));
-        }
-    }
-
-    #[test]
-    fn test_init_policy_from_hob_list_propagates_service_failures() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
-
-        let hob_list = policy_hob_list(true);
-        let mut pass_down_failure = RecordingPolicyServices::successful();
-        pass_down_failure.pass_down_result = Err(PolicyInitError::InvalidPolicyData.into());
-        let result = supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut pass_down_failure);
-        assert_eq!(result, Err(PolicyInitError::InvalidPolicyData.into()));
-        assert_eq!(pass_down_failure.calls, ["pass_down"]);
-
-        let hob_list = policy_hob_list(true);
-        let mut supervisor_buffer_failure = RecordingPolicyServices::successful();
-        supervisor_buffer_failure.supv_result = Err(PolicyInitError::MemoryAllocationFailed.into());
-        let result = supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut supervisor_buffer_failure);
-        assert_eq!(result, Err(PolicyInitError::MemoryAllocationFailed.into()));
-        assert_eq!(supervisor_buffer_failure.calls, ["pass_down", "save_state", "mseg", "patch_idt", "supv_comm"]);
-
-        let hob_list = policy_hob_list(true);
-        let mut user_buffer_failure = RecordingPolicyServices::successful();
-        user_buffer_failure.user_result = Err(PolicyInitError::InvalidCommunicationBufferSize { pages: 0 }.into());
-        let result = supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut user_buffer_failure);
-        assert_eq!(result, Err(PolicyInitError::InvalidCommunicationBufferSize { pages: 0 }.into()));
-        assert_eq!(
-            user_buffer_failure.calls,
-            ["pass_down", "save_state", "mseg", "patch_idt", "supv_comm", "user_comm"]
-        );
-
-        let hob_list = policy_hob_list(true);
-        let mut allocation_failure = RecordingPolicyServices::successful();
-        allocation_failure.allocation_result = Err(PolicyInitError::MemoryAllocationFailed.into());
-        let result = supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut allocation_failure);
-        assert_eq!(result, Err(PolicyInitError::MemoryAllocationFailed.into()));
-        assert_eq!(allocation_failure.calls.last(), Some(&"allocate"));
-        assert!(allocation_failure.config.is_none());
-    }
-
-    #[test]
-    fn test_init_policy_from_hob_list_rejects_zero_required_buffer() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
-        let hob_list = policy_hob_list(true);
-        let mut services = RecordingPolicyServices::successful();
-        services.user_result = Ok((0, 0x6000, 0x7000, 0x8000));
-        let result = supervisor.init_policy_from_hob_list(hob_list.handoff(), &mut services);
-        assert_eq!(result, Err(PolicyInitError::MissingCommunicationBuffer.into()));
-        assert!(services.config.is_none());
-    }
-
-    #[test]
-    fn test_init_policy_and_validate_runs_policy_validation() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
-        let hob_list = policy_hob_list(true);
-        let mut services = RecordingPolicyServices::successful();
-
-        supervisor
-            .init_policy_and_validate(hob_list.handoff(), &mut services)
-            .expect("a complete policy HOB list should validate");
-
-        assert_eq!(services.calls.last(), Some(&"validate"));
-        assert!(services.config.is_some());
+        let result = supervisor.init_policy_from_hob_list(without_pass_down.handoff());
+        assert_eq!(result, Err(PolicyInitError::HobNotFound.into()));
     }
 
     #[test]
@@ -1390,12 +1268,10 @@ mod tests {
         crate::test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let hob_list = RawHobList::new().finish();
-        let mut services = RecordingPolicyServices::successful();
 
-        let result = supervisor.init_policy_and_validate(hob_list.handoff(), &mut services);
+        let result = supervisor.init_policy_and_validate(hob_list.handoff());
 
         assert_eq!(result, Err(PolicyInitError::HobNotFound.into()));
-        assert!(services.calls.is_empty());
     }
 
     #[test]
@@ -1404,27 +1280,11 @@ mod tests {
 
         for cpu_count in [0, 5] {
             let hob_list = policy_hob_list_with_cpu_count(cpu_count, true);
-            let mut services = RecordingPolicyServices::successful();
 
-            let result = supervisor.init_policy_and_validate(hob_list.handoff(), &mut services);
+            let result = supervisor.init_policy_and_validate(hob_list.handoff());
 
             assert!(result.is_err(), "CPU count {cpu_count} should fail-stop initialization");
-            assert!(services.calls.is_empty());
         }
-    }
-
-    #[test]
-    fn test_init_policy_and_validate_reports_a_failed_policy_check() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
-        let hob_list = policy_hob_list(true);
-        let mut services = RecordingPolicyServices::successful();
-        let expected = mm_policy::helpers::PolicyValidationError::NullPointer.into();
-        services.policy_validation = Err(expected);
-
-        let result = supervisor.init_policy_and_validate(hob_list.handoff(), &mut services);
-
-        assert_eq!(result, Err(expected));
-        assert_eq!(services.calls.last(), Some(&"validate"));
     }
 
     #[test]

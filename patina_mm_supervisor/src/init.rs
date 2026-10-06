@@ -1,11 +1,9 @@
-//! MM Supervisor Initialization Services
+//! MM Supervisor Initialization Errors
 //!
-//! Defines the seam the BSP initialization sequence calls through: [`PolicyInitServices`] and
-//! its production implementation [`RuntimePolicyInitServices`], plus the [`PolicyInitError`]
-//! reported when a step fails. Routing every side-effecting step of start-up through one trait
-//! lets the sequence be driven by a recording fake in tests.
+//! Defines [`PolicyInitError`], reported when a step of BSP start-up fails, and hosts the
+//! [`smi_idt_patch`] submodule.
 //!
-//! The sequence that calls these services lives in [`crate::mm_core::init`].
+//! The start-up sequence that reports these errors lives in [`crate::mm_core::init`].
 //!
 //! ## License
 //!
@@ -18,18 +16,7 @@ use core::fmt;
 
 pub(crate) mod smi_idt_patch;
 
-use smi_idt_patch::{RuntimeSmiHandlerIdtPatchServices, patch_smi_handler_idt};
 pub use smi_idt_patch::{SmiHandlerIdtPatchError, SmiHandlerIdtPatchInputError};
-
-use crate::{
-    MmSupervisorCore, PlatformInfo,
-    comm_buffer::{CommBufferConfig, CommBufferInitValue, init_supv_comm_buffer, init_user_comm_buffer},
-    error::MmSupervisorResult,
-    mem::AllocationType,
-    mm_policy,
-    save_state::SaveStateInfo,
-    state::{init_state, security_state},
-};
 
 /// Errors that can occur during policy initialization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,80 +88,6 @@ impl fmt::Display for PolicyInitError {
     }
 }
 
-pub(crate) trait PolicyInitServices {
-    unsafe fn init_from_pass_down_hob(&mut self, data: &[u8], number_of_cpus: u64) -> MmSupervisorResult<(u64, u64)>;
-    fn set_save_state_info(&mut self, info: SaveStateInfo);
-    fn set_mseg_base(&mut self, base: u64);
-    fn patch_smi_handler_idt(&mut self, sm_base: u64, number_of_cpus: u64, mmi_entry_size: u64);
-    fn init_supv_comm_buffer(&mut self, data: &[u8]) -> MmSupervisorResult<CommBufferInitValue>;
-    unsafe fn init_user_comm_buffer(
-        &mut self,
-        data: *mut u8,
-        data_len: usize,
-    ) -> MmSupervisorResult<CommBufferInitValue>;
-    fn allocate_supv_to_user_buffer(&mut self) -> MmSupervisorResult<u64>;
-    fn set_comm_buffer_config(&mut self, config: CommBufferConfig);
-    fn validate_policy(&mut self) -> MmSupervisorResult<()>;
-}
-
-pub(crate) struct RuntimePolicyInitServices<'a, P: PlatformInfo, const MAX_CPUS: usize> {
-    pub(crate) supervisor: &'a MmSupervisorCore<P, MAX_CPUS>,
-}
-
-impl<P: PlatformInfo, const MAX_CPUS: usize> PolicyInitServices for RuntimePolicyInitServices<'_, P, MAX_CPUS> {
-    unsafe fn init_from_pass_down_hob(&mut self, data: &[u8], number_of_cpus: u64) -> MmSupervisorResult<(u64, u64)> {
-        // SAFETY: the caller forwards a validated PassDown HOB payload.
-        unsafe { self.supervisor.init_from_pass_down_hob(data, number_of_cpus) }
-    }
-
-    fn set_save_state_info(&mut self, info: SaveStateInfo) {
-        security_state().set_save_state_info(info);
-        // SAFETY: `info.sm_base` came from the PassDown HOB the MM IPL published, so it
-        // references `info.number_of_cpus` resident SMBASE entries in MMRAM.
-        unsafe { crate::save_state::log_save_state_map(info) };
-    }
-
-    fn set_mseg_base(&mut self, base: u64) {
-        init_state().set_mseg_base(base);
-    }
-
-    fn patch_smi_handler_idt(&mut self, sm_base: u64, number_of_cpus: u64, mmi_entry_size: u64) {
-        patch_smi_handler_idt(sm_base, number_of_cpus, mmi_entry_size, &mut RuntimeSmiHandlerIdtPatchServices);
-    }
-
-    fn init_supv_comm_buffer(&mut self, data: &[u8]) -> MmSupervisorResult<CommBufferInitValue> {
-        init_supv_comm_buffer(data)
-    }
-
-    unsafe fn init_user_comm_buffer(
-        &mut self,
-        data: *mut u8,
-        data_len: usize,
-    ) -> MmSupervisorResult<CommBufferInitValue> {
-        // SAFETY: the caller forwards the original writable user communication HOB payload.
-        unsafe { init_user_comm_buffer(data, data_len) }
-    }
-
-    fn allocate_supv_to_user_buffer(&mut self) -> MmSupervisorResult<u64> {
-        security_state().page_allocator().allocate_pages_with_type(1, AllocationType::User).map_err(|e| {
-            log::error!("Failed to allocate page for supervisor-to-user buffer: {e}");
-            PolicyInitError::MemoryAllocationFailed.into()
-        })
-    }
-
-    fn set_comm_buffer_config(&mut self, config: CommBufferConfig) {
-        security_state().set_comm_buffer_config(config);
-    }
-
-    fn validate_policy(&mut self) -> MmSupervisorResult<()> {
-        let gate =
-            security_state().policy_gate().expect("Policy gate must be initialized before policy validation runs");
-        // SAFETY: `gate.as_ptr()` returns the resident firmware policy buffer pointer
-        // validated while constructing the policy gate.
-        unsafe { mm_policy::helpers::security_policy_check(gate.as_ptr()) }
-    }
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
@@ -184,9 +97,12 @@ mod tests {
     use patina_paging::{MemoryAttributes, PageTable};
     use smi_idt_patch::{
         DescriptorTablePointer, FIXUP64_SMI_HANDLER_IDTR, PerCoreMmiEntryStructHdr, SMM_HANDLER_OFFSET,
-        SmiHandlerIdtPatchInputs, parse_smi_handler_idt_descriptor, read_idtr, validate_smi_handler_idt_patch_inputs,
+        SmiHandlerIdtPatchInputs, parse_smi_handler_idt_descriptor, patch_smi_handler_idt, read_idtr,
+        validate_smi_handler_idt_patch_inputs,
     };
 
+    use crate::mem::AllocationType;
+    use crate::state::security_state;
     use crate::test_support::init::*;
 
     #[test]
