@@ -9,6 +9,8 @@
 //!
 //! SPDX-License-Identifier: Apache-2.0
 //!
+use crate::error::MmSupervisorResult;
+
 use super::{
     ACCESS_ATTR_ALLOW, ACCESS_ATTR_DENY, AccessType, Instruction, IoWidth, MemDescriptorV1_0, PolicyRootV1,
     RESOURCE_ATTR_COND_READ, RESOURCE_ATTR_EXECUTE, RESOURCE_ATTR_READ, RESOURCE_ATTR_STRICT_WIDTH, SaveStateCondition,
@@ -19,7 +21,7 @@ use spin::Once;
 
 /// Errors that can occur during policy gate operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PolicyError {
+pub enum PolicyGateError {
     /// The policy pointer is null.
     NullPointer,
     /// Invalid policy version.
@@ -42,6 +44,27 @@ pub enum PolicyError {
     InternalError,
 }
 
+impl core::error::Error for PolicyGateError {}
+
+impl core::fmt::Display for PolicyGateError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NullPointer => write!(f, "the policy pointer is null"),
+            Self::InvalidVersion => write!(f, "the policy version is not supported"),
+            Self::InvalidAccessMask => write!(f, "the requested access mask is invalid"),
+            Self::InvalidIoAddress => write!(f, "the I/O address is outside the 16-bit port range"),
+            Self::InvalidIoRange => write!(f, "the I/O address range overflows"),
+            Self::InvalidInstructionIndex => write!(f, "the instruction index is not a known instruction"),
+            Self::PolicyRootNotFound => write!(f, "the policy contains no root for the requested type"),
+            Self::MalformedPolicy => {
+                write!(f, "the policy blob's internal offsets do not describe a structure inside its own buffer")
+            }
+            Self::AccessDenied => write!(f, "the firmware policy denied the access"),
+            Self::InternalError => write!(f, "an internal error occurred while evaluating the policy"),
+        }
+    }
+}
+
 /// Checks that every offset and count inside the policy blob describes a structure lying wholly
 /// within `buffer_size` bytes.
 ///
@@ -52,11 +75,11 @@ pub enum PolicyError {
 /// ## Safety
 ///
 /// `policy_ptr` must be non-null and point to `buffer_size` readable bytes.
-unsafe fn validate_policy_layout(policy_ptr: *const u8, buffer_size: usize) -> Result<(), PolicyError> {
+unsafe fn validate_policy_layout(policy_ptr: *const u8, buffer_size: usize) -> MmSupervisorResult<()> {
     let header_size = core::mem::size_of::<SecurePolicyDataV1_0>();
     if buffer_size < header_size {
         log::error!("policy blob buffer is {buffer_size} bytes, too small for a {header_size}-byte header");
-        return Err(PolicyError::MalformedPolicy);
+        return Err(PolicyGateError::MalformedPolicy.into());
     }
 
     // SAFETY: the buffer was just verified to hold a complete header, and the caller guarantees
@@ -69,7 +92,7 @@ unsafe fn validate_policy_layout(policy_ptr: *const u8, buffer_size: usize) -> R
             policy.version_major,
             policy.version_minor
         );
-        return Err(PolicyError::InvalidVersion);
+        return Err(PolicyGateError::InvalidVersion.into());
     }
 
     // Every offset below is bounded against the blob's own declared size, so that has to fit the
@@ -77,20 +100,20 @@ unsafe fn validate_policy_layout(policy_ptr: *const u8, buffer_size: usize) -> R
     let declared = policy.size as usize;
     if declared < header_size || declared > buffer_size {
         log::error!("policy blob declares {declared} bytes in a {buffer_size}-byte buffer");
-        return Err(PolicyError::MalformedPolicy);
+        return Err(PolicyGateError::MalformedPolicy.into());
     }
 
     let roots_end = (policy.policy_root_count as usize)
         .checked_mul(core::mem::size_of::<PolicyRootV1>())
         .and_then(|bytes| bytes.checked_add(policy.policy_root_offset as usize))
-        .ok_or(PolicyError::MalformedPolicy)?;
+        .ok_or(PolicyGateError::MalformedPolicy)?;
     if roots_end > declared {
         log::error!(
             "policy root array ends at {roots_end}, past the {declared}-byte blob ({} roots at offset {})",
             policy.policy_root_count,
             policy.policy_root_offset
         );
-        return Err(PolicyError::MalformedPolicy);
+        return Err(PolicyGateError::MalformedPolicy.into());
     }
 
     // SAFETY: the roots array was just verified to lie wholly inside the blob.
@@ -105,13 +128,13 @@ unsafe fn validate_policy_layout(policy_ptr: *const u8, buffer_size: usize) -> R
         let descriptors_end = (root.count as usize)
             .checked_mul(desc_size)
             .and_then(|bytes| bytes.checked_add(root.offset as usize))
-            .ok_or(PolicyError::MalformedPolicy)?;
+            .ok_or(PolicyGateError::MalformedPolicy)?;
         if descriptors_end > declared {
             log::error!(
                 "policy type {} descriptors end at {descriptors_end}, past the {declared}-byte blob",
                 root.policy_type
             );
-            return Err(PolicyError::MalformedPolicy);
+            return Err(PolicyGateError::MalformedPolicy.into());
         }
     }
 
@@ -154,10 +177,18 @@ impl PolicyGate {
     ///
     /// The caller must ensure that `policy_ptr` points to `buffer_size` readable bytes that
     /// remain valid for the lifetime of this `PolicyGate`.
-    pub unsafe fn new(policy_ptr: *const u8, buffer_size: usize) -> Result<Self, PolicyError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PolicyGateError::NullPointer`] for a null pointer,
+    /// [`PolicyGateError::InvalidVersion`] for an unsupported version, and
+    /// [`PolicyGateError::MalformedPolicy`] when an internal offset falls outside `buffer_size`.
+    /// That last check is what makes the later unchecked reads of those offsets sound, so a gate
+    /// is never constructed from a blob whose layout was not validated.
+    pub unsafe fn new(policy_ptr: *const u8, buffer_size: usize) -> MmSupervisorResult<Self> {
         if policy_ptr.is_null() {
             log::error!("Policy gate creation failed: policy buffer pointer is null");
-            return Err(PolicyError::NullPointer);
+            return Err(PolicyGateError::NullPointer.into());
         }
 
         // SAFETY: `policy_ptr` is non-null (checked above) and, per this function's contract,
@@ -210,11 +241,19 @@ impl PolicyGate {
     /// Checks if I/O access is allowed.
     ///
     /// `io_address` must be within the 16-bit I/O port space (`<= 0xFFFF`).
-    pub fn is_io_allowed(&self, io_address: u32, width: IoWidth, access_type: AccessType) -> Result<(), PolicyError> {
+    ///
+    /// # Errors
+    ///
+    /// `Ok(())` means the policy permits the access; the error is the denial itself, not a
+    /// malfunction. Returns [`PolicyGateError::AccessDenied`] when no descriptor permits the
+    /// access, [`PolicyGateError::PolicyRootNotFound`] when the blob carries no I/O policy, and
+    /// [`PolicyGateError::InvalidIoAddress`] or [`PolicyGateError::InvalidIoRange`] when the
+    /// request itself is outside the 16-bit port space or overflows it.
+    pub fn is_io_allowed(&self, io_address: u32, width: IoWidth, access_type: AccessType) -> MmSupervisorResult<()> {
         // Validate access type (must be read or write, not execute)
         if access_type == AccessType::Execute {
             log::error!("Rejecting IO access: port=0x{io_address:x} requested Execute access");
-            return Err(PolicyError::InvalidAccessMask);
+            return Err(PolicyGateError::InvalidAccessMask.into());
         }
 
         let io_size = width.size();
@@ -222,20 +261,20 @@ impl PolicyGate {
         // Validate I/O address range (16-bit port space)
         if io_address > u32::from(u16::MAX) {
             log::error!("Rejecting IO access: port 0x{io_address:x} is outside the 16-bit I/O space");
-            return Err(PolicyError::InvalidIoAddress);
+            return Err(PolicyGateError::InvalidIoAddress.into());
         }
 
         // Check for overflow (MAX_UINT16 + 1 is valid for end address)
         if io_address.saturating_add(io_size) > u32::from(u16::MAX) + 1 {
             log::error!("Rejecting IO access: port 0x{io_address:x} with width {io_size} runs past the I/O space");
-            return Err(PolicyError::InvalidIoRange);
+            return Err(PolicyGateError::InvalidIoRange.into());
         }
 
         let policy_root = if let Some(root) = self.find_policy_root(TYPE_IO) {
             root
         } else {
             log::warn!("Could not find IO policy root, denying access to be safe.");
-            return Err(PolicyError::PolicyRootNotFound);
+            return Err(PolicyGateError::PolicyRootNotFound.into());
         };
 
         // SAFETY: We validated the policy in the constructor
@@ -288,25 +327,31 @@ impl PolicyGate {
 
         if !allowed {
             log::debug!("Rejecting IO access: port=0x{io_address:x}, width={io_size}, type={access_type:?}");
-            return Err(PolicyError::AccessDenied);
+            return Err(PolicyGateError::AccessDenied.into());
         }
 
         Ok(())
     }
 
     /// Checks if MSR access is allowed.
-    pub fn is_msr_allowed(&self, msr_address: u32, access_type: AccessType) -> Result<(), PolicyError> {
+    ///
+    /// # Errors
+    ///
+    /// `Ok(())` means the policy permits the access. Returns
+    /// [`PolicyGateError::AccessDenied`] when no descriptor permits it, and
+    /// [`PolicyGateError::PolicyRootNotFound`] when the blob carries no MSR policy.
+    pub fn is_msr_allowed(&self, msr_address: u32, access_type: AccessType) -> MmSupervisorResult<()> {
         // Validate access type
         if access_type == AccessType::Execute {
             log::error!("Rejecting MSR access: address=0x{msr_address:x} requested Execute access");
-            return Err(PolicyError::InvalidAccessMask);
+            return Err(PolicyGateError::InvalidAccessMask.into());
         }
 
         let policy_root = if let Some(root) = self.find_policy_root(TYPE_MSR) {
             root
         } else {
             log::warn!("Could not find MSR policy root, denying access to be safe.");
-            return Err(PolicyError::PolicyRootNotFound);
+            return Err(PolicyGateError::PolicyRootNotFound.into());
         };
 
         // SAFETY: We validated the policy in the constructor
@@ -340,14 +385,22 @@ impl PolicyGate {
 
         if !allowed {
             log::debug!("Rejecting MSR access: address=0x{msr_address:x}, type={access_type:?}");
-            return Err(PolicyError::AccessDenied);
+            return Err(PolicyGateError::AccessDenied.into());
         }
 
         Ok(())
     }
 
     /// Checks if instruction execution is allowed.
-    pub fn is_instruction_allowed(&self, instruction: Instruction) -> Result<(), PolicyError> {
+    ///
+    /// # Errors
+    ///
+    /// `Ok(())` means the policy permits the instruction. Returns
+    /// [`PolicyGateError::AccessDenied`] when it is denied,
+    /// [`PolicyGateError::PolicyRootNotFound`] when the blob carries no instruction policy, and
+    /// [`PolicyGateError::InvalidInstructionIndex`] when the instruction is not one the policy
+    /// format describes.
+    pub fn is_instruction_allowed(&self, instruction: Instruction) -> MmSupervisorResult<()> {
         let instruction_index = instruction.as_index();
 
         if instruction_index >= Instruction::COUNT {
@@ -355,14 +408,14 @@ impl PolicyGate {
                 "Rejecting instruction execution: index {instruction_index} is outside 0..{}",
                 Instruction::COUNT
             );
-            return Err(PolicyError::InvalidInstructionIndex);
+            return Err(PolicyGateError::InvalidInstructionIndex.into());
         }
 
         let policy_root = if let Some(root) = self.find_policy_root(TYPE_INSTRUCTION) {
             root
         } else {
             log::error!("Could not find Instruction policy root, denying access to be safe.");
-            return Err(PolicyError::PolicyRootNotFound);
+            return Err(PolicyGateError::PolicyRootNotFound.into());
         };
 
         // SAFETY: We validated the policy in the constructor
@@ -393,7 +446,7 @@ impl PolicyGate {
 
         if !allowed {
             log::error!("Rejecting instruction execution: {instruction:?}");
-            return Err(PolicyError::AccessDenied);
+            return Err(PolicyGateError::AccessDenied.into());
         }
 
         Ok(())
@@ -405,7 +458,7 @@ impl PolicyGate {
         field: SaveStateField,
         width: usize,
         current_condition: Option<SaveStateCondition>,
-    ) -> Result<(), PolicyError> {
+    ) -> MmSupervisorResult<()> {
         let policy_root = if let Some(root) = self.find_policy_root(TYPE_SAVE_STATE) {
             root
         } else {
@@ -465,7 +518,7 @@ impl PolicyGate {
 
         if !allowed {
             log::error!("Rejecting save state read: field={field:?}, width={width}");
-            return Err(PolicyError::AccessDenied);
+            return Err(PolicyGateError::AccessDenied.into());
         }
 
         Ok(())
@@ -508,7 +561,14 @@ impl PolicyGate {
     /// * `cr3` must point to a valid, stable PML4 table.
     /// * The memory policy buffer (set via [`set_memory_policy_buffer`])
     ///   must still be valid and large enough.
-    pub unsafe fn take_snapshot(&self, cr3: u64, is_inside_mmram: IsInsideMmramFn) -> Result<usize, PolicyError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PolicyGateError::InternalError`] when no memory policy buffer has been set, and
+    /// a [`PageTableWalkError`](crate::mm_policy::helpers::PageTableWalkError) when the walk
+    /// cannot complete. The descriptor count is only published once the walk succeeds, so a
+    /// failed call leaves the gate unlocked rather than locked over a partial snapshot.
+    pub unsafe fn take_snapshot(&self, cr3: u64, is_inside_mmram: IsInsideMmramFn) -> MmSupervisorResult<usize> {
         // Idempotent: if already locked, return the saved count.
         if let Some(&count) = self.snapshot_count.get() {
             return Ok(count);
@@ -516,7 +576,7 @@ impl PolicyGate {
 
         if self.memory_policy_buffer.is_null() || self.memory_policy_max_count == 0 {
             log::error!("take_snapshot: memory policy buffer not configured");
-            return Err(PolicyError::InternalError);
+            return Err(PolicyGateError::InternalError.into());
         }
 
         // SAFETY: The caller guarantees that `cr3` points to a valid PML4 and
@@ -526,7 +586,7 @@ impl PolicyGate {
             unsafe { walk_page_table(cr3, self.memory_policy_buffer, self.memory_policy_max_count, is_inside_mmram) }
                 .map_err(|e| {
                 log::error!("take_snapshot: walk_page_table failed: {e:?}");
-                PolicyError::InternalError
+                PolicyGateError::InternalError
             })?;
 
         Ok(self.record_snapshot(count))
@@ -547,8 +607,8 @@ impl PolicyGate {
     /// overwriting the saved snapshot during comparison.
     ///
     /// Returns `Ok(())` only when a snapshot exists and the tables match it.
-    /// Returns `Err(PolicyError::AccessDenied)` if they differ ("security violation"), and
-    /// `Err(PolicyError::InternalError)` if there is no snapshot to verify against - this
+    /// Returns `Err(PolicyGateError::AccessDenied.into())` if they differ ("security violation"), and
+    /// `Err(PolicyGateError::InternalError.into())` if there is no snapshot to verify against - this
     /// routine is what detects tampering, so "nothing to compare" must never read as a pass.
     ///
     /// ## Safety
@@ -562,10 +622,10 @@ impl PolicyGate {
         is_inside_mmram: IsInsideMmramFn,
         scratch: *mut MemDescriptorV1_0,
         scratch_max_count: usize,
-    ) -> Result<(), PolicyError> {
+    ) -> MmSupervisorResult<()> {
         let Some(&saved_count) = self.snapshot_count.get() else {
             log::error!("verify_snapshot: no snapshot to verify against");
-            return Err(PolicyError::InternalError);
+            return Err(PolicyGateError::InternalError.into());
         };
 
         // SAFETY: The caller guarantees that `cr3` points to a valid PML4 and
@@ -573,7 +633,7 @@ impl PolicyGate {
         let fresh_count =
             unsafe { walk_page_table(cr3, scratch, scratch_max_count, is_inside_mmram) }.map_err(|e| {
                 log::error!("verify_snapshot: walk_page_table failed: {e:?}");
-                PolicyError::InternalError
+                PolicyGateError::InternalError
             })?;
 
         // View both buffers as slices so the comparison runs in safe code.
@@ -619,32 +679,39 @@ impl PolicyGate {
     /// ## Safety
     ///
     /// * `dest` must point to a writable buffer of at least `dest_size` bytes.
-    pub unsafe fn fetch_n_update_policy(&self, dest: *mut u8, dest_size: usize) -> Result<usize, PolicyError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PolicyGateError::NullPointer`] for a null `dest`, and
+    /// [`PolicyGateError::InternalError`] when `dest_size` cannot hold the blob plus its
+    /// snapshot, or when the memory policy root is missing. Nothing is written to `dest` unless
+    /// the whole copy fits.
+    pub unsafe fn fetch_n_update_policy(&self, dest: *mut u8, dest_size: usize) -> MmSupervisorResult<usize> {
         let count = self.snapshot_count.get().copied().ok_or_else(|| {
             log::error!("fetch_n_update_policy: no snapshot taken");
-            PolicyError::InternalError
+            PolicyGateError::InternalError
         })?;
 
         let desc_size = core::mem::size_of::<MemDescriptorV1_0>();
         let mem_policy_bytes = count.checked_mul(desc_size).ok_or_else(|| {
             log::error!("fetch_n_update_policy: descriptor count overflow");
-            PolicyError::InternalError
+            PolicyGateError::InternalError
         })?;
 
         let fw_size = self.firmware_policy_size();
         if fw_size == 0 {
             log::error!("fetch_n_update_policy: firmware policy size is 0");
-            return Err(PolicyError::InternalError);
+            return Err(PolicyGateError::InternalError.into());
         }
 
         let total_bytes = fw_size.checked_add(mem_policy_bytes).ok_or_else(|| {
             log::error!("fetch_n_update_policy: total size overflow");
-            PolicyError::InternalError
+            PolicyGateError::InternalError
         })?;
 
         if dest_size < total_bytes {
             log::error!("fetch_n_update_policy: buffer too small ({dest_size} bytes, need {total_bytes})");
-            return Err(PolicyError::InternalError);
+            return Err(PolicyGateError::InternalError.into());
         }
 
         // 1. Copy the firmware policy blob (header + payload), then append the
@@ -683,7 +750,7 @@ impl PolicyGate {
         // Find the TYPE_MEM policy root and patch its offset/count.
         let Some(mem_root) = roots.iter_mut().find(|r| r.policy_type == TYPE_MEM) else {
             log::error!("fetch_n_update_policy: firmware policy has no TYPE_MEM policy root");
-            return Err(PolicyError::PolicyRootNotFound);
+            return Err(PolicyGateError::PolicyRootNotFound.into());
         };
         mem_root.access_attr = ACCESS_ATTR_ALLOW;
         mem_root.offset = fw_size as u32;
@@ -704,10 +771,10 @@ impl PolicyGate {
 }
 
 /// Returns an error when a freshly walked page table no longer matches the recorded snapshot.
-fn compare_snapshot(saved: &[MemDescriptorV1_0], fresh: &[MemDescriptorV1_0]) -> Result<(), PolicyError> {
+fn compare_snapshot(saved: &[MemDescriptorV1_0], fresh: &[MemDescriptorV1_0]) -> MmSupervisorResult<()> {
     if saved.len() != fresh.len() {
         log::error!("verify_snapshot: descriptor count mismatch (saved={}, fresh={})", saved.len(), fresh.len());
-        return Err(PolicyError::AccessDenied);
+        return Err(PolicyGateError::AccessDenied.into());
     }
 
     for (i, (saved, fresh)) in saved.iter().zip(fresh.iter()).enumerate() {
@@ -724,7 +791,7 @@ fn compare_snapshot(saved: &[MemDescriptorV1_0], fresh: &[MemDescriptorV1_0]) ->
                 fresh.size,
                 fresh.mem_attributes,
             );
-            return Err(PolicyError::AccessDenied);
+            return Err(PolicyGateError::AccessDenied.into());
         }
     }
 
@@ -762,14 +829,17 @@ mod tests {
 
     #[test]
     fn test_gate_rejects_an_invalid_policy_buffer() {
-        // SAFETY: `new` checks for null before dereferencing.
-        assert_eq!(unsafe { PolicyGate::new(core::ptr::null(), 0) }.err(), Some(PolicyError::NullPointer));
+        assert_eq!(
+            // SAFETY: `new` checks for null before dereferencing.
+            unsafe { PolicyGate::new(core::ptr::null(), 0) }.err(),
+            Some(PolicyGateError::NullPointer.into())
+        );
 
         let wrong_version = PolicyBuilder::new().version(2, 0).build();
         assert_eq!(
             // SAFETY: the builder produced an aligned, fully-initialized header that outlives the call.
             unsafe { PolicyGate::new(wrong_version.as_ptr(), wrong_version.len()) }.err(),
-            Some(PolicyError::InvalidVersion)
+            Some(PolicyGateError::InvalidVersion.into())
         );
     }
 
@@ -790,11 +860,20 @@ mod tests {
         let gate = policy.gate();
 
         // Execute is not a meaningful I/O access type.
-        assert_eq!(gate.is_io_allowed(0x60, IoWidth::Byte, AccessType::Execute), Err(PolicyError::InvalidAccessMask));
+        assert_eq!(
+            gate.is_io_allowed(0x60, IoWidth::Byte, AccessType::Execute),
+            Err(PolicyGateError::InvalidAccessMask.into())
+        );
         // Ports live in the 16-bit space.
-        assert_eq!(gate.is_io_allowed(0x1_0000, IoWidth::Byte, AccessType::Read), Err(PolicyError::InvalidIoAddress));
+        assert_eq!(
+            gate.is_io_allowed(0x1_0000, IoWidth::Byte, AccessType::Read),
+            Err(PolicyGateError::InvalidIoAddress.into())
+        );
         // A width that runs off the end of the port space.
-        assert_eq!(gate.is_io_allowed(0xFFFF, IoWidth::Dword, AccessType::Read), Err(PolicyError::InvalidIoRange));
+        assert_eq!(
+            gate.is_io_allowed(0xFFFF, IoWidth::Dword, AccessType::Read),
+            Err(PolicyGateError::InvalidIoRange.into())
+        );
     }
 
     #[test]
@@ -802,7 +881,7 @@ mod tests {
         let policy = PolicyBuilder::new().build();
         assert_eq!(
             policy.gate().is_io_allowed(0x60, IoWidth::Byte, AccessType::Read),
-            Err(PolicyError::PolicyRootNotFound)
+            Err(PolicyGateError::PolicyRootNotFound.into())
         );
     }
 
@@ -815,9 +894,15 @@ mod tests {
         assert_eq!(gate.is_io_allowed(0xCF8, IoWidth::Dword, AccessType::Read), Ok(()));
         assert_eq!(gate.is_io_allowed(0xCFC, IoWidth::Dword, AccessType::Write), Ok(()));
         // Straddles the end of the descriptor's range.
-        assert_eq!(gate.is_io_allowed(0xCFE, IoWidth::Dword, AccessType::Read), Err(PolicyError::AccessDenied));
+        assert_eq!(
+            gate.is_io_allowed(0xCFE, IoWidth::Dword, AccessType::Read),
+            Err(PolicyGateError::AccessDenied.into())
+        );
         // Outside the descriptor entirely.
-        assert_eq!(gate.is_io_allowed(0x60, IoWidth::Byte, AccessType::Read), Err(PolicyError::AccessDenied));
+        assert_eq!(
+            gate.is_io_allowed(0x60, IoWidth::Byte, AccessType::Read),
+            Err(PolicyGateError::AccessDenied.into())
+        );
     }
 
     #[test]
@@ -828,10 +913,19 @@ mod tests {
 
         assert_eq!(gate.is_io_allowed(0x70, IoWidth::Word, AccessType::Read), Ok(()));
         // Strict width requires an exact address and size match.
-        assert_eq!(gate.is_io_allowed(0x70, IoWidth::Byte, AccessType::Read), Err(PolicyError::AccessDenied));
-        assert_eq!(gate.is_io_allowed(0x71, IoWidth::Word, AccessType::Read), Err(PolicyError::AccessDenied));
+        assert_eq!(
+            gate.is_io_allowed(0x70, IoWidth::Byte, AccessType::Read),
+            Err(PolicyGateError::AccessDenied.into())
+        );
+        assert_eq!(
+            gate.is_io_allowed(0x71, IoWidth::Word, AccessType::Read),
+            Err(PolicyGateError::AccessDenied.into())
+        );
         // The descriptor grants read only.
-        assert_eq!(gate.is_io_allowed(0x70, IoWidth::Word, AccessType::Write), Err(PolicyError::AccessDenied));
+        assert_eq!(
+            gate.is_io_allowed(0x70, IoWidth::Word, AccessType::Write),
+            Err(PolicyGateError::AccessDenied.into())
+        );
     }
 
     #[test]
@@ -840,14 +934,20 @@ mod tests {
             PolicyBuilder::new().root(ACCESS_ATTR_DENY, Descriptors::Io(vec![io(0xB2, 1, READ | WRITE)])).build();
         let gate = policy.gate();
 
-        assert_eq!(gate.is_io_allowed(0xB2, IoWidth::Byte, AccessType::Write), Err(PolicyError::AccessDenied));
+        assert_eq!(
+            gate.is_io_allowed(0xB2, IoWidth::Byte, AccessType::Write),
+            Err(PolicyGateError::AccessDenied.into())
+        );
         assert_eq!(gate.is_io_allowed(0x60, IoWidth::Byte, AccessType::Write), Ok(()));
     }
 
     #[test]
     fn test_is_io_allowed_fails_closed_on_an_unknown_access_attribute() {
         let policy = PolicyBuilder::new().root(0x7F, Descriptors::Io(vec![io(0x60, 1, READ)])).build();
-        assert_eq!(policy.gate().is_io_allowed(0x60, IoWidth::Byte, AccessType::Read), Err(PolicyError::AccessDenied));
+        assert_eq!(
+            policy.gate().is_io_allowed(0x60, IoWidth::Byte, AccessType::Read),
+            Err(PolicyGateError::AccessDenied.into())
+        );
     }
 
     #[test]
@@ -858,23 +958,26 @@ mod tests {
         assert_eq!(gate.is_msr_allowed(0x1B, AccessType::Read), Ok(()));
         assert_eq!(gate.is_msr_allowed(0x1E, AccessType::Read), Ok(()));
         // One past the descriptor's range.
-        assert_eq!(gate.is_msr_allowed(0x1F, AccessType::Read), Err(PolicyError::AccessDenied));
+        assert_eq!(gate.is_msr_allowed(0x1F, AccessType::Read), Err(PolicyGateError::AccessDenied.into()));
         // The descriptor grants read only.
-        assert_eq!(gate.is_msr_allowed(0x1B, AccessType::Write), Err(PolicyError::AccessDenied));
-        assert_eq!(gate.is_msr_allowed(0x1B, AccessType::Execute), Err(PolicyError::InvalidAccessMask));
+        assert_eq!(gate.is_msr_allowed(0x1B, AccessType::Write), Err(PolicyGateError::AccessDenied.into()));
+        assert_eq!(gate.is_msr_allowed(0x1B, AccessType::Execute), Err(PolicyGateError::InvalidAccessMask.into()));
     }
 
     #[test]
     fn test_is_msr_allowed_without_a_policy_root_or_with_an_unknown_attribute() {
         let missing = PolicyBuilder::new().build();
-        assert_eq!(missing.gate().is_msr_allowed(0x1B, AccessType::Read), Err(PolicyError::PolicyRootNotFound));
+        assert_eq!(
+            missing.gate().is_msr_allowed(0x1B, AccessType::Read),
+            Err(PolicyGateError::PolicyRootNotFound.into())
+        );
 
         let deny = PolicyBuilder::new().root(ACCESS_ATTR_DENY, Descriptors::Msr(vec![msr(0x1B, 1, READ)])).build();
-        assert_eq!(deny.gate().is_msr_allowed(0x1B, AccessType::Read), Err(PolicyError::AccessDenied));
+        assert_eq!(deny.gate().is_msr_allowed(0x1B, AccessType::Read), Err(PolicyGateError::AccessDenied.into()));
         assert_eq!(deny.gate().is_msr_allowed(0x20, AccessType::Read), Ok(()));
 
         let unknown = PolicyBuilder::new().root(0x7F, Descriptors::Msr(vec![msr(0x1B, 1, READ)])).build();
-        assert_eq!(unknown.gate().is_msr_allowed(0x1B, AccessType::Read), Err(PolicyError::AccessDenied));
+        assert_eq!(unknown.gate().is_msr_allowed(0x1B, AccessType::Read), Err(PolicyGateError::AccessDenied.into()));
     }
 
     #[test]
@@ -885,30 +988,36 @@ mod tests {
         let gate = policy.gate();
 
         assert_eq!(gate.is_instruction_allowed(Instruction::Hlt), Ok(()));
-        assert_eq!(gate.is_instruction_allowed(Instruction::Cli), Err(PolicyError::AccessDenied));
+        assert_eq!(gate.is_instruction_allowed(Instruction::Cli), Err(PolicyGateError::AccessDenied.into()));
     }
 
     #[test]
     fn test_is_instruction_allowed_without_a_policy_root_or_with_an_unknown_attribute() {
         let missing = PolicyBuilder::new().build();
-        assert_eq!(missing.gate().is_instruction_allowed(Instruction::Cli), Err(PolicyError::PolicyRootNotFound));
+        assert_eq!(
+            missing.gate().is_instruction_allowed(Instruction::Cli),
+            Err(PolicyGateError::PolicyRootNotFound.into())
+        );
 
         // A descriptor without the execute attribute never matches.
         let no_execute = PolicyBuilder::new()
             .root(ACCESS_ATTR_ALLOW, Descriptors::Instruction(vec![instruction(Instruction::Cli, READ)]))
             .build();
-        assert_eq!(no_execute.gate().is_instruction_allowed(Instruction::Cli), Err(PolicyError::AccessDenied));
+        assert_eq!(
+            no_execute.gate().is_instruction_allowed(Instruction::Cli),
+            Err(PolicyGateError::AccessDenied.into())
+        );
 
         let deny = PolicyBuilder::new()
             .root(ACCESS_ATTR_DENY, Descriptors::Instruction(vec![instruction(Instruction::Cli, EXECUTE)]))
             .build();
-        assert_eq!(deny.gate().is_instruction_allowed(Instruction::Cli), Err(PolicyError::AccessDenied));
+        assert_eq!(deny.gate().is_instruction_allowed(Instruction::Cli), Err(PolicyGateError::AccessDenied.into()));
         assert_eq!(deny.gate().is_instruction_allowed(Instruction::Hlt), Ok(()));
 
         let unknown = PolicyBuilder::new()
             .root(0x7F, Descriptors::Instruction(vec![instruction(Instruction::Cli, EXECUTE)]))
             .build();
-        assert_eq!(unknown.gate().is_instruction_allowed(Instruction::Cli), Err(PolicyError::AccessDenied));
+        assert_eq!(unknown.gate().is_instruction_allowed(Instruction::Cli), Err(PolicyGateError::AccessDenied.into()));
     }
 
     #[test]
@@ -939,10 +1048,13 @@ mod tests {
         // The conditional descriptor only covers I/O reads.
         assert_eq!(
             gate.is_save_state_read_allowed(SaveStateField::IoTrap, 4, Some(SaveStateCondition::IoWrite)),
-            Err(PolicyError::AccessDenied)
+            Err(PolicyGateError::AccessDenied.into())
         );
         // A conditional descriptor never matches when no condition is supplied.
-        assert_eq!(gate.is_save_state_read_allowed(SaveStateField::IoTrap, 4, None), Err(PolicyError::AccessDenied));
+        assert_eq!(
+            gate.is_save_state_read_allowed(SaveStateField::IoTrap, 4, None),
+            Err(PolicyGateError::AccessDenied.into())
+        );
     }
 
     #[test]
@@ -959,7 +1071,7 @@ mod tests {
             .build();
         assert_eq!(
             deny.gate().is_save_state_read_allowed(SaveStateField::Rax, 8, None),
-            Err(PolicyError::AccessDenied)
+            Err(PolicyGateError::AccessDenied.into())
         );
         assert_eq!(deny.gate().is_save_state_read_allowed(SaveStateField::IoTrap, 8, None), Ok(()));
 
@@ -976,7 +1088,7 @@ mod tests {
             .build();
         assert_eq!(
             write_only.gate().is_save_state_read_allowed(SaveStateField::Rax, 8, None),
-            Err(PolicyError::AccessDenied)
+            Err(PolicyGateError::AccessDenied.into())
         );
 
         let unknown = PolicyBuilder::new()
@@ -991,7 +1103,7 @@ mod tests {
             .build();
         assert_eq!(
             unknown.gate().is_save_state_read_allowed(SaveStateField::Rax, 8, None),
-            Err(PolicyError::AccessDenied)
+            Err(PolicyGateError::AccessDenied.into())
         );
     }
 
@@ -1000,8 +1112,11 @@ mod tests {
         let policy = PolicyBuilder::new().build();
         let gate = policy.gate();
 
-        // SAFETY: the buffer check fails before `cr3` is ever dereferenced.
-        assert_eq!(unsafe { gate.take_snapshot(0x1000, |_, _| false) }, Err(PolicyError::InternalError));
+        assert_eq!(
+            // SAFETY: the buffer check fails before `cr3` is ever dereferenced.
+            unsafe { gate.take_snapshot(0x1000, |_, _| false) },
+            Err(PolicyGateError::InternalError.into())
+        );
     }
 
     #[test]
@@ -1029,7 +1144,7 @@ mod tests {
         assert_eq!(
             // SAFETY: the missing snapshot short-circuits before `cr3`/`scratch` are dereferenced.
             unsafe { gate.verify_snapshot(0x1000, |_, _| false, core::ptr::null_mut(), 0) },
-            Err(PolicyError::InternalError)
+            Err(PolicyGateError::InternalError.into())
         );
     }
 
@@ -1039,10 +1154,10 @@ mod tests {
 
         assert_eq!(compare_snapshot(&saved, &saved), Ok(()));
         // A page table that grew or shrank since the snapshot.
-        assert_eq!(compare_snapshot(&saved, &saved[..1]), Err(PolicyError::AccessDenied));
+        assert_eq!(compare_snapshot(&saved, &saved[..1]), Err(PolicyGateError::AccessDenied.into()));
         // Same shape, but an attribute changed under us.
         let tampered = [saved[0], mem(0x8000, 0x1000, RESOURCE_ATTR_EXECUTE)];
-        assert_eq!(compare_snapshot(&saved, &tampered), Err(PolicyError::AccessDenied));
+        assert_eq!(compare_snapshot(&saved, &tampered), Err(PolicyGateError::AccessDenied.into()));
     }
 
     #[test]
@@ -1054,7 +1169,7 @@ mod tests {
         assert_eq!(
             // SAFETY: `dest` is writable for `dest.len()` bytes.
             unsafe { gate.fetch_n_update_policy(dest.as_mut_ptr(), dest.len()) },
-            Err(PolicyError::InternalError)
+            Err(PolicyGateError::InternalError.into())
         );
     }
 
@@ -1070,7 +1185,7 @@ mod tests {
         assert_eq!(
             // SAFETY: `dest` is writable for `dest.len()` bytes.
             unsafe { gate.fetch_n_update_policy(dest.as_mut_ptr(), dest.len()) },
-            Err(PolicyError::InternalError)
+            Err(PolicyGateError::InternalError.into())
         );
     }
 
@@ -1086,7 +1201,7 @@ mod tests {
         assert_eq!(
             // SAFETY: `dest` is writable for `dest.len()` bytes.
             unsafe { gate.fetch_n_update_policy(dest.as_mut_ptr(), dest.len()) },
-            Err(PolicyError::PolicyRootNotFound)
+            Err(PolicyGateError::PolicyRootNotFound.into())
         );
     }
 
@@ -1100,13 +1215,13 @@ mod tests {
         // SAFETY: `policy` keeps an aligned, live buffer alive; the undersized length is rejected
         // before anything is dereferenced.
         let result = unsafe { PolicyGate::new(policy.as_ptr(), core::mem::size_of::<SecurePolicyDataV1_0>() - 1) };
-        assert_eq!(result.err(), Some(PolicyError::MalformedPolicy));
+        assert_eq!(result.err(), Some(PolicyGateError::MalformedPolicy.into()));
     }
 
     #[test]
     fn test_gate_rejects_a_policy_that_declares_no_size() {
         let policy = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Mem(vec![])).declared_size(0).build();
-        assert_eq!(policy.try_gate().err(), Some(PolicyError::MalformedPolicy));
+        assert_eq!(policy.try_gate().err(), Some(PolicyGateError::MalformedPolicy.into()));
     }
 
     #[test]
@@ -1115,14 +1230,14 @@ mod tests {
         // copy adjacent MMRAM out to the non-MM caller.
         let policy =
             PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Mem(vec![])).declared_size(u32::MAX).build();
-        assert_eq!(policy.try_gate().err(), Some(PolicyError::MalformedPolicy));
+        assert_eq!(policy.try_gate().err(), Some(PolicyGateError::MalformedPolicy.into()));
     }
 
     #[test]
     fn test_gate_rejects_a_root_array_past_the_end_of_the_policy() {
         let policy =
             PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Mem(vec![])).declared_root_count(4096).build();
-        assert_eq!(policy.try_gate().err(), Some(PolicyError::MalformedPolicy));
+        assert_eq!(policy.try_gate().err(), Some(PolicyGateError::MalformedPolicy.into()));
     }
 
     #[test]
@@ -1131,7 +1246,7 @@ mod tests {
             .root(ACCESS_ATTR_ALLOW, Descriptors::Mem(vec![mem(0x1000, 0x1000, RESOURCE_ATTR_READ)]))
             .declared_descriptor_count(4096)
             .build();
-        assert_eq!(policy.try_gate().err(), Some(PolicyError::MalformedPolicy));
+        assert_eq!(policy.try_gate().err(), Some(PolicyGateError::MalformedPolicy.into()));
     }
 
     #[test]
@@ -1140,7 +1255,7 @@ mod tests {
             .root(ACCESS_ATTR_ALLOW, Descriptors::Mem(vec![mem(0x1000, 0x1000, RESOURCE_ATTR_READ)]))
             .declared_descriptor_count(u32::MAX)
             .build();
-        assert_eq!(policy.try_gate().err(), Some(PolicyError::MalformedPolicy));
+        assert_eq!(policy.try_gate().err(), Some(PolicyGateError::MalformedPolicy.into()));
     }
 
     #[test]
@@ -1171,7 +1286,7 @@ mod tests {
         assert_eq!(
             // SAFETY: `dest` is writable for `dest.len()` bytes.
             unsafe { gate.fetch_n_update_policy(dest.as_mut_ptr(), dest.len()) },
-            Err(PolicyError::InternalError)
+            Err(PolicyGateError::InternalError.into())
         );
     }
 
@@ -1186,7 +1301,7 @@ mod tests {
         assert_eq!(
             // SAFETY: `dest` is writable for `dest.len()` bytes.
             unsafe { gate.fetch_n_update_policy(dest.as_mut_ptr(), dest.len()) },
-            Err(PolicyError::InternalError)
+            Err(PolicyGateError::InternalError.into())
         );
     }
 

@@ -25,7 +25,42 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use crate::perf_timer;
+use crate::{error::MmSupervisorResult, perf_timer};
+
+/// Why a command could not be posted to an AP's mailbox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MailboxError {
+    /// The CPU index has no mailbox slot.
+    NoMailboxForCpuIndex {
+        /// The index the caller asked for.
+        index: usize,
+        /// Number of mailbox slots the manager holds.
+        len: usize,
+    },
+    /// The AP's mailbox still holds a command it has not taken yet.
+    ///
+    /// Distinct from [`MailboxError::NoMailboxForCpuIndex`]: the slot exists, but overwriting it
+    /// would drop a command the AP was still going to run.
+    CommandAlreadyPending {
+        /// The index whose mailbox is occupied.
+        index: usize,
+    },
+}
+
+impl core::error::Error for MailboxError {}
+
+impl core::fmt::Display for MailboxError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NoMailboxForCpuIndex { index, len } => {
+                write!(f, "CPU index {index} has no mailbox slot among the {len} available")
+            }
+            Self::CommandAlreadyPending { index } => {
+                write!(f, "the mailbox for CPU index {index} still holds an untaken command")
+            }
+        }
+    }
+}
 
 /// Commands that can be sent from BSP to APs via the mailbox.
 ///
@@ -247,16 +282,19 @@ impl<const MAX_APS: usize> MailboxManager<MAX_APS> {
     }
 
     /// Sends a command to a specific AP.
-    pub fn send_command(&self, cpu_index: usize, command: ApCommand) -> Result<(), ()> {
+    ///
+    /// Reports [`MailboxError::NoMailboxForCpuIndex`] when `cpu_index` has no slot, and
+    /// [`MailboxError::CommandAlreadyPending`] when the AP has not taken its previous command.
+    pub fn send_command(&self, cpu_index: usize, command: ApCommand) -> MmSupervisorResult<()> {
         let Some(mailbox) = self.mailboxes.get(cpu_index) else {
             log::error!("No mailbox for CPU index {cpu_index} ({MAX_APS} slots)");
-            return Err(());
+            return Err(MailboxError::NoMailboxForCpuIndex { index: cpu_index, len: MAX_APS }.into());
         };
         if mailbox.send_command(command) {
             Ok(())
         } else {
             log::error!("CPU index {cpu_index} already has a command pending");
-            Err(())
+            Err(MailboxError::CommandAlreadyPending { index: cpu_index }.into())
         }
     }
 
@@ -407,7 +445,10 @@ mod tests {
         let command = ApCommand::RunProcedure { procedure: 0x1000, argument: 0x2000 };
 
         // Slot 4 is past the end of a four slot manager.
-        assert_eq!(manager.send_command(4, command), Err(()));
+        assert_eq!(
+            manager.send_command(4, command),
+            Err(MailboxError::NoMailboxForCpuIndex { index: 4, len: 4 }.into())
+        );
         assert_eq!(manager.check_mailbox(4), None);
     }
 
@@ -418,7 +459,26 @@ mod tests {
 
         assert!(manager.send_command(2, command).is_ok());
         // The slot already holds a command that the AP has not taken yet.
-        assert_eq!(manager.send_command(2, command), Err(()));
+        assert_eq!(manager.send_command(2, command), Err(MailboxError::CommandAlreadyPending { index: 2 }.into()));
+
+        // A busy slot and a missing slot are no longer the same failure.
+        assert_ne!(
+            manager.send_command(2, command),
+            manager.send_command(4, command),
+            "a pending command and a missing mailbox must stay distinguishable"
+        );
+    }
+
+    #[test]
+    fn test_mailbox_error_displays_each_variant() {
+        assert_eq!(
+            format!("{}", MailboxError::NoMailboxForCpuIndex { index: 4, len: 4 }),
+            "CPU index 4 has no mailbox slot among the 4 available"
+        );
+        assert_eq!(
+            format!("{}", MailboxError::CommandAlreadyPending { index: 2 }),
+            "the mailbox for CPU index 2 still holds an untaken command"
+        );
     }
 
     #[test]

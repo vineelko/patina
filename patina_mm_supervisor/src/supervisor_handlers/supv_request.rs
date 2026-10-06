@@ -4,10 +4,10 @@
 //! `MM_SUPERVISOR_REQUEST_HANDLER_GUID` protocol.
 //!
 //! Each request type is handled by a dedicated sub-module:
-//! - [`version_info`] — supervisor version query
-//! - [`fetch_policy`] — security policy retrieval
-//! - [`comm_update`] — communication buffer updates
-//! - [`unblock_mem`] — memory region unblocking
+//! - [`version_info`] - supervisor version query
+//! - [`fetch_policy`] - security policy retrieval
+//! - [`comm_update`] - communication buffer updates
+//! - [`unblock_mem`] - memory region unblocking
 //!
 //! ## License
 //!

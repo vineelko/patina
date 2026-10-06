@@ -32,6 +32,10 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
+use crate::{
+    error::{MmSupervisorError, MmSupervisorResult},
+    mem::AllocError,
+};
 use patina::{UEFI_PAGE_SIZE, align_up};
 use patina_paging::{PtError, page_allocator::PageAllocator as PagingPageAllocator};
 use spin::Mutex;
@@ -39,23 +43,6 @@ use spin::Mutex;
 /// Default number of pages to reserve for page table allocations.
 /// This should be sufficient for most MM environments (128 pages = 512KB).
 pub const DEFAULT_PAGING_POOL_PAGES: usize = 128;
-
-/// Errors that can occur during paging allocator operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PagingAllocError {
-    /// The allocator has not been initialized.
-    NotInitialized,
-    /// Already initialized.
-    AlreadyInitialized,
-    /// No free pages available to satisfy the request.
-    OutOfMemory,
-    /// Invalid alignment requested.
-    InvalidAlignment,
-    /// Invalid allocation size requested.
-    InvalidSize,
-    /// The pool region is too small.
-    PoolTooSmall,
-}
 
 /// A dedicated page allocator for the paging subsystem.
 ///
@@ -117,37 +104,40 @@ impl PagingPoolAllocator {
     ///
     /// ## Errors
     ///
-    /// Returns an error if already initialized or if parameters are invalid.
-    pub unsafe fn init(&self, pool_base: u64, pool_pages: usize) -> Result<(), PagingAllocError> {
+    /// Returns [`AllocError::AlreadyInitialized`] on a second call,
+    /// [`AllocError::PoolTooSmall`] when `pool_pages` is zero or the pool does not fit the
+    /// address space, and [`AllocError::InvalidAlignment`] when `pool_base` is not page aligned.
+    /// The allocator stays uninitialized in every one of those cases.
+    pub unsafe fn init(&self, pool_base: u64, pool_pages: usize) -> MmSupervisorResult<()> {
         let mut state = self.state.lock();
         if state.initialized {
             log::error!("Paging allocator init rejected: already initialized");
-            return Err(PagingAllocError::AlreadyInitialized);
+            return Err(AllocError::AlreadyInitialized.into());
         }
 
         if pool_base == 0 || pool_pages == 0 {
             log::error!("Paging allocator init rejected: base=0x{pool_base:016x}, pages={pool_pages}");
-            return Err(PagingAllocError::PoolTooSmall);
+            return Err(AllocError::PoolTooSmall.into());
         }
 
         if !pool_base.is_multiple_of(UEFI_PAGE_SIZE as u64) {
             log::error!("Paging allocator init rejected: base 0x{pool_base:016x} is not page aligned");
-            return Err(PagingAllocError::InvalidAlignment);
+            return Err(AllocError::InvalidAlignment.into());
         }
 
         let pool_bytes = Self::page_bytes(pool_pages).ok_or_else(|| {
             log::error!("Paging allocator init rejected: {pool_pages} pages do not fit a byte count");
-            PagingAllocError::PoolTooSmall
+            AllocError::PoolTooSmall
         })?;
         let pool_bytes_u64 = u64::try_from(pool_bytes).map_err(|_| {
             log::error!("Paging allocator init rejected: pool size 0x{pool_bytes:x} does not fit u64");
-            PagingAllocError::PoolTooSmall
+            AllocError::PoolTooSmall
         })?;
         pool_base.checked_add(pool_bytes_u64).ok_or_else(|| {
             log::error!(
                 "Paging allocator init rejected: base 0x{pool_base:016x} plus 0x{pool_bytes_u64:x} bytes overflows"
             );
-            PagingAllocError::PoolTooSmall
+            AllocError::PoolTooSmall
         })?;
 
         // SAFETY: `init` is an `unsafe fn` whose contract (see `# Safety` above) requires the
@@ -171,31 +161,37 @@ impl PagingPoolAllocator {
     /// `align` must be a power of 2 and at least `UEFI_PAGE_SIZE`, `size` must be
     /// at least `UEFI_PAGE_SIZE`, and `is_root` indicates whether this is a root
     /// page table (e.g., PML4).
-    pub fn allocate_page_internal(&self, align: u64, size: u64, _is_root: bool) -> Result<u64, PagingAllocError> {
+    ///
+    /// ## Errors
+    ///
+    /// Returns [`AllocError::NotInitialized`] before [`init`](Self::init) has run,
+    /// [`AllocError::InvalidAlignment`] or [`AllocError::InvalidSize`] when the request does not
+    /// meet the constraints above, and [`AllocError::OutOfMemory`] when the pool is exhausted.
+    pub fn allocate_page_internal(&self, align: u64, size: u64, _is_root: bool) -> MmSupervisorResult<u64> {
         let mut state = self.state.lock();
         if !state.initialized {
-            return Err(PagingAllocError::NotInitialized);
+            return Err(AllocError::NotInitialized.into());
         }
 
         if align < UEFI_PAGE_SIZE as u64 || !align.is_power_of_two() {
-            return Err(PagingAllocError::InvalidAlignment);
+            return Err(AllocError::InvalidAlignment.into());
         }
         if size < UEFI_PAGE_SIZE as u64 {
-            return Err(PagingAllocError::InvalidSize);
+            return Err(AllocError::InvalidSize.into());
         }
 
-        let size = usize::try_from(size).map_err(|_| PagingAllocError::InvalidSize)?;
+        let size = usize::try_from(size).map_err(|_| AllocError::InvalidSize)?;
         let pages_needed = size.div_ceil(UEFI_PAGE_SIZE);
-        let allocation_bytes = Self::page_bytes(pages_needed).ok_or(PagingAllocError::InvalidSize)?;
+        let allocation_bytes = Self::page_bytes(pages_needed).ok_or(AllocError::InvalidSize)?;
 
         // Calculate the aligned address
-        let current_offset = u64::try_from(state.current_offset).map_err(|_| PagingAllocError::OutOfMemory)?;
-        let current_addr = state.pool_base.checked_add(current_offset).ok_or(PagingAllocError::OutOfMemory)?;
-        let aligned_addr = align_up(current_addr, align).map_err(|_| PagingAllocError::InvalidAlignment)?;
-        let padding = usize::try_from(aligned_addr - current_addr).map_err(|_| PagingAllocError::OutOfMemory)?;
-        let total_bytes = padding.checked_add(allocation_bytes).ok_or(PagingAllocError::OutOfMemory)?;
-        let new_offset = state.current_offset.checked_add(total_bytes).ok_or(PagingAllocError::OutOfMemory)?;
-        let pool_bytes = Self::page_bytes(state.pool_pages).ok_or(PagingAllocError::OutOfMemory)?;
+        let current_offset = u64::try_from(state.current_offset).map_err(|_| AllocError::OutOfMemory)?;
+        let current_addr = state.pool_base.checked_add(current_offset).ok_or(AllocError::OutOfMemory)?;
+        let aligned_addr = align_up(current_addr, align).map_err(|_| AllocError::InvalidAlignment)?;
+        let padding = usize::try_from(aligned_addr - current_addr).map_err(|_| AllocError::OutOfMemory)?;
+        let total_bytes = padding.checked_add(allocation_bytes).ok_or(AllocError::OutOfMemory)?;
+        let new_offset = state.current_offset.checked_add(total_bytes).ok_or(AllocError::OutOfMemory)?;
+        let pool_bytes = Self::page_bytes(state.pool_pages).ok_or(AllocError::OutOfMemory)?;
 
         // Check if we have enough space
         if new_offset > pool_bytes {
@@ -206,11 +202,11 @@ impl PagingPoolAllocator {
                 total_bytes,
                 pool_bytes - state.current_offset
             );
-            return Err(PagingAllocError::OutOfMemory);
+            return Err(AllocError::OutOfMemory.into());
         }
 
         // Update the bump pointer and allocation count.
-        let allocated_pages = state.allocated_pages.checked_add(pages_needed).ok_or(PagingAllocError::OutOfMemory)?;
+        let allocated_pages = state.allocated_pages.checked_add(pages_needed).ok_or(AllocError::OutOfMemory)?;
         state.current_offset = new_offset;
         state.allocated_pages = allocated_pages;
 
@@ -249,15 +245,18 @@ impl PagingPageAllocator for PagingPoolAllocator {
     }
 }
 
-fn paging_error_to_pt(error: PagingAllocError, align: u64, size: u64) -> PtError {
-    log::error!("Paging allocator failed a request for 0x{size:x} bytes at align 0x{align:x}: {error:?}");
+/// Maps an allocator failure onto the `PtError` the paging crate expects.
+///
+/// Only [`AllocError::OutOfMemory`] becomes `OutOfResources`. Everything else describes a request
+/// the allocator could not honour, so it becomes `InvalidParameter`. The match is kept total
+/// rather than exhaustive over the reachable variants, because panicking here would take down MM
+/// if the error set grows.
+fn paging_error_to_pt(error: MmSupervisorError, align: u64, size: u64) -> PtError {
+    log::error!("Paging allocator failed a request for 0x{size:x} bytes at align 0x{align:x}: {error}");
     match error {
-        PagingAllocError::NotInitialized
-        | PagingAllocError::AlreadyInitialized
-        | PagingAllocError::InvalidAlignment
-        | PagingAllocError::InvalidSize
-        | PagingAllocError::PoolTooSmall => PtError::InvalidParameter,
-        PagingAllocError::OutOfMemory => PtError::OutOfResources,
+        MmSupervisorError::Alloc(AllocError::OutOfMemory) => PtError::OutOfResources,
+        // Everything else the allocator can report is a malformed request rather than exhaustion.
+        _ => PtError::InvalidParameter,
     }
 }
 
@@ -315,7 +314,7 @@ mod tests {
         assert_eq!(allocator.allocated_page_count(), 0);
         assert_eq!(
             allocator.allocate_page_internal(UEFI_PAGE_SIZE as u64, UEFI_PAGE_SIZE as u64, false),
-            Err(PagingAllocError::NotInitialized)
+            Err(AllocError::NotInitialized.into())
         );
     }
 
@@ -326,7 +325,7 @@ mod tests {
 
         // SAFETY: the page count is rejected before the allocator touches the buffer.
         unsafe {
-            assert_eq!(PagingPoolAllocator::new().init(base, usize::MAX), Err(PagingAllocError::PoolTooSmall));
+            assert_eq!(PagingPoolAllocator::new().init(base, usize::MAX), Err(AllocError::PoolTooSmall.into()));
         }
     }
 
@@ -337,7 +336,7 @@ mod tests {
 
         // SAFETY: the range check fails before the allocator writes anything.
         unsafe {
-            assert_eq!(PagingPoolAllocator::new().init(base, 2), Err(PagingAllocError::PoolTooSmall));
+            assert_eq!(PagingPoolAllocator::new().init(base, 2), Err(AllocError::PoolTooSmall.into()));
         }
     }
 
@@ -349,8 +348,8 @@ mod tests {
         // SAFETY: each non-null address points into the live test buffer. Invalid
         // parameters are rejected before the allocator writes to it.
         unsafe {
-            assert_eq!(PagingPoolAllocator::new().init(base, 0), Err(PagingAllocError::PoolTooSmall));
-            assert_eq!(PagingPoolAllocator::new().init(base + 1, 1), Err(PagingAllocError::InvalidAlignment));
+            assert_eq!(PagingPoolAllocator::new().init(base, 0), Err(AllocError::PoolTooSmall.into()));
+            assert_eq!(PagingPoolAllocator::new().init(base + 1, 1), Err(AllocError::InvalidAlignment.into()));
         }
     }
 
@@ -374,7 +373,7 @@ mod tests {
 
         // SAFETY: `buffer` is page-aligned and contains the requested eight pages.
         unsafe {
-            assert_eq!(allocator.init(base, 8), Err(PagingAllocError::AlreadyInitialized));
+            assert_eq!(allocator.init(base, 8), Err(AllocError::AlreadyInitialized.into()));
         }
         assert_eq!(allocator.free_page_count(), 8);
         assert_eq!(allocator.allocated_page_count(), 0);
@@ -388,11 +387,11 @@ mod tests {
         for align in [0, page_size / 2, page_size + 1] {
             assert_eq!(
                 allocator.allocate_page_internal(align, page_size, false),
-                Err(PagingAllocError::InvalidAlignment)
+                Err(AllocError::InvalidAlignment.into())
             );
         }
         for size in [0, page_size - 1, u64::MAX] {
-            assert_eq!(allocator.allocate_page_internal(page_size, size, false), Err(PagingAllocError::InvalidSize));
+            assert_eq!(allocator.allocate_page_internal(page_size, size, false), Err(AllocError::InvalidSize.into()));
         }
 
         assert_eq!(PagingPoolAllocator::page_bytes(usize::MAX), None);
@@ -435,15 +434,15 @@ mod tests {
         let page_size = UEFI_PAGE_SIZE as u64;
 
         assert!(allocator.allocate_page_internal(page_size, page_size * 2, false).is_ok());
-        assert_eq!(allocator.allocate_page_internal(page_size, page_size, false), Err(PagingAllocError::OutOfMemory));
+        assert_eq!(allocator.allocate_page_internal(page_size, page_size, false), Err(AllocError::OutOfMemory.into()));
         assert_eq!(allocator.allocated_page_count(), 2);
         assert_eq!(allocator.free_page_count(), 0);
     }
 
     #[test]
     fn test_paging_allocator_maps_trait_errors() {
-        assert_eq!(paging_error_to_pt(PagingAllocError::InvalidSize, 0x1000, 0x1000), PtError::InvalidParameter);
-        assert_eq!(paging_error_to_pt(PagingAllocError::OutOfMemory, 0x1000, 0x1000), PtError::OutOfResources);
+        assert_eq!(paging_error_to_pt(AllocError::InvalidSize.into(), 0x1000, 0x1000), PtError::InvalidParameter);
+        assert_eq!(paging_error_to_pt(AllocError::OutOfMemory.into(), 0x1000, 0x1000), PtError::OutOfResources);
     }
 
     #[test]

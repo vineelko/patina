@@ -2,7 +2,7 @@
 //!
 //! Every syscall handler in [`super::syscall_dispatcher`] follows the same shape: validate the
 //! request coming from Ring 3, ask the firmware policy whether it is permitted, and only then
-//! perform a privileged action — executing an instruction, touching an I/O port or MSR, or
+//! perform a privileged action - executing an instruction, touching an I/O port or MSR, or
 //! consulting supervisor-global state.
 //!
 //! This module isolates that second half behind the [`SyscallOps`] trait so that:
@@ -21,9 +21,11 @@
 use core::arch::asm;
 
 use crate::{
-    CommBufferConfig, PageOwnership,
-    mem::{AllocationType, page_allocator::PageAllocError},
-    mm_policy::{AccessType, Instruction, IoWidth, PolicyError},
+    CommBufferConfig,
+    error::{MmSupervisorError, MmSupervisorResult},
+    mem::AllocationType,
+    mm_policy::{AccessType, Instruction, IoWidth},
+    page_ownership::PageOwnership,
     state::{init_state, security_state},
 };
 
@@ -35,13 +37,13 @@ pub enum PolicyDecision {
     /// The firmware policy permits the operation.
     Allowed,
     /// The firmware policy denies the operation.
-    Denied(PolicyError),
+    Denied(MmSupervisorError),
     /// The policy gate has not been initialized, so nothing can be permitted yet.
     Unavailable,
 }
 
-impl From<Result<(), PolicyError>> for PolicyDecision {
-    fn from(result: Result<(), PolicyError>) -> Self {
+impl From<MmSupervisorResult<()>> for PolicyDecision {
+    fn from(result: MmSupervisorResult<()>) -> Self {
         match result {
             Ok(()) => PolicyDecision::Allowed,
             Err(err) => PolicyDecision::Denied(err),
@@ -108,10 +110,10 @@ pub trait SyscallOps {
     fn is_bsp(&self) -> bool;
 
     /// Allocates `page_count` pages of user-owned (Ring 3) memory.
-    fn allocate_user_pages(&self, page_count: usize) -> Result<u64, PageAllocError>;
+    fn allocate_user_pages(&self, page_count: usize) -> MmSupervisorResult<u64>;
 
     /// Frees `page_count` user-owned pages starting at `addr`, rejecting non-user allocations.
-    fn free_user_pages(&self, addr: u64, page_count: usize) -> Result<(), PageAllocError>;
+    fn free_user_pages(&self, addr: u64, page_count: usize) -> MmSupervisorResult<()>;
 
     /// Returns how the page at `addr` was allocated, or `None` if it is not allocated.
     fn allocation_type(&self, addr: u64) -> Option<AllocationType>;
@@ -242,14 +244,14 @@ impl SyscallOps for FirmwareOps {
     // Reads the APIC base MSR, which faults outside ring 0 and cannot run in a host-based unit
     // test.
     fn is_bsp(&self) -> bool {
-        crate::is_bsp()
+        crate::intrinsics::is_bsp()
     }
 
-    fn allocate_user_pages(&self, page_count: usize) -> Result<u64, PageAllocError> {
+    fn allocate_user_pages(&self, page_count: usize) -> MmSupervisorResult<u64> {
         security_state().page_allocator().allocate_pages_with_type(page_count, AllocationType::User)
     }
 
-    fn free_user_pages(&self, addr: u64, page_count: usize) -> Result<(), PageAllocError> {
+    fn free_user_pages(&self, addr: u64, page_count: usize) -> MmSupervisorResult<()> {
         security_state().page_allocator().free_pages_checked(addr, page_count, AllocationType::User)
     }
 
@@ -258,7 +260,7 @@ impl SyscallOps for FirmwareOps {
     }
 
     fn query_address_ownership(&self, addr: u64, size: u64) -> Option<PageOwnership> {
-        crate::query_address_ownership(addr, size)
+        crate::page_ownership::query_address_ownership(addr, size)
     }
 
     fn start_ap_procedure(&self, cpu_index: u64, procedure: u64, argument: u64) -> Option<u64> {
@@ -292,6 +294,8 @@ impl SyscallOps for FirmwareOps {
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
+    use crate::mem::AllocError;
+    use crate::mm_policy::PolicyGateError;
     use patina::standard::efi::Status;
     use serial_test::serial;
 
@@ -299,12 +303,12 @@ mod tests {
     fn test_policy_decision_from_gate_result() {
         assert_eq!(PolicyDecision::from(Ok(())), PolicyDecision::Allowed);
         assert_eq!(
-            PolicyDecision::from(Err(PolicyError::AccessDenied)),
-            PolicyDecision::Denied(PolicyError::AccessDenied)
+            PolicyDecision::from(Err(PolicyGateError::AccessDenied.into())),
+            PolicyDecision::Denied(PolicyGateError::AccessDenied.into())
         );
         assert_eq!(
-            PolicyDecision::from(Err(PolicyError::PolicyRootNotFound)),
-            PolicyDecision::Denied(PolicyError::PolicyRootNotFound)
+            PolicyDecision::from(Err(PolicyGateError::PolicyRootNotFound.into())),
+            PolicyDecision::Denied(PolicyGateError::PolicyRootNotFound.into())
         );
     }
 
@@ -316,8 +320,8 @@ mod tests {
         let ops = FirmwareOps;
 
         // The page allocator refuses to serve or release memory it does not own yet.
-        assert_eq!(ops.allocate_user_pages(1), Err(PageAllocError::NotInitialized));
-        assert_eq!(ops.free_user_pages(0x1000, 1), Err(PageAllocError::NotInitialized));
+        assert_eq!(ops.allocate_user_pages(1), Err(AllocError::NotInitialized.into()));
+        assert_eq!(ops.free_user_pages(0x1000, 1), Err(AllocError::NotInitialized.into()));
         assert_eq!(ops.allocation_type(0x1000), None);
 
         // With no page table installed, ownership of an address is unknown rather than "user".
@@ -440,17 +444,23 @@ mod tests {
         assert_eq!(ops.check_instruction(Instruction::Cli), PolicyDecision::Allowed);
 
         // ...and everything outside the allow list is denied.
-        assert_eq!(ops.check_msr(0x200, AccessType::Read), PolicyDecision::Denied(PolicyError::AccessDenied));
+        assert_eq!(
+            ops.check_msr(0x200, AccessType::Read),
+            PolicyDecision::Denied(PolicyGateError::AccessDenied.into())
+        );
         assert_eq!(
             ops.check_io(0x70, IoWidth::Byte, AccessType::Read),
-            PolicyDecision::Denied(PolicyError::AccessDenied)
+            PolicyDecision::Denied(PolicyGateError::AccessDenied.into())
         );
-        assert_eq!(ops.check_instruction(Instruction::Hlt), PolicyDecision::Denied(PolicyError::AccessDenied));
+        assert_eq!(
+            ops.check_instruction(Instruction::Hlt),
+            PolicyDecision::Denied(PolicyGateError::AccessDenied.into())
+        );
 
         // A wider access than the descriptor covers is denied even on an allowed port.
         assert_eq!(
             ops.check_io(ALLOWED_PORT, IoWidth::Dword, AccessType::Read),
-            PolicyDecision::Denied(PolicyError::AccessDenied)
+            PolicyDecision::Denied(PolicyGateError::AccessDenied.into())
         );
     }
 

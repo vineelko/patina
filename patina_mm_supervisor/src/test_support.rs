@@ -9,6 +9,8 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
+pub(crate) mod init;
+
 /// Installs a silent logger for the current test process.
 ///
 /// The logger reports every record as enabled and then discards it. It produces no output,

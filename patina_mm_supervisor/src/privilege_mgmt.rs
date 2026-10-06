@@ -49,7 +49,7 @@
 
 use patina::standard::efi::Status;
 
-mod call_gate;
+pub(crate) mod call_gate;
 mod syscall_dispatcher;
 mod syscall_ops;
 pub(crate) mod syscall_setup;

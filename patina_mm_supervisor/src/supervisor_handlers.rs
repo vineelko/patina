@@ -49,7 +49,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
-mod supv_request;
+pub(crate) mod supv_request;
 mod system_handlers;
 
 pub use supv_request::unblock_memory::UnblockedMemoryTracker;

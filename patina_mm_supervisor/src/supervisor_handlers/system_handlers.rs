@@ -14,9 +14,10 @@ use core::fmt::Debug;
 use patina::standard::efi;
 
 use crate::{
+    error::MmSupervisorError,
     intrinsics::read_cr3,
-    is_buffer_inside_mmram,
-    mm_policy::{PolicyError, PolicyGate},
+    mem::mmram_placement::is_buffer_inside_mmram,
+    mm_policy::PolicyGate,
     state::{InitState, init_state, security_state},
     supervisor_handlers::UnblockedMemoryTracker,
 };
@@ -38,7 +39,7 @@ struct SupervisorReadyToLockContext<'a> {
 
 impl ReadyToLockContext for SupervisorReadyToLockContext<'_> {
     type Gate = PolicyGate;
-    type SnapshotError = PolicyError;
+    type SnapshotError = MmSupervisorError;
 
     fn policy_gate(&self) -> Option<&Self::Gate> {
         self.gate
@@ -129,7 +130,7 @@ mod tests {
     use core::cell::Cell;
 
     use super::*;
-    use crate::mm_policy::SecurePolicyDataV1_0;
+    use crate::mm_policy::{PolicyGateError, SecurePolicyDataV1_0};
 
     #[derive(Clone, Copy, Debug)]
     struct TestSnapshotError;
@@ -229,7 +230,7 @@ mod tests {
 
         let context_gate = context.policy_gate().expect("test context must expose its policy gate");
         assert!(!context.is_locked(context_gate));
-        assert_eq!(context.take_snapshot(context_gate), Err(PolicyError::InternalError));
+        assert_eq!(context.take_snapshot(context_gate), Err(PolicyGateError::InternalError.into()));
         assert!(!tracker.is_core_init_complete());
         context.lock_unblocked_memory();
         assert!(tracker.is_core_init_complete());

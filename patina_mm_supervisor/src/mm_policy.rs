@@ -26,7 +26,7 @@
 pub(crate) mod gate;
 pub(crate) mod helpers;
 
-pub(crate) use gate::{PolicyError, PolicyGate};
+pub(crate) use gate::{PolicyGate, PolicyGateError};
 pub(crate) use helpers::{dump_policy, walk_page_table};
 
 use core::slice;
@@ -527,6 +527,8 @@ const _: () = {
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 pub(crate) mod test_support {
+    use crate::error::MmSupervisorResult;
+
     use super::*;
 
     /// Byte size of the `SecurePolicyDataV1_0` header.
@@ -773,7 +775,7 @@ pub(crate) mod test_support {
         }
 
         /// Creates a gate over this buffer, surfacing the validation error for malformed blobs.
-        pub(crate) fn try_gate(&self) -> Result<PolicyGate, PolicyError> {
+        pub(crate) fn try_gate(&self) -> MmSupervisorResult<PolicyGate> {
             // SAFETY: `PolicyBuilder::build` produced an aligned buffer of `len()` bytes that
             // this `PolicyBuffer` keeps alive for the gate's lifetime.
             unsafe { PolicyGate::new(self.as_ptr(), self.len()) }
