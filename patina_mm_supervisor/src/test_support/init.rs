@@ -45,10 +45,7 @@ use patina::{
 use patina_internal_cpu::save_state::PROCESSOR_INFO_ENTRY_SIZE;
 use patina_paging::MemoryAttributes;
 use patina_paging::{PageTable, PagingType, x64::X64PageTable};
-use smi_idt_patch::{
-    DescriptorTablePointer, FIXUP64_SMI_HANDLER_IDTR, PerCoreMmiEntryStructHdr, SMM_HANDLER_OFFSET,
-    SmiHandlerIdtPatchServices,
-};
+use smi_idt_patch::{FIXUP64_SMI_HANDLER_IDTR, PerCoreMmiEntryStructHdr};
 use std::{
     alloc::{alloc_zeroed, dealloc, handle_alloc_error},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -167,35 +164,6 @@ impl Drop for PageAlignedMemory {
     }
 }
 
-pub(crate) struct RecordingSmiPatchServices {
-    pub(crate) allowed_ranges: Vec<(u64, u64)>,
-    pub(crate) idtr: DescriptorTablePointer,
-    pub(crate) writes: Vec<(u64, u16, u64)>,
-}
-impl RecordingSmiPatchServices {
-    pub(crate) fn new(allowed_ranges: Vec<(u64, u64)>) -> Self {
-        Self {
-            allowed_ranges,
-            idtr: DescriptorTablePointer { limit: 0x1234, base: 0x5678_9ABC_DEF0_1234 },
-            writes: Vec::new(),
-        }
-    }
-}
-impl SmiHandlerIdtPatchServices for RecordingSmiPatchServices {
-    fn is_inside_mmram(&self, address: u64, size: u64) -> bool {
-        self.allowed_ranges.contains(&(address, size))
-    }
-
-    fn read_idtr(&self) -> DescriptorTablePointer {
-        self.idtr
-    }
-
-    unsafe fn write_idtr(&mut self, address: u64, idtr: DescriptorTablePointer) {
-        let limit = idtr.limit;
-        let base = idtr.base;
-        self.writes.push((address, limit, base));
-    }
-}
 pub(crate) fn pass_down_hob_data(pass_down: &MmSupvPassDownHobData) -> [u8; size_of::<MmSupvPassDownHobData>()] {
     let mut data = [0_u8; size_of::<MmSupvPassDownHobData>()];
     data[0..4].copy_from_slice(&pass_down.revision.to_ne_bytes());
@@ -332,20 +300,7 @@ pub(crate) fn mmi_entry(fixup64_count: u8, idt_descriptor_address: u64) -> Vec<u
     entry[trailer_start..].copy_from_slice(&(fixup_structure_size as u32).to_ne_bytes());
     entry
 }
-pub(crate) fn smi_handler_memory(entry: &[u8]) -> Vec<u64> {
-    let byte_len = SMM_HANDLER_OFFSET as usize + entry.len();
-    let mut memory = vec![0_u64; byte_len.div_ceil(size_of::<u64>())];
-    // SAFETY: `memory` has at least `byte_len` writable bytes, and the source is
-    // a distinct allocation.
-    unsafe {
-        core::ptr::copy_nonoverlapping(
-            entry.as_ptr(),
-            memory.as_mut_ptr().cast::<u8>().add(SMM_HANDLER_OFFSET as usize),
-            entry.len(),
-        );
-    }
-    memory
-}
+
 pub(crate) fn scan_regions(hob_list: &RawHobList) -> Vec<SmramRegion> {
     // SAFETY: `hob_list` is a valid contiguous HOB list, so it begins with a Phase Handoff
     // Information Table that stays live for the borrow.

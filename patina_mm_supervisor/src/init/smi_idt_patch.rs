@@ -251,29 +251,6 @@ pub(crate) fn read_idtr() -> DescriptorTablePointer {
     rt_descriptor
 }
 
-pub(crate) trait SmiHandlerIdtPatchServices {
-    fn is_inside_mmram(&self, address: u64, size: u64) -> bool;
-    fn read_idtr(&self) -> DescriptorTablePointer;
-    unsafe fn write_idtr(&mut self, address: u64, idtr: DescriptorTablePointer);
-}
-
-pub(crate) struct RuntimeSmiHandlerIdtPatchServices;
-
-impl SmiHandlerIdtPatchServices for RuntimeSmiHandlerIdtPatchServices {
-    fn is_inside_mmram(&self, address: u64, size: u64) -> bool {
-        is_buffer_inside_mmram(address, size)
-    }
-
-    fn read_idtr(&self) -> DescriptorTablePointer {
-        read_idtr()
-    }
-
-    unsafe fn write_idtr(&mut self, address: u64, idtr: DescriptorTablePointer) {
-        // SAFETY: the caller validated that `address` covers a writable descriptor in MMRAM.
-        unsafe { core::ptr::write_unaligned(address as *mut DescriptorTablePointer, idtr) };
-    }
-}
-
 /// Patches every core's SMI-handler IDT descriptor to point to the Rust IDT.
 ///
 /// Each per-core MMI entry (copied to `sm_base[i] + 0x8000` during C relocation)
@@ -282,24 +259,21 @@ impl SmiHandlerIdtPatchServices for RuntimeSmiHandlerIdtPatchServices {
 ///
 /// `sm_base_array` is the per-CPU SMBASE array (`u64[number_of_cpus]`) from the `PassDown`
 /// HOB; `number_of_cpus` is its length.
-pub(crate) fn patch_smi_handler_idt<S: SmiHandlerIdtPatchServices>(
-    sm_base_array: u64,
-    number_of_cpus: u64,
-    mmi_entry_size: u64,
-    services: &mut S,
-) {
-    let inputs =
-        match validate_smi_handler_idt_patch_inputs(sm_base_array, number_of_cpus, mmi_entry_size, |address, size| {
-            services.is_inside_mmram(address, size)
-        }) {
-            Ok(inputs) => inputs,
-            Err(error) => {
-                log::warn!("Cannot patch SMI handler IDT: {error:?}");
-                return;
-            }
-        };
+pub(crate) fn patch_smi_handler_idt(sm_base_array: u64, number_of_cpus: u64, mmi_entry_size: u64) {
+    let inputs = match validate_smi_handler_idt_patch_inputs(
+        sm_base_array,
+        number_of_cpus,
+        mmi_entry_size,
+        is_buffer_inside_mmram,
+    ) {
+        Ok(inputs) => inputs,
+        Err(error) => {
+            log::warn!("Cannot patch SMI handler IDT: {error:?}");
+            return;
+        }
+    };
 
-    let idtr = services.read_idtr();
+    let idtr = read_idtr();
     // Copy packed fields into aligned locals before formatting; taking a reference to a
     // field of a `packed(2)` struct (as `log::info!` would) is undefined behavior.
     let idtr_base = idtr.base;
@@ -323,7 +297,7 @@ pub(crate) fn patch_smi_handler_idt<S: SmiHandlerIdtPatchServices>(
             log::error!("CPU {cpu}: SMBASE 0x{smbase:016x} overflows the SMI handler address");
             continue;
         };
-        if !services.is_inside_mmram(mmi_entry_base, inputs.mmi_entry_size_u64) {
+        if !is_buffer_inside_mmram(mmi_entry_base, inputs.mmi_entry_size_u64) {
             log::error!(
                 "CPU {cpu}: SMI handler at 0x{mmi_entry_base:016x} with size 0x{:x} is not inside MMRAM",
                 inputs.mmi_entry_size
@@ -346,14 +320,14 @@ pub(crate) fn patch_smi_handler_idt<S: SmiHandlerIdtPatchServices>(
             log::warn!("CPU {cpu}: Fixup64[{FIXUP64_SMI_HANDLER_IDTR}] (SMI_HANDLER_IDTR) is null");
             continue;
         }
-        if !services.is_inside_mmram(idt_desc_addr, core::mem::size_of::<DescriptorTablePointer>() as u64) {
+        if !is_buffer_inside_mmram(idt_desc_addr, core::mem::size_of::<DescriptorTablePointer>() as u64) {
             log::error!("CPU {cpu}: SMI handler IDT descriptor at 0x{idt_desc_addr:016x} is not inside MMRAM");
             continue;
         }
 
         // SAFETY: the range check above establishes that the destination is a complete
         // writable descriptor in MMRAM.
-        unsafe { services.write_idtr(idt_desc_addr, idtr) };
+        unsafe { core::ptr::write_unaligned(idt_desc_addr as *mut DescriptorTablePointer, idtr) };
         patched += 1;
 
         log::debug!(

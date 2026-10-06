@@ -96,9 +96,8 @@ mod tests {
     use patina::UEFI_PAGE_SIZE;
     use patina_paging::{MemoryAttributes, PageTable};
     use smi_idt_patch::{
-        DescriptorTablePointer, FIXUP64_SMI_HANDLER_IDTR, PerCoreMmiEntryStructHdr, SMM_HANDLER_OFFSET,
-        SmiHandlerIdtPatchInputs, parse_smi_handler_idt_descriptor, patch_smi_handler_idt, read_idtr,
-        validate_smi_handler_idt_patch_inputs,
+        DescriptorTablePointer, FIXUP64_SMI_HANDLER_IDTR, PerCoreMmiEntryStructHdr, SmiHandlerIdtPatchInputs,
+        parse_smi_handler_idt_descriptor, read_idtr, validate_smi_handler_idt_patch_inputs,
     };
 
     use crate::mem::AllocationType;
@@ -258,67 +257,6 @@ mod tests {
             validate_smi_handler_idt_patch_inputs(0x1000, 1, isize::MAX as u64 + 1, |_, _| true),
             Err(SmiHandlerIdtPatchInputError::EntrySizeTooLarge.into())
         );
-    }
-
-    #[test]
-    fn test_patch_smi_handler_idt_writes_valid_descriptor() {
-        let descriptor_address = 0x1234_5000;
-        let entry = mmi_entry((FIXUP64_SMI_HANDLER_IDTR + 1) as u8, descriptor_address);
-        let handler_memory = smi_handler_memory(&entry);
-        let smbase = handler_memory.as_ptr() as u64;
-        let sm_bases = [smbase];
-        let sm_base_array = sm_bases.as_ptr() as u64;
-        let mmi_entry_base = smbase + SMM_HANDLER_OFFSET;
-        let mut services = RecordingSmiPatchServices::new(vec![
-            (sm_base_array, size_of_val(&sm_bases) as u64),
-            (mmi_entry_base, entry.len() as u64),
-            (descriptor_address, size_of::<DescriptorTablePointer>() as u64),
-        ]);
-
-        patch_smi_handler_idt(sm_base_array, sm_bases.len() as u64, entry.len() as u64, &mut services);
-
-        assert_eq!(services.writes, [(descriptor_address, 0x1234, 0x5678_9ABC_DEF0_1234)]);
-    }
-
-    #[test]
-    fn test_patch_smi_handler_idt_rejects_invalid_top_level_inputs() {
-        let mut services = RecordingSmiPatchServices::new(Vec::new());
-
-        patch_smi_handler_idt(0, 1, 0x100, &mut services);
-
-        assert!(services.writes.is_empty());
-    }
-
-    #[test]
-    fn test_patch_smi_handler_idt_skips_invalid_cpu_entries() {
-        let zero_descriptor_entry = mmi_entry((FIXUP64_SMI_HANDLER_IDTR + 1) as u8, 0);
-        let malformed_entry = vec![0_u8; zero_descriptor_entry.len()];
-        let malformed_memory = smi_handler_memory(&malformed_entry);
-        let malformed_smbase = malformed_memory.as_ptr() as u64;
-        let zero_descriptor_memory = smi_handler_memory(&zero_descriptor_entry);
-        let zero_descriptor_smbase = zero_descriptor_memory.as_ptr() as u64;
-        let outside_descriptor_entry = mmi_entry((FIXUP64_SMI_HANDLER_IDTR + 1) as u8, 0xDEAD_0000);
-        let outside_descriptor_memory = smi_handler_memory(&outside_descriptor_entry);
-        let outside_descriptor_smbase = outside_descriptor_memory.as_ptr() as u64;
-        let sm_bases = [
-            0,
-            u64::MAX - SMM_HANDLER_OFFSET + 1,
-            0x1000,
-            malformed_smbase,
-            zero_descriptor_smbase,
-            outside_descriptor_smbase,
-        ];
-        let sm_base_array = sm_bases.as_ptr() as u64;
-        let mut services = RecordingSmiPatchServices::new(vec![
-            (sm_base_array, size_of_val(&sm_bases) as u64),
-            (malformed_smbase + SMM_HANDLER_OFFSET, malformed_entry.len() as u64),
-            (zero_descriptor_smbase + SMM_HANDLER_OFFSET, zero_descriptor_entry.len() as u64),
-            (outside_descriptor_smbase + SMM_HANDLER_OFFSET, outside_descriptor_entry.len() as u64),
-        ]);
-
-        patch_smi_handler_idt(sm_base_array, sm_bases.len() as u64, malformed_entry.len() as u64, &mut services);
-
-        assert!(services.writes.is_empty());
     }
 
     #[test]

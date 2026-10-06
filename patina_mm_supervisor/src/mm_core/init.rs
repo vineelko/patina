@@ -56,7 +56,7 @@ use crate::{
 use super::CoreInitError;
 use crate::hob::{find_guid_hob, find_module, find_required_hob};
 use crate::init::PolicyInitError;
-use crate::init::smi_idt_patch::{RuntimeSmiHandlerIdtPatchServices, patch_smi_handler_idt};
+use crate::init::smi_idt_patch::patch_smi_handler_idt;
 use crate::mmram_bound::{establish_mmram_bound, supervisor_image_anchor};
 use crate::mseg::parse_mseg_smram_hob;
 use crate::pass_down_hob::{MmSupvPassDownHobData, parse_pass_down_hob};
@@ -555,7 +555,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // 1c. Patch every core's SMI-handler IDT descriptor to the Rust IDT now that the
         //     CPU count is known (the SMI entry blocks were already copied per SMBASE, so
         //     each core must be patched, not just the BSP).
-        patch_smi_handler_idt(sm_base, number_of_cpus, mmi_entry_size, &mut RuntimeSmiHandlerIdtPatchServices);
+        patch_smi_handler_idt(sm_base, number_of_cpus, mmi_entry_size);
 
         // 2. Process the supervisor communication buffer HOB. Only one
         //    MM_COMM_REGION_HOB is published (the supervisor one); the user
