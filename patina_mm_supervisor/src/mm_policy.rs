@@ -23,7 +23,7 @@ pub(crate) mod helper;
 pub(crate) mod policy_gate;
 pub(crate) mod policy_validation;
 
-pub(crate) use boundary_audit::{audit_boundary_io_grants, audit_boundary_msr_grants};
+pub(crate) use boundary_audit::audit_boundary_grants;
 pub(crate) use helper::dump_policy;
 pub(crate) use policy_gate::{PolicyGate, PolicyGateError};
 pub(crate) use policy_validation::walk_page_table;
