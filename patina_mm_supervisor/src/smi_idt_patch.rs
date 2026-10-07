@@ -74,8 +74,6 @@ pub enum SmiHandlerIdtPatchInputError {
     ZeroEntrySize,
     /// The SMBASE array pointer is null, or no CPUs were reported.
     MissingSmBaseArray,
-    /// The reported CPU count does not fit the target architecture.
-    CpuCountTooLarge,
     /// The SMBASE array size overflows, so the array cannot be addressed.
     SmBaseArraySizeOverflow,
     /// The SMBASE array is not entirely inside MMRAM.
@@ -91,7 +89,6 @@ impl fmt::Display for SmiHandlerIdtPatchInputError {
         match self {
             Self::ZeroEntrySize => write!(f, "the MMI entry size is zero"),
             Self::MissingSmBaseArray => write!(f, "the SMBASE array pointer is null, or no CPUs were reported"),
-            Self::CpuCountTooLarge => write!(f, "the reported CPU count does not fit the target architecture"),
             Self::SmBaseArraySizeOverflow => {
                 write!(f, "the SMBASE array size overflows, so the array cannot be addressed")
             }
@@ -139,7 +136,7 @@ pub(crate) struct SmiHandlerIdtPatchInputs {
 
 fn validate_smi_handler_idt_patch_inputs(
     sm_base_array: u64,
-    number_of_cpus: u64,
+    number_of_cpus: usize,
     mmi_entry_size: u64,
     is_inside_mmram: impl Fn(u64, u64) -> bool,
 ) -> MmSupervisorResult<SmiHandlerIdtPatchInputs> {
@@ -150,8 +147,7 @@ fn validate_smi_handler_idt_patch_inputs(
         return Err(SmiHandlerIdtPatchInputError::MissingSmBaseArray.into());
     }
 
-    let cpu_count = usize::try_from(number_of_cpus).map_err(|_| SmiHandlerIdtPatchInputError::CpuCountTooLarge)?;
-    let sm_base_array_size = cpu_count
+    let sm_base_array_size = number_of_cpus
         .checked_mul(core::mem::size_of::<u64>())
         .filter(|size| isize::try_from(*size).is_ok())
         .ok_or(SmiHandlerIdtPatchInputError::SmBaseArraySizeOverflow)?;
@@ -219,7 +215,7 @@ fn parse_smi_handler_idt_descriptor(mmi_entry: &[u8]) -> MmSupervisorResult<u64>
 ///
 /// `sm_base_array` is the per-CPU SMBASE array (`u64[number_of_cpus]`) from the `PassDown`
 /// HOB; `number_of_cpus` is its length.
-pub(crate) fn patch_smi_handler_idt(sm_base_array: u64, number_of_cpus: u64, mmi_entry_size: u64) {
+pub(crate) fn patch_smi_handler_idt(sm_base_array: u64, number_of_cpus: usize, mmi_entry_size: u64) {
     let inputs = match validate_smi_handler_idt_patch_inputs(
         sm_base_array,
         number_of_cpus,
@@ -340,7 +336,7 @@ mod tests {
             Err(SmiHandlerIdtPatchInputError::MissingSmBaseArray.into())
         );
         assert_eq!(
-            validate_smi_handler_idt_patch_inputs(0x1000, u64::MAX, 0x100, |_, _| true),
+            validate_smi_handler_idt_patch_inputs(0x1000, usize::MAX, 0x100, |_, _| true),
             Err(SmiHandlerIdtPatchInputError::SmBaseArraySizeOverflow.into())
         );
         assert_eq!(

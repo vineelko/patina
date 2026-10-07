@@ -79,7 +79,7 @@ pub enum CoreInitError {
     /// The CPU count the producer reported cannot be used to size the per-core arrays.
     InvalidCpuCount {
         /// CPU count reported by the HOB.
-        found: u64,
+        found: usize,
         /// Maximum CPU count this supervisor instance supports.
         maximum: usize,
     },

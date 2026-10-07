@@ -447,14 +447,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// covers the `num_cpus` stacks the MM IPL provisioned, which is also the range
     /// [`SyscallInterface::get_cpl3_stack`](crate::privilege_mgmt::syscall_setup::SyscallInterface::get_cpl3_stack)
     /// hands out.
-    fn map_cpl3_stacks_to_user(&self, base: u64, per_core_size: u64, num_cpus: u64) {
+    fn map_cpl3_stacks_to_user(&self, base: u64, per_core_size: u64, num_cpus: usize) {
         assert!(
             !(base == 0 || per_core_size == 0),
             "PassDown HOB does not describe a CPL3 stack region (base 0x{base:016x}, per-core size 0x{per_core_size:x})"
         );
 
         let total_size = per_core_size
-            .checked_mul(num_cpus)
+            .checked_mul(num_cpus as u64)
             .unwrap_or_else(|| panic!("CPL3 stack size 0x{per_core_size:x} for {num_cpus} CPUs overflows"));
 
         let (aligned_base, aligned_size) = align_range(base, total_size, UEFI_PAGE_SIZE as u64)
@@ -637,7 +637,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     }
 
     /// Returns the CPU count from the MP Information HOB.
-    fn parse_mp_information_hob(&self, data: &[u8]) -> MmSupervisorResult<u64> {
+    ///
+    /// The count is validated against `MAX_CPUS` here and returned as a `usize`, so callers
+    /// index and size allocations with it directly. [`CoreInitError::InvalidCpuCount`] keeps the
+    /// raw `u64` from the HOB, because the value it reports may be one that does not fit a
+    /// `usize`.
+    fn parse_mp_information_hob(&self, data: &[u8]) -> MmSupervisorResult<usize> {
         /// Offset of `ProcessorInfoBuffer[]` within `MP_INFORMATION_HOB_DATA`.
         const PROCESSOR_INFO_BUFFER_OFFSET: usize = 16;
 
@@ -661,13 +666,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                     CoreInitError::MpInformationHobMalformed
                 })?,
         );
-        let cpu_count: usize = number_of_cpus.try_into().map_err(|_| {
-            log::error!("MP Information HOB CPU count {number_of_cpus} does not fit the target architecture");
-            CoreInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }
-        })?;
+        // A count that does not fit a `usize` is certainly larger than MAX_CPUS, so it is named
+        // as the largest count this target can express and rejected by the bound below rather
+        // than needing an error of its own.
+        let cpu_count = usize::try_from(number_of_cpus).unwrap_or(usize::MAX);
         if cpu_count == 0 || cpu_count > MAX_CPUS {
             log::error!("MP Information HOB CPU count {cpu_count} is outside the supported range 1..={MAX_CPUS}");
-            return Err(CoreInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }.into());
+            return Err(CoreInitError::InvalidCpuCount { found: cpu_count, maximum: MAX_CPUS }.into());
         }
 
         // `cpu_count` is bounded by `MAX_CPUS`, so the offsets below cannot overflow today.
@@ -687,7 +692,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             CoreInitError::MpInformationHobMalformed
         })?;
 
-        Ok(number_of_cpus)
+        Ok(cpu_count)
     }
 
     /// Processes the MM Supervisor `PassDown` HOB.
@@ -707,7 +712,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     pub(crate) unsafe fn init_from_pass_down_hob(
         &self,
         data: &[u8],
-        number_of_cpus: u64,
+        number_of_cpus: usize,
     ) -> MmSupervisorResult<(u64, u64)> {
         let pass_down = MmSupvPassDownHobData::parse(data)?;
 
@@ -724,15 +729,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // Store bounded per-core initialized slots.
         if mm_initialized_buffer != 0 {
-            let cpu_count: usize = number_of_cpus
-                .try_into()
-                .map_err(|_| CoreInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS })?;
-            if cpu_count == 0 || cpu_count > MAX_CPUS {
+            // The slice built below is `number_of_cpus` elements long, so the bound is a
+            // memory-safety precondition and is checked here rather than assumed of the caller.
+            if number_of_cpus == 0 || number_of_cpus > MAX_CPUS {
                 return Err(CoreInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }.into());
             }
-            if !is_buffer_inside_mmram(mm_initialized_buffer, number_of_cpus) {
+            if !is_buffer_inside_mmram(mm_initialized_buffer, number_of_cpus as u64) {
                 log::error!(
-                    "MM initialized buffer at 0x{mm_initialized_buffer:016x} does not contain {cpu_count} slot(s) in MMRAM"
+                    "MM initialized buffer at 0x{mm_initialized_buffer:016x} does not contain {number_of_cpus} slot(s) in MMRAM"
                 );
                 return Err(CoreInitError::InitializedBufferInvalid.into());
             }
@@ -742,9 +746,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             // SAFETY: The PassDown HOB was validated before this routine is called and this
             // function's contract requires its buffer pointers to remain valid. The validated
             // CPU count is the number of one-byte initialized slots supplied by the MM IPL.
-            let initialized_slots = unsafe { core::slice::from_raw_parts(buffer_ptr, cpu_count) };
+            let initialized_slots = unsafe { core::slice::from_raw_parts(buffer_ptr, number_of_cpus) };
             init_state().set_mm_initialized_buffer(initialized_slots);
-            log::info!("MM Initialized buffer set to 0x{mm_initialized_buffer:016x} with {cpu_count} slot(s)");
+            log::info!("MM Initialized buffer set to 0x{mm_initialized_buffer:016x} with {number_of_cpus} slot(s)");
         } else {
             log::warn!("MM Initialized buffer is null in PassDown HOB");
         }
@@ -785,7 +789,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // count the MM IPL sized the stack array for, not the supervisor's `MAX_CPUS` capacity.
         self.syscall_interface
             .init(
-                number_of_cpus.try_into().unwrap_or_else(|err| panic!("Invalid CPU count: {err:?}")),
+                number_of_cpus,
                 cpl3_stack_base,
                 cpl3_stack_size.try_into().unwrap_or_else(|err| panic!("Invalid CPL3 stack buffer size: {err:?}")),
             )
@@ -1327,8 +1331,8 @@ mod tests {
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let mut data = [0_u8; 16];
 
-        for cpu_count in [0_u64, 5] {
-            data[..8].copy_from_slice(&cpu_count.to_le_bytes());
+        for cpu_count in [0_usize, 5] {
+            data[..8].copy_from_slice(&(cpu_count as u64).to_le_bytes());
             assert_eq!(
                 supervisor.parse_mp_information_hob(&data),
                 Err(CoreInitError::InvalidCpuCount { found: cpu_count, maximum: 4 }.into())
