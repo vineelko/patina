@@ -22,7 +22,7 @@ use super::{
     InstructionDescriptorV1_0, IoDescriptorV1_0, MemDescriptorV1_0, MsrDescriptorV1_0, PolicyRootV1,
     RESOURCE_ATTR_COND_READ, RESOURCE_ATTR_COND_WRITE, RESOURCE_ATTR_EXECUTE, RESOURCE_ATTR_READ, RESOURCE_ATTR_WRITE,
     SaveStateCondition, SaveStateDescriptorV1_0, SecurePolicyDataV1_0, TYPE_INSTRUCTION, TYPE_IO, TYPE_MEM, TYPE_MSR,
-    TYPE_SAVE_STATE,
+    TYPE_SAVE_STATE, policy_gate::PolicyGate,
 };
 use core::mem::size_of;
 
@@ -33,10 +33,6 @@ use crate::{error::MmSupervisorResult, mem::SharedPagingAllocator, state::securi
 /// Errors that can occur during policy validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyValidationError {
-    /// The policy pointer is null.
-    NullPointer,
-    /// Invalid policy version.
-    InvalidVersion { major: u16, minor: u16 },
     /// A reserved field contains non-zero data.
     InvalidReservedField { policy_type: u32, entry_index: usize },
     /// The same policy type appears multiple times.
@@ -60,10 +56,6 @@ impl core::error::Error for PolicyValidationError {}
 impl core::fmt::Display for PolicyValidationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::NullPointer => write!(f, "the policy pointer is null"),
-            Self::InvalidVersion { major, minor } => {
-                write!(f, "policy version {major}.{minor} is not supported")
-            }
             Self::InvalidReservedField { policy_type, entry_index } => {
                 write!(f, "entry {entry_index} of policy type {policy_type} has a non-zero reserved field")
             }
@@ -89,44 +81,25 @@ impl core::fmt::Display for PolicyValidationError {
     }
 }
 
-/// Performs comprehensive security policy validation.
+/// Checks that the policy a [`PolicyGate`] was built over is one the supervisor will accept.
 ///
-/// ## Safety
-///
-/// The caller must ensure that `policy_ptr` points to a valid policy buffer.
+/// Taking the gate rather than a raw pointer is what makes this safe and keeps it to one job.
+/// [`PolicyGate::new`] has already rejected a null pointer, an unsupported version, and any
+/// internal offset that falls outside the blob, so this reads the header and the roots through
+/// safe accessors and checks only what the layout rules do not cover.
 ///
 /// # Errors
 ///
-/// Returns a [`PolicyValidationError`] naming the first defect found in the blob: a null pointer,
-/// an unsupported version, a declared size that does not match what was scanned, a duplicate or
-/// unrecognized policy type, a non-zero reserved field, an unsupported attribute, conflicting
-/// save-state conditions, or the legacy memory policy format. This runs once during
-/// initialization, so any error stops the supervisor from accepting the policy.
-pub unsafe fn security_policy_check(policy_ptr: *const u8) -> MmSupervisorResult<()> {
-    if policy_ptr.is_null() {
-        return Err(PolicyValidationError::NullPointer.into());
-    }
-
-    // SAFETY: `policy_ptr` is non-null (checked above) and, per this function's contract, points
-    // to a valid policy buffer, so the header can be reborrowed for reading.
-    let policy = unsafe { &*policy_ptr.cast::<SecurePolicyDataV1_0>() };
-
-    let len = policy.size as usize;
-    if len < size_of::<SecurePolicyDataV1_0>() {
-        log::error!("security_policy_check: invalid policy size: 0x{len:x}");
-        return Err(
-            PolicyValidationError::SizeMismatch { expected: size_of::<SecurePolicyDataV1_0>(), declared: len }.into()
-        );
-    }
+/// Returns a [`PolicyValidationError`] naming the first defect found: a non-zero reserved field
+/// or header bit, a duplicate or unrecognized policy type, an unsupported attribute, conflicting
+/// save-state conditions, the legacy memory policy format, or a declared size that does not match
+/// what was scanned. This runs once during initialization, so any error stops the supervisor from
+/// accepting the policy.
+pub(crate) fn security_policy_check(gate: &PolicyGate) -> MmSupervisorResult<()> {
+    let policy = gate.policy();
+    let policy_ptr = gate.as_ptr();
 
     log::info!("Security policy check entry...");
-
-    // Version check
-    if !policy.is_valid_version() {
-        return Err(
-            PolicyValidationError::InvalidVersion { major: policy.version_major, minor: policy.version_minor }.into()
-        );
-    }
 
     // Check for unrecognized header bits
     if policy.reserved != 0 || policy.flags != 0 || policy.capabilities != 0 {
@@ -136,11 +109,7 @@ pub unsafe fn security_policy_check(policy_ptr: *const u8) -> MmSupervisorResult
     let mut total_scanned_size = size_of::<SecurePolicyDataV1_0>();
     let mut type_flags: u64 = 0;
 
-    // SAFETY: `policy` is the validated header of a valid policy buffer, so its policy-root array
-    // (root pointer + count) is in-bounds.
-    let policy_roots = unsafe { policy.get_policy_roots() };
-
-    for root in policy_roots {
+    for root in gate.policy_roots() {
         let type_bit = 1u64 << root.policy_type;
 
         if (type_flags & type_bit) != 0 {
@@ -154,69 +123,31 @@ pub unsafe fn security_policy_check(policy_ptr: *const u8) -> MmSupervisorResult
             );
         }
 
+        // Every arm below reads a descriptor array that `PolicyGate::new` already proved lies
+        // wholly inside the blob, so the bounds are not re-checked here.
         match root.policy_type {
             TYPE_IO => {
-                assert!(
-                    root.offset as usize + root.count as usize * size_of::<IoDescriptorV1_0>() <= len,
-                    "  Policy root {} out of bounds (offset=0x{:x}, count={}, total_size=0x{:x})",
-                    root.policy_type,
-                    root.offset,
-                    root.count,
-                    len
-                );
-                // SAFETY: `policy_ptr` is a valid policy buffer (contract) and `root` was read from
-                // it, so the descriptors it references are in-bounds.
+                // SAFETY: `policy_ptr` is the gate's validated buffer and `root` came from it, so
+                // the descriptor array it names is in bounds.
                 unsafe { validate_io_policy(policy_ptr, root)? };
                 total_scanned_size += (root.count as usize) * size_of::<IoDescriptorV1_0>();
             }
             TYPE_MEM => {
-                assert!(
-                    root.offset as usize + root.count as usize * size_of::<MemDescriptorV1_0>() <= len,
-                    "  Policy root {} out of bounds (offset=0x{:x}, count={}, total_size=0x{:x})",
-                    root.policy_type,
-                    root.offset,
-                    root.count,
-                    len
-                );
                 // SAFETY: as above; `policy_ptr`/`root` describe an in-bounds descriptor array.
                 unsafe { validate_mem_policy(policy_ptr, root)? };
                 total_scanned_size += (root.count as usize) * size_of::<MemDescriptorV1_0>();
             }
             TYPE_MSR => {
-                assert!(
-                    root.offset as usize + root.count as usize * size_of::<MsrDescriptorV1_0>() <= len,
-                    "  Policy root {} out of bounds (offset=0x{:x}, count={}, total_size=0x{:x})",
-                    root.policy_type,
-                    root.offset,
-                    root.count,
-                    len
-                );
                 // SAFETY: as above; `policy_ptr`/`root` describe an in-bounds descriptor array.
                 unsafe { validate_msr_policy(policy_ptr, root)? };
                 total_scanned_size += (root.count as usize) * size_of::<MsrDescriptorV1_0>();
             }
             TYPE_INSTRUCTION => {
-                assert!(
-                    root.offset as usize + root.count as usize * size_of::<InstructionDescriptorV1_0>() <= len,
-                    "  Policy root {} out of bounds (offset=0x{:x}, count={}, total_size=0x{:x})",
-                    root.policy_type,
-                    root.offset,
-                    root.count,
-                    len
-                );
                 // SAFETY: as above; `policy_ptr`/`root` describe an in-bounds descriptor array.
                 unsafe { validate_instruction_policy(policy_ptr, root)? };
                 total_scanned_size += (root.count as usize) * size_of::<InstructionDescriptorV1_0>();
             }
             TYPE_SAVE_STATE => {
-                assert!(
-                    root.offset as usize + root.count as usize * size_of::<SaveStateDescriptorV1_0>() <= len,
-                    "  Policy root {} out of bounds (offset=0x{:x}, count={}, total_size=0x{:x})",
-                    root.policy_type,
-                    root.offset,
-                    root.count,
-                    len
-                );
                 // SAFETY: as above; `policy_ptr`/`root` describe an in-bounds descriptor array.
                 unsafe { validate_save_state_policy(policy_ptr, root)? };
                 total_scanned_size += (root.count as usize) * size_of::<SaveStateDescriptorV1_0>();
@@ -545,36 +476,14 @@ mod tests {
     #[test]
     fn test_security_policy_check_accepts_a_conforming_policy() {
         let policy = full_policy().build();
-        // SAFETY: the builder produced a valid policy buffer that outlives this call.
-        assert_eq!(unsafe { security_policy_check(policy.as_ptr()) }, Ok(()));
+        assert_eq!(security_policy_check(&policy.gate()), Ok(()));
     }
 
     #[test]
-    fn test_security_policy_check_rejects_a_malformed_header() {
-        assert_eq!(
-            // SAFETY: `security_policy_check` checks for null before dereferencing.
-            unsafe { security_policy_check(core::ptr::null()) },
-            Err(PolicyValidationError::NullPointer.into())
-        );
-
-        let undersized = PolicyBuilder::new().declared_size(4).build();
-        assert_eq!(
-            // SAFETY: the header is valid; only its `size` field is understated.
-            unsafe { security_policy_check(undersized.as_ptr()) },
-            Err(PolicyValidationError::SizeMismatch { expected: size_of::<SecurePolicyDataV1_0>(), declared: 4 }.into())
-        );
-
-        let wrong_version = PolicyBuilder::new().version(2, 3).build();
-        assert_eq!(
-            // SAFETY: the builder produced a valid policy buffer that outlives this call.
-            unsafe { security_policy_check(wrong_version.as_ptr()) },
-            Err(PolicyValidationError::InvalidVersion { major: 2, minor: 3 }.into())
-        );
-
+    fn test_security_policy_check_rejects_unrecognized_header_bits() {
         let dirty_flags = PolicyBuilder::new().flags(1).build();
         assert_eq!(
-            // SAFETY: as above.
-            unsafe { security_policy_check(dirty_flags.as_ptr()) },
+            security_policy_check(&dirty_flags.gate()),
             Err(PolicyValidationError::UnrecognizedHeaderBits.into())
         );
     }
@@ -586,23 +495,20 @@ mod tests {
             .root(ACCESS_ATTR_ALLOW, Descriptors::Msr(vec![]))
             .build();
         assert_eq!(
-            // SAFETY: the builder produced a valid policy buffer that outlives this call.
-            unsafe { security_policy_check(duplicate.as_ptr()) },
+            security_policy_check(&duplicate.gate()),
             Err(PolicyValidationError::DuplicatePolicyType { policy_type: TYPE_MSR }.into())
         );
 
         let dirty_reserved =
             PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Msr(vec![])).root_reserved([0, 0, 7]).build();
         assert_eq!(
-            // SAFETY: as above.
-            unsafe { security_policy_check(dirty_reserved.as_ptr()) },
+            security_policy_check(&dirty_reserved.gate()),
             Err(PolicyValidationError::InvalidReservedField { policy_type: TYPE_MSR, entry_index: 0 }.into())
         );
 
         let unknown_type = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Unknown(9)).build();
         assert_eq!(
-            // SAFETY: as above.
-            unsafe { security_policy_check(unknown_type.as_ptr()) },
+            security_policy_check(&unknown_type.gate()),
             Err(PolicyValidationError::UnrecognizedPolicyType { policy_type: 9 }.into())
         );
     }
@@ -611,18 +517,20 @@ mod tests {
     fn test_security_policy_check_rejects_legacy_and_mismatched_sizes() {
         let legacy = PolicyBuilder::new().memory_policy_count(1).build();
         assert_eq!(
-            // SAFETY: the builder produced a valid policy buffer that outlives this call.
-            unsafe { security_policy_check(legacy.as_ptr()) },
+            security_policy_check(&legacy.gate()),
             Err(PolicyValidationError::LegacyMemoryPolicyDetected.into())
         );
 
-        // Overstating the size keeps every descriptor array in bounds but fails the final tally.
-        let overstated =
-            PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Msr(vec![])).declared_size(256).build();
+        // A header that undercounts its roots keeps every offset in bounds, so the gate accepts
+        // it, but it leaves the trailing root unaccounted for in the final tally.
+        let undercounted = PolicyBuilder::new()
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Msr(vec![]))
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Io(vec![]))
+            .declared_root_count(1)
+            .build();
         assert_eq!(
-            // SAFETY: as above.
-            unsafe { security_policy_check(overstated.as_ptr()) },
-            Err(PolicyValidationError::SizeMismatch { expected: 64, declared: 256 }.into())
+            security_policy_check(&undercounted.gate()),
+            Err(PolicyValidationError::SizeMismatch { expected: 64, declared: 88 }.into())
         );
     }
 
@@ -660,8 +568,7 @@ mod tests {
         for (descriptors, policy_type) in cases {
             let policy = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, descriptors).build();
             assert_eq!(
-                // SAFETY: the builder produced a valid policy buffer that outlives this call.
-                unsafe { security_policy_check(policy.as_ptr()) },
+                security_policy_check(&policy.gate()),
                 Err(PolicyValidationError::InvalidReservedField { policy_type, entry_index: 0 }.into())
             );
         }
@@ -681,8 +588,7 @@ mod tests {
             )
             .build();
         assert_eq!(
-            // SAFETY: the builder produced a valid policy buffer that outlives this call.
-            unsafe { security_policy_check(writable.as_ptr()) },
+            security_policy_check(&writable.gate()),
             Err(PolicyValidationError::UnsupportedAttribute {
                 policy_type: TYPE_SAVE_STATE,
                 entry_index: 0,
@@ -703,8 +609,7 @@ mod tests {
             )
             .build();
         assert_eq!(
-            // SAFETY: as above.
-            unsafe { security_policy_check(conflicting.as_ptr()) },
+            security_policy_check(&conflicting.gate()),
             Err(PolicyValidationError::ConflictingCondition { entry_index: 0 }.into())
         );
 
@@ -720,8 +625,7 @@ mod tests {
             )
             .build();
         assert_eq!(
-            // SAFETY: as above.
-            unsafe { security_policy_check(dirty_reserved.as_ptr()) },
+            security_policy_check(&dirty_reserved.gate()),
             Err(PolicyValidationError::InvalidReservedField { policy_type: TYPE_SAVE_STATE, entry_index: 0 }.into())
         );
     }
@@ -802,7 +706,7 @@ mod tests {
 
     #[test]
     fn test_policy_check_errors_are_comparable() {
-        assert_ne!(PolicyValidationError::NullPointer, PolicyValidationError::UnrecognizedHeaderBits);
+        assert_ne!(PolicyValidationError::LegacyMemoryPolicyDetected, PolicyValidationError::UnrecognizedHeaderBits);
         assert_eq!(RESOURCE_ATTR_STRICT_WIDTH, 0x08);
     }
 }

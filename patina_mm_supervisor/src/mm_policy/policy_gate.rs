@@ -234,17 +234,24 @@ impl PolicyGate {
     }
 
     /// Gets a reference to the policy header.
-    fn policy(&self) -> &SecurePolicyDataV1_0 {
+    pub(crate) fn policy(&self) -> &SecurePolicyDataV1_0 {
         // SAFETY: Constructor validated the pointer
         unsafe { &*self.policy_ptr.cast::<SecurePolicyDataV1_0>() }
     }
 
+    /// Returns the policy roots the blob declares.
+    ///
+    /// This is safe because [`PolicyGate::new`] proved that `policy_root_offset` and
+    /// `policy_root_count` describe an array lying wholly inside the blob, and the buffer
+    /// outlives the gate.
+    pub(crate) fn policy_roots(&self) -> &[PolicyRootV1] {
+        // SAFETY: the layout check in `new` established that the root array is in bounds.
+        unsafe { self.policy().get_policy_roots() }
+    }
+
     /// Finds a policy root by type.
     fn find_policy_root(&self, policy_type: u32) -> Option<&PolicyRootV1> {
-        let policy = self.policy();
-        // SAFETY: Constructor validated the policy
-        let roots = unsafe { policy.get_policy_roots() };
-        roots.iter().find(|r| r.policy_type == policy_type)
+        self.policy_roots().iter().find(|r| r.policy_type == policy_type)
     }
 
     /// Checks if I/O access is allowed.
@@ -852,6 +859,15 @@ mod tests {
             unsafe { PolicyGate::new(wrong_version.as_ptr(), wrong_version.len()) }.err(),
             Some(PolicyGateError::InvalidVersion.into())
         );
+
+        // A header that understates its own size is refused here, which is why
+        // `security_policy_check` never has to repeat the check.
+        let understated = PolicyBuilder::new().declared_size(4).build();
+        assert_eq!(understated.try_gate().err(), Some(PolicyGateError::MalformedPolicy.into()));
+
+        // So is one that declares more bytes than the buffer holds.
+        let overstated = PolicyBuilder::new().declared_size(256).build();
+        assert_eq!(overstated.try_gate().err(), Some(PolicyGateError::MalformedPolicy.into()));
     }
 
     #[test]
