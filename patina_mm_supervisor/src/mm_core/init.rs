@@ -44,7 +44,7 @@ use crate::{
         mmram_placement::{classify_mmram_in_regions, is_buffer_inside_mmram},
         page_allocator::coalesced_smrr_range,
     },
-    mm_policy::{self, MemDescriptorV1_0, dump_policy, gate::PolicyGate, walk_page_table},
+    mm_policy::{self, MemDescriptorV1_0, dump_policy, policy_gate::PolicyGate, walk_page_table},
     mseg::MSEG_SMRAM_HOB_GUID,
     page_ownership::{PageOwnership, query_address_ownership},
     pass_down_hob::MM_SUPV_PASS_DOWN_HOB_GUID,
@@ -325,8 +325,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// # Errors
     ///
     /// Reports a [`PassDownHobError`] when the `PassDown` HOB cannot be parsed, a
-    /// [`PolicyGateError`](crate::mm_policy::gate::PolicyGateError) when the policy blob cannot
-    /// be read, and a [`PolicyValidationError`](mm_policy::helpers::PolicyValidationError) when
+    /// [`PolicyGateError`](crate::mm_policy::policy_gate::PolicyGateError) when the policy blob cannot
+    /// be read, and a [`PolicyValidationError`](mm_policy::policy_validation::PolicyValidationError) when
     /// the blob is rejected. All were fatal before and still stop initialization; the caller now
     /// decides how to fail instead of this function panicking.
     fn init_policy_and_validate(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
@@ -336,7 +336,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             security_state().policy_gate().expect("Policy gate must be initialized before policy validation runs");
         // SAFETY: `gate.as_ptr()` returns the resident firmware policy buffer pointer validated
         // while constructing the policy gate.
-        unsafe { mm_policy::helpers::security_policy_check(gate.as_ptr()) }?;
+        unsafe { mm_policy::policy_validation::security_policy_check(gate.as_ptr()) }?;
 
         log::info!("Security policy check passed");
         Ok(())

@@ -34,7 +34,7 @@
 
 use crate::{
     error::MmSupervisorResult,
-    mm_policy::{SaveStateCondition, SaveStateField, gate::PolicyGate},
+    mm_policy::{SaveStateCondition, SaveStateField, policy_gate::PolicyGate},
 };
 use patina::standard::efi::Status;
 use patina_internal_cpu::save_state::{

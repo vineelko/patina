@@ -32,7 +32,7 @@ use patina_paging::x64::X64PageTable;
 use crate::{
     comm_buffer::CommBufferConfig,
     mem::{PageAllocator, PagingPoolAllocator, SharedPagingAllocator},
-    mm_policy::gate::PolicyGate,
+    mm_policy::policy_gate::PolicyGate,
     save_state::{SaveStateAccessHolder, SaveStateInfo},
     smrr::SmramRegion,
     supervisor_handlers::{

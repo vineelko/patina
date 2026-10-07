@@ -1,7 +1,16 @@
-//! Policy Gate - Runtime access validation
+//! Firmware Policy Gate
 //!
-//! This module provides the `PolicyGate` struct that wraps a policy buffer
-//! and provides methods to check if various operations are allowed.
+//! Wraps the validated firmware policy blob and answers whether a given operation is
+//! permitted: reading or writing an MSR or I/O port, executing a privileged instruction,
+//! reading a save-state field, or touching a memory range.
+//!
+//! The syscall dispatcher consults the gate on behalf of Ring 3, so every answer here
+//! decides what the user core is allowed to reach through the supervisor.
+//!
+//! The gate bounds the blob's own offsets as it is built, which is what makes its later
+//! unchecked reads of the descriptor arrays sound. Deciding whether the contents are a policy
+//! the supervisor will accept is a separate check that runs once afterwards on the same buffer
+//! and lives in [`crate::mm_policy::policy_validation`].
 //!
 //! ## License
 //!
@@ -15,7 +24,7 @@ use super::{
     ACCESS_ATTR_ALLOW, ACCESS_ATTR_DENY, AccessType, Instruction, IoWidth, MemDescriptorV1_0, PolicyRootV1,
     RESOURCE_ATTR_COND_READ, RESOURCE_ATTR_EXECUTE, RESOURCE_ATTR_READ, RESOURCE_ATTR_STRICT_WIDTH, SaveStateCondition,
     SaveStateField, SecurePolicyDataV1_0, TYPE_INSTRUCTION, TYPE_IO, TYPE_MEM, TYPE_MSR, TYPE_SAVE_STATE,
-    helpers::{IsInsideMmramFn, walk_page_table},
+    policy_validation::{IsInsideMmramFn, walk_page_table},
 };
 use spin::Once;
 
@@ -565,7 +574,7 @@ impl PolicyGate {
     /// # Errors
     ///
     /// Returns [`PolicyGateError::InternalError`] when no memory policy buffer has been set, and
-    /// a [`PageTableWalkError`](crate::mm_policy::helpers::PageTableWalkError) when the walk
+    /// a [`PageTableWalkError`](crate::mm_policy::policy_validation::PageTableWalkError) when the walk
     /// cannot complete. The descriptor count is only published once the walk succeeds, so a
     /// failed call leaves the gate unlocked rather than locked over a partial snapshot.
     pub unsafe fn take_snapshot(&self, cr3: u64, is_inside_mmram: IsInsideMmramFn) -> MmSupervisorResult<usize> {
