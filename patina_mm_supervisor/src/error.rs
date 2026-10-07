@@ -284,8 +284,8 @@ mod tests {
             MmSupervisorError::PolicyGate(PolicyGateError::AccessDenied)
         );
         assert_eq!(
-            MmSupervisorError::from(PolicyValidationError::NullPointer),
-            MmSupervisorError::PolicyValidation(PolicyValidationError::NullPointer)
+            MmSupervisorError::from(PolicyValidationError::UnrecognizedHeaderBits),
+            MmSupervisorError::PolicyValidation(PolicyValidationError::UnrecognizedHeaderBits)
         );
         assert_eq!(
             MmSupervisorError::from(PageTableWalkError::InvalidCr3),
@@ -340,7 +340,7 @@ mod tests {
         );
         assert_ne!(
             MmSupervisorError::PolicyGate(PolicyGateError::InvalidVersion),
-            MmSupervisorError::PolicyValidation(PolicyValidationError::InvalidVersion { major: 1, minor: 0 })
+            MmSupervisorError::PolicyValidation(PolicyValidationError::UnrecognizedHeaderBits)
         );
     }
 
@@ -361,11 +361,10 @@ mod tests {
             format!("SMRR Programming: {}", SmrrError::SmrrUnsupported)
         );
 
-        // The two policy stages are told apart by their prefix even when the inner message is
-        // about the same thing.
+        // The two policy stages are told apart by their prefix, so a reader can see which one
+        // rejected the blob without reading the rest of the message.
         let gate = format!("{}", MmSupervisorError::from(PolicyGateError::InvalidVersion));
-        let validation =
-            format!("{}", MmSupervisorError::from(PolicyValidationError::InvalidVersion { major: 1, minor: 0 }));
+        let validation = format!("{}", MmSupervisorError::from(PolicyValidationError::UnrecognizedHeaderBits));
         assert!(gate.starts_with("Policy gate: "));
         assert!(validation.starts_with("Policy validation: "));
         assert_ne!(gate, validation);
@@ -381,7 +380,7 @@ mod tests {
             MmSupervisorError::from(CoreInitError::UserEntryPointMissing),
             MmSupervisorError::from(AllocError::OutOfMemory),
             MmSupervisorError::from(PolicyGateError::AccessDenied),
-            MmSupervisorError::from(PolicyValidationError::NullPointer),
+            MmSupervisorError::from(PolicyValidationError::UnrecognizedHeaderBits),
             MmSupervisorError::from(PageTableWalkError::InvalidCr3),
             MmSupervisorError::from(SyscallSetupError::NotInitialized),
             MmSupervisorError::from(SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 0, smbase: 0 }),

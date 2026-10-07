@@ -334,9 +334,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         let gate =
             security_state().policy_gate().expect("Policy gate must be initialized before policy validation runs");
-        // SAFETY: `gate.as_ptr()` returns the resident firmware policy buffer pointer validated
-        // while constructing the policy gate.
-        unsafe { mm_policy::policy_validation::security_policy_check(gate.as_ptr()) }?;
+        mm_policy::policy_validation::security_policy_check(gate)?;
 
         log::info!("Security policy check passed");
         Ok(())
@@ -666,6 +664,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                     CoreInitError::MpInformationHobMalformed
                 })?,
         );
+
         // A count that does not fit a `usize` is certainly larger than MAX_CPUS, so it is named
         // as the largest count this target can express and rejected by the bound below rather
         // than needing an error of its own.
@@ -680,10 +679,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             log::error!("MP Information HOB: {cpu_count} processor entries overflow the payload size");
             CoreInitError::MpInformationHobMalformed
         })?;
+
         let processor_info_end = PROCESSOR_INFO_BUFFER_OFFSET.checked_add(processor_info_size).ok_or_else(|| {
             log::error!("MP Information HOB: processor info end offset overflows");
             CoreInitError::MpInformationHobMalformed
         })?;
+
         data.get(PROCESSOR_INFO_BUFFER_OFFSET..processor_info_end).ok_or_else(|| {
             log::error!(
                 "MP Information HOB holds {} bytes but {cpu_count} processor entries need {processor_info_end}",
