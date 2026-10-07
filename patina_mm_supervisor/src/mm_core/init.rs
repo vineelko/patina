@@ -573,9 +573,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // through MM_COMM_BUFFER_HOB_GUID below.
         let supv_region_data = find_guid_hob(hob_hand_off_table, MM_COMMON_REGION_HOB_GUID)
             .ok_or(CommBufferError::CommRegionHobMissing)?;
-        let (supv_comm_buffer, supv_comm_buffer_size, supv_comm_buffer_internal, supv_status_buffer) =
-            init_supv_comm_buffer(supv_region_data)
-                .inspect_err(|e| log::error!("Failed to initialize supervisor communication buffer: {e}"))?;
+        let supv = init_supv_comm_buffer(supv_region_data)
+            .inspect_err(|e| log::error!("Failed to initialize supervisor communication buffer: {e}"))?;
 
         // The user channel still uses the legacy `MM_COMM_BUFFER_HOB_GUID` so the user core's own
         // HOB walk keeps working (see the HACKHACK at the tail of `init_user_comm_buffer`).
@@ -586,7 +585,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         };
         // SAFETY: the pointer and length identify the original HOB payload in the writable live
         // HOB list. The shared slice used to locate it is no longer used while it is rewritten.
-        let (user_comm_buffer, user_comm_buffer_size, user_comm_buffer_internal, user_status_buffer) = unsafe {
+        let user = unsafe {
             init_user_comm_buffer(user_buffer_data, user_buffer_data_len)
                 .inspect_err(|e| log::error!("Failed to initialize user communication buffer: {e}"))?
         };
@@ -597,30 +596,34 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 CommBufferError::AllocationFailed
             })?;
 
-        if supv_comm_buffer == 0
-            || user_comm_buffer == 0
-            || user_status_buffer == 0
-            || supv_status_buffer == 0
-            || supv_to_user_buffer == 0
+        if supv.external == 0 || user.external == 0 || user.status == 0 || supv.status == 0 || supv_to_user_buffer == 0
         {
             log::error!("One or more communication buffers are not properly initialized");
             return Err(CommBufferError::Missing.into());
         }
 
         security_state().set_comm_buffer_config(CommBufferConfig {
-            supv_comm_buffer,
-            supv_comm_buffer_internal,
-            supv_comm_buffer_size,
-            user_comm_buffer,
-            user_comm_buffer_internal,
-            user_comm_buffer_size,
-            user_status_buffer,
-            supv_status_buffer,
+            supv_comm_buffer: supv.external,
+            supv_comm_buffer_internal: supv.internal,
+            supv_comm_buffer_size: supv.size,
+            user_comm_buffer: user.external,
+            user_comm_buffer_internal: user.internal,
+            user_comm_buffer_size: user.size,
+            user_status_buffer: user.status,
+            supv_status_buffer: supv.status,
             supv_to_user_buffer,
             supv_to_user_buffer_size: UEFI_PAGE_SIZE as u64,
         });
         log::info!(
-            "Comm buffers: supv=0x{supv_comm_buffer:x}/0x{supv_comm_buffer_internal:x} size=0x{supv_comm_buffer_size:x} status=0x{supv_status_buffer:x}, user=0x{user_comm_buffer:x}/0x{user_comm_buffer_internal:x} size=0x{user_comm_buffer_size:x} status=0x{user_status_buffer:x}"
+            "Comm buffers: supv=0x{:x}/0x{:x} size=0x{:x} status=0x{:x}, user=0x{:x}/0x{:x} size=0x{:x} status=0x{:x}",
+            supv.external,
+            supv.internal,
+            supv.size,
+            supv.status,
+            user.external,
+            user.internal,
+            user.size,
+            user.status
         );
 
         Ok(())
