@@ -17,10 +17,6 @@
 //!
 //! SPDX-License-Identifier: Apache-2.0
 //!
-// Variants and constructors are adopted incrementally as failure sites are converted, so some are
-// not referenced outside tests yet. The module is crate-private, so without this they would be
-// reported as dead code before their call sites exist.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use crate::{
     comm_buffer::CommBufferError,

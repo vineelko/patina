@@ -41,8 +41,6 @@ pub(crate) const MM_COMMON_REGION_HOB_GUID: patina::BinaryGuid =
 /// field is checked before the internal copy is allocated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommBufferError {
-    /// The communication buffer HOB was not present in the HOB list.
-    HobMissing,
     /// The MM Common Region HOB, which describes the supervisor channel, was not present in
     /// the HOB list.
     CommRegionHobMissing,
@@ -73,7 +71,6 @@ impl core::error::Error for CommBufferError {}
 impl fmt::Display for CommBufferError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::HobMissing => write!(f, "the communication buffer HOB is missing from the HOB list"),
             Self::CommRegionHobMissing => write!(f, "the MM Common Region HOB is missing from the HOB list"),
             Self::CommunicationBufferHobMissing => {
                 write!(f, "the MM Communication Buffer HOB is missing from the HOB list")
@@ -657,7 +654,6 @@ mod tests {
     #[test]
     fn test_comm_buffer_error_displays_each_variant() {
         let errors = [
-            CommBufferError::HobMissing,
             CommBufferError::CommRegionHobMissing,
             CommBufferError::CommunicationBufferHobMissing,
             CommBufferError::HobTooSmall { found: 31, expected: 32 },
