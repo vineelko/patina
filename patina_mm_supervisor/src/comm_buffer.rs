@@ -296,6 +296,15 @@ pub(crate) fn init_supv_comm_buffer(data: &[u8]) -> MmSupervisorResult<CommChann
 
 /// Processes the user communication buffer HOB (`MM_COMM_BUFFER_HOB_GUID`).
 ///
+/// Unlike [`init_supv_comm_buffer`], this writes back into the HOB: `physical_start` is replaced
+/// with the internal copy so the user module names it during its own HOB walk after demotion.
+///
+/// That write is why the payload arrives as a pointer rather than a slice. The HOB list is walked
+/// through shared references, so the caller holds a `&[u8]` and cannot turn it into a `&mut [u8]`.
+/// It takes the address instead and ends the shared borrow before calling. The HOB pages may also
+/// be mapped read-only, which the store below handles by clearing `CR0.WP`, and a `&mut [u8]`
+/// would claim an ordinary write would succeed.
+///
 /// ## Safety
 ///
 /// `data` must be non-null and point to `data_len` readable, writable bytes in the
