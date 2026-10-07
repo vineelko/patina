@@ -578,6 +578,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // The user channel still uses the legacy `MM_COMM_BUFFER_HOB_GUID` so the user core's own
         // HOB walk keeps working (see the HACKHACK at the tail of `init_user_comm_buffer`).
+        //
+        // The lookup is scoped so the shared slice it returns is dead before the call below
+        // rewrites the same bytes. Taking the address is the only way to hand over write access:
+        // the HOB list is walked through shared references, and `&[u8]` cannot become `&mut [u8]`.
         let (user_buffer_data, user_buffer_data_len) = {
             let data = find_guid_hob(hob_hand_off_table, MM_COMM_BUFFER_HOB_GUID)
                 .ok_or(CommBufferError::CommunicationBufferHobMissing)?;
