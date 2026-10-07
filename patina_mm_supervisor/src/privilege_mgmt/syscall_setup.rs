@@ -71,6 +71,7 @@ struct SyscallInterfaceState<const MAX_CPUS: usize> {
 }
 
 impl<const MAX_CPUS: usize> SyscallInterfaceState<MAX_CPUS> {
+    /// Creates the state every field zeroed, before [`SyscallInterface::init`] fills it in.
     const fn new() -> Self {
         Self { num_cpus: 0, cpl3_stack_base: 0, stack_size: 0 }
     }

@@ -5,8 +5,11 @@
 //! list, programming the SMRRs, committing the allocators and page table, and publishing a
 //! read-only copy of the HOB list for the demoted user core.
 //!
-//! Sits beside the other two phases in `mm_core`; the HOB payload types and parsing helpers it
-//! builds on stay in the `init` module.
+//! Sits beside the other two phases in `mm_core`. The HOB payloads each step reads, and the
+//! parsing and validation behind them, stay with the modules that own them:
+//! [`hob`](crate::hob), [`pass_down_hob`](crate::pass_down_hob),
+//! [`comm_buffer`](crate::comm_buffer), [`mseg`](crate::mseg),
+//! [`mmram_bound`](crate::mmram_bound) and [`smi_idt_patch`](crate::smi_idt_patch).
 //!
 //! ## License
 //!
@@ -83,6 +86,17 @@ const _: () = {
     );
 };
 
+/// Checks that one page of the MM Init image carries the protection it was mapped with.
+///
+/// Called for every page of the image just before it is freed, so a page that was never mapped
+/// read-only and supervisor-only is caught while the image is still identifiable. A page that is
+/// not executable carries data rather than code and is accepted as is.
+///
+/// # Panics
+///
+/// Panics when an executable page is not supervisor-only and read-only, or is read-protected.
+/// Freeing a page the supervisor cannot account for would return memory of unknown provenance to
+/// the allocator, so this fails closed.
 pub(crate) fn validate_init_code_page(address: u64, attributes: MemoryAttributes) {
     if attributes.contains(MemoryAttributes::ExecuteProtect) {
         return;

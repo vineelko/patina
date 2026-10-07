@@ -38,6 +38,10 @@ use crate::{
 };
 use core::fmt;
 
+/// Result of any fallible MM Supervisor operation.
+///
+/// Every subsystem returns this, so a caller propagates with `?` across subsystem boundaries and
+/// the aggregate [`MmSupervisorError`] records which one failed.
 pub type MmSupervisorResult<T> = Result<T, MmSupervisorError>;
 
 /// An error reported by any MM Supervisor subsystem.

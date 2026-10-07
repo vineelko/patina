@@ -15,6 +15,14 @@
 
 use patina::pi::hob::{self, Hob, PhaseHandoffInformationTable};
 
+/// Finds the first memory allocation module HOB matching both names.
+///
+/// A module is identified by two GUIDs: `allocation_name` is the allocation descriptor's name,
+/// which says which producer reserved the pages, and `module_name` identifies the image occupying
+/// them. Both must match, because the same image is described by different allocation names
+/// depending on who allocated it.
+///
+/// Returns `None` when no HOB matches both.
 pub(crate) fn find_module<'a>(
     hobs: impl IntoIterator<Item = Hob<'a>>,
     allocation_name: patina::BinaryGuid,

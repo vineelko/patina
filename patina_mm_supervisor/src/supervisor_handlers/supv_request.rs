@@ -7,7 +7,7 @@
 //! - [`version_info`] - supervisor version query
 //! - [`fetch_policy`] - security policy retrieval
 //! - [`comm_update`] - communication buffer updates
-//! - [`unblock_mem`] - memory region unblocking
+//! - [`unblock_memory`] - memory region unblocking
 //!
 //! ## License
 //!

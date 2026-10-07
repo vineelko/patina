@@ -150,11 +150,22 @@ pub(crate) struct CommChannel {
     pub(crate) status: u64,
 }
 
+/// The region one communication buffer HOB described, after its page count and extent were
+/// checked.
+///
+/// Both HOB layouts reduce to the same four values, so the two readers produce this and
+/// `init_supv_comm_buffer` and `init_user_comm_buffer` work from it without caring which HOB it
+/// came from. The fields are private because a value only exists once [`ParsedCommBuffer::new`]
+/// has accepted the page count and the extent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ParsedCommBuffer {
+    /// Base address of the external region the HOB named.
     address: u64,
+    /// Region length in pages, narrowed to the target's pointer width.
     page_count: usize,
+    /// Region length in bytes, which is `page_count` scaled and known not to overflow.
     size: u64,
+    /// Address of the `MmCommBufferStatus` that pairs with the region.
     status_address: u64,
 }
 

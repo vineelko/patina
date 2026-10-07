@@ -43,6 +43,12 @@ fn us_to_ticks_at(us: u64, freq: u64) -> Option<u64> {
     Some(((u128::from(freq) * u128::from(us)) / 1_000_000) as u64)
 }
 
+/// Returns the frequency of the counter [`ticks`] reads, in Hz.
+///
+/// Leaf 0x15 gives the TSC frequency directly and is supported by most modern Intel and AMD
+/// platforms; leaf 0x16 is the less accurate nominal fallback for older ones. Returns 0 when
+/// neither enumerates a frequency, which makes [`us_to_ticks`] report `None` and leaves
+/// [`spin_until`] on its iteration-count heuristic.
 pub(crate) fn arch_perf_frequency() -> u64 {
     // Leaf 0x15 is supported by most modern Intel and AMD platforms; leaf 0x16 is the
     // less accurate fallback for older ones. It is only queried when 0x15 comes up empty

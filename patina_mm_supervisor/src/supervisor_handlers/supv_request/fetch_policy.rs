@@ -22,19 +22,37 @@ use crate::{
     supervisor_handlers::UnblockedMemoryTracker,
 };
 
+/// The state a `FETCH_POLICY` request reads and the effects it has.
+///
+/// The request has two shapes depending on whether the gate is already locked, and both of them
+/// touch supervisor-global state. Naming that state as a trait keeps
+/// [`process_fetch_policy`] free of global access and of `unsafe`, so the lock-then-fetch ordering
+/// can be driven directly in a test.
+///
+/// `Gate` is the policy gate the implementation supplies.
 trait FetchPolicyContext {
+    /// The policy gate type this context supplies.
     type Gate;
 
+    /// Returns the policy gate, or `None` when none was installed.
     fn policy_gate(&self) -> Option<&Self::Gate>;
+    /// Returns whether the gate is locked, which selects verify over snapshot.
     fn is_locked(&self, gate: &Self::Gate) -> bool;
+    /// Records the memory policy baseline on the first fetch, before the gate locks.
     fn take_snapshot(&self, gate: &Self::Gate) -> MmSupervisorResult<()>;
+    /// Refuses any further unblock requests.
     fn lock_unblocked_memory(&self);
+    /// Re-walks the page table and compares it against the recorded baseline.
     fn verify_snapshot(&self, gate: &Self::Gate) -> Result<(), efi::Status>;
+    /// Writes the merged firmware and memory policy into `destination`, returning the byte count.
     fn fetch_policy(&self, gate: &Self::Gate, destination: &mut [u8]) -> MmSupervisorResult<usize>;
 }
 
+/// The live [`FetchPolicyContext`], reading the supervisor's own global state.
 struct SupervisorFetchPolicyContext<'a> {
+    /// The installed policy gate, if initialization got far enough to install one.
     gate: Option<&'a PolicyGate>,
+    /// The tracker that stops accepting unblock requests once the gate locks.
     unblocked_tracker: &'a UnblockedMemoryTracker,
 }
 
@@ -69,15 +87,27 @@ impl FetchPolicyContext for SupervisorFetchPolicyContext<'_> {
     }
 }
 
+/// The scratch allocation and comparison a snapshot verification needs.
+///
+/// Verification has to allocate a page-aligned buffer, walk the page table into it, and free it
+/// again whether or not the comparison passed. Naming those four steps as a trait keeps that
+/// free-on-every-path ordering testable without a live page allocator.
 trait SnapshotVerificationContext {
+    /// Returns how many descriptors the recorded baseline holds, or `None` when there is none.
     fn snapshot_count(&self) -> Option<usize>;
+    /// Allocates `pages` of scratch for a fresh page table walk.
     fn allocate_scratch(&self, pages: usize) -> Result<u64, ()>;
+    /// Walks the page table into `scratch` and compares it against the baseline.
     fn verify_snapshot(&self, scratch: *mut MemDescriptorV1_0, max_count: usize) -> MmSupervisorResult<()>;
+    /// Returns the scratch pages, which runs whether or not the comparison passed.
     fn free_scratch(&self, base: u64, pages: usize) -> Result<(), ()>;
 }
 
+/// The live [`SnapshotVerificationContext`], allocating from the supervisor's page allocator.
 struct SupervisorSnapshotVerificationContext<'a> {
+    /// The gate holding the baseline to compare against.
     gate: &'a PolicyGate,
+    /// The active page table root for this MM invocation.
     cr3: u64,
 }
 
@@ -152,6 +182,14 @@ pub(super) fn handle_fetch_policy(comm_buffer: *mut u8, comm_buffer_size: &mut u
     status
 }
 
+/// Serves a `FETCH_POLICY` request into `comm_buffer`, returning the status and the number of
+/// bytes the response occupies.
+///
+/// Takes the snapshot and locks the gate on the first call, and verifies the page table against
+/// the recorded baseline on every call after that. Reports `BUFFER_TOO_SMALL` when the buffer
+/// cannot hold the header or the merged policy, `NOT_READY` when no policy gate is installed, and
+/// `SECURITY_VIOLATION` when a later walk disagrees with the baseline. Every failure reports a
+/// response size of just the header, so a caller never reads a payload that was not written.
 fn process_fetch_policy<C: FetchPolicyContext>(comm_buffer: &mut [u8], context: &C) -> (efi::Status, usize) {
     let Some(payload) = comm_buffer.get_mut(MmSupervisorRequestHeader::SIZE..) else {
         log::error!("FETCH_POLICY: communication buffer is too small for the request header");
@@ -225,6 +263,12 @@ fn verify_policy_snapshot(gate: &PolicyGate, cr3: u64) -> Result<(), efi::Status
     verify_policy_snapshot_with_context(&context)
 }
 
+/// Runs a snapshot verification against `context`.
+///
+/// Reports `SECURITY_VIOLATION` when the gate is locked without a baseline behind it, since
+/// having nothing to compare against is not a pass, and when the fresh walk disagrees with the
+/// baseline. The scratch pages are freed on every path, and a failure to free them is reported as
+/// `DEVICE_ERROR` only after the comparison result has been accounted for.
 fn verify_policy_snapshot_with_context<C: SnapshotVerificationContext>(context: &C) -> Result<(), efi::Status> {
     let Some(saved_count) = context.snapshot_count() else {
         // Reaching here means the gate reported itself locked without a snapshot behind it.

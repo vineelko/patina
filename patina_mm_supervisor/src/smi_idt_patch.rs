@@ -98,6 +98,12 @@ impl fmt::Display for SmiHandlerIdtPatchInputError {
     }
 }
 
+/// Header of the fixup structure embedded at the end of each per-core MMI entry.
+///
+/// The producer writes this, so every offset and count it declares is treated as untrusted and
+/// bounds-checked against the entry before it is followed. Only `fixup64_offset` and
+/// `fixup64_num` are read today; the rest are kept so the layout matches the version 4 header the
+/// C-side setup emits and a size change is caught rather than silently misread.
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy, FromBytes, Immutable)]
 pub(crate) struct PerCoreMmiEntryStructHdr {
@@ -127,13 +133,37 @@ pub(crate) struct PerCoreMmiEntryStructHdr {
     pub(crate) reserved: u32,
 }
 
+/// The patch inputs after they were checked, narrowed to the widths the loop needs.
+///
+/// Produced by [`validate_smi_handler_idt_patch_inputs`] so the loop over CPUs does no
+/// conversion of its own: it has the array length and the entry size in both the pointer width it
+/// indexes with and the `u64` it does address arithmetic with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SmiHandlerIdtPatchInputs {
+    /// Byte length of the SMBASE array, known to be addressable and inside MMRAM.
     pub(crate) sm_base_array_size: usize,
+    /// MMI entry size as a length usable for slicing.
     pub(crate) mmi_entry_size: usize,
+    /// The same entry size kept as a `u64` for address arithmetic.
     pub(crate) mmi_entry_size_u64: u64,
 }
 
+/// Checks the patch inputs before any core's MMI entry is read.
+///
+/// `is_inside_mmram` is taken as a parameter so the check can be driven in a test without a live
+/// page allocator; production passes
+/// [`is_buffer_inside_mmram`](crate::mem::mmram_placement::is_buffer_inside_mmram).
+///
+/// # Errors
+///
+/// Returns [`SmiHandlerIdtPatchInputError::ZeroEntrySize`] for an empty MMI entry,
+/// [`MissingSmBaseArray`](SmiHandlerIdtPatchInputError::MissingSmBaseArray) for a null array or a
+/// CPU count of zero, [`SmBaseArraySizeOverflow`](SmiHandlerIdtPatchInputError::SmBaseArraySizeOverflow)
+/// when the array length cannot be addressed,
+/// [`SmBaseArrayOutsideMmram`](SmiHandlerIdtPatchInputError::SmBaseArrayOutsideMmram) when the
+/// array is not entirely inside MMRAM, and
+/// [`EntrySizeTooLarge`](SmiHandlerIdtPatchInputError::EntrySizeTooLarge) when the entry size does
+/// not fit the target architecture.
 fn validate_smi_handler_idt_patch_inputs(
     sm_base_array: u64,
     number_of_cpus: usize,
@@ -171,6 +201,18 @@ fn validate_smi_handler_idt_patch_inputs(
     })
 }
 
+/// Returns the address of the `IA32_DESCRIPTOR` one core's SMI entry loads.
+///
+/// The MMI entry ends with a `u32` giving the size of the fixup structure that precedes it. That
+/// structure starts with a [`PerCoreMmiEntryStructHdr`], whose Fixup64 array holds the IDTR slot
+/// at [`FIXUP64_SMI_HANDLER_IDTR`]. Every offset read here comes from the producer, so each step
+/// is bounds-checked against `mmi_entry` rather than trusted.
+///
+/// # Errors
+///
+/// Returns a [`SmiHandlerIdtPatchError`] naming the step that failed: an entry too small for the
+/// trailer, a fixup structure or Fixup64 entry outside the entry, a structure smaller than its own
+/// header, or a Fixup64 array shorter than the IDTR slot index.
 fn parse_smi_handler_idt_descriptor(mmi_entry: &[u8]) -> MmSupervisorResult<u64> {
     const TRAILING_SIZE_FIELD_SIZE: usize = core::mem::size_of::<u32>();
 

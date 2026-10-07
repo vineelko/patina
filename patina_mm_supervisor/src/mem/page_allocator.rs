@@ -753,6 +753,11 @@ impl PageAllocator {
         self.lock_state().region_count()
     }
 
+    /// Returns whether `[addr, addr + size)` lies entirely inside MMRAM.
+    ///
+    /// Reports `false` before the allocator is initialized, since nothing can be shown to be
+    /// inside MMRAM before the regions are known. A caller that must tell "outside" apart from
+    /// "not known yet" should use [`PageAllocator::classify_mmram`] instead.
     pub fn is_region_inside_mmram(&self, addr: u64, size: u64) -> bool {
         if !self.is_initialized() {
             return false;

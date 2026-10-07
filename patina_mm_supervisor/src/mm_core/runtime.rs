@@ -696,8 +696,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
     /// Type-erased trampoline for AP startup, called from the syscall dispatcher.
     ///
-    /// This function is conformed for the concrete `P: PlatformInfo` type
-    /// and stored as a `fn(u64, u64, u64) -> u64` in [`AP_STARTUP_FN`].
+    /// This function is conformed for the concrete `P: PlatformInfo` type and stored as a
+    /// `fn(u64, u64, u64) -> u64` through
+    /// [`InitState::set_ap_startup_fn`](crate::state::InitState::set_ap_startup_fn), which is how
+    /// the dispatcher reaches the supervisor without naming its generic parameters.
     pub(crate) fn start_ap_procedure_trampoline(cpu_index: u64, procedure: u64, argument: u64) -> u64 {
         let core = Self::instance();
         core.start_ap_procedure(cpu_index, procedure, argument)

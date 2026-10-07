@@ -1,8 +1,11 @@
 //! Memory Management
 //!
-//! This module contains the memory allocators used by the MM Supervisor Core:
+//! This module contains the memory allocators used by the MM Supervisor Core and the shared
+//! [`AllocError`] both of them report:
 //! - [`page_allocator`] - SMRAM page-granularity allocator for general use
 //! - [`paging_allocator`] - dedicated bump allocator for page table structures
+//! - [`locked_state`] - the locked view over the bookkeeping the page allocator keeps in SMRAM
+//! - [`mmram_placement`] - where an address range sits relative to MMRAM
 //!
 //! ## License
 //!
