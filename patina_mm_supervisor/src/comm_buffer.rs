@@ -3,9 +3,9 @@
 //! Defines the communication buffer layout extracted from the MM Supervisor `PassDown` HOB
 //! and shared across the supervisor for routing user- and supervisor-targeted requests.
 //!
-//! Also owns parsing and adoption of the supervisor and user communication buffer HOBs:
-//! validating that each externally supplied buffer lies outside MMRAM and is mapped
-//! supervisor-only, then allocating the internal copy the supervisor actually uses.
+//! Also owns building the supervisor and user channels from their HOBs: validating that each
+//! externally supplied buffer lies outside MMRAM and is mapped supervisor-only, then
+//! allocating the internal copy the supervisor actually uses.
 //!
 //! ## License
 //!
@@ -35,7 +35,7 @@ use crate::{
 pub(crate) const MM_COMMON_REGION_HOB_GUID: patina::BinaryGuid =
     patina::BinaryGuid::from_string("d4ffc718-fb82-4274-9afc-aa8b1eef5293");
 
-/// Why a communication buffer could not be adopted from the HOB list.
+/// Why a communication channel could not be built from the HOB list.
 ///
 /// The MM IPL describes both buffers from outside the supervisor's trust boundary, so each
 /// field is checked before the internal copy is allocated.
@@ -516,7 +516,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_init_supv_comm_buffer_adopts_a_supervisor_mapped_buffer_outside_mmram() {
+    fn test_init_supv_comm_buffer_builds_a_channel_from_a_buffer_outside_mmram() {
         test_support::init_test_logger();
         let mmram = PageAlignedMemory::new(mem::DEFAULT_PAGING_POOL_PAGES + 8);
         init_global_state_over(&mmram);
@@ -527,14 +527,14 @@ mod tests {
         let status = external.base() + 2 * UEFI_PAGE_SIZE as u64;
         let data = supv_comm_buffer_hob_data(external.base(), 2, status);
 
-        let adopted = init_supv_comm_buffer(&data).expect("adopt the buffer");
+        let channel = init_supv_comm_buffer(&data).expect("build the supervisor channel");
 
-        assert_eq!(adopted.external, external.base());
-        assert_eq!(adopted.size, 2 * UEFI_PAGE_SIZE as u64);
-        assert_eq!(adopted.status, status);
+        assert_eq!(channel.external, external.base());
+        assert_eq!(channel.size, 2 * UEFI_PAGE_SIZE as u64);
+        assert_eq!(channel.status, status);
         // Ring 3 works on the internal copy, so it comes from supervisor-owned MMRAM.
         assert_eq!(
-            security_state().page_allocator().get_allocation_type(adopted.internal),
+            security_state().page_allocator().get_allocation_type(channel.internal),
             Some(AllocationType::Supervisor)
         );
     }
@@ -552,7 +552,7 @@ mod tests {
 
         let result = catch_unwind(|| init_supv_comm_buffer(&data));
 
-        assert!(result.is_err(), "a communication buffer inside MMRAM was adopted");
+        assert!(result.is_err(), "a communication buffer inside MMRAM produced a channel");
     }
 
     #[test]
@@ -569,14 +569,14 @@ mod tests {
 
         // SAFETY: `data` is a live, writable payload of exactly one `MmCommonBufferHobData`, and
         // no references into it are held across the call.
-        let adopted = unsafe { init_user_comm_buffer(data.as_mut_ptr(), data.len()) }.expect("adopt the buffer");
+        let channel = unsafe { init_user_comm_buffer(data.as_mut_ptr(), data.len()) }.expect("build the user channel");
 
-        assert_eq!(adopted.external, external.base());
-        assert_eq!(adopted.size, 2 * UEFI_PAGE_SIZE as u64);
-        assert_eq!(adopted.status, status);
-        assert_eq!(security_state().page_allocator().get_allocation_type(adopted.internal), Some(AllocationType::User));
+        assert_eq!(channel.external, external.base());
+        assert_eq!(channel.size, 2 * UEFI_PAGE_SIZE as u64);
+        assert_eq!(channel.status, status);
+        assert_eq!(security_state().page_allocator().get_allocation_type(channel.internal), Some(AllocationType::User));
         // The user module reads the HOB after demotion, so it must name the internal copy.
-        assert_eq!(u64::from_ne_bytes(data[0..8].try_into().expect("eight bytes")), adopted.internal);
+        assert_eq!(u64::from_ne_bytes(data[0..8].try_into().expect("eight bytes")), channel.internal);
     }
 
     #[test]
@@ -602,7 +602,7 @@ mod tests {
             unsafe { init_user_comm_buffer(data.as_mut_ptr(), data.len()) }
         }));
 
-        assert!(result.is_err(), "a user-accessible communication buffer was adopted");
+        assert!(result.is_err(), "a user-accessible communication buffer produced a channel");
     }
 
     #[test]

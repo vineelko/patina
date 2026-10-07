@@ -52,7 +52,7 @@ pub type MmSupervisorResult<T> = Result<T, MmSupervisorError>;
 pub enum MmSupervisorError {
     /// Validation of the incoming HOB list failed.
     HobValidation(HobValidationError),
-    /// A communication buffer could not be adopted from the HOB list.
+    /// A communication channel could not be built from the HOB list.
     CommBuffer(CommBufferError),
     /// The `PassDown` HOB could not be used.
     PassDownHob(PassDownHobError),

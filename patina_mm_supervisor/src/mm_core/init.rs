@@ -576,12 +576,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         }
     }
 
-    /// Adopts both communication buffers and stores the assembled configuration.
+    /// Builds both communication channels and stores the assembled configuration.
     ///
     /// # Errors
     ///
     /// Returns a [`CommBufferError`] when either HOB is missing, when a region one of them
-    /// describes cannot be adopted, or when the supervisor-to-user page cannot be allocated.
+    /// describes cannot be used, or when the supervisor-to-user page cannot be allocated.
     fn init_comm_buffers(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
         // Only one MM_COMM_REGION_HOB is published, the supervisor one; the user channel flows
         // through MM_COMM_BUFFER_HOB_GUID below.
