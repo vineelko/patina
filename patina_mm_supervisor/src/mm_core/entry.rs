@@ -24,7 +24,7 @@ use super::CoreInitError;
 use crate::{
     MmSupervisorCore, PlatformInfo,
     cpu::CpuManager,
-    error::MmSupervisorResult,
+    error::{MmSupervisorError, MmSupervisorResult},
     intrinsics::{current_apic_id, is_bsp},
     mailbox::MailboxManager,
     privilege_mgmt::invoke_demoted_routine,
@@ -67,6 +67,21 @@ fn mark_core_initialized(cpu_index: usize) -> MmSupervisorResult<()> {
 
     slot.store(1, Ordering::Release);
     Ok(())
+}
+
+/// Returns whether `cpu_index` has already completed initialization, reading an unpublished
+/// buffer as a first entry rather than as a failure.
+///
+/// The buffer is published part way through BSP initialization, so every core that arrives in the
+/// initializing MMI finds nothing to read: the BSP before it publishes the buffer, and any AP that
+/// reaches the check before the BSP gets there. None of them can have been initialized, which is
+/// exactly what a missing buffer means here. The buffer is never withdrawn once published, so a
+/// later entry cannot reach this case, and a bad index is still reported.
+fn core_already_initialized(cpu_index: usize) -> MmSupervisorResult<bool> {
+    match is_core_initialized(cpu_index) {
+        Err(MmSupervisorError::CoreInit(CoreInitError::InitializedBufferUnavailable)) => Ok(false),
+        result => result,
+    }
 }
 
 impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
@@ -171,7 +186,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let is_bsp = is_bsp();
 
         log::trace!("CPU {cpu_id} (index {cpu_index}) entering MM Supervisor Core (BSP: {is_bsp})");
-        let core_initialized = is_core_initialized(cpu_index)?;
+        let core_initialized = core_already_initialized(cpu_index)?;
 
         // Check if this core has already completed initialization (per-core check)
         if core_initialized {
@@ -297,7 +312,7 @@ mod tests {
     use serial_test::serial;
 
     use super::super::CoreInitError;
-    use super::{is_core_initialized, mark_core_initialized};
+    use super::{core_already_initialized, is_core_initialized, mark_core_initialized};
     use crate::state::init_state;
     use crate::{MmSupervisorCore, PlatformInfo};
 
@@ -328,6 +343,9 @@ mod tests {
 
         assert!(init_state().mm_initialized_buffer().is_none());
         assert_eq!(is_core_initialized(0), Err(CoreInitError::InitializedBufferUnavailable.into()));
+        // The entry point reads the same missing buffer as a first entry, because nothing can have
+        // been initialized before the buffer that records it exists.
+        assert_eq!(core_already_initialized(0), Ok(false));
         // Before the buffer is published the mark is reported rather than silently dropped.
         assert_eq!(mark_core_initialized(0), Err(CoreInitError::InitializedBufferUnavailable.into()));
 
@@ -352,7 +370,13 @@ mod tests {
             is_core_initialized(SLOTS.len()),
             Err(CoreInitError::CpuIndexOutOfRange { index: SLOTS.len(), len: SLOTS.len() }.into())
         );
+        // A bad index is a real fault and stays a fault, unlike an absent buffer.
+        assert_eq!(
+            core_already_initialized(SLOTS.len()),
+            Err(CoreInitError::CpuIndexOutOfRange { index: SLOTS.len(), len: SLOTS.len() }.into())
+        );
         assert_eq!(is_core_initialized(0), Ok(false));
         assert_eq!(is_core_initialized(1), Ok(true));
+        assert_eq!(core_already_initialized(1), Ok(true));
     }
 }
