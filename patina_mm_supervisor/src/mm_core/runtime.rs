@@ -25,8 +25,8 @@ use crate::{
     page_ownership::PageOwnership,
     page_ownership::query_address_ownership,
     privilege_mgmt::invoke_demoted_routine,
-    runtime::with_user_access,
     state::{DEFAULT_SUPERVISOR_MMI_HANDLERS, init_state, security_state},
+    user_access_guard::with_user_access,
 };
 
 /// Timeout for waiting for APs to arrive in the holding pen (1 second).

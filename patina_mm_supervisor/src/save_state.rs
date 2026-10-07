@@ -48,8 +48,8 @@ use crate::{
     page_ownership::PageOwnership,
     page_ownership::query_address_ownership,
     privilege_mgmt::SyscallResult,
-    runtime::with_user_access,
     state::{init_state, security_state},
+    user_access_guard::with_user_access,
 };
 
 /// Why the per-CPU save-state regions the `PassDown` HOB describes cannot be used.

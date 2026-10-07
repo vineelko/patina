@@ -49,11 +49,11 @@ use patina_paging::{MemoryAttributes, PageTable};
 use spin::Mutex;
 use zerocopy::FromBytes;
 
-use crate::error::MmSupervisorResult;
 use crate::mem::AllocError;
 use crate::mem::locked_state::{AllocatorState, BITS_PER_BYTE, LockedState, StatePtr, page_count};
 use crate::mem::mmram_placement::MmramPlacement;
 use crate::smrr::{SmramRegion, verify_smrr_base_size};
+use crate::{error::MmSupervisorResult, user_access_guard::with_user_access};
 
 /// `EFI_ALLOCATED` bit in `RegionState`.
 pub const EFI_ALLOCATED: u64 = 0x0000000000000010;
@@ -589,7 +589,7 @@ impl PageAllocator {
         // access made while SMAP is lifted stays inside that range. SMAP has to come down
         // because the range may be user-owned (U/S = 1).
         unsafe {
-            crate::runtime::with_user_access(|| {
+            with_user_access(|| {
                 core::ptr::write_bytes(addr as *mut u8, 0, uefi_pages_to_size!(num_pages));
             });
         }

@@ -3,7 +3,8 @@
 //! Provides thin, architecture-specific wrappers around low-level `x86_64`
 //! instructions used by the supervisor: `rdmsr`/`wrmsr` for Model-Specific
 //! Registers, `cpuid`/MSR reads for CPU identification (APIC ID and BSP
-//! detection), and `sidt` for the interrupt descriptor table pointer. Access to individual MSRs is expected to be gated by the syscall
+//! detection), `sidt` for the interrupt descriptor table pointer, and `stac`/`clac`
+//! for Supervisor Mode Access Prevention. Access to individual MSRs is expected to be gated by the syscall
 //! policy layer.
 //!
 //! ## License
@@ -170,6 +171,49 @@ pub(crate) fn read_idtr() -> DescriptorTablePointer {
     };
 
     rt_descriptor
+}
+
+/// Helper function to disable the SMAP bit in EFLAGS to allow supervisor code to access user memory when needed.
+///
+/// ## Safety
+///
+/// Disabling SMAP removes the hardware barrier that stops the supervisor (Ring 0) from
+/// reading or writing user-owned (Ring 3) memory. The caller must re-enable SMAP via
+/// [`enable_smap`](crate::intrinsics::enable_smap) once the user-memory access completes, and must ensure every access
+/// performed while SMAP is lifted targets valid, correctly-owned user memory. Prefer
+/// [`with_user_access`](crate::user_access_guard::with_user_access), which guarantees the disable/enable pair is balanced.
+pub(crate) unsafe fn disable_smap() {
+    // SAFETY: `stac` only sets the AC flag in EFLAGS; it touches no memory and clobbers
+    // no registers (hence `nostack, preserves_flags`). It is a privileged instruction that
+    // is valid in the Ring 0 supervisor context this code always runs in.
+    #[cfg(not(test))]
+    unsafe {
+        core::arch::asm!(
+            "stac", // Set AC flag to enable access to user memory
+            options(nostack, preserves_flags)
+        );
+    }
+}
+
+/// Helper function to re-enable the SMAP bit in EFLAGS after accessing user memory.
+///
+/// ## Safety
+///
+/// This mutates the privileged EFLAGS.AC state and must only be called to close a region
+/// opened by [`disable_smap`](crate::intrinsics::disable_smap). Callers must ensure no further user-memory access that
+/// relies on SMAP being lifted happens after this returns. Prefer [`with_user_access`](crate::user_access_guard::with_user_access),
+/// which guarantees the disable/enable pair is balanced.
+pub(crate) unsafe fn enable_smap() {
+    // SAFETY: `clac` only clears the AC flag in EFLAGS; it touches no memory and clobbers
+    // no registers (hence `nostack, preserves_flags`). It is a privileged instruction that
+    // is valid in the Ring 0 supervisor context this code always runs in.
+    #[cfg(not(test))]
+    unsafe {
+        core::arch::asm!(
+            "clac", // Clear AC flag to re-enable SMAP protections
+            options(nostack, preserves_flags)
+        );
+    }
 }
 
 #[cfg(test)]

@@ -47,10 +47,10 @@ use crate::{
     mm_policy::{self, MemDescriptorV1_0, dump_policy, gate::PolicyGate, walk_page_table},
     page_ownership::PageOwnership,
     page_ownership::query_address_ownership,
-    runtime::with_user_access,
     save_state::{SaveStateInfo, validate_save_state_regions},
     smrr::{SmramRegion, configure_smm_code_access, smrr_initialize},
     state::{init_state, security_state},
+    user_access_guard::with_user_access,
 };
 
 use super::CoreInitError;

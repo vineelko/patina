@@ -59,7 +59,6 @@ mod pass_down_hob;
 mod perf_timer;
 mod privilege_mgmt;
 mod request_target;
-mod runtime;
 mod save_state;
 mod semaphore;
 mod smi_idt_patch;
@@ -68,6 +67,7 @@ mod state;
 mod supervisor_handlers;
 #[cfg(test)]
 mod test_support;
+mod user_access_guard;
 
 /// Re-export the MM Supervisor Core for external use. The actual implementation
 /// resides in the `mm_core` module.
