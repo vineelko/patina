@@ -60,14 +60,14 @@ pub enum SaveStateValidationError {
         /// Base address of the array.
         base: u64,
         /// Number of entries the array was said to hold.
-        count: u64,
+        count: usize,
     },
     /// The SMBASE array is inside MMRAM but is not mapped supervisor-only.
     SmBaseArrayNotSupervisorOwned {
         /// Base address of the array.
         base: u64,
         /// Number of entries the array was said to hold.
-        count: u64,
+        count: usize,
     },
     /// A CPU's save-state region is null, overflows, or is not entirely inside MMRAM.
     UnusableSaveStateRegion {
@@ -144,7 +144,7 @@ const SMRAM_SAVE_STATE_MAP_OFFSET: u64 = 0xfc00;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SaveStateInfo {
     /// Number of CPUs (from `MP_INFORMATION_HOB_DATA.NumberOfProcessors`).
-    pub(crate) number_of_cpus: u64,
+    pub(crate) number_of_cpus: usize,
     /// Pointer to the per-CPU SMBASE array (`u64[number_of_cpus]`).
     pub(crate) sm_base: u64,
 }
@@ -164,15 +164,15 @@ pub(crate) struct SaveStateInfo {
 /// Supervisor-only mapping is what keeps the syscall the only way in.
 pub(crate) fn validate_save_state_regions(
     sm_base: u64,
-    number_of_cpus: u64,
+    number_of_cpus: usize,
     is_inside_mmram: impl Fn(u64, u64) -> bool,
     is_supervisor_owned: impl Fn(u64, u64) -> bool,
 ) -> MmSupervisorResult<()> {
     let unusable_array = SaveStateValidationError::UnusableSmBaseArray { base: sm_base, count: number_of_cpus };
 
-    let count = usize::try_from(number_of_cpus).map_err(|_| unusable_array)?;
     let array_size = number_of_cpus
-        .checked_mul(core::mem::size_of::<u64>() as u64)
+        .checked_mul(core::mem::size_of::<u64>())
+        .and_then(|size| u64::try_from(size).ok())
         .filter(|size| *size != 0)
         .ok_or(unusable_array)?;
     // Alignment is required as well as containment, because the array is read back as `&[u64]`.
@@ -189,11 +189,11 @@ pub(crate) fn validate_save_state_regions(
         );
     }
 
-    // SAFETY: the checks above establish that `sm_base` is a non-null, aligned array of `count`
-    // initialized `u64` entries lying entirely inside supervisor-owned MMRAM. The MM IPL
-    // populates it before launching the supervisor and it stays resident for the supervisor's
-    // lifetime.
-    let sm_bases = unsafe { core::slice::from_raw_parts(sm_base as *const u64, count) };
+    // SAFETY: the checks above establish that `sm_base` is a non-null, aligned array of
+    // `number_of_cpus` initialized `u64` entries lying entirely inside supervisor-owned MMRAM.
+    // The MM IPL populates it before launching the supervisor and it stays resident for the
+    // supervisor's lifetime.
+    let sm_bases = unsafe { core::slice::from_raw_parts(sm_base as *const u64, number_of_cpus) };
 
     for (cpu_index, &smbase) in sm_bases.iter().enumerate() {
         let Some(map_base) = smbase
@@ -247,13 +247,17 @@ pub fn save_state_read_phase1(protocol: u64, register_raw: u64, cpu_index: u64) 
 }
 
 /// Validates a Phase 1 request against `num_cpus` and stages it for Phase 2 on behalf of `caller`.
-fn stage_read_request(caller: u32, protocol: u64, register_raw: u64, cpu_index: u64, num_cpus: u64) -> SyscallResult {
+fn stage_read_request(caller: u32, protocol: u64, register_raw: u64, cpu_index: u64, num_cpus: usize) -> SyscallResult {
     let Some(register) = MmSaveStateRegister::from_u64(register_raw) else {
         log::error!("SAVE_STATE_READ: Unknown register value: {register_raw}");
         return Err(Status::INVALID_PARAMETER);
     };
 
-    if cpu_index >= num_cpus {
+    let Ok(index) = usize::try_from(cpu_index) else {
+        log::error!("SAVE_STATE_READ: CPU index {cpu_index} does not fit the target architecture");
+        return Err(Status::INVALID_PARAMETER);
+    };
+    if index >= num_cpus {
         log::error!("SAVE_STATE_READ: CPU index {cpu_index} >= NumberOfCpus {num_cpus}");
         return Err(Status::INVALID_PARAMETER);
     }
@@ -414,7 +418,7 @@ fn save_state_info() -> Result<SaveStateInfo, Status> {
 }
 
 /// Returns the number of CPUs from the save-state metadata.
-fn get_number_of_cpus() -> Result<u64, Status> {
+fn get_number_of_cpus() -> Result<usize, Status> {
     Ok(save_state_info()?.number_of_cpus)
 }
 
@@ -437,10 +441,7 @@ pub(crate) unsafe fn log_save_state_map(info: SaveStateInfo) {
         return;
     }
 
-    let Ok(num_cpus) = usize::try_from(info.number_of_cpus) else {
-        log::warn!("CPU count {} does not fit the target architecture", info.number_of_cpus);
-        return;
-    };
+    let num_cpus = info.number_of_cpus;
 
     // Read the array as bytes so an unaligned producer address does not create an invalid
     // `&[u64]`.
@@ -513,7 +514,11 @@ impl SaveStateView {
 /// [`SMRAM_SAVE_STATE_MAP_SIZE`].
 fn get_save_state_view(info: SaveStateInfo, cpu_index: u64) -> Result<SaveStateView, Status> {
     let num_cpus = info.number_of_cpus;
-    if cpu_index >= num_cpus {
+    let Ok(cpu_index_usize) = usize::try_from(cpu_index) else {
+        log::error!("Save state read: CPU index {cpu_index} does not fit the target architecture");
+        return Err(Status::INVALID_PARAMETER);
+    };
+    if cpu_index_usize >= num_cpus {
         log::error!("Save state read: CPU index {cpu_index} >= NumberOfCpus {num_cpus}");
         return Err(Status::INVALID_PARAMETER);
     }
@@ -530,9 +535,9 @@ fn get_save_state_view(info: SaveStateInfo, cpu_index: u64) -> Result<SaveStateV
     // SAFETY: `validate_save_state_regions` proved during initialization that `sm_base` is a
     // non-null, aligned array of at least `num_cpus` initialized `u64` entries inside MMRAM, and
     // MMRAM is not writable from outside MM, so it still describes that array here.
-    let sm_bases = unsafe { core::slice::from_raw_parts(info.sm_base as *const u64, num_cpus as usize) };
+    let sm_bases = unsafe { core::slice::from_raw_parts(info.sm_base as *const u64, num_cpus) };
 
-    let smbase = *sm_bases.get(cpu_index as usize).ok_or(Status::INVALID_PARAMETER)?;
+    let smbase = *sm_bases.get(cpu_index_usize).ok_or(Status::INVALID_PARAMETER)?;
     if smbase == 0 {
         log::error!("SmBase[{cpu_index}] is null");
         return Err(Status::INVALID_PARAMETER);
@@ -848,7 +853,7 @@ mod tests {
 
         /// Returns the metadata the save-state syscall would receive from the `PassDown` HOB.
         fn info(&self) -> SaveStateInfo {
-            SaveStateInfo { number_of_cpus: self.sm_bases.len() as u64, sm_base: self.sm_bases.as_ptr() as u64 }
+            SaveStateInfo { number_of_cpus: self.sm_bases.len(), sm_base: self.sm_bases.as_ptr() as u64 }
         }
 
         /// Returns the save-state map bytes (the `SMBASE + 0xfc00` window).
@@ -1198,7 +1203,7 @@ mod tests {
         let smram = FakeSmram::new(1);
         let mut info = smram.info();
         // A count this large cannot be turned into a byte length, so nothing is read.
-        info.number_of_cpus = u64::MAX;
+        info.number_of_cpus = usize::MAX;
 
         // SAFETY: the count is rejected before the SMBASE array is touched.
         unsafe { log_save_state_map(info) };
