@@ -47,8 +47,15 @@ pub enum CommBufferError {
     /// The MM Communication Buffer HOB, which describes the user channel, was not present in
     /// the HOB list.
     CommunicationBufferHobMissing,
-    /// The HOB payload is smaller than the structure it must contain.
-    HobTooSmall {
+    /// The MM Common Region HOB payload is smaller than [`MmCommonRegionHobData`].
+    CommRegionHobTooSmall {
+        /// Bytes the HOB actually carries.
+        found: usize,
+        /// Bytes the structure requires.
+        expected: usize,
+    },
+    /// The MM Communication Buffer HOB payload is smaller than [`MmCommonBufferHobData`].
+    CommunicationBufferHobTooSmall {
         /// Bytes the HOB actually carries.
         found: usize,
         /// Bytes the structure requires.
@@ -75,8 +82,11 @@ impl fmt::Display for CommBufferError {
             Self::CommunicationBufferHobMissing => {
                 write!(f, "the MM Communication Buffer HOB is missing from the HOB list")
             }
-            Self::HobTooSmall { found, expected } => {
-                write!(f, "the HOB payload is {found} bytes, but {expected} are required")
+            Self::CommRegionHobTooSmall { found, expected } => {
+                write!(f, "the MM Common Region HOB payload is {found} bytes, but {expected} are required")
+            }
+            Self::CommunicationBufferHobTooSmall { found, expected } => {
+                write!(f, "the MM Communication Buffer HOB payload is {found} bytes, but {expected} are required")
             }
             Self::InvalidSize { pages } => write!(f, "the page count {pages} does not describe a usable buffer"),
             Self::AllocationFailed => write!(f, "the internal copy of the buffer could not be allocated"),
@@ -150,7 +160,7 @@ impl CommChannel {
     ///
     /// # Errors
     ///
-    /// Returns [`CommBufferError::HobTooSmall`] when the payload is shorter than
+    /// Returns [`CommBufferError::CommRegionHobTooSmall`] when the payload is shorter than
     /// [`MmCommonRegionHobData`], [`CommBufferError::InvalidSize`] when the page count does not
     /// fit the target architecture, is zero, produces a byte size that overflows, or describes a
     /// region running past the end of the address space, and
@@ -164,14 +174,11 @@ impl CommChannel {
     pub(crate) fn from_supv_hob(data: &[u8]) -> MmSupervisorResult<Self> {
         log::info!("Found MM Common Region HOB (supervisor)");
 
-        let (hob, _) = MmCommonRegionHobData::read_from_prefix(data).map_err(|_| {
-            log::error!(
-                "MM Common Region HOB data too small: {} < {}",
-                data.len(),
-                core::mem::size_of::<MmCommonRegionHobData>()
-            );
-            CommBufferError::HobTooSmall { found: data.len(), expected: core::mem::size_of::<MmCommonRegionHobData>() }
-        })?;
+        let (hob, _) =
+            MmCommonRegionHobData::read_from_prefix(data).map_err(|_| CommBufferError::CommRegionHobTooSmall {
+                found: data.len(),
+                expected: core::mem::size_of::<MmCommonRegionHobData>(),
+            })?;
 
         let external = hob.addr;
         let status = hob.status_addr;
@@ -222,8 +229,9 @@ impl CommChannel {
     ///
     /// # Errors
     ///
-    /// Returns [`CommBufferError::HobTooSmall`] when the payload is shorter than
-    /// [`MmCommonBufferHobData`], [`CommBufferError::InvalidSize`] when the page count does not
+    /// Returns [`CommBufferError::CommunicationBufferHobTooSmall`] when the payload is shorter
+    /// than [`MmCommonBufferHobData`], [`CommBufferError::InvalidSize`] when the page count does
+    /// not
     /// fit the target architecture, is zero, produces a byte size that overflows, or describes a
     /// region running past the end of the address space, and
     /// [`CommBufferError::AllocationFailed`] when the internal copy cannot be allocated.
@@ -241,24 +249,17 @@ impl CommChannel {
     pub(crate) unsafe fn from_user_hob(data: *mut u8, data_len: usize) -> MmSupervisorResult<Self> {
         log::info!("Found MM Communication Buffer HOB");
 
-        let hob = {
-            // SAFETY: the caller guarantees that `data` points to `data_len` readable bytes. The
-            // temporary shared slice is dropped before the payload is rewritten below.
-            let bytes = unsafe { core::slice::from_raw_parts(data.cast_const(), data_len) };
-            MmCommonBufferHobData::read_from_prefix(bytes)
-                .map_err(|_| {
-                    log::error!(
-                        "MM Communication Buffer HOB data too small: {} < {}",
-                        data_len,
-                        core::mem::size_of::<MmCommonBufferHobData>()
-                    );
-                    CommBufferError::HobTooSmall {
-                        found: data_len,
-                        expected: core::mem::size_of::<MmCommonBufferHobData>(),
-                    }
-                })?
-                .0
-        };
+        // SAFETY: the caller guarantees that `data` points to `data_len` readable bytes.
+        // `MmCommonBufferHobData` is `Copy`, so `hob` below is an owned copy rather than a borrow
+        // of the payload, and `bytes` is never read again. No shared reference to those bytes is
+        // live by the time the payload is rewritten through `data` at the end of this function.
+        let bytes = unsafe { core::slice::from_raw_parts(data.cast_const(), data_len) };
+        let (hob, _) = MmCommonBufferHobData::read_from_prefix(bytes).map_err(|_| {
+            CommBufferError::CommunicationBufferHobTooSmall {
+                found: data_len,
+                expected: core::mem::size_of::<MmCommonBufferHobData>(),
+            }
+        })?;
 
         let external = hob.physical_start;
         let status = hob.status_buffer;
@@ -586,15 +587,22 @@ mod tests {
         // these reach no global state.
         assert_eq!(
             CommChannel::from_supv_hob(&supv[..supv.len() - 1]),
-            Err(CommBufferError::HobTooSmall { found: supv.len() - 1, expected: size_of::<MmCommonRegionHobData>() }
-                .into())
+            Err(CommBufferError::CommRegionHobTooSmall {
+                found: supv.len() - 1,
+                expected: size_of::<MmCommonRegionHobData>()
+            }
+            .into())
         );
         // SAFETY: `user` is a live, writable payload and no references into it are held across
         // the call. The truncated length stops the read before the HOB is rewritten.
         let user_result = unsafe { CommChannel::from_user_hob(user.as_mut_ptr(), user_len) };
         assert_eq!(
             user_result,
-            Err(CommBufferError::HobTooSmall { found: user_len, expected: size_of::<MmCommonBufferHobData>() }.into())
+            Err(CommBufferError::CommunicationBufferHobTooSmall {
+                found: user_len,
+                expected: size_of::<MmCommonBufferHobData>()
+            }
+            .into())
         );
     }
 
@@ -622,7 +630,8 @@ mod tests {
         let errors = [
             CommBufferError::CommRegionHobMissing,
             CommBufferError::CommunicationBufferHobMissing,
-            CommBufferError::HobTooSmall { found: 31, expected: 32 },
+            CommBufferError::CommRegionHobTooSmall { found: 31, expected: 32 },
+            CommBufferError::CommunicationBufferHobTooSmall { found: 31, expected: 32 },
             CommBufferError::InvalidSize { pages: 0 },
             CommBufferError::AllocationFailed,
             CommBufferError::Missing,
@@ -630,6 +639,13 @@ mod tests {
         for err in errors {
             assert!(!format!("{err}").is_empty(), "every variant must render a message");
         }
+
+        // The two short payload variants carry the same sizes, so the HOB each one names is the
+        // only thing telling them apart in the log.
+        assert_ne!(
+            format!("{}", CommBufferError::CommRegionHobTooSmall { found: 31, expected: 32 }),
+            format!("{}", CommBufferError::CommunicationBufferHobTooSmall { found: 31, expected: 32 })
+        );
     }
 
     #[test]
