@@ -1448,6 +1448,66 @@ mod tests {
     }
 
     #[test]
+    fn test_store_mm_initialized_slots_accepts_a_null_buffer() {
+        test_support::init_test_logger();
+        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+
+        // The MM IPL may omit the buffer. The supervisor then runs without per-core initialized
+        // tracking rather than refusing to start.
+        // SAFETY: a null buffer returns before anything is read.
+        assert_eq!(unsafe { supervisor.store_mm_initialized_slots(0, 2) }, Ok(()));
+        assert!(init_state().mm_initialized_buffer().is_none());
+    }
+
+    #[test]
+    fn test_store_mm_initialized_slots_rejects_an_unusable_cpu_count() {
+        test_support::init_test_logger();
+        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let memory = PageAlignedMemory::new(1);
+
+        // The count is the length of the slot slice, so it is refused before the buffer is read.
+        for cpu_count in [0, 5] {
+            // SAFETY: the count is rejected before `memory` is dereferenced.
+            let result = unsafe { supervisor.store_mm_initialized_slots(memory.base(), cpu_count) };
+            assert_eq!(result, Err(CoreInitError::InvalidCpuCount { found: cpu_count, maximum: 4 }.into()));
+        }
+        assert!(init_state().mm_initialized_buffer().is_none());
+    }
+
+    #[test]
+    #[serial]
+    fn test_store_mm_initialized_slots_rejects_a_buffer_outside_mmram() {
+        test_support::init_test_logger();
+        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let memory = PageAlignedMemory::new(mem::DEFAULT_PAGING_POOL_PAGES + 8);
+        test_support::init_global_state_over(&memory);
+
+        // Every core writes its own slot, so a buffer the MM IPL placed outside MMRAM would let
+        // anything outside MM report a core as initialized.
+        let outside = PageAlignedMemory::new(1);
+        // SAFETY: `outside` is a live page, and the call refuses it before building a slice.
+        let result = unsafe { supervisor.store_mm_initialized_slots(outside.base(), 2) };
+        assert_eq!(result, Err(CoreInitError::InitializedBufferInvalid.into()));
+        assert!(init_state().mm_initialized_buffer().is_none());
+    }
+
+    #[test]
+    #[serial]
+    fn test_store_mm_initialized_slots_publishes_one_slot_per_cpu() {
+        test_support::init_test_logger();
+        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let memory = PageAlignedMemory::new(mem::DEFAULT_PAGING_POOL_PAGES + 8);
+        test_support::init_global_state_over(&memory);
+
+        // SAFETY: `memory` is a live allocation inside the MMRAM the allocators were built over,
+        // and it outlives the published slice for the rest of this test.
+        assert_eq!(unsafe { supervisor.store_mm_initialized_slots(memory.base(), 3) }, Ok(()));
+
+        let slots = init_state().mm_initialized_buffer().expect("the slots were published");
+        assert_eq!(slots.len(), 3);
+    }
+
+    #[test]
     fn test_validate_init_code_page_requires_supervisor_readonly_executable() {
         let code = MemoryAttributes::Supervisor | MemoryAttributes::ReadOnly;
         validate_init_code_page(0x1000, code);
