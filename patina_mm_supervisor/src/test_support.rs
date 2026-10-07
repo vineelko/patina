@@ -341,13 +341,19 @@ pub(crate) fn map_supervisor_only(memory: &PageAlignedMemory) {
     let pt = pt_guard.as_mut().expect("a page table is installed");
     pt.map_memory_region(memory.base(), memory.size(), attrs).expect("map the external buffer");
 }
-pub(crate) struct InitModuleFixture {
+/// An MM Init module allocated and mapped the way `free_init_module` expects to find it:
+/// three pages whose first and last are supervisor read-only executable and whose middle
+/// page is non-executable, described by a HOB list alongside the Core module.
+///
+/// Tests perturb that mapping, by unmapping a page, clearing its protection, or dropping
+/// the page table, and assert the free is refused and nothing is released.
+pub(crate) struct MappedInitModule {
     pub(crate) supervisor: MmSupervisorCore<TestPlatform, 4>,
     pub(crate) state: InitState,
     pub(crate) init_module: MemoryAllocationModule,
     pub(crate) core_module: MemoryAllocationModule,
 }
-impl InitModuleFixture {
+impl MappedInitModule {
     pub(crate) fn new() -> Self {
         // These allocations back global state for the lifetime of this nextest process.
         let memory = Box::leak(Box::new(PageAlignedMemory::new(16)));

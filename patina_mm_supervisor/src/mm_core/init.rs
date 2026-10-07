@@ -1119,18 +1119,18 @@ mod tests {
 
     #[test]
     fn test_free_init_module_releases_mixed_code_and_data_exactly_once() {
-        let fixture = InitModuleFixture::new();
-        let base = fixture.init_module.alloc_descriptor.memory_base_address;
-        let size = fixture.init_module.alloc_descriptor.memory_length as usize;
+        let mapped = MappedInitModule::new();
+        let base = mapped.init_module.alloc_descriptor.memory_base_address;
+        let size = mapped.init_module.alloc_descriptor.memory_length as usize;
         let allocator = security_state().page_allocator();
         let free_pages = allocator.free_page_count();
         // SAFETY: the inactive test page table does not change the host allocation's writable mapping.
         let bytes = unsafe { core::slice::from_raw_parts_mut(base as *mut u8, size) };
         bytes.fill(0xA5);
 
-        fixture.free();
+        mapped.free();
 
-        assert!(fixture.state.is_init_module_freed());
+        assert!(mapped.state.is_init_module_freed());
         assert_eq!(allocator.free_page_count(), free_pages + 3);
         assert!(bytes.iter().all(|&byte| byte == 0), "the page allocator must scrub the freed image");
         {
@@ -1143,7 +1143,7 @@ mod tests {
                     Err(patina_paging::PtError::NoMapping)
                 );
             }
-            let core_base = fixture.core_module.alloc_descriptor.memory_base_address;
+            let core_base = mapped.core_module.alloc_descriptor.memory_base_address;
             assert_eq!(allocator.get_allocation_type(core_base), Some(AllocationType::Supervisor));
             assert_eq!(
                 page_table.query_memory_region(core_base, UEFI_PAGE_SIZE as u64).unwrap(),
@@ -1152,19 +1152,19 @@ mod tests {
         }
 
         assert_eq!(allocator.allocate_pages(3).unwrap(), base);
-        fixture.supervisor.free_init_module(&fixture.state);
+        mapped.supervisor.free_init_module(&mapped.state);
         assert_eq!(allocator.free_page_count(), free_pages);
         assert_eq!(allocator.get_allocation_type(base), Some(AllocationType::Supervisor));
     }
 
     #[test]
     fn test_free_init_module_uses_saved_region_after_hobs_are_reclaimed_and_reused() {
-        let fixture = InitModuleFixture::new();
+        let mapped = MappedInitModule::new();
         let allocator = security_state().page_allocator();
         let producer = allocator.allocate_pages(4).unwrap();
         let mut source = RawHobList::new();
-        source.push_struct(fixture.core_module);
-        source.push_struct(fixture.init_module);
+        source.push_struct(mapped.core_module);
+        source.push_struct(mapped.init_module);
         source.push_guid_hob(MM_SUPERVISOR_CORE_GUID, &vec![0xcd_u8; 2 * UEFI_PAGE_SIZE]);
         let source = source.finish();
         // SAFETY: the separate producer allocation has room for this valid HOB list.
@@ -1177,17 +1177,17 @@ mod tests {
         // SAFETY: the producer's HOB list and its synthetic image allocations remain live, so the
         // list begins with a Phase Handoff Information Table that outlives the borrow.
         let handoff = unsafe { &*(producer as *const PhaseHandoffInformationTable) };
-        fixture
+        mapped
             .supervisor
-            .discover_and_store_init_region(handoff, &fixture.state)
+            .discover_and_store_init_region(handoff, &mapped.state)
             .expect("the producer's HOB list describes an Init module");
         let user_copy =
-            fixture.supervisor.publish_hob_list_to_user(handoff).expect("publishing the HOB list copy should succeed");
+            mapped.supervisor.publish_hob_list_to_user(handoff).expect("publishing the HOB list copy should succeed");
 
-        let init_base = fixture.init_module.alloc_descriptor.memory_base_address;
-        let init_size = fixture.init_module.alloc_descriptor.memory_length;
-        assert_eq!(fixture.state.init_module_region(), Some((init_base, init_size)));
-        assert!(!fixture.state.is_init_module_freed());
+        let init_base = mapped.init_module.alloc_descriptor.memory_base_address;
+        let init_size = mapped.init_module.alloc_descriptor.memory_length;
+        assert_eq!(mapped.state.init_module_region(), Some((init_base, init_size)));
+        assert!(!mapped.state.is_init_module_freed());
         assert_eq!(allocator.get_allocation_type(init_base), Some(AllocationType::Supervisor));
         let reclaimed_pages = size / UEFI_PAGE_SIZE;
         let copy_pages = size.div_ceil(UEFI_PAGE_SIZE);
@@ -1209,18 +1209,18 @@ mod tests {
         // SAFETY: the old HOB pages are now a live, writable allocation used for unrelated data.
         let reused = unsafe { core::slice::from_raw_parts_mut(producer as *mut u8, reclaimed_pages * UEFI_PAGE_SIZE) };
         reused.fill(0xA5);
-        fixture.supervisor.free_init_module(&fixture.state);
+        mapped.supervisor.free_init_module(&mapped.state);
 
-        assert!(fixture.state.is_init_module_freed());
+        assert!(mapped.state.is_init_module_freed());
         assert_eq!(allocator.get_allocation_type(init_base), None);
         assert_eq!(allocator.free_page_count(), free_before - copy_pages + 3);
         assert!(reused.iter().all(|&byte| byte == 0xA5), "runtime must not read or free the old HOB allocation");
         assert_eq!(allocator.get_allocation_type(producer), Some(AllocationType::Supervisor));
         assert_eq!(
-            allocator.get_allocation_type(fixture.core_module.alloc_descriptor.memory_base_address),
+            allocator.get_allocation_type(mapped.core_module.alloc_descriptor.memory_base_address),
             Some(AllocationType::Supervisor)
         );
-        // SAFETY: the published user copy and source fixture are both still readable.
+        // SAFETY: the published user copy and source mapped are both still readable.
         assert_eq!(unsafe { core::slice::from_raw_parts(user_copy as *const u8, size) }, unsafe {
             core::slice::from_raw_parts(source.as_ptr().cast::<u8>(), size)
         });
@@ -1343,9 +1343,9 @@ mod tests {
 
     #[test]
     fn test_free_init_module_accepts_an_entirely_non_executable_image() {
-        let fixture = InitModuleFixture::new();
-        let base = fixture.init_module.alloc_descriptor.memory_base_address;
-        let size = fixture.init_module.alloc_descriptor.memory_length;
+        let mapped = MappedInitModule::new();
+        let base = mapped.init_module.alloc_descriptor.memory_base_address;
+        let size = mapped.init_module.alloc_descriptor.memory_length;
         security_state()
             .lock_page_table()
             .as_mut()
@@ -1353,24 +1353,24 @@ mod tests {
             .map_memory_region(base, size, MemoryAttributes::Supervisor | MemoryAttributes::ExecuteProtect)
             .unwrap();
 
-        fixture.free();
+        mapped.free();
 
-        assert!(fixture.state.is_init_module_freed());
+        assert!(mapped.state.is_init_module_freed());
         assert_eq!(security_state().page_allocator().get_allocation_type(base), None);
     }
 
     #[test]
     fn test_free_init_module_rejects_missing_page_table() {
-        let fixture = InitModuleFixture::new();
+        let mapped = MappedInitModule::new();
         *security_state().lock_page_table() = None;
 
-        fixture.assert_rejected("Page table required to validate MM Init module");
+        mapped.assert_rejected("Page table required to validate MM Init module");
     }
 
     #[test]
     fn test_free_init_module_rejects_an_unmapped_later_page() {
-        let fixture = InitModuleFixture::new();
-        let last_page = fixture.init_module.alloc_descriptor.memory_base_address + 2 * UEFI_PAGE_SIZE as u64;
+        let mapped = MappedInitModule::new();
+        let last_page = mapped.init_module.alloc_descriptor.memory_base_address + 2 * UEFI_PAGE_SIZE as u64;
         security_state()
             .lock_page_table()
             .as_mut()
@@ -1378,13 +1378,13 @@ mod tests {
             .unmap_memory_region(last_page, UEFI_PAGE_SIZE as u64)
             .unwrap();
 
-        fixture.assert_rejected("Failed to query MM Init module page");
+        mapped.assert_rejected("Failed to query MM Init module page");
     }
 
     #[test]
     fn test_free_init_module_rejects_unprotected_later_code_pages() {
-        let fixture = InitModuleFixture::new();
-        let last_page = fixture.init_module.alloc_descriptor.memory_base_address + 2 * UEFI_PAGE_SIZE as u64;
+        let mapped = MappedInitModule::new();
+        let last_page = mapped.init_module.alloc_descriptor.memory_base_address + 2 * UEFI_PAGE_SIZE as u64;
         for attributes in [MemoryAttributes::Supervisor, MemoryAttributes::ReadOnly] {
             security_state()
                 .lock_page_table()
@@ -1392,15 +1392,15 @@ mod tests {
                 .unwrap()
                 .map_memory_region(last_page, UEFI_PAGE_SIZE as u64, attributes)
                 .unwrap();
-            fixture.assert_rejected("must be supervisor-only, read-only and executable");
+            mapped.assert_rejected("must be supervisor-only, read-only and executable");
         }
     }
 
     #[test]
     fn test_free_init_module_does_not_mark_failed_free_as_complete() {
-        let fixture = InitModuleFixture::new();
-        let base = fixture.init_module.alloc_descriptor.memory_base_address;
-        let size = fixture.init_module.alloc_descriptor.memory_length;
+        let mapped = MappedInitModule::new();
+        let base = mapped.init_module.alloc_descriptor.memory_base_address;
+        let size = mapped.init_module.alloc_descriptor.memory_length;
         let allocator = security_state().page_allocator();
         allocator.free_pages(base, 3).unwrap();
         assert_eq!(allocator.allocate_pages_with_type(3, AllocationType::User).unwrap(), base);
@@ -1411,6 +1411,6 @@ mod tests {
             .map_memory_region(base, size, MemoryAttributes::Supervisor | MemoryAttributes::ReadOnly)
             .unwrap();
 
-        fixture.assert_rejected("Failed to free MM Init module");
+        mapped.assert_rejected("Failed to free MM Init module");
     }
 }
