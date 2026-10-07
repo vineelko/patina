@@ -136,9 +136,22 @@ pub struct MmCommonRegionHobData {
     pub status_addr: u64,
 }
 
-/// The values a communication buffer HOB yields once parsed and validated:
-/// `(external_address, size, internal_copy_address, status_address)`.
-pub(crate) type CommBufferInitValue = (u64, u64, u64, u64);
+/// One communication channel between the supervisor and the code on the other side of it.
+///
+/// A channel is the region the MM IPL named, the supervisor's own copy of it, and the status
+/// mailbox that pairs with them. [`CommBufferConfig`] holds the two the supervisor runs: the
+/// supervisor channel from the MM Common Region HOB, and the user channel from the MM
+/// Communication Buffer HOB.
+pub(crate) struct CommChannel {
+    /// Address of the external region the HOB named.
+    pub(crate) external: u64,
+    /// Size of that region in bytes.
+    pub(crate) size: u64,
+    /// Address of the supervisor's internal copy of it.
+    pub(crate) internal: u64,
+    /// Address of the `MmCommBufferStatus` that pairs with it.
+    pub(crate) status: u64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ParsedCommBuffer {
@@ -241,8 +254,6 @@ fn require_external_comm_buffer_with(
 
 /// Processes the supervisor communication buffer HOB (`MM_COMMON_REGION_HOB_GUID`).
 ///
-/// Returns `(buffer_addr, buffer_size, internal_copy_addr, status_buffer_addr)`.
-///
 /// # Errors
 ///
 /// Returns [`CommBufferError::HobTooSmall`] when the HOB payload is short,
@@ -254,7 +265,7 @@ fn require_external_comm_buffer_with(
 /// Panics if the named buffer overlaps MMRAM or is not mapped supervisor-only. The MM IPL
 /// supplies these addresses from outside the trust boundary, so failing closed is the only safe
 /// outcome; see [`require_external_comm_buffer`].
-pub(crate) fn init_supv_comm_buffer(data: &[u8]) -> MmSupervisorResult<CommBufferInitValue> {
+pub(crate) fn init_supv_comm_buffer(data: &[u8]) -> MmSupervisorResult<CommChannel> {
     log::info!("Found MM Common Region HOB (supervisor)");
 
     let buffer = parse_supv_comm_buffer_hob(data)?;
@@ -275,19 +286,22 @@ pub(crate) fn init_supv_comm_buffer(data: &[u8]) -> MmSupervisorResult<CommBuffe
             CommBufferError::AllocationFailed
         })?;
 
-    Ok((buffer.address, buffer.size, supv_comm_buffer_internal, buffer.status_address))
+    Ok(CommChannel {
+        external: buffer.address,
+        size: buffer.size,
+        internal: supv_comm_buffer_internal,
+        status: buffer.status_address,
+    })
 }
 
 /// Processes the user communication buffer HOB (`MM_COMM_BUFFER_HOB_GUID`).
-///
-/// Returns `(buffer_addr, buffer_size, internal_copy_addr, status_buffer_addr)`.
 ///
 /// ## Safety
 ///
 /// `data` must be non-null and point to `data_len` readable, writable bytes in the
 /// original HOB buffer. No references to those bytes may be live while this
 /// function runs because `physical_start` is overwritten in place.
-pub(crate) unsafe fn init_user_comm_buffer(data: *mut u8, data_len: usize) -> MmSupervisorResult<CommBufferInitValue> {
+pub(crate) unsafe fn init_user_comm_buffer(data: *mut u8, data_len: usize) -> MmSupervisorResult<CommChannel> {
     log::info!("Found MM Communication Buffer HOB");
 
     let buffer = {
@@ -333,7 +347,12 @@ pub(crate) unsafe fn init_user_comm_buffer(data: *mut u8, data_len: usize) -> Mm
         enable_write_protection(original_cr0);
     }
 
-    Ok((buffer.address, buffer.size, user_comm_buffer_internal, buffer.status_address))
+    Ok(CommChannel {
+        external: buffer.address,
+        size: buffer.size,
+        internal: user_comm_buffer_internal,
+        status: buffer.status_address,
+    })
 }
 
 #[cfg(test)]
@@ -470,13 +489,16 @@ mod tests {
         let status = external.base() + 2 * UEFI_PAGE_SIZE as u64;
         let data = supv_comm_buffer_hob_data(external.base(), 2, status);
 
-        let (address, size, internal, status_address) = init_supv_comm_buffer(&data).expect("adopt the buffer");
+        let adopted = init_supv_comm_buffer(&data).expect("adopt the buffer");
 
-        assert_eq!(address, external.base());
-        assert_eq!(size, 2 * UEFI_PAGE_SIZE as u64);
-        assert_eq!(status_address, status);
+        assert_eq!(adopted.external, external.base());
+        assert_eq!(adopted.size, 2 * UEFI_PAGE_SIZE as u64);
+        assert_eq!(adopted.status, status);
         // Ring 3 works on the internal copy, so it comes from supervisor-owned MMRAM.
-        assert_eq!(security_state().page_allocator().get_allocation_type(internal), Some(AllocationType::Supervisor));
+        assert_eq!(
+            security_state().page_allocator().get_allocation_type(adopted.internal),
+            Some(AllocationType::Supervisor)
+        );
     }
 
     #[test]
@@ -509,15 +531,14 @@ mod tests {
 
         // SAFETY: `data` is a live, writable payload of exactly one `MmCommonBufferHobData`, and
         // no references into it are held across the call.
-        let (address, size, internal, status_address) =
-            unsafe { init_user_comm_buffer(data.as_mut_ptr(), data.len()) }.expect("adopt the buffer");
+        let adopted = unsafe { init_user_comm_buffer(data.as_mut_ptr(), data.len()) }.expect("adopt the buffer");
 
-        assert_eq!(address, external.base());
-        assert_eq!(size, 2 * UEFI_PAGE_SIZE as u64);
-        assert_eq!(status_address, status);
-        assert_eq!(security_state().page_allocator().get_allocation_type(internal), Some(AllocationType::User));
+        assert_eq!(adopted.external, external.base());
+        assert_eq!(adopted.size, 2 * UEFI_PAGE_SIZE as u64);
+        assert_eq!(adopted.status, status);
+        assert_eq!(security_state().page_allocator().get_allocation_type(adopted.internal), Some(AllocationType::User));
         // The user module reads the HOB after demotion, so it must name the internal copy.
-        assert_eq!(u64::from_ne_bytes(data[0..8].try_into().expect("eight bytes")), internal);
+        assert_eq!(u64::from_ne_bytes(data[0..8].try_into().expect("eight bytes")), adopted.internal);
     }
 
     #[test]
