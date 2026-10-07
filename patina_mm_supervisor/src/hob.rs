@@ -45,14 +45,7 @@ pub(crate) fn find_guid_hob(
     hob_list_info: &PhaseHandoffInformationTable,
     target_guid: patina::BinaryGuid,
 ) -> Option<&[u8]> {
-    find_guid_hob_in(&Hob::Handoff(hob_list_info), target_guid)
-}
-
-pub(crate) fn find_guid_hob_in<'a>(
-    hobs: impl IntoIterator<Item = Hob<'a>>,
-    target_guid: patina::BinaryGuid,
-) -> Option<&'a [u8]> {
-    for current_hob in hobs {
+    for current_hob in &Hob::Handoff(hob_list_info) {
         if let Hob::GuidHob(guid_hob, data) = current_hob
             && guid_hob.name == target_guid
         {
@@ -122,25 +115,18 @@ mod tests {
     }
 
     #[test]
-    fn test_find_guid_hob_in_selects_first_matching_hob() {
-        let unrelated_data = [0x11];
-        let first_data = [0x22, 0x33];
-        let second_data = [0x44];
-        let unrelated = guid_hob(MM_SUPV_PASS_DOWN_HOB_GUID, unrelated_data.len());
-        let first = guid_hob(MM_COMMON_REGION_HOB_GUID, first_data.len());
-        let second = guid_hob(MM_COMMON_REGION_HOB_GUID, second_data.len());
+    fn test_find_guid_hob_selects_first_matching_hob() {
+        // A HOB list is built in eight-byte units, so every payload here is one unit long.
+        // Two of them carry the same GUID, which is what shows that the first match wins.
+        let mut list = RawHobList::new();
+        list.push_guid_hob(MM_SUPV_PASS_DOWN_HOB_GUID, &[0x11; 8]);
+        list.push_guid_hob(MM_COMMON_REGION_HOB_GUID, &[0x22; 8]);
+        list.push_guid_hob(MM_COMMON_REGION_HOB_GUID, &[0x44; 8]);
+        let list = list.finish();
 
-        assert_eq!(
-            find_guid_hob_in(
-                [
-                    Hob::GuidHob(&unrelated, &unrelated_data),
-                    Hob::GuidHob(&first, &first_data),
-                    Hob::GuidHob(&second, &second_data),
-                ],
-                MM_COMMON_REGION_HOB_GUID,
-            ),
-            Some(first_data.as_slice())
-        );
-        assert_eq!(find_guid_hob_in([Hob::GuidHob(&unrelated, &unrelated_data)], MM_COMMON_REGION_HOB_GUID), None);
+        assert_eq!(find_guid_hob(list.handoff(), MM_COMMON_REGION_HOB_GUID), Some([0x22; 8].as_slice()));
+        assert_eq!(find_guid_hob(list.handoff(), MM_SUPV_PASS_DOWN_HOB_GUID), Some([0x11; 8].as_slice()));
+        // A GUID no HOB carries is a miss, not a match on the nearest one.
+        assert_eq!(find_guid_hob(list.handoff(), MM_SUPERVISOR_CORE_GUID), None);
     }
 }
