@@ -361,6 +361,7 @@ pub(crate) static DEFAULT_SUPERVISOR_MMI_HANDLERS: &[SupervisorMmiHandler] = &[
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
+    use crate::comm_buffer::CommChannel;
     use patina_internal_cpu::save_state::MmSaveStateRegister;
 
     fn processor_id_lookup(cpu_index: usize) -> Option<u64> {
@@ -505,9 +506,15 @@ mod tests {
     fn test_security_state_one_time_values_ignore_later_writes() {
         let state = SecurityState::new();
 
-        state.set_comm_buffer_config(CommBufferConfig { supv_comm_buffer: 0x1000, ..Default::default() });
-        state.set_comm_buffer_config(CommBufferConfig { supv_comm_buffer: 0x2000, ..Default::default() });
-        assert_eq!(state.comm_buffer_config().unwrap().supv_comm_buffer, 0x1000);
+        state.set_comm_buffer_config(CommBufferConfig {
+            supervisor: CommChannel { external: 0x1000, ..Default::default() },
+            ..Default::default()
+        });
+        state.set_comm_buffer_config(CommBufferConfig {
+            supervisor: CommChannel { external: 0x2000, ..Default::default() },
+            ..Default::default()
+        });
+        assert_eq!(state.comm_buffer_config().unwrap().supervisor.external, 0x1000);
 
         state.set_save_state_info(SaveStateInfo { number_of_cpus: 4, sm_base: 0x3000 });
         state.set_save_state_info(SaveStateInfo { number_of_cpus: 8, sm_base: 0x9000 });

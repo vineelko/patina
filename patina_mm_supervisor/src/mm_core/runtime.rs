@@ -148,23 +148,23 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         };
 
         // Bail out only if neither status mailbox is wired up yet.
-        if config.user_status_buffer == 0 && config.supv_status_buffer == 0 {
+        if config.user.status == 0 && config.supervisor.status == 0 {
             return RequestTarget::None;
         }
 
         // Read both status mailboxes. A buffer that hasn't been published yet
         // is treated as an all-zero (idle) status.
-        let user_status = if config.user_status_buffer != 0 {
+        let user_status = if config.user.status != 0 {
             // SAFETY: `user_status_buffer` is non-zero here and, provided by the MM IPL, references
             // an MMRAM-resident `MmCommBufferStatus`, so the volatile read is valid.
-            unsafe { core::ptr::read_volatile(config.user_status_buffer as *const MmCommBufferStatus) }
+            unsafe { core::ptr::read_volatile(config.user.status as *const MmCommBufferStatus) }
         } else {
             MmCommBufferStatus::new()
         };
-        let supv_status = if config.supv_status_buffer != 0 {
+        let supv_status = if config.supervisor.status != 0 {
             // SAFETY: `supv_status_buffer` is non-zero here and, provided by the MM IPL, references
             // an MMRAM-resident `MmCommBufferStatus`, so the volatile read is valid.
-            unsafe { core::ptr::read_volatile(config.supv_status_buffer as *const MmCommBufferStatus) }
+            unsafe { core::ptr::read_volatile(config.supervisor.status as *const MmCommBufferStatus) }
         } else {
             MmCommBufferStatus::new()
         };
@@ -208,7 +208,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         log::trace!("Processing User request on CPU {cpu_index} (synchronous: {})", status.is_comm_buffer_valid != 0);
 
         // Validate buffers
-        if config.user_comm_buffer == 0 || config.user_comm_buffer_internal == 0 {
+        if config.user.external == 0 || config.user.internal == 0 {
             log::error!("User communication buffer not configured");
             return;
         }
@@ -297,17 +297,17 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             unsafe {
                 with_user_access(|| {
                     core::ptr::copy_nonoverlapping(
-                        config.user_comm_buffer as *const u8,
-                        config.user_comm_buffer_internal as *mut u8,
-                        config.user_comm_buffer_size as usize,
+                        config.user.external as *const u8,
+                        config.user.internal as *mut u8,
+                        config.user.size as usize,
                     );
                 });
             }
             log::trace!(
                 "Copied {} bytes from user buffer 0x{:x} to internal 0x{:x}",
-                config.user_comm_buffer_size,
-                config.user_comm_buffer,
-                config.user_comm_buffer_internal
+                config.user.size,
+                config.user.external,
+                config.user.internal
             );
         }
 
@@ -338,9 +338,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             unsafe {
                 with_user_access(|| {
                     core::ptr::copy_nonoverlapping(
-                        config.user_comm_buffer_internal as *const u8,
-                        config.user_comm_buffer as *mut u8,
-                        config.user_comm_buffer_size as usize,
+                        config.user.internal as *const u8,
+                        config.user.external as *mut u8,
+                        config.user.size as usize,
                     );
                 });
             }
@@ -369,11 +369,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // response the caller can be given any part of: the supervisor cannot tell which bytes
         // the user module meant, so truncating would hand back a prefix of something it never
         // agreed to send. Report the failure instead and return nothing.
-        if final_status.return_buffer_size > config.user_comm_buffer_size {
+        if final_status.return_buffer_size > config.user.size {
             log::error!(
                 "User module reported a 0x{:x}-byte response for a 0x{:x}-byte communication buffer; rejecting",
                 final_status.return_buffer_size,
-                config.user_comm_buffer_size
+                config.user.size
             );
             final_status.return_status = efi::Status::BAD_BUFFER_SIZE.as_usize() as u64;
             final_status.return_buffer_size = 0;
@@ -381,7 +381,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // SAFETY: user_status_buffer is valid and writable
         unsafe {
-            let status_ptr = config.user_status_buffer as *mut MmCommBufferStatus;
+            let status_ptr = config.user.status as *mut MmCommBufferStatus;
             core::ptr::write_volatile(status_ptr, final_status);
         }
     }
@@ -417,20 +417,20 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         }
 
         // Validate buffers
-        if config.supv_comm_buffer == 0 || config.supv_comm_buffer_internal == 0 {
+        if config.supervisor.external == 0 || config.supervisor.internal == 0 {
             log::error!("Supervisor communication buffer not configured");
             return;
         }
 
-        let buffer_size = config.supv_comm_buffer_size as usize;
+        let buffer_size = config.supervisor.size as usize;
 
         // Zero the internal buffer then copy the external supervisor buffer into it
         // SAFETY: Buffers are provided by MM IPL and are guaranteed valid and non-overlapping
         unsafe {
-            core::ptr::write_bytes(config.supv_comm_buffer_internal as *mut u8, 0, buffer_size);
+            core::ptr::write_bytes(config.supervisor.internal as *mut u8, 0, buffer_size);
             core::ptr::copy_nonoverlapping(
-                config.supv_comm_buffer as *const u8,
-                config.supv_comm_buffer_internal as *mut u8,
+                config.supervisor.external as *const u8,
+                config.supervisor.internal as *mut u8,
                 buffer_size,
             );
         }
@@ -448,8 +448,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // SAFETY: We verified the buffer is large enough for the header.
         // The header is packed so we use read_unaligned.
-        let header =
-            unsafe { core::ptr::read_unaligned(config.supv_comm_buffer_internal as *const EfiMmCommunicateHeader) };
+        let header = unsafe { core::ptr::read_unaligned(config.supervisor.internal as *const EfiMmCommunicateHeader) };
 
         let message_length = header.message_length();
 
@@ -468,7 +467,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // SAFETY: `supv_comm_buffer_internal` is a valid buffer of `buffer_size` bytes, and we
         // verified above that `buffer_size >= EfiMmCommunicateHeader::size()`, so offsetting by
         // the header size stays within the same allocation.
-        let data_ptr = unsafe { (config.supv_comm_buffer_internal as *mut u8).add(EfiMmCommunicateHeader::size()) };
+        let data_ptr = unsafe { (config.supervisor.internal as *mut u8).add(EfiMmCommunicateHeader::size()) };
         let mut data_size = message_length;
 
         // Dispatch: iterate the default handlers followed by the platform handlers to find a match
@@ -514,16 +513,16 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // both allocations.
         unsafe {
             core::ptr::copy_nonoverlapping(
-                config.supv_comm_buffer_internal as *const u8,
-                config.supv_comm_buffer as *mut u8,
+                config.supervisor.internal as *const u8,
+                config.supervisor.external as *mut u8,
                 total_response_size,
             );
         }
         log::trace!(
             "Copied {} bytes from internal buffer 0x{:x} back to external 0x{:x}",
             total_response_size,
-            config.supv_comm_buffer_internal,
-            config.supv_comm_buffer
+            config.supervisor.internal,
+            config.supervisor.external
         );
 
         // Update the status buffer with return status and response size
@@ -545,7 +544,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ) {
         // SAFETY: supv_status_buffer is valid and writable, set up by MM IPL
         unsafe {
-            let status_ptr = config.supv_status_buffer as *mut MmCommBufferStatus;
+            let status_ptr = config.supervisor.status as *mut MmCommBufferStatus;
             let updated = MmCommBufferStatus {
                 is_comm_buffer_valid: 0,
                 _padding: [0; 7],
@@ -783,7 +782,9 @@ mod tests {
     use crate::cpu::ApState;
     use crate::mailbox::{ApCommand, ApResponse};
     use crate::state::{init_state, security_state};
-    use crate::{MmSupervisorCore, comm_buffer::CommBufferConfig, request_target::RequestTarget};
+    use crate::{
+        MmSupervisorCore, comm_buffer::CommBufferConfig, comm_buffer::CommChannel, request_target::RequestTarget,
+    };
     use crate::{SupervisorMmiHandler, privilege_mgmt::mock};
     use core::sync::atomic::{AtomicUsize, Ordering};
     use patina::Guid;
@@ -851,14 +852,18 @@ mod tests {
 
         fn config(&mut self) -> CommBufferConfig {
             CommBufferConfig {
-                supv_comm_buffer: self.supv_external.as_mut_ptr() as u64,
-                supv_comm_buffer_internal: self.supv_internal.as_mut_ptr() as u64,
-                supv_comm_buffer_size: self.supv_external.len() as u64,
-                user_comm_buffer: self.user_external.as_mut_ptr() as u64,
-                user_comm_buffer_internal: self.user_internal.as_mut_ptr() as u64,
-                user_comm_buffer_size: self.user_external.len() as u64,
-                user_status_buffer: core::ptr::from_mut(self.user_status.as_mut()) as u64,
-                supv_status_buffer: core::ptr::from_mut(self.supv_status.as_mut()) as u64,
+                supervisor: CommChannel {
+                    external: self.supv_external.as_mut_ptr() as u64,
+                    internal: self.supv_internal.as_mut_ptr() as u64,
+                    size: self.supv_external.len() as u64,
+                    status: core::ptr::from_mut(self.supv_status.as_mut()) as u64,
+                },
+                user: CommChannel {
+                    external: self.user_external.as_mut_ptr() as u64,
+                    internal: self.user_internal.as_mut_ptr() as u64,
+                    size: self.user_external.len() as u64,
+                    status: core::ptr::from_mut(self.user_status.as_mut()) as u64,
+                },
                 supv_to_user_buffer: self.supv_to_user.as_mut_ptr() as u64,
                 supv_to_user_buffer_size: self.supv_to_user.len() as u64,
             }
@@ -933,8 +938,8 @@ mod tests {
     fn test_bsp_request_loop_ignores_unpublished_status_mailboxes() {
         let mut buffers = TestBuffers::new(256);
         let mut config = buffers.config();
-        config.user_status_buffer = 0;
-        config.supv_status_buffer = 0;
+        config.user.status = 0;
+        config.supervisor.status = 0;
         security_state().set_comm_buffer_config(config);
 
         assert_eq!(TestCore::new().bsp_request_loop(0), RequestTarget::None);
@@ -948,7 +953,7 @@ mod tests {
         buffers.write_supv_request(TEST_HANDLER_GUID, 4, &[1, 2, 3, 4]);
         let mut config = buffers.config();
         // Only the supervisor channel is published; the user mailbox reads as all-zero.
-        config.user_status_buffer = 0;
+        config.user.status = 0;
         security_state().set_comm_buffer_config(config);
 
         HANDLER_RESPONSE_SIZE.store(4, Ordering::SeqCst);
@@ -967,7 +972,7 @@ mod tests {
         let mut config = buffers.config();
         // Neither mailbox is valid, so the request is an async MMI. Drop the supervisor
         // mailbox so the user channel is the only published one.
-        config.supv_status_buffer = 0;
+        config.supervisor.status = 0;
         security_state().set_comm_buffer_config(config);
 
         let calls = std::rc::Rc::new(core::cell::Cell::new(0));
@@ -990,7 +995,7 @@ mod tests {
         let core = TestCore::new();
         let mut buffers = TestBuffers::new(256);
         let mut config = buffers.config();
-        config.supv_comm_buffer = 0;
+        config.supervisor.external = 0;
 
         core.process_supervisor_request(&config, &valid_status(), 0);
         // The early return leaves the mailbox untouched.
@@ -1133,11 +1138,11 @@ mod tests {
         let mut buffers = TestBuffers::new(256);
 
         let mut no_comm = buffers.config();
-        no_comm.user_comm_buffer = 0;
+        no_comm.user.external = 0;
         core.process_user_request(&no_comm, &valid_status(), 0);
 
         let mut no_internal = buffers.config();
-        no_internal.user_comm_buffer_internal = 0;
+        no_internal.user.internal = 0;
         core.process_user_request(&no_internal, &valid_status(), 0);
 
         let mut no_supv_to_user = buffers.config();

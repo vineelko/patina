@@ -86,24 +86,15 @@ impl fmt::Display for CommBufferError {
 }
 
 /// Communication buffer configuration extracted from `PassDown` HOB.
+///
+/// The two channels carry the same four values each, so they are held as [`CommChannel`] rather
+/// than as eight flat fields under three spellings of the same names.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CommBufferConfig {
-    /// MM Supervisor communication buffer (external interface).
-    pub supv_comm_buffer: u64,
-    /// MM Supervisor internal communication buffer.
-    pub supv_comm_buffer_internal: u64,
-    /// Size of supervisor communication buffer.
-    pub supv_comm_buffer_size: u64,
-    /// MM User communication buffer (external interface).
-    pub user_comm_buffer: u64,
-    /// MM User internal communication buffer.
-    pub user_comm_buffer_internal: u64,
-    /// Size of user communication buffer.
-    pub user_comm_buffer_size: u64,
-    /// `MmCommBufferStatus` mailbox for user-targeted requests.
-    pub user_status_buffer: u64,
-    /// `MmCommBufferStatus` mailbox for supervisor-targeted requests.
-    pub supv_status_buffer: u64,
+    /// The channel carrying supervisor-targeted requests.
+    pub supervisor: CommChannel,
+    /// The channel carrying user-targeted requests.
+    pub user: CommChannel,
     /// MM Supervisor to User buffer.
     pub supv_to_user_buffer: u64,
     /// Size of Supervisor to User buffer.
@@ -139,72 +130,40 @@ pub struct MmCommonRegionHobData {
 /// mailbox that pairs with them. [`CommBufferConfig`] holds the two the supervisor runs: the
 /// supervisor channel from the MM Common Region HOB, and the user channel from the MM
 /// Communication Buffer HOB.
-pub(crate) struct CommChannel {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CommChannel {
     /// Address of the external region the HOB named.
-    pub(crate) external: u64,
+    pub external: u64,
     /// Size of that region in bytes.
-    pub(crate) size: u64,
+    pub size: u64,
     /// Address of the supervisor's internal copy of it.
-    pub(crate) internal: u64,
+    pub internal: u64,
     /// Address of the `MmCommBufferStatus` that pairs with it.
-    pub(crate) status: u64,
+    pub status: u64,
 }
 
-/// The region one communication buffer HOB described, after its page count and extent were
-/// checked.
-///
-/// Both HOB layouts reduce to the same four values, so the two readers produce this and
-/// `init_supv_comm_buffer` and `init_user_comm_buffer` work from it without caring which HOB it
-/// came from. The fields are private because a value only exists once [`ParsedCommBuffer::new`]
-/// has accepted the page count and the extent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ParsedCommBuffer {
-    /// Base address of the external region the HOB named.
-    address: u64,
-    /// Region length in pages, narrowed to the target's pointer width.
-    page_count: usize,
-    /// Region length in bytes, which is `page_count` scaled and known not to overflow.
-    size: u64,
-    /// Address of the `MmCommBufferStatus` that pairs with the region.
-    status_address: u64,
-}
-
-impl ParsedCommBuffer {
-    /// Records the region a communication buffer HOB described, once its page count and extent
-    /// are known to be usable.
+impl CommChannel {
+    /// Builds the supervisor channel from an `MM_COMMON_REGION_HOB_GUID` payload.
     ///
-    /// `description` names the buffer in the log when one of those checks rejects it.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CommBufferError::InvalidSize`] when the page count does not fit the target
-    /// architecture, when it is zero or produces a byte size that overflows, or when the region
-    /// would run past the end of the address space.
-    fn new(address: u64, pages: u64, status_address: u64, description: &str) -> MmSupervisorResult<Self> {
-        let page_count = usize::try_from(pages).map_err(|_| {
-            log::error!("{description} page count {pages} does not fit the target architecture");
-            CommBufferError::InvalidSize { pages }
-        })?;
-        let size = pages.checked_mul(UEFI_PAGE_SIZE as u64).filter(|size| *size != 0).ok_or_else(|| {
-            log::error!("{description} page count {pages} produces an invalid byte size");
-            CommBufferError::InvalidSize { pages }
-        })?;
-        if address.checked_add(size).is_none() {
-            log::error!("{description} address 0x{address:016x} plus size 0x{size:x} overflows");
-            return Err(CommBufferError::InvalidSize { pages }.into());
-        }
-
-        Ok(Self { address, page_count, size, status_address })
-    }
-
-    /// Reads the supervisor channel's region from an `MM_COMMON_REGION_HOB_GUID` payload.
+    /// The page count stays local, because nothing past the allocation needs it: `size` carries
+    /// the same length in the unit every later reader works in.
     ///
     /// # Errors
     ///
     /// Returns [`CommBufferError::HobTooSmall`] when the payload is shorter than
-    /// [`MmCommonRegionHobData`], and [`CommBufferError::InvalidSize`] when the region it
-    /// describes cannot be used.
+    /// [`MmCommonRegionHobData`], [`CommBufferError::InvalidSize`] when the page count does not
+    /// fit the target architecture, is zero, produces a byte size that overflows, or describes a
+    /// region running past the end of the address space, and
+    /// [`CommBufferError::AllocationFailed`] when the internal copy cannot be allocated.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the named buffer overlaps MMRAM or is not mapped supervisor-only. The MM IPL
+    /// supplies these addresses from outside the trust boundary, so failing closed is the only
+    /// safe outcome; see [`require_external_comm_buffer`].
     pub(crate) fn from_supv_hob(data: &[u8]) -> MmSupervisorResult<Self> {
+        log::info!("Found MM Common Region HOB (supervisor)");
+
         let (hob, _) = MmCommonRegionHobData::read_from_prefix(data).map_err(|_| {
             log::error!(
                 "MM Common Region HOB data too small: {} < {}",
@@ -214,27 +173,144 @@ impl ParsedCommBuffer {
             CommBufferError::HobTooSmall { found: data.len(), expected: core::mem::size_of::<MmCommonRegionHobData>() }
         })?;
 
-        Self::new(hob.addr, hob.number_of_pages, hob.status_addr, "Supervisor communication buffer")
+        let external = hob.addr;
+        let status = hob.status_addr;
+        let pages = hob.number_of_pages;
+
+        let page_count = usize::try_from(pages).map_err(|_| {
+            log::error!("Supervisor communication buffer page count {pages} does not fit the target architecture");
+            CommBufferError::InvalidSize { pages }
+        })?;
+        let size = pages.checked_mul(UEFI_PAGE_SIZE as u64).filter(|size| *size != 0).ok_or_else(|| {
+            log::error!("Supervisor communication buffer page count {pages} produces an invalid byte size");
+            CommBufferError::InvalidSize { pages }
+        })?;
+        if external.checked_add(size).is_none() {
+            log::error!("Supervisor communication buffer address 0x{external:016x} plus size 0x{size:x} overflows");
+            return Err(CommBufferError::InvalidSize { pages }.into());
+        }
+
+        require_external_comm_buffer(external, size, "Supervisor communication buffer");
+        require_external_comm_buffer(
+            status,
+            core::mem::size_of::<MmCommBufferStatus>() as u64,
+            "Supervisor status buffer",
+        );
+
+        let internal = security_state()
+            .page_allocator()
+            .allocate_pages_with_type(page_count, AllocationType::Supervisor)
+            .map_err(|e| {
+                log::error!("Failed to allocate internal supervisor common buffer: {e:?}");
+                CommBufferError::AllocationFailed
+            })?;
+
+        Ok(Self { external, size, internal, status })
     }
 
-    /// Reads the user channel's region from an `MM_COMM_BUFFER_HOB_GUID` payload.
+    /// Builds the user channel from an `MM_COMM_BUFFER_HOB_GUID` payload.
+    ///
+    /// Unlike [`CommChannel::from_supv_hob`], this writes back into the HOB: `physical_start` is
+    /// replaced with the internal copy so the user module names it during its own HOB walk after
+    /// demotion.
+    ///
+    /// That write is why the payload arrives as a pointer rather than a slice. The HOB list is
+    /// walked through shared references, so the caller holds a `&[u8]` and cannot turn it into a
+    /// `&mut [u8]`. It takes the address instead and ends the shared borrow before calling. The
+    /// HOB pages may also be mapped read-only, which the store below handles by clearing
+    /// `CR0.WP`, and a `&mut [u8]` would claim an ordinary write would succeed.
     ///
     /// # Errors
     ///
     /// Returns [`CommBufferError::HobTooSmall`] when the payload is shorter than
-    /// [`MmCommonBufferHobData`], and [`CommBufferError::InvalidSize`] when the region it
-    /// describes cannot be used.
-    pub(crate) fn from_user_hob(data: &[u8]) -> MmSupervisorResult<Self> {
-        let (hob, _) = MmCommonBufferHobData::read_from_prefix(data).map_err(|_| {
-            log::error!(
-                "MM Communication Buffer HOB data too small: {} < {}",
-                data.len(),
-                core::mem::size_of::<MmCommonBufferHobData>()
-            );
-            CommBufferError::HobTooSmall { found: data.len(), expected: core::mem::size_of::<MmCommonBufferHobData>() }
-        })?;
+    /// [`MmCommonBufferHobData`], [`CommBufferError::InvalidSize`] when the page count does not
+    /// fit the target architecture, is zero, produces a byte size that overflows, or describes a
+    /// region running past the end of the address space, and
+    /// [`CommBufferError::AllocationFailed`] when the internal copy cannot be allocated.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the named buffer overlaps MMRAM or is not mapped supervisor-only; see
+    /// [`require_external_comm_buffer`].
+    ///
+    /// ## Safety
+    ///
+    /// `data` must be non-null and point to `data_len` readable, writable bytes in the
+    /// original HOB buffer. No references to those bytes may be live while this
+    /// function runs because `physical_start` is overwritten in place.
+    pub(crate) unsafe fn from_user_hob(data: *mut u8, data_len: usize) -> MmSupervisorResult<Self> {
+        log::info!("Found MM Communication Buffer HOB");
 
-        Self::new(hob.physical_start, hob.number_of_pages, hob.status_buffer, "User communication buffer")
+        let hob = {
+            // SAFETY: the caller guarantees that `data` points to `data_len` readable bytes. The
+            // temporary shared slice is dropped before the payload is rewritten below.
+            let bytes = unsafe { core::slice::from_raw_parts(data.cast_const(), data_len) };
+            MmCommonBufferHobData::read_from_prefix(bytes)
+                .map_err(|_| {
+                    log::error!(
+                        "MM Communication Buffer HOB data too small: {} < {}",
+                        data_len,
+                        core::mem::size_of::<MmCommonBufferHobData>()
+                    );
+                    CommBufferError::HobTooSmall {
+                        found: data_len,
+                        expected: core::mem::size_of::<MmCommonBufferHobData>(),
+                    }
+                })?
+                .0
+        };
+
+        let external = hob.physical_start;
+        let status = hob.status_buffer;
+        let pages = hob.number_of_pages;
+
+        let page_count = usize::try_from(pages).map_err(|_| {
+            log::error!("User communication buffer page count {pages} does not fit the target architecture");
+            CommBufferError::InvalidSize { pages }
+        })?;
+        let size = pages.checked_mul(UEFI_PAGE_SIZE as u64).filter(|size| *size != 0).ok_or_else(|| {
+            log::error!("User communication buffer page count {pages} produces an invalid byte size");
+            CommBufferError::InvalidSize { pages }
+        })?;
+        if external.checked_add(size).is_none() {
+            log::error!("User communication buffer address 0x{external:016x} plus size 0x{size:x} overflows");
+            return Err(CommBufferError::InvalidSize { pages }.into());
+        }
+
+        require_external_comm_buffer(external, size, "User communication buffer");
+        require_external_comm_buffer(status, core::mem::size_of::<MmCommBufferStatus>() as u64, "User status buffer");
+
+        let internal = security_state()
+            .page_allocator()
+            .allocate_pages_with_type(page_count, AllocationType::User)
+            .map_err(|e| {
+                log::error!("Failed to allocate internal user common buffer: {e:?}");
+                CommBufferError::AllocationFailed
+            })?;
+
+        let channel = Self { external, size, internal, status };
+
+        // TODO: Remove the logic that overwrites the HOB's physical_start with the internal buffer address
+        // so the user module sees it after demotion.
+        // SAFETY:
+        // - `data` points to the original writable HOB buffer and parsing above proved it contains
+        //   `MmCommonBufferHobData`, so `physical_start` lies within the allocation. `addr_of_mut!`
+        //   avoids forming a reference to the packed field, and `write_volatile` keeps the store from
+        //   being elided.
+        // - The HOB pages may be mapped read-only, so `disable_write_protection` clears `CR0.WP` to
+        //   permit the supervisor store. This runs in Ring 0 during single-threaded BSP init in the MM
+        //   (SMM) environment, where interrupts are masked, satisfying the privilege/atomicity
+        //   requirements of `disable_write_protection`. `enable_write_protection` is handed exactly the
+        //   value returned by `disable_write_protection`, restoring `CR0.WP` before this block returns
+        //   and bounding the unprotected window to the single field write.
+        unsafe {
+            let hob_ptr = data.cast::<MmCommonBufferHobData>();
+            let original_cr0 = disable_write_protection();
+            core::ptr::write_volatile(core::ptr::addr_of_mut!((*hob_ptr).physical_start), channel.internal);
+            enable_write_protection(original_cr0);
+        }
+
+        Ok(channel)
     }
 }
 
@@ -281,118 +357,6 @@ fn require_external_comm_buffer_with(
     }
 }
 
-/// Processes the supervisor communication buffer HOB (`MM_COMMON_REGION_HOB_GUID`).
-///
-/// # Errors
-///
-/// Returns [`CommBufferError::HobTooSmall`] when the HOB payload is short,
-/// [`CommBufferError::InvalidSize`] when it describes an unusable range, and
-/// [`CommBufferError::AllocationFailed`] when the internal copy cannot be allocated.
-///
-/// # Panics
-///
-/// Panics if the named buffer overlaps MMRAM or is not mapped supervisor-only. The MM IPL
-/// supplies these addresses from outside the trust boundary, so failing closed is the only safe
-/// outcome; see [`require_external_comm_buffer`].
-pub(crate) fn init_supv_comm_buffer(data: &[u8]) -> MmSupervisorResult<CommChannel> {
-    log::info!("Found MM Common Region HOB (supervisor)");
-
-    let buffer = ParsedCommBuffer::from_supv_hob(data)?;
-
-    require_external_comm_buffer(buffer.address, buffer.size, "Supervisor communication buffer");
-    require_external_comm_buffer(
-        buffer.status_address,
-        core::mem::size_of::<MmCommBufferStatus>() as u64,
-        "Supervisor status buffer",
-    );
-
-    // Allocate internal copy
-    let supv_comm_buffer_internal = security_state()
-        .page_allocator()
-        .allocate_pages_with_type(buffer.page_count, AllocationType::Supervisor)
-        .map_err(|e| {
-            log::error!("Failed to allocate internal supervisor common buffer: {e:?}");
-            CommBufferError::AllocationFailed
-        })?;
-
-    Ok(CommChannel {
-        external: buffer.address,
-        size: buffer.size,
-        internal: supv_comm_buffer_internal,
-        status: buffer.status_address,
-    })
-}
-
-/// Processes the user communication buffer HOB (`MM_COMM_BUFFER_HOB_GUID`).
-///
-/// Unlike [`init_supv_comm_buffer`], this writes back into the HOB: `physical_start` is replaced
-/// with the internal copy so the user module names it during its own HOB walk after demotion.
-///
-/// That write is why the payload arrives as a pointer rather than a slice. The HOB list is walked
-/// through shared references, so the caller holds a `&[u8]` and cannot turn it into a `&mut [u8]`.
-/// It takes the address instead and ends the shared borrow before calling. The HOB pages may also
-/// be mapped read-only, which the store below handles by clearing `CR0.WP`, and a `&mut [u8]`
-/// would claim an ordinary write would succeed.
-///
-/// ## Safety
-///
-/// `data` must be non-null and point to `data_len` readable, writable bytes in the
-/// original HOB buffer. No references to those bytes may be live while this
-/// function runs because `physical_start` is overwritten in place.
-pub(crate) unsafe fn init_user_comm_buffer(data: *mut u8, data_len: usize) -> MmSupervisorResult<CommChannel> {
-    log::info!("Found MM Communication Buffer HOB");
-
-    let buffer = {
-        // SAFETY: the caller guarantees that `data` points to `data_len` readable bytes. The
-        // temporary shared slice is dropped before the payload is rewritten below.
-        let bytes = unsafe { core::slice::from_raw_parts(data.cast_const(), data_len) };
-        ParsedCommBuffer::from_user_hob(bytes)?
-    };
-
-    require_external_comm_buffer(buffer.address, buffer.size, "User communication buffer");
-    require_external_comm_buffer(
-        buffer.status_address,
-        core::mem::size_of::<MmCommBufferStatus>() as u64,
-        "User status buffer",
-    );
-
-    // Allocate internal copy
-    let user_comm_buffer_internal = security_state()
-        .page_allocator()
-        .allocate_pages_with_type(buffer.page_count, AllocationType::User)
-        .map_err(|e| {
-            log::error!("Failed to allocate internal user common buffer: {e:?}");
-            CommBufferError::AllocationFailed
-        })?;
-
-    // TODO: Remove the logic that overwrites the HOB's physical_start with the internal buffer address
-    // so the user module sees it after demotion.
-    // SAFETY:
-    // - `data` points to the original writable HOB buffer and parsing above proved it contains
-    //   `MmCommonBufferHobData`, so `physical_start` lies within the allocation. `addr_of_mut!`
-    //   avoids forming a reference to the packed field, and `write_volatile` keeps the store from
-    //   being elided.
-    // - The HOB pages may be mapped read-only, so `disable_write_protection` clears `CR0.WP` to
-    //   permit the supervisor store. This runs in Ring 0 during single-threaded BSP init in the MM
-    //   (SMM) environment, where interrupts are masked, satisfying the privilege/atomicity
-    //   requirements of `disable_write_protection`. `enable_write_protection` is handed exactly the
-    //   value returned by `disable_write_protection`, restoring `CR0.WP` before this block returns
-    //   and bounding the unprotected window to the single field write.
-    unsafe {
-        let hob_ptr = data.cast::<MmCommonBufferHobData>();
-        let original_cr0 = disable_write_protection();
-        core::ptr::write_volatile(core::ptr::addr_of_mut!((*hob_ptr).physical_start), user_comm_buffer_internal);
-        enable_write_protection(original_cr0);
-    }
-
-    Ok(CommChannel {
-        external: buffer.address,
-        size: buffer.size,
-        internal: user_comm_buffer_internal,
-        status: buffer.status_address,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,26 +371,32 @@ mod tests {
     #[test]
     fn test_comm_buffer_config_default_is_zeroed() {
         let cfg = CommBufferConfig::default();
-        assert_eq!(cfg.supv_comm_buffer, 0);
-        assert_eq!(cfg.supv_comm_buffer_internal, 0);
-        assert_eq!(cfg.supv_comm_buffer_size, 0);
-        assert_eq!(cfg.user_comm_buffer, 0);
-        assert_eq!(cfg.user_comm_buffer_internal, 0);
-        assert_eq!(cfg.user_comm_buffer_size, 0);
-        assert_eq!(cfg.user_status_buffer, 0);
-        assert_eq!(cfg.supv_status_buffer, 0);
+        assert_eq!(cfg.supervisor, CommChannel::default());
+        assert_eq!(cfg.user, CommChannel::default());
+        assert_eq!(cfg.supervisor.external, 0);
+        assert_eq!(cfg.supervisor.internal, 0);
+        assert_eq!(cfg.supervisor.size, 0);
+        assert_eq!(cfg.supervisor.status, 0);
+        assert_eq!(cfg.user.external, 0);
+        assert_eq!(cfg.user.internal, 0);
+        assert_eq!(cfg.user.size, 0);
+        assert_eq!(cfg.user.status, 0);
         assert_eq!(cfg.supv_to_user_buffer, 0);
         assert_eq!(cfg.supv_to_user_buffer_size, 0);
     }
 
     #[test]
     fn test_comm_buffer_config_is_copy() {
-        let cfg = CommBufferConfig { supv_comm_buffer: 0x1000, user_comm_buffer: 0x2000, ..Default::default() };
+        let cfg = CommBufferConfig {
+            supervisor: CommChannel { external: 0x1000, ..Default::default() },
+            user: CommChannel { external: 0x2000, ..Default::default() },
+            ..Default::default()
+        };
         let copied = cfg; // relies on `Copy`
-        assert_eq!(copied.supv_comm_buffer, 0x1000);
-        assert_eq!(copied.user_comm_buffer, 0x2000);
+        assert_eq!(copied.supervisor.external, 0x1000);
+        assert_eq!(copied.user.external, 0x2000);
         // `cfg` is still usable after the copy.
-        assert_eq!(cfg.supv_comm_buffer, 0x1000);
+        assert_eq!(cfg.supervisor.external, 0x1000);
     }
 
     #[test]
@@ -516,7 +486,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_init_supv_comm_buffer_builds_a_channel_from_a_buffer_outside_mmram() {
+    fn test_from_supv_hob_builds_a_channel_from_a_buffer_outside_mmram() {
         test_support::init_test_logger();
         let mmram = PageAlignedMemory::new(mem::DEFAULT_PAGING_POOL_PAGES + 8);
         init_global_state_over(&mmram);
@@ -527,7 +497,7 @@ mod tests {
         let status = external.base() + 2 * UEFI_PAGE_SIZE as u64;
         let data = supv_comm_buffer_hob_data(external.base(), 2, status);
 
-        let channel = init_supv_comm_buffer(&data).expect("build the supervisor channel");
+        let channel = CommChannel::from_supv_hob(&data).expect("build the supervisor channel");
 
         assert_eq!(channel.external, external.base());
         assert_eq!(channel.size, 2 * UEFI_PAGE_SIZE as u64);
@@ -541,7 +511,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_init_supv_comm_buffer_rejects_a_buffer_inside_mmram() {
+    fn test_from_supv_hob_rejects_a_buffer_inside_mmram() {
         test_support::init_test_logger();
         let mmram = PageAlignedMemory::new(mem::DEFAULT_PAGING_POOL_PAGES + 8);
         init_global_state_over(&mmram);
@@ -550,14 +520,14 @@ mod tests {
         // MMRAM write with a payload chosen outside MM.
         let data = supv_comm_buffer_hob_data(mmram.base(), 1, mmram.base());
 
-        let result = catch_unwind(|| init_supv_comm_buffer(&data));
+        let result = catch_unwind(|| CommChannel::from_supv_hob(&data));
 
         assert!(result.is_err(), "a communication buffer inside MMRAM produced a channel");
     }
 
     #[test]
     #[serial]
-    fn test_init_user_comm_buffer_redirects_the_hob_to_the_internal_copy() {
+    fn test_from_user_hob_redirects_the_hob_to_the_internal_copy() {
         test_support::init_test_logger();
         let mmram = PageAlignedMemory::new(mem::DEFAULT_PAGING_POOL_PAGES + 8);
         init_global_state_over(&mmram);
@@ -569,7 +539,8 @@ mod tests {
 
         // SAFETY: `data` is a live, writable payload of exactly one `MmCommonBufferHobData`, and
         // no references into it are held across the call.
-        let channel = unsafe { init_user_comm_buffer(data.as_mut_ptr(), data.len()) }.expect("build the user channel");
+        let channel =
+            unsafe { CommChannel::from_user_hob(data.as_mut_ptr(), data.len()) }.expect("build the user channel");
 
         assert_eq!(channel.external, external.base());
         assert_eq!(channel.size, 2 * UEFI_PAGE_SIZE as u64);
@@ -581,7 +552,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_init_user_comm_buffer_rejects_a_user_mapped_buffer() {
+    fn test_from_user_hob_rejects_a_user_mapped_buffer() {
         test_support::init_test_logger();
         let mmram = PageAlignedMemory::new(mem::DEFAULT_PAGING_POOL_PAGES + 8);
         init_global_state_over(&mmram);
@@ -599,69 +570,53 @@ mod tests {
 
         let result = catch_unwind(AssertUnwindSafe(|| {
             // SAFETY: `data` is a live, writable payload of exactly one `MmCommonBufferHobData`.
-            unsafe { init_user_comm_buffer(data.as_mut_ptr(), data.len()) }
+            unsafe { CommChannel::from_user_hob(data.as_mut_ptr(), data.len()) }
         }));
 
         assert!(result.is_err(), "a user-accessible communication buffer produced a channel");
     }
 
     #[test]
-    fn test_parse_communication_buffer_hobs() {
-        let supv = ParsedCommBuffer::from_supv_hob(&supv_comm_buffer_hob_data(0x10_0000, 2, 0x20_0000))
-            .expect("valid supervisor communication buffer HOB should parse");
-        let user = ParsedCommBuffer::from_user_hob(&user_comm_buffer_hob_data(0x30_0000, 3, 0x40_0000))
-            .expect("valid user communication buffer HOB should parse");
-
-        assert_eq!(
-            supv,
-            ParsedCommBuffer {
-                address: 0x10_0000,
-                page_count: 2,
-                size: 2 * UEFI_PAGE_SIZE as u64,
-                status_address: 0x20_0000,
-            }
-        );
-        assert_eq!(
-            user,
-            ParsedCommBuffer {
-                address: 0x30_0000,
-                page_count: 3,
-                size: 3 * UEFI_PAGE_SIZE as u64,
-                status_address: 0x40_0000,
-            }
-        );
-    }
-
-    #[test]
     fn test_parse_communication_buffer_hobs_reject_truncated_data() {
         let supv = supv_comm_buffer_hob_data(0x10_0000, 1, 0x20_0000);
-        let user = user_comm_buffer_hob_data(0x30_0000, 1, 0x40_0000);
+        let mut user = user_comm_buffer_hob_data(0x30_0000, 1, 0x40_0000);
+        let user_len = user.len() - 1;
 
+        // A short payload is rejected while reading the HOB, before anything is allocated, so
+        // these reach no global state.
         assert_eq!(
-            ParsedCommBuffer::from_supv_hob(&supv[..supv.len() - 1]),
+            CommChannel::from_supv_hob(&supv[..supv.len() - 1]),
             Err(CommBufferError::HobTooSmall { found: supv.len() - 1, expected: size_of::<MmCommonRegionHobData>() }
                 .into())
         );
+        // SAFETY: `user` is a live, writable payload and no references into it are held across
+        // the call. The truncated length stops the read before the HOB is rewritten.
+        let user_result = unsafe { CommChannel::from_user_hob(user.as_mut_ptr(), user_len) };
         assert_eq!(
-            ParsedCommBuffer::from_user_hob(&user[..user.len() - 1]),
-            Err(CommBufferError::HobTooSmall { found: user.len() - 1, expected: size_of::<MmCommonBufferHobData>() }
-                .into())
+            user_result,
+            Err(CommBufferError::HobTooSmall { found: user_len, expected: size_of::<MmCommonBufferHobData>() }.into())
         );
     }
 
     #[test]
     fn test_parse_communication_buffer_hobs_reject_invalid_ranges() {
         for (address, pages) in [(0x1000, 0), (0x1000, u64::MAX), (u64::MAX - 0xFFF, 1)] {
+            // The range is checked before the external buffer is required or anything is
+            // allocated, so a bad page count is reported without reaching global state.
             assert_eq!(
-                ParsedCommBuffer::from_supv_hob(&supv_comm_buffer_hob_data(address, pages, 0x20_0000)),
+                CommChannel::from_supv_hob(&supv_comm_buffer_hob_data(address, pages, 0x20_0000)),
                 Err(CommBufferError::InvalidSize { pages }.into())
             );
-            assert_eq!(
-                ParsedCommBuffer::from_user_hob(&user_comm_buffer_hob_data(address, pages, 0x20_0000)),
-                Err(CommBufferError::InvalidSize { pages }.into())
-            );
+
+            let mut user = user_comm_buffer_hob_data(address, pages, 0x20_0000);
+            let user_len = user.len();
+            // SAFETY: `user` is a live, writable payload and no references into it are held
+            // across the call. The range check stops the work before the HOB is rewritten.
+            let user_result = unsafe { CommChannel::from_user_hob(user.as_mut_ptr(), user_len) };
+            assert_eq!(user_result, Err(CommBufferError::InvalidSize { pages }.into()));
         }
     }
+
     #[test]
     fn test_comm_buffer_error_displays_each_variant() {
         let errors = [

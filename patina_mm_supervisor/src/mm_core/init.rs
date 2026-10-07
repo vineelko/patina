@@ -36,9 +36,7 @@ use patina_paging::{MemoryAttributes, PageTable, PagingType, x64::X64PageTable};
 
 use crate::{
     MmSupervisorCore, PlatformInfo,
-    comm_buffer::{
-        CommBufferConfig, CommBufferError, MM_COMMON_REGION_HOB_GUID, init_supv_comm_buffer, init_user_comm_buffer,
-    },
+    comm_buffer::{CommBufferConfig, CommBufferError, CommChannel, MM_COMMON_REGION_HOB_GUID},
     error::MmSupervisorResult,
     hob_validation::{self, HobValidationError},
     intrinsics::read_cr3,
@@ -587,11 +585,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // through MM_COMM_BUFFER_HOB_GUID below.
         let supv_region_data = find_guid_hob(hob_hand_off_table, MM_COMMON_REGION_HOB_GUID)
             .ok_or(CommBufferError::CommRegionHobMissing)?;
-        let supv = init_supv_comm_buffer(supv_region_data)
+        let supv = CommChannel::from_supv_hob(supv_region_data)
             .inspect_err(|e| log::error!("Failed to initialize supervisor communication buffer: {e}"))?;
 
         // The user channel still uses the legacy `MM_COMM_BUFFER_HOB_GUID` so the user core's own
-        // HOB walk keeps working (see the HACKHACK at the tail of `init_user_comm_buffer`).
+        // HOB walk keeps working (see the HACKHACK at the tail of `CommChannel::from_user_hob`).
         //
         // The lookup is scoped so the shared slice it returns is dead before the call below
         // rewrites the same bytes. Taking the address is the only way to hand over write access:
@@ -604,7 +602,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // SAFETY: the pointer and length identify the original HOB payload in the writable live
         // HOB list. The shared slice used to locate it is no longer used while it is rewritten.
         let user = unsafe {
-            init_user_comm_buffer(user_buffer_data, user_buffer_data_len)
+            CommChannel::from_user_hob(user_buffer_data, user_buffer_data_len)
                 .inspect_err(|e| log::error!("Failed to initialize user communication buffer: {e}"))?
         };
 
@@ -621,14 +619,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         }
 
         security_state().set_comm_buffer_config(CommBufferConfig {
-            supv_comm_buffer: supv.external,
-            supv_comm_buffer_internal: supv.internal,
-            supv_comm_buffer_size: supv.size,
-            user_comm_buffer: user.external,
-            user_comm_buffer_internal: user.internal,
-            user_comm_buffer_size: user.size,
-            user_status_buffer: user.status,
-            supv_status_buffer: supv.status,
+            supervisor: supv,
+            user,
             supv_to_user_buffer,
             supv_to_user_buffer_size: UEFI_PAGE_SIZE as u64,
         });

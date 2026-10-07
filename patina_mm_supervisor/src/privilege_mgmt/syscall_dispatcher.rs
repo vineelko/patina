@@ -602,8 +602,8 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
             return Ok(0); // FALSE
         };
 
-        let buf_start = config.user_comm_buffer_internal;
-        let buf_end = buf_start.saturating_add(config.user_comm_buffer_size);
+        let buf_start = config.user.internal;
+        let buf_end = buf_start.saturating_add(config.user.size);
         let range_end = address.saturating_add(size);
 
         // Check that the range is non-empty and falls entirely within the user comm buffer.
@@ -639,7 +639,7 @@ pub extern "efiapi" fn syscall_dispatcher(
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
-    use crate::comm_buffer::CommBufferConfig;
+    use crate::comm_buffer::{CommBufferConfig, CommChannel};
     use crate::error::MmSupervisorResult;
     use crate::mem::{AllocError, AllocationType};
     use crate::mm_policy::PolicyGateError;
@@ -893,8 +893,7 @@ mod tests {
         let any = u64::from(ALLOCATE_ANY_PAGES);
         let data = u64::from(RUNTIME_SERVICES_DATA);
         let comm_buffer = CommBufferConfig {
-            user_comm_buffer_internal: 0x1_0000,
-            user_comm_buffer_size: 0x1000,
+            user: CommChannel { internal: 0x1_0000, size: 0x1000, ..Default::default() },
             ..Default::default()
         };
 
@@ -1428,8 +1427,7 @@ mod tests {
     #[test]
     fn test_mm_is_comm_buffer_range_checks() {
         let config = CommBufferConfig {
-            user_comm_buffer_internal: 0x1_0000,
-            user_comm_buffer_size: 0x1000,
+            user: CommChannel { internal: 0x1_0000, size: 0x1000, ..Default::default() },
             ..Default::default()
         };
         let d = dispatcher(MockOps { comm_buffer: Some(config), ..Default::default() });
