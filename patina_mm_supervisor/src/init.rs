@@ -29,7 +29,7 @@ mod tests {
 
     use crate::mem::AllocationType;
     use crate::state::security_state;
-    use crate::test_support::init::*;
+    use crate::test_support::*;
 
     #[test]
     fn test_free_init_module_accepts_an_entirely_non_executable_image() {

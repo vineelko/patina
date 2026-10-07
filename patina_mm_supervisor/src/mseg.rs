@@ -88,7 +88,7 @@ pub(crate) fn program_mseg_base(cpu_id: u32) {
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
-    use crate::test_support::init::*;
+    use crate::test_support::*;
 
     #[test]
     fn test_parse_mseg_smram_hob_returns_cpu_start() {

@@ -72,7 +72,7 @@ mod tests {
     };
     use patina::pi::guid::HOB_MEMORY_ALLOC_MODULE_GUID;
 
-    use crate::test_support::init::*;
+    use crate::test_support::*;
 
     #[test]
     fn test_find_module_selects_init_and_core_allocations() {

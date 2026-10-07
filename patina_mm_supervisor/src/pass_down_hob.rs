@@ -165,7 +165,7 @@ pub(crate) fn parse_pass_down_hob(data: &[u8]) -> MmSupervisorResult<MmSupvPassD
 mod tests {
     use super::*;
 
-    use crate::test_support::init::*;
+    use crate::test_support::*;
 
     #[test]
     fn test_parse_pass_down_hob() {

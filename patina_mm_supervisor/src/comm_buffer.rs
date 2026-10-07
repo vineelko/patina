@@ -337,7 +337,7 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use crate::mem;
-    use crate::test_support::init::*;
+    use crate::test_support::*;
     use patina_paging::{MemoryAttributes, PageTable};
 
     #[test]

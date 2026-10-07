@@ -835,7 +835,7 @@ mod tests {
     use serial_test::serial;
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    use crate::test_support::init::*;
+    use crate::test_support::*;
 
     #[test]
     fn test_scan_hob_list_does_not_write_the_memory_it_describes() {
