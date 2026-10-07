@@ -20,6 +20,14 @@ use crate::{
     state::init_state,
 };
 
+// GUID for gMsegSmramGuid (UefiCpuPkg/UefiCpuPkg.dec)
+// { 0x5802bce4, 0xeeee, 0x4e33, { 0xa1, 0x30, 0xeb, 0xad, 0x27, 0xf0, 0xe4, 0x39 } }
+/// GUID for the MSEG SMRAM HOB, which carries the `EFI_SMRAM_DESCRIPTOR` for the
+/// MSEG region carved out of SMRAM for an STM. Only published by platforms that
+/// integrate STM/SEA support.
+pub(crate) const MSEG_SMRAM_HOB_GUID: patina::BinaryGuid =
+    patina::BinaryGuid::from_string("5802bce4-eeee-4e33-a130-ebad27f0e439");
+
 /// MSR index for `IA32_SMM_MONITOR_CTL`, which holds the MSEG base used to
 /// activate the dual-monitor treatment (Intel SDM Vol. 4).
 const IA32_SMM_MONITOR_CTL_MSR: u32 = 0x9b;

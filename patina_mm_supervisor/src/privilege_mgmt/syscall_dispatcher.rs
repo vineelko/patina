@@ -639,7 +639,7 @@ pub extern "efiapi" fn syscall_dispatcher(
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
-    use crate::CommBufferConfig;
+    use crate::comm_buffer::CommBufferConfig;
     use crate::error::MmSupervisorResult;
     use crate::mem::{AllocError, AllocationType};
     use crate::mm_policy::PolicyGateError;

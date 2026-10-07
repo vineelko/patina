@@ -72,6 +72,8 @@ mod tests {
     };
     use patina::pi::guid::HOB_MEMORY_ALLOC_MODULE_GUID;
 
+    use crate::comm_buffer::MM_COMMON_REGION_HOB_GUID;
+    use crate::pass_down_hob::MM_SUPV_PASS_DOWN_HOB_GUID;
     use crate::test_support::*;
 
     #[test]
@@ -124,9 +126,9 @@ mod tests {
         let unrelated_data = [0x11];
         let first_data = [0x22, 0x33];
         let second_data = [0x44];
-        let unrelated = guid_hob(crate::MM_SUPV_PASS_DOWN_HOB_GUID, unrelated_data.len());
-        let first = guid_hob(crate::MM_COMMON_REGION_HOB_GUID, first_data.len());
-        let second = guid_hob(crate::MM_COMMON_REGION_HOB_GUID, second_data.len());
+        let unrelated = guid_hob(MM_SUPV_PASS_DOWN_HOB_GUID, unrelated_data.len());
+        let first = guid_hob(MM_COMMON_REGION_HOB_GUID, first_data.len());
+        let second = guid_hob(MM_COMMON_REGION_HOB_GUID, second_data.len());
 
         assert_eq!(
             find_guid_hob_in(
@@ -135,13 +137,10 @@ mod tests {
                     Hob::GuidHob(&first, &first_data),
                     Hob::GuidHob(&second, &second_data),
                 ],
-                crate::MM_COMMON_REGION_HOB_GUID,
+                MM_COMMON_REGION_HOB_GUID,
             ),
             Some(first_data.as_slice())
         );
-        assert_eq!(
-            find_guid_hob_in([Hob::GuidHob(&unrelated, &unrelated_data)], crate::MM_COMMON_REGION_HOB_GUID),
-            None
-        );
+        assert_eq!(find_guid_hob_in([Hob::GuidHob(&unrelated, &unrelated_data)], MM_COMMON_REGION_HOB_GUID), None);
     }
 }

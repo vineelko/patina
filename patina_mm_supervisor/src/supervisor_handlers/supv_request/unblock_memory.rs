@@ -801,6 +801,8 @@ fn validate_unblock_request(params: &MmSupervisorUnblockMemoryParams) -> Result<
 mod tests {
     use core::cell::Cell;
 
+    use crate::test_support;
+
     use super::*;
 
     const REQUEST_SIZE: usize = MmSupervisorRequestHeader::SIZE + MmSupervisorUnblockMemoryParams::SIZE;
@@ -905,7 +907,7 @@ mod tests {
     }
 
     fn create_test_tracker() -> UnblockedMemoryTracker {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         UnblockedMemoryTracker::new()
     }
 
@@ -922,7 +924,7 @@ mod tests {
         attribute: u64,
         valid_guid: bool,
     ) -> [u8; REQUEST_SIZE] {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let mut buffer = [0u8; REQUEST_SIZE];
         let payload_offset = MmSupervisorRequestHeader::SIZE;
         write_u64(&mut buffer, payload_offset + MEMORY_DESCRIPTOR_PHYSICAL_START_OFFSET, physical_start);
@@ -937,7 +939,7 @@ mod tests {
     }
 
     fn validated_request(is_supervisor_page: bool) -> ValidatedUnblockRequest {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         ValidatedUnblockRequest {
             physical_start: 0x2000,
             number_of_pages: 2,

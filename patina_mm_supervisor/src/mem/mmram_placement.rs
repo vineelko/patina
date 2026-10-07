@@ -125,6 +125,8 @@ pub(crate) fn buffer_overlaps_mmram(base: u64, size: u64) -> bool {
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
+    use crate::test_support;
+
     use super::*;
     use std::panic::catch_unwind;
 
@@ -179,7 +181,7 @@ mod tests {
 
     #[test]
     fn test_mmram_placement_mmram_placement_rejects_a_range_crossing_the_boundary() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
 
         // A range that is neither wholly in nor wholly out of MMRAM has no safe reading, so it is
         // reported as the configuration error it is rather than resolved either way.

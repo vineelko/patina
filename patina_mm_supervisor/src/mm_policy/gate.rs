@@ -802,6 +802,8 @@ fn compare_snapshot(saved: &[MemDescriptorV1_0], fresh: &[MemDescriptorV1_0]) ->
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
+    use crate::test_support;
+
     use super::super::test_support::{Descriptors, PolicyBuilder, instruction, io, mem, msr, save_state};
     use super::super::{RESOURCE_ATTR_COND_WRITE, RESOURCE_ATTR_WRITE, TYPE_MSR};
     use super::*;
@@ -1207,7 +1209,7 @@ mod tests {
 
     #[test]
     fn test_gate_rejects_a_buffer_too_small_for_a_header() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
 
         // The producer's reported size is what bounds every offset the blob carries, so a buffer
         // that cannot even hold the header is refused before the header is read.
