@@ -357,6 +357,16 @@ mod tests {
     use super::*;
     use zerocopy::FromZeros;
 
+    #[test]
+    fn test_call_gate_error_names_the_undersized_gdt() {
+        // The GDT image comes from outside the supervisor, so the one way programming can fail is
+        // an image that does not reach the entries being written.
+        assert_eq!(
+            format!("{}", CallGateError::GdtTooSmall),
+            "the GDT image does not contain the privilege transition entries to program"
+        );
+    }
+
     /// A zeroed GDT image large enough for the entries the supervisor programs.
     fn empty_gdt() -> Vec<u8> {
         vec![0u8; GDT_PROGRAMMED_SIZE]

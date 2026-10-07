@@ -474,6 +474,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_policy_validation_errors_render_each_variant_distinctly() {
+        // A rejected blob stops initialization, so the message is what a platform owner has to
+        // work from. Each variant carries the identifiers needed to find the offending entry.
+        let cases = [
+            (
+                PolicyValidationError::InvalidReservedField { policy_type: TYPE_MEM, entry_index: 3 },
+                "entry 3 of policy type 1 has a non-zero reserved field",
+            ),
+            (
+                PolicyValidationError::DuplicatePolicyType { policy_type: TYPE_IO },
+                "policy type 2 appears more than once",
+            ),
+            (
+                PolicyValidationError::SizeMismatch { expected: 64, declared: 32 },
+                "the policy declares a size of 32 bytes, but 64 bytes were scanned",
+            ),
+            (PolicyValidationError::UnrecognizedPolicyType { policy_type: 99 }, "policy type 99 is not recognized"),
+            (
+                PolicyValidationError::UnrecognizedHeaderBits,
+                "the policy header sets bits the supervisor does not recognize",
+            ),
+            (
+                PolicyValidationError::UnsupportedAttribute { policy_type: TYPE_MSR, entry_index: 1, attributes: 0x40 },
+                "entry 1 of policy type 3 requests unsupported attributes 0x40",
+            ),
+            (
+                PolicyValidationError::ConflictingCondition { entry_index: 7 },
+                "save-state entry 7 declares conflicting conditions",
+            ),
+            (
+                PolicyValidationError::LegacyMemoryPolicyDetected,
+                "the policy uses the legacy memory policy format, which is not accepted",
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(format!("{error}"), expected);
+        }
+
+        // The entry index is part of the message, so two entries failing the same way stay
+        // distinguishable in the log.
+        assert_ne!(
+            format!("{}", PolicyValidationError::ConflictingCondition { entry_index: 1 }),
+            format!("{}", PolicyValidationError::ConflictingCondition { entry_index: 2 })
+        );
+    }
+
+    #[test]
     fn test_security_policy_check_accepts_a_conforming_policy() {
         let policy = full_policy().build();
         assert_eq!(security_policy_check(&policy.gate()), Ok(()));

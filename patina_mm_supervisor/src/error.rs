@@ -347,19 +347,38 @@ mod tests {
     #[test]
     fn test_mm_supervisor_error_displays_the_subsystem_and_the_cause() {
         // Every variant names its subsystem and then defers to the wrapped error's own message,
-        // so widening never loses the detail the subsystem reported.
-        assert_eq!(
-            format!("{}", MmSupervisorError::from(CoreInitError::UserEntryPointMissing)),
-            format!("Core bring-up: {}", CoreInitError::UserEntryPointMissing)
-        );
-        assert_eq!(
-            format!("{}", MmSupervisorError::from(AllocError::OutOfMemory)),
-            format!("Alloc allocation: {}", AllocError::OutOfMemory)
-        );
-        assert_eq!(
-            format!("{}", MmSupervisorError::from(SmrrError::SmrrUnsupported)),
-            format!("SMRR Programming: {}", SmrrError::SmrrUnsupported)
-        );
+        // so widening never loses the detail the subsystem reported. The table is exhaustive so a
+        // new variant added without a Display arm fails here rather than printing the wrong stage.
+        let cases: [(MmSupervisorError, &str); 18] = [
+            (HobValidationError::NoMmramRegions.into(), "HOB validation: "),
+            (CommBufferError::Missing.into(), "Communication buffer: "),
+            (PassDownHobError::TooSmall.into(), "PassDown HOB: "),
+            (CoreInitError::UserEntryPointMissing.into(), "Core bring-up: "),
+            (AllocError::OutOfMemory.into(), "Alloc allocation: "),
+            (PolicyGateError::AccessDenied.into(), "Policy gate: "),
+            (PolicyValidationError::UnrecognizedHeaderBits.into(), "Policy validation: "),
+            (PageTableWalkError::InvalidCr3.into(), "Page table walk: "),
+            (SyscallSetupError::NotInitialized.into(), "Syscall setup: "),
+            (
+                SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 0, smbase: 0x3000 }.into(),
+                "Save-state validation: ",
+            ),
+            (MmramBoundError::NoSmrrRange.into(), "MMRAM bound: "),
+            (SmrrError::SmrrUnsupported.into(), "SMRR Programming: "),
+            (CallGateError::GdtTooSmall.into(), "Call gate setup: "),
+            (SmiHandlerIdtPatchError::EntryTooSmall.into(), "SMI handler IDT patch: "),
+            (SmiHandlerIdtPatchInputError::ZeroEntrySize.into(), "SMI handler IDT patch inputs: "),
+            (MailboxError::CommandAlreadyPending { index: 2 }.into(), "AP mailbox: "),
+            (UnblockError::OverlapsWithMmram.into(), "Unblock memory: "),
+            (PageUpdateError::AlreadyMapped.into(), "Unblock page table update: "),
+        ];
+
+        for (error, prefix) in cases {
+            let rendered = format!("{error}");
+            assert!(rendered.starts_with(prefix), "{rendered:?} should start with {prefix:?}");
+            // The wrapped message follows the prefix rather than being replaced by it.
+            assert!(rendered.len() > prefix.len(), "{rendered:?} carries no message from the subsystem");
+        }
 
         // The two policy stages are told apart by their prefix, so a reader can see which one
         // rejected the blob without reading the rest of the message.
@@ -377,6 +396,8 @@ mod tests {
         // Every variant wraps a subsystem error, so a source is always reachable.
         let errors = [
             MmSupervisorError::from(HobValidationError::NoMmramRegions),
+            MmSupervisorError::from(CommBufferError::Missing),
+            MmSupervisorError::from(PassDownHobError::TooSmall),
             MmSupervisorError::from(CoreInitError::UserEntryPointMissing),
             MmSupervisorError::from(AllocError::OutOfMemory),
             MmSupervisorError::from(PolicyGateError::AccessDenied),
@@ -384,6 +405,7 @@ mod tests {
             MmSupervisorError::from(PageTableWalkError::InvalidCr3),
             MmSupervisorError::from(SyscallSetupError::NotInitialized),
             MmSupervisorError::from(SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 0, smbase: 0 }),
+            MmSupervisorError::from(MmramBoundError::NoSmrrRange),
             MmSupervisorError::from(SmrrError::SmrrUnsupported),
             MmSupervisorError::from(CallGateError::GdtTooSmall),
             MmSupervisorError::from(SmiHandlerIdtPatchError::EntryTooSmall),

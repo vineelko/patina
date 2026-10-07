@@ -358,6 +358,20 @@ mod tests {
     }
 
     #[test]
+    fn test_mailbox_defaults_match_new() {
+        // Both types are held in fixed-size arrays, so Default has to produce the same empty
+        // mailbox that new() does or an array built by default would start out usable.
+        let mailbox = ApMailbox::default();
+        assert_eq!(mailbox.take_command(), None);
+        assert_eq!(mailbox.get_response(), None);
+
+        let manager = MailboxManager::<4>::default();
+        for index in 0..4 {
+            assert_eq!(manager.check_mailbox(index), None);
+        }
+    }
+
+    #[test]
     fn test_mailbox_is_const() {
         // Verify we can create a static mailbox
         static _MAILBOX: ApMailbox = ApMailbox::new();

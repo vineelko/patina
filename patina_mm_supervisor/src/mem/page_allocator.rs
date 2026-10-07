@@ -1277,6 +1277,19 @@ mod tests {
     }
 
     #[test]
+    fn test_page_allocator_bookkeeping_rejects_a_page_total_that_overflows() {
+        // The descriptors are produced outside MMRAM, so the sizing has to survive a list that
+        // claims more pages than a usize can hold. Each region here claims the whole address
+        // space, and enough of them are present that the running total wraps. The sizing must
+        // report that rather than allocating a bookkeeping area too small for the bitmaps.
+        let pages_per_region = u64::MAX as usize / UEFI_PAGE_SIZE;
+        let regions_needed = usize::MAX / pages_per_region + 1;
+        let regions = vec![SmramRegion::new(0x8000_0000, u64::MAX, false); regions_needed];
+
+        assert_eq!(PageAllocator::calculate_bookkeeping(&regions), Err(AllocError::OutOfMemory.into()));
+    }
+
+    #[test]
     fn test_page_allocator_classify_mmram_in_regions_matches_the_committed_classifier() {
         // The pre-commit and post-commit classifiers decide the same security questions, so a
         // range must not be judged differently depending on which one a caller reaches for.

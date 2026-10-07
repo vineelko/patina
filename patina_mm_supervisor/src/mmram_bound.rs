@@ -83,6 +83,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_mmram_bound_errors_render_each_variant_distinctly() {
+        // The anchor is the address the CPU proved is MMRAM, so a mismatch names it: that value
+        // is what tells a platform owner which descriptors the HOB list got wrong.
+        assert_eq!(
+            format!("{}", MmramBoundError::AnchorOutsideRegions { anchor: 0x7000_0000 }),
+            "the scanned descriptors do not cover the supervisor image anchor 0x0000000070000000"
+        );
+        assert_eq!(
+            format!("{}", MmramBoundError::NoSmrrRange),
+            "no scanned region meets the SMRR base and size requirements"
+        );
+        assert_ne!(
+            format!("{}", MmramBoundError::AnchorOutsideRegions { anchor: 0x1000 }),
+            format!("{}", MmramBoundError::AnchorOutsideRegions { anchor: 0x2000 })
+        );
+    }
+
+    #[test]
     fn test_establish_mmram_bound_returns_the_derived_range() {
         let regions = [SmramRegion::new(0x1000, 0x2000, false)];
         let range = SmramRegion::new(0x1000, 0x2000, false);

@@ -342,6 +342,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_ap_state_maps_every_byte_value() {
+        // The state is stored as a byte in an atomic, so every value that can be read back has to
+        // map to something. Anything the supervisor did not write reads as NotPresent, which
+        // fails closed: an unrecognized byte never presents an AP as available for work.
+        assert_eq!(ApState::from(0), ApState::NotPresent);
+        assert_eq!(ApState::from(1), ApState::InHoldingPen);
+        assert_eq!(ApState::from(2), ApState::Busy);
+        assert_eq!(ApState::from(3), ApState::Halted);
+
+        for value in 4..=u8::MAX {
+            assert_eq!(ApState::from(value), ApState::NotPresent, "byte {value} should read as NotPresent");
+        }
+
+        // The four named states round-trip through the byte they are stored as.
+        for state in [ApState::NotPresent, ApState::InHoldingPen, ApState::Busy, ApState::Halted] {
+            assert_eq!(ApState::from(state as u8), state);
+        }
+    }
+
+    #[test]
+    fn test_cpu_slot_starts_unused() {
+        // A fresh slot must not look like a registered CPU, or the first AP to arrive would be
+        // matched against it.
+        let slot = CpuSlot::new();
+        assert!(!slot.is_used());
+        assert_eq!(slot.get_cpu_id(), None);
+        assert_eq!(ApState::from(slot.state.load(Ordering::Acquire)), ApState::NotPresent);
+    }
+
+    #[test]
     fn test_cpu_manager_creation() {
         let manager: CpuManager<4> = CpuManager::new();
         assert_eq!(manager.registered_count(), 0);
@@ -430,6 +460,57 @@ mod tests {
 
         // Cannot change BSP state
         assert!(!manager.set_ap_state(0, ApState::Halted));
+
+        // An APIC ID that was never registered has no slot to change, so the request is refused
+        // rather than silently applied to a neighbouring slot.
+        assert!(!manager.set_ap_state(0x99, ApState::Busy));
+        assert_eq!(manager.get_ap_state(0x99), None);
+    }
+
+    #[test]
+    fn test_ap_state_by_index_tracks_only_used_slots() {
+        let manager: CpuManager<4> = CpuManager::new();
+        manager.register_cpu(0x20, 0, true).unwrap();
+        manager.register_cpu(0x30, 1, false).unwrap();
+        manager.set_ap_state(0x30, ApState::InHoldingPen);
+
+        // The index here is the dense CPU index, not the APIC ID, so a lookup by index reports
+        // the state of whichever core registered at that position. The BSP registers as Busy
+        // because it is the core currently running, while an AP starts out NotPresent until it
+        // checks in.
+        assert_eq!(manager.get_ap_state_by_index(1), Some(ApState::InHoldingPen));
+        assert_eq!(manager.get_ap_state_by_index(0), Some(ApState::Busy));
+
+        // A slot nobody registered into reports nothing, which is what keeps an unregistered
+        // core from being counted as present and waiting for work.
+        assert_eq!(manager.get_ap_state_by_index(2), None);
+        // An index past the array is out of range rather than wrapping onto a live slot.
+        assert_eq!(manager.get_ap_state_by_index(4), None);
+        assert_eq!(manager.get_ap_state_by_index(usize::MAX), None);
+    }
+
+    #[test]
+    fn test_take_release_by_index_refuses_an_index_out_of_range() {
+        let manager: CpuManager<4> = CpuManager::new();
+        manager.register_cpu(0x20, 0, true).unwrap();
+
+        // An AP polling with an index outside the array must not take a release token from
+        // another slot; it simply sees nothing to take.
+        assert!(!manager.take_release_by_index(4));
+        assert!(!manager.take_release_by_index(usize::MAX));
+
+        // A registered slot with no pending release is also empty, but for the ordinary reason.
+        assert!(!manager.take_release_by_index(0));
+    }
+
+    #[test]
+    fn test_cpu_manager_default_matches_new() {
+        // CpuManager is held in a static, so Default has to produce the same empty manager that
+        // new() does.
+        let manager: CpuManager<4> = CpuManager::default();
+        assert_eq!(manager.registered_count(), 0);
+        assert_eq!(manager.max_cpus(), 4);
+        assert!(manager.bsp_id().is_none());
     }
 
     #[test]

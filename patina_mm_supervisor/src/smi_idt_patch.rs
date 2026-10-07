@@ -347,6 +347,61 @@ mod tests {
     use crate::test_support::mmi_entry;
 
     #[test]
+    fn test_smi_handler_idt_patch_errors_render_each_variant_distinctly() {
+        // The MMI entry comes from the producer, so when parsing rejects one the message is the
+        // only record of which bound failed. Each variant must therefore say something different.
+        assert_eq!(
+            format!("{}", SmiHandlerIdtPatchError::EntryTooSmall),
+            "the MMI entry is too small to hold its trailing structure-size field"
+        );
+        assert_eq!(
+            format!("{}", SmiHandlerIdtPatchError::FixupStructureOutOfBounds),
+            "the fixup structure the MMI entry trailer points at lies outside the entry"
+        );
+        assert_eq!(
+            format!("{}", SmiHandlerIdtPatchError::FixupHeaderTooSmall),
+            "the fixup structure is smaller than its own header"
+        );
+        assert_eq!(
+            format!("{}", SmiHandlerIdtPatchError::Fixup64EntryOutOfBounds),
+            "the addressed Fixup64 entry lies outside the MMI entry"
+        );
+        // The count is carried in the message, so a short array says how short it was.
+        assert_eq!(
+            format!("{}", SmiHandlerIdtPatchError::Fixup64ArrayTooSmall { found: 2 }),
+            "the Fixup64 array holds 2 entries, too few for the IDTR slot the supervisor patches"
+        );
+        assert_ne!(
+            format!("{}", SmiHandlerIdtPatchError::Fixup64ArrayTooSmall { found: 2 }),
+            format!("{}", SmiHandlerIdtPatchError::Fixup64ArrayTooSmall { found: 3 })
+        );
+    }
+
+    #[test]
+    fn test_smi_handler_idt_patch_input_errors_render_each_variant_distinctly() {
+        let all = [
+            (SmiHandlerIdtPatchInputError::ZeroEntrySize, "the MMI entry size is zero"),
+            (
+                SmiHandlerIdtPatchInputError::MissingSmBaseArray,
+                "the SMBASE array pointer is null, or no CPUs were reported",
+            ),
+            (
+                SmiHandlerIdtPatchInputError::SmBaseArraySizeOverflow,
+                "the SMBASE array size overflows, so the array cannot be addressed",
+            ),
+            (SmiHandlerIdtPatchInputError::SmBaseArrayOutsideMmram, "the SMBASE array is not entirely inside MMRAM"),
+            (
+                SmiHandlerIdtPatchInputError::EntrySizeTooLarge,
+                "the MMI entry size does not fit the target architecture",
+            ),
+        ];
+
+        for (error, expected) in all {
+            assert_eq!(format!("{error}"), expected);
+        }
+    }
+
+    #[test]
     fn test_validate_smi_handler_idt_patch_inputs() {
         let inputs = validate_smi_handler_idt_patch_inputs(0x1000, 4, 0x200, |base, size| {
             base == 0x1000 && size == 4 * size_of::<u64>() as u64

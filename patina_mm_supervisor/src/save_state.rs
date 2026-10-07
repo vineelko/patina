@@ -890,6 +890,45 @@ mod tests {
     }
 
     #[test]
+    fn test_save_state_validation_errors_render_each_variant_distinctly() {
+        // These reject the per-CPU save-state regions the PassDown HOB describes, which stops
+        // initialization. The message carries the address and the CPU index, because that is what
+        // identifies which descriptor the producer got wrong.
+        assert_eq!(
+            format!("{}", SaveStateValidationError::UnusableSmBaseArray { base: 0x7000, count: 4 }),
+            "the SMBASE array at 0x0000000000007000 with 4 entries is null, misaligned, overflowing, \
+             or not entirely inside MMRAM"
+        );
+        assert_eq!(
+            format!("{}", SaveStateValidationError::SmBaseArrayNotSupervisorOwned { base: 0x7000, count: 4 }),
+            "the SMBASE array at 0x0000000000007000 with 4 entries is inside MMRAM but is not mapped \
+             supervisor-only"
+        );
+        assert_eq!(
+            format!("{}", SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 2, smbase: 0x8000 }),
+            "the save-state region for CPU 2 at SMBASE 0x0000000000008000 is null, overflowing, \
+             or not entirely inside MMRAM"
+        );
+        assert_eq!(
+            format!("{}", SaveStateValidationError::SaveStateRegionNotSupervisorOwned { cpu_index: 2, smbase: 0x8000 }),
+            "the save-state region for CPU 2 at SMBASE 0x0000000000008000 is inside MMRAM but is not \
+             mapped supervisor-only"
+        );
+
+        // Placement and ownership are separate findings for the same region, so the two must not
+        // render the same way.
+        assert_ne!(
+            format!("{}", SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 0, smbase: 0x8000 }),
+            format!("{}", SaveStateValidationError::SaveStateRegionNotSupervisorOwned { cpu_index: 0, smbase: 0x8000 })
+        );
+        // The CPU index distinguishes two cores failing the same check.
+        assert_ne!(
+            format!("{}", SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 0, smbase: 0x8000 }),
+            format!("{}", SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 1, smbase: 0x8000 })
+        );
+    }
+
+    #[test]
     fn test_validate_save_state_regions_accepts_regions_inside_mmram() {
         let smram = FakeSmram::new(2);
         let info = smram.info();
