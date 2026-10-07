@@ -58,7 +58,7 @@ use super::CoreInitError;
 use crate::hob::{find_guid_hob, find_module};
 use crate::mmram_bound::{establish_mmram_bound, supervisor_image_anchor};
 use crate::mseg::parse_mseg_smram_hob;
-use crate::pass_down_hob::{MmSupvPassDownHobData, PassDownHobError, parse_pass_down_hob};
+use crate::pass_down_hob::{MmSupvPassDownHobData, PassDownHobError};
 use crate::smi_idt_patch::patch_smi_handler_idt;
 
 // GUID for gMpInformationHobGuid (StandaloneMmPkg/Include/Guid/MpInformation.h)
@@ -709,7 +709,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         data: &[u8],
         number_of_cpus: u64,
     ) -> MmSupervisorResult<(u64, u64)> {
-        let pass_down = parse_pass_down_hob(data)?;
+        let pass_down = MmSupvPassDownHobData::parse(data)?;
 
         let MmSupvPassDownHobData {
             cpl3_stack_base,

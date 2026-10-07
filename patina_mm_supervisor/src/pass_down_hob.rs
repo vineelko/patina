@@ -133,40 +133,56 @@ pub(crate) struct MmSupvPassDownHobData {
     pub mmi_entry_size: u64,
 }
 
-pub(crate) fn parse_pass_down_hob(data: &[u8]) -> MmSupervisorResult<MmSupvPassDownHobData> {
-    let (pass_down, _) = MmSupvPassDownHobData::read_from_prefix(data).map_err(|_| {
-        log::error!("PassDown HOB data too small: {} < {}", data.len(), core::mem::size_of::<MmSupvPassDownHobData>());
-        PassDownHobError::TooSmall
-    })?;
+impl MmSupvPassDownHobData {
+    /// Reads the `PassDown` payload from the raw HOB bytes.
+    ///
+    /// The MM IPL produces this HOB outside the supervisor's trust boundary, so the payload
+    /// length, the revision, and the firmware policy buffer pointer are checked here before any
+    /// caller reads a field. Range and ownership checks on the remaining pointers live in
+    /// [`crate::hob_validation`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PassDownHobError::TooSmall`] when the payload is shorter than this structure,
+    /// [`PassDownHobError::InvalidRevision`] when the revision is not
+    /// [`MM_SUPV_PASS_DOWN_HOB_REVISION`], and [`PassDownHobError::NullFirmwarePolicyBuffer`] or
+    /// [`PassDownHobError::FirmwarePolicyBufferOverflows`] when the firmware policy buffer it
+    /// reports cannot be used.
+    pub(crate) fn parse(data: &[u8]) -> MmSupervisorResult<Self> {
+        let (pass_down, _) = Self::read_from_prefix(data).map_err(|_| {
+            log::error!("PassDown HOB data too small: {} < {}", data.len(), core::mem::size_of::<Self>());
+            PassDownHobError::TooSmall
+        })?;
 
-    if pass_down.revision != MM_SUPV_PASS_DOWN_HOB_REVISION {
-        log::error!(
-            "Invalid PassDown HOB revision: {} (expected {})",
-            pass_down.revision,
-            MM_SUPV_PASS_DOWN_HOB_REVISION
-        );
-        return Err(PassDownHobError::InvalidRevision {
-            found: pass_down.revision,
-            expected: MM_SUPV_PASS_DOWN_HOB_REVISION,
+        if pass_down.revision != MM_SUPV_PASS_DOWN_HOB_REVISION {
+            log::error!(
+                "Invalid PassDown HOB revision: {} (expected {})",
+                pass_down.revision,
+                MM_SUPV_PASS_DOWN_HOB_REVISION
+            );
+            return Err(PassDownHobError::InvalidRevision {
+                found: pass_down.revision,
+                expected: MM_SUPV_PASS_DOWN_HOB_REVISION,
+            }
+            .into());
         }
-        .into());
-    }
 
-    if pass_down.firmware_policy_buffer == 0 || pass_down.firmware_policy_buffer_size == 0 {
-        log::error!("Firmware policy buffer is null or empty");
-        return Err(PassDownHobError::NullFirmwarePolicyBuffer.into());
-    }
-
-    if pass_down.firmware_policy_buffer.checked_add(pass_down.firmware_policy_buffer_size).is_none() {
-        log::error!("Firmware policy buffer address range overflows");
-        return Err(PassDownHobError::FirmwarePolicyBufferOverflows {
-            base: pass_down.firmware_policy_buffer,
-            size: pass_down.firmware_policy_buffer_size,
+        if pass_down.firmware_policy_buffer == 0 || pass_down.firmware_policy_buffer_size == 0 {
+            log::error!("Firmware policy buffer is null or empty");
+            return Err(PassDownHobError::NullFirmwarePolicyBuffer.into());
         }
-        .into());
-    }
 
-    Ok(pass_down)
+        if pass_down.firmware_policy_buffer.checked_add(pass_down.firmware_policy_buffer_size).is_none() {
+            log::error!("Firmware policy buffer address range overflows");
+            return Err(PassDownHobError::FirmwarePolicyBufferOverflows {
+                base: pass_down.firmware_policy_buffer,
+                size: pass_down.firmware_policy_buffer_size,
+            }
+            .into());
+        }
+
+        Ok(pass_down)
+    }
 }
 
 #[cfg(test)]
@@ -179,7 +195,8 @@ mod tests {
     #[test]
     fn test_parse_pass_down_hob() {
         let expected = valid_pass_down_hob();
-        let parsed = parse_pass_down_hob(&pass_down_hob_data(&expected)).expect("valid PassDown HOB should parse");
+        let parsed =
+            MmSupvPassDownHobData::parse(&pass_down_hob_data(&expected)).expect("valid PassDown HOB should parse");
 
         assert_eq!(parsed.revision, expected.revision);
         assert_eq!(parsed.cpl3_stack_base, expected.cpl3_stack_base);
@@ -193,7 +210,7 @@ mod tests {
         let data = pass_down_hob_data(&valid_pass_down_hob());
 
         assert_eq!(
-            parse_pass_down_hob(&data[..data.len() - 1]).expect_err("truncated PassDown HOB should fail"),
+            MmSupvPassDownHobData::parse(&data[..data.len() - 1]).expect_err("truncated PassDown HOB should fail"),
             PassDownHobError::TooSmall.into()
         );
     }
@@ -204,7 +221,7 @@ mod tests {
         pass_down.revision += 1;
 
         assert_eq!(
-            parse_pass_down_hob(&pass_down_hob_data(&pass_down))
+            MmSupvPassDownHobData::parse(&pass_down_hob_data(&pass_down))
                 .expect_err("invalid PassDown HOB revision should fail"),
             PassDownHobError::InvalidRevision { found: pass_down.revision, expected: MM_SUPV_PASS_DOWN_HOB_REVISION }
                 .into()
@@ -227,7 +244,8 @@ mod tests {
             pass_down.firmware_policy_buffer_size = size;
 
             assert_eq!(
-                parse_pass_down_hob(&pass_down_hob_data(&pass_down)).expect_err("invalid policy buffer should fail"),
+                MmSupvPassDownHobData::parse(&pass_down_hob_data(&pass_down))
+                    .expect_err("invalid policy buffer should fail"),
                 expected.into()
             );
         }
