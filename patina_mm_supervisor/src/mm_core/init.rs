@@ -68,6 +68,21 @@ use crate::smi_idt_patch::patch_smi_handler_idt;
 pub(crate) const MP_INFORMATION_HOB_GUID: patina::BinaryGuid =
     patina::BinaryGuid::from_string("ba33f15d-4000-45c1-8e88-f91692d457e3");
 
+/// Number of memory policy descriptors one page holds.
+///
+/// The page-table walk writes `MemDescriptorV1_0` entries into a single page, and the policy gate
+/// keeps that same page as its snapshot buffer. Both are bounded by this count. It is named once
+/// because the two take it as a number of entries, not a number of bytes, and a page length
+/// passed in its place would let the walk write past the page.
+const MEMORY_POLICY_DESCRIPTORS_PER_PAGE: usize = UEFI_PAGE_SIZE / core::mem::size_of::<MemDescriptorV1_0>();
+
+const _: () = {
+    assert!(
+        MEMORY_POLICY_DESCRIPTORS_PER_PAGE * core::mem::size_of::<MemDescriptorV1_0>() <= UEFI_PAGE_SIZE,
+        "the memory policy descriptor count must fit the page the page-table walk writes into"
+    );
+};
+
 pub(crate) fn validate_init_code_page(address: u64, attributes: MemoryAttributes) {
     if attributes.contains(MemoryAttributes::ExecuteProtect) {
         return;
@@ -696,13 +711,186 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         Ok(cpu_count)
     }
 
+    /// Publishes the per-core "MM initialized" slots the MM IPL allocated.
+    ///
+    /// A null buffer is not an error. The MM IPL may omit it, and the supervisor then runs
+    /// without per-core initialized tracking.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreInitError::InvalidCpuCount`] when the count cannot size the slot array, and
+    /// [`CoreInitError::InitializedBufferInvalid`] when the buffer does not hold one slot per CPU
+    /// inside MMRAM.
+    ///
+    /// ## Safety
+    ///
+    /// `buffer` must name `number_of_cpus` bytes that stay resident for the supervisor's
+    /// lifetime.
+    unsafe fn store_mm_initialized_slots(&self, buffer: u64, number_of_cpus: usize) -> MmSupervisorResult<()> {
+        if buffer == 0 {
+            log::warn!("MM Initialized buffer is null in PassDown HOB");
+            return Ok(());
+        }
+
+        // The slice built below is `number_of_cpus` elements long, so the bound is a
+        // memory-safety precondition and is checked here rather than assumed of the caller.
+        if number_of_cpus == 0 || number_of_cpus > MAX_CPUS {
+            return Err(CoreInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }.into());
+        }
+        if !is_buffer_inside_mmram(buffer, number_of_cpus as u64) {
+            log::error!("MM initialized buffer at 0x{buffer:016x} does not contain {number_of_cpus} slot(s) in MMRAM");
+            return Err(CoreInitError::InitializedBufferInvalid.into());
+        }
+
+        let address = usize::try_from(buffer).map_err(|_| CoreInitError::InitializedBufferInvalid)?;
+        let buffer_ptr = core::ptr::with_exposed_provenance::<AtomicU8>(address);
+        // SAFETY: the checks above place `number_of_cpus` one-byte slots inside MMRAM at
+        // `buffer`, and this function's contract keeps them resident.
+        let initialized_slots = unsafe { core::slice::from_raw_parts(buffer_ptr, number_of_cpus) };
+        init_state().set_mm_initialized_buffer(initialized_slots);
+        log::info!("MM Initialized buffer set to 0x{buffer:016x} with {number_of_cpus} slot(s)");
+
+        Ok(())
+    }
+
+    /// Requires every per-CPU save-state region to lie inside MMRAM and be mapped
+    /// supervisor-only.
+    ///
+    /// The save-state syscall reads these regions on Ring 3's behalf, so they are proven once
+    /// here rather than trusted at each read.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SaveStateValidationError`](crate::save_state::SaveStateValidationError)
+    /// naming the first region the `PassDown` HOB describes that cannot be used.
+    fn check_save_state_regions(&self, sm_base: u64, number_of_cpus: usize) -> MmSupervisorResult<()> {
+        validate_save_state_regions(sm_base, number_of_cpus, is_buffer_inside_mmram, |base, size| {
+            matches!(query_address_ownership(base, size), Some(PageOwnership::Supervisor))
+        })
+        .inspect_err(|e| log::error!("PassDown HOB does not describe usable save-state regions: {e}"))?;
+        log::info!("Validated save-state regions for {number_of_cpus} CPU(s) from SMBASE array at 0x{sm_base:016x}");
+
+        Ok(())
+    }
+
+    /// Builds the policy gate over the firmware policy blob and installs it.
+    ///
+    /// Returns the page reserved for the memory policy descriptors, which the gate keeps as its
+    /// snapshot buffer and [`record_unblocked_memory`](Self::record_unblocked_memory) fills.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`AllocError`](crate::mem::AllocError) when the descriptor page cannot be
+    /// allocated, [`PassDownHobError::FirmwarePolicyBufferSizeUnsupported`] when the reported
+    /// size does not fit the target architecture, and a
+    /// [`PolicyGateError`](crate::mm_policy::policy_gate::PolicyGateError) when the blob's layout
+    /// is rejected.
+    ///
+    /// ## Safety
+    ///
+    /// `buffer` must name `size` readable bytes that stay resident for the supervisor's lifetime.
+    unsafe fn install_policy_gate(&self, buffer: u64, size: u64) -> MmSupervisorResult<u64> {
+        let memory_policy_buffer = security_state()
+            .page_allocator()
+            .allocate_pages(1)
+            .inspect_err(|e| log::error!("Failed to allocate page for memory policy buffer: {e}"))?;
+
+        let policy_ptr = buffer as *const u8;
+        let policy_buffer_size =
+            usize::try_from(size).map_err(|_| PassDownHobError::FirmwarePolicyBufferSizeUnsupported { size })?;
+
+        // SAFETY: this function's contract requires `buffer` to be readable for `size` bytes and
+        // to stay resident. The HOB's reported size bounds the blob's own internal offsets.
+        let mut gate = unsafe { PolicyGate::new(policy_ptr, policy_buffer_size) }
+            .inspect_err(|e| log::error!("Failed to create policy gate: {e}"))?;
+        log::info!("Policy gate initialized successfully");
+        // SAFETY: `policy_ptr` is the same valid, resident firmware policy buffer.
+        unsafe { dump_policy(policy_ptr) };
+
+        mm_policy::audit_boundary_grants(&gate);
+
+        gate.set_memory_policy_buffer(
+            memory_policy_buffer as *mut MemDescriptorV1_0,
+            MEMORY_POLICY_DESCRIPTORS_PER_PAGE,
+        );
+        security_state().set_policy_gate(gate);
+
+        Ok(memory_policy_buffer)
+    }
+
+    /// Starts the syscall interface over the Ring 3 stacks the MM IPL provisioned.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the stack size does not fit the target architecture, or when the syscall
+    /// interface rejects the region. Either means the supervisor has nowhere to demote to.
+    fn start_syscall_interface(&self, cpl3_stack_base: u64, cpl3_stack_size: u64, number_of_cpus: usize) {
+        // The CPU count bounds `get_cpl3_stack`, so it must be the count the MM IPL sized the
+        // stack array for, not the supervisor's `MAX_CPUS` capacity.
+        let stack_size =
+            cpl3_stack_size.try_into().unwrap_or_else(|err| panic!("Invalid CPL3 stack buffer size: {err:?}"));
+
+        self.syscall_interface
+            .init(number_of_cpus, cpl3_stack_base, stack_size)
+            .unwrap_or_else(|err| panic!("Failed to initialize syscall interface: {err:?}"));
+    }
+
+    /// Records the memory outside MMRAM that the page table currently maps.
+    ///
+    /// The descriptors the walk generates seed the unblocked memory tracker, which later
+    /// `UNBLOCK_MEM` requests are checked against. A failure is logged rather than propagated:
+    /// the supervisor still runs, with no unblocked regions recorded.
+    ///
+    /// ## Safety
+    ///
+    /// `memory_policy_buffer` must name a page with room for
+    /// [`MEMORY_POLICY_DESCRIPTORS_PER_PAGE`] descriptors that stays resident.
+    unsafe fn record_unblocked_memory(&self, memory_policy_buffer: u64) {
+        let descriptors = memory_policy_buffer as *mut MemDescriptorV1_0;
+        let cr3 = read_cr3();
+
+        // SAFETY: `cr3` is read from the active control register, so it points to the live PML4
+        // table, and this function's contract gives `descriptors` room for
+        // `MEMORY_POLICY_DESCRIPTORS_PER_PAGE` entries.
+        let walked =
+            unsafe { walk_page_table(cr3, descriptors, MEMORY_POLICY_DESCRIPTORS_PER_PAGE, is_buffer_inside_mmram) };
+
+        let descriptor_count = match walked {
+            Ok(count) => count,
+            Err(e) => {
+                log::error!("Failed to generate memory policy descriptors: {e}");
+                return;
+            }
+        };
+        log::info!("Generated {descriptor_count} memory policy descriptor(s) from the page table walk");
+
+        // SAFETY: `walk_page_table` succeeded, so the buffer holds `descriptor_count` initialized
+        // `MemDescriptorV1_0` entries.
+        if let Err(e) = unsafe { security_state().unblocked_tracker().init_from_buffer(descriptors, descriptor_count) }
+        {
+            log::error!("Failed to initialize unblocked memory tracker: {e:?}");
+            return;
+        }
+
+        security_state().unblocked_tracker().dump_regions();
+    }
+
     /// Processes the MM Supervisor `PassDown` HOB.
     ///
-    /// Handles: revision validation, per-core buffer setup,
-    /// policy gate initialization, syscall interface setup, memory policy walk,
-    /// and unblocked memory tracker initialization.
+    /// Runs the setup its payload describes, in order: the per-core initialized slots, the
+    /// save-state regions, the policy gate, the syscall interface and the Ring 3 stacks, and the
+    /// unblocked memory tracker. The stacks are mapped before the page-table walk so the
+    /// descriptors it generates see their final attributes.
     ///
     /// Returns `(sm_base_array, mmi_entry_size)` carried by the HOB.
+    ///
+    /// # Errors
+    ///
+    /// Reports the first stage that fails, so the caller stops before anything further is
+    /// programmed. The payload itself is rejected through [`PassDownHobError`], the slot array
+    /// and CPU count through [`CoreInitError`], the save-state regions through
+    /// [`SaveStateValidationError`](crate::save_state::SaveStateValidationError), and the policy
+    /// blob through [`PolicyGateError`](crate::mm_policy::policy_gate::PolicyGateError).
     ///
     /// ## Safety
     ///
@@ -715,8 +903,6 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         data: &[u8],
         number_of_cpus: usize,
     ) -> MmSupervisorResult<(u64, u64)> {
-        let pass_down = MmSupvPassDownHobData::parse(data)?;
-
         let MmSupvPassDownHobData {
             cpl3_stack_base,
             cpl3_stack_size,
@@ -726,104 +912,24 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             firmware_policy_buffer_size,
             mmi_entry_size,
             ..
-        } = pass_down;
+        } = MmSupvPassDownHobData::parse(data)?;
 
-        // Store bounded per-core initialized slots.
-        if mm_initialized_buffer != 0 {
-            // The slice built below is `number_of_cpus` elements long, so the bound is a
-            // memory-safety precondition and is checked here rather than assumed of the caller.
-            if number_of_cpus == 0 || number_of_cpus > MAX_CPUS {
-                return Err(CoreInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }.into());
-            }
-            if !is_buffer_inside_mmram(mm_initialized_buffer, number_of_cpus as u64) {
-                log::error!(
-                    "MM initialized buffer at 0x{mm_initialized_buffer:016x} does not contain {number_of_cpus} slot(s) in MMRAM"
-                );
-                return Err(CoreInitError::InitializedBufferInvalid.into());
-            }
-            let buffer_address =
-                usize::try_from(mm_initialized_buffer).map_err(|_| CoreInitError::InitializedBufferInvalid)?;
-            let buffer_ptr = core::ptr::with_exposed_provenance::<AtomicU8>(buffer_address);
-            // SAFETY: The PassDown HOB was validated before this routine is called and this
-            // function's contract requires its buffer pointers to remain valid. The validated
-            // CPU count is the number of one-byte initialized slots supplied by the MM IPL.
-            let initialized_slots = unsafe { core::slice::from_raw_parts(buffer_ptr, number_of_cpus) };
-            init_state().set_mm_initialized_buffer(initialized_slots);
-            log::info!("MM Initialized buffer set to 0x{mm_initialized_buffer:016x} with {number_of_cpus} slot(s)");
-        } else {
-            log::warn!("MM Initialized buffer is null in PassDown HOB");
-        }
+        // SAFETY: this function's contract requires the pointers the HOB carries to name resident
+        // memory of the size they declare.
+        unsafe { self.store_mm_initialized_slots(mm_initialized_buffer, number_of_cpus) }?;
 
-        // The save-state syscall reads these regions on Ring 3's behalf, so every entry is proven
-        // to be inside MMRAM and supervisor-only now rather than trusted at each read.
-        validate_save_state_regions(sm_base, number_of_cpus, is_buffer_inside_mmram, |base, size| {
-            matches!(query_address_ownership(base, size), Some(PageOwnership::Supervisor))
-        })
-        .inspect_err(|e| log::error!("PassDown HOB does not describe usable save-state regions: {e}"))?;
-        log::info!("Validated save-state regions for {number_of_cpus} CPU(s) from SMBASE array at 0x{sm_base:016x}");
+        self.check_save_state_regions(sm_base, number_of_cpus)?;
 
-        let policy_ptr = firmware_policy_buffer as *const u8;
-        let memory_policy_buffer = security_state()
-            .page_allocator()
-            .allocate_pages(1)
-            .inspect_err(|e| log::error!("Failed to allocate page for memory policy buffer: {e}"))?;
+        // SAFETY: as above, for the firmware policy buffer and the size reported beside it.
+        let memory_policy_buffer =
+            unsafe { self.install_policy_gate(firmware_policy_buffer, firmware_policy_buffer_size) }?;
 
-        let policy_buffer_size = usize::try_from(firmware_policy_buffer_size)
-            .map_err(|_| PassDownHobError::FirmwarePolicyBufferSizeUnsupported { size: firmware_policy_buffer_size })?;
-
-        // SAFETY: `policy_ptr` is the firmware policy buffer from the PassDown HOB, validated
-        // non-zero above, and stays resident for the supervisor's lifetime. The HOB's reported
-        // size bounds the blob's own internal offsets.
-        let mut gate = unsafe { PolicyGate::new(policy_ptr, policy_buffer_size) }
-            .inspect_err(|e| log::error!("Failed to create policy gate: {e}"))?;
-        log::info!("Policy gate initialized successfully");
-        // SAFETY: `policy_ptr` is the same valid, resident firmware policy buffer.
-        unsafe { dump_policy(policy_ptr) };
-
-        mm_policy::audit_boundary_grants(&gate);
-
-        let mem_policy_max_count = UEFI_PAGE_SIZE / core::mem::size_of::<MemDescriptorV1_0>();
-        gate.set_memory_policy_buffer(memory_policy_buffer as *mut MemDescriptorV1_0, mem_policy_max_count);
-        security_state().set_policy_gate(gate);
-
-        // Initialize syscall interface. The CPU count bounds `get_cpl3_stack`, so it must be the
-        // count the MM IPL sized the stack array for, not the supervisor's `MAX_CPUS` capacity.
-        self.syscall_interface
-            .init(
-                number_of_cpus,
-                cpl3_stack_base,
-                cpl3_stack_size.try_into().unwrap_or_else(|err| panic!("Invalid CPL3 stack buffer size: {err:?}")),
-            )
-            .unwrap_or_else(|err| panic!("Failed to initialize syscall interface: {err:?}"));
-
-        // Done before the policy walk below so the generated descriptors see the final attributes.
+        self.start_syscall_interface(cpl3_stack_base, cpl3_stack_size, number_of_cpus);
         self.map_cpl3_stacks_to_user(cpl3_stack_base, cpl3_stack_size, number_of_cpus);
 
-        // Walk page table and generate memory policy
-        let cr3 = read_cr3();
-        // SAFETY: `cr3` is read from the active control register, so it points to the live PML4
-        // table, and `memory_policy_buffer` is the page just allocated above with room for
-        // `UEFI_PAGE_SIZE` bytes of descriptors.
-        let count = unsafe {
-            walk_page_table(cr3, memory_policy_buffer as *mut MemDescriptorV1_0, UEFI_PAGE_SIZE, is_buffer_inside_mmram)
-        };
-
-        if let Ok(descriptor_count) = count {
-            log::info!("Generated {descriptor_count} memory policy descriptor(s) from the page table walk");
-            // SAFETY: `walk_page_table` succeeded, so `memory_policy_buffer` holds `descriptor_count`
-            // valid `MemDescriptorV1_0` entries.
-            if let Err(e) = unsafe {
-                security_state()
-                    .unblocked_tracker()
-                    .init_from_buffer(memory_policy_buffer as *const MemDescriptorV1_0, descriptor_count)
-            } {
-                log::error!("Failed to initialize unblocked memory tracker: {e:?}");
-            } else {
-                security_state().unblocked_tracker().dump_regions();
-            }
-        } else {
-            log::error!("Failed to generate memory policy descriptors: {:?}", count.err());
-        }
+        // SAFETY: `install_policy_gate` returned a freshly allocated page, which holds
+        // `MEMORY_POLICY_DESCRIPTORS_PER_PAGE` descriptors and stays resident.
+        unsafe { self.record_unblocked_memory(memory_policy_buffer) };
 
         Ok((sm_base, mmi_entry_size))
     }
