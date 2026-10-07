@@ -32,7 +32,7 @@ use crate::{
     pass_down_hob::PassDownHobError,
     privilege_mgmt::{call_gate::CallGateError, syscall_setup::SyscallSetupError},
     save_state::SaveStateValidationError,
-    smi_idt_patch::{SmiHandlerIdtPatchError, SmiHandlerIdtPatchInputError},
+    smi_idt_patch::SmiHandlerIdtPatchError,
     smrr::SmrrError,
     supervisor_handlers::supv_request::unblock_memory::{PageUpdateError, UnblockError},
 };
@@ -76,10 +76,8 @@ pub enum MmSupervisorError {
     Smrr(SmrrError),
     /// The GDT privilege transition entries could not be programmed.
     CallGate(CallGateError),
-    /// The MMI entry's embedded IDT fixup structure could not be parsed.
+    /// The SMI handler IDT patch could not be applied.
     SmiHandlerIdtPatch(SmiHandlerIdtPatchError),
-    /// The inputs to the SMI handler IDT patch could not be used.
-    SmiHandlerIdtPatchInput(SmiHandlerIdtPatchInputError),
     /// A command could not be posted to an AP's mailbox.
     Mailbox(MailboxError),
     /// A request to unblock memory for Ring 3 was rejected.
@@ -105,7 +103,6 @@ impl core::error::Error for MmSupervisorError {
             Self::Smrr(err) => Some(err),
             Self::CallGate(err) => Some(err),
             Self::SmiHandlerIdtPatch(err) => Some(err),
-            Self::SmiHandlerIdtPatchInput(err) => Some(err),
             Self::Mailbox(err) => Some(err),
             Self::Unblock(err) => Some(err),
             Self::PageUpdate(err) => Some(err),
@@ -131,7 +128,6 @@ impl fmt::Display for MmSupervisorError {
             Self::Smrr(err) => write!(f, "SMRR Programming: {err}"),
             Self::CallGate(err) => write!(f, "Call gate setup: {err}"),
             Self::SmiHandlerIdtPatch(err) => write!(f, "SMI handler IDT patch: {err}"),
-            Self::SmiHandlerIdtPatchInput(err) => write!(f, "SMI handler IDT patch inputs: {err}"),
             Self::Mailbox(err) => write!(f, "AP mailbox: {err}"),
             Self::Unblock(err) => write!(f, "Unblock memory: {err}"),
             Self::PageUpdate(err) => write!(f, "Unblock page table update: {err}"),
@@ -223,12 +219,6 @@ impl From<SmiHandlerIdtPatchError> for MmSupervisorError {
     }
 }
 
-impl From<SmiHandlerIdtPatchInputError> for MmSupervisorError {
-    fn from(error: SmiHandlerIdtPatchInputError) -> Self {
-        Self::SmiHandlerIdtPatchInput(error)
-    }
-}
-
 impl From<MailboxError> for MmSupervisorError {
     fn from(error: MailboxError) -> Self {
         Self::Mailbox(error)
@@ -315,10 +305,6 @@ mod tests {
             MmSupervisorError::SmiHandlerIdtPatch(SmiHandlerIdtPatchError::EntryTooSmall)
         );
         assert_eq!(
-            MmSupervisorError::from(SmiHandlerIdtPatchInputError::ZeroEntrySize),
-            MmSupervisorError::SmiHandlerIdtPatchInput(SmiHandlerIdtPatchInputError::ZeroEntrySize)
-        );
-        assert_eq!(
             MmSupervisorError::from(MailboxError::CommandAlreadyPending { index: 2 }),
             MmSupervisorError::Mailbox(MailboxError::CommandAlreadyPending { index: 2 })
         );
@@ -349,7 +335,7 @@ mod tests {
         // Every variant names its subsystem and then defers to the wrapped error's own message,
         // so widening never loses the detail the subsystem reported. The table is exhaustive so a
         // new variant added without a Display arm fails here rather than printing the wrong stage.
-        let cases: [(MmSupervisorError, &str); 18] = [
+        let cases: [(MmSupervisorError, &str); 17] = [
             (HobValidationError::NoMmramRegions.into(), "HOB validation: "),
             (CommBufferError::Missing.into(), "Communication buffer: "),
             (PassDownHobError::TooSmall.into(), "PassDown HOB: "),
@@ -367,7 +353,6 @@ mod tests {
             (SmrrError::SmrrUnsupported.into(), "SMRR Programming: "),
             (CallGateError::GdtTooSmall.into(), "Call gate setup: "),
             (SmiHandlerIdtPatchError::EntryTooSmall.into(), "SMI handler IDT patch: "),
-            (SmiHandlerIdtPatchInputError::ZeroEntrySize.into(), "SMI handler IDT patch inputs: "),
             (MailboxError::CommandAlreadyPending { index: 2 }.into(), "AP mailbox: "),
             (UnblockError::OverlapsWithMmram.into(), "Unblock memory: "),
             (PageUpdateError::AlreadyMapped.into(), "Unblock page table update: "),
@@ -409,7 +394,6 @@ mod tests {
             MmSupervisorError::from(SmrrError::SmrrUnsupported),
             MmSupervisorError::from(CallGateError::GdtTooSmall),
             MmSupervisorError::from(SmiHandlerIdtPatchError::EntryTooSmall),
-            MmSupervisorError::from(SmiHandlerIdtPatchInputError::ZeroEntrySize),
             MmSupervisorError::from(MailboxError::CommandAlreadyPending { index: 2 }),
             MmSupervisorError::from(UnblockError::OverlapsWithMmram),
             MmSupervisorError::from(PageUpdateError::AlreadyMapped),
