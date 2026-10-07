@@ -712,13 +712,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let pass_down = parse_pass_down_hob(data)?;
 
         let MmSupvPassDownHobData {
-            mm_initialized_buffer,
-            firmware_policy_buffer,
             cpl3_stack_base,
             cpl3_stack_size,
-            mmi_entry_size,
             sm_base,
+            mm_initialized_buffer,
+            firmware_policy_buffer,
             firmware_policy_buffer_size,
+            mmi_entry_size,
             ..
         } = pass_down;
 
@@ -775,8 +775,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // SAFETY: `policy_ptr` is the same valid, resident firmware policy buffer.
         unsafe { dump_policy(policy_ptr) };
 
-        mm_policy::audit_boundary_msr_grants(&gate);
-        mm_policy::audit_boundary_io_grants(&gate);
+        mm_policy::audit_boundary_grants(&gate);
 
         let mem_policy_max_count = UEFI_PAGE_SIZE / core::mem::size_of::<MemDescriptorV1_0>();
         gate.set_memory_policy_buffer(memory_policy_buffer as *mut MemDescriptorV1_0, mem_policy_max_count);

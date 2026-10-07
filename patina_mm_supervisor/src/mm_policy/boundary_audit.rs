@@ -18,6 +18,16 @@
 //!
 use super::{AccessType, IoWidth, policy_gate::PolicyGate};
 
+/// Reports every boundary-defining MSR and I/O port the policy grants Ring 3 write access to,
+/// returning how many it found in total.
+///
+/// Both halves always run, so the log names every problem in the policy rather than only the
+/// first kind found. See [`audit_boundary_msr_grants`] and [`audit_boundary_io_grants`] for what
+/// each half covers and why those registers and ports were chosen.
+pub(crate) fn audit_boundary_grants(gate: &PolicyGate) -> usize {
+    audit_boundary_msr_grants(gate) + audit_boundary_io_grants(gate)
+}
+
 /// MSRs whose write access defines the privilege boundary the supervisor rests on, as inclusive
 /// `(first, last, description)` ranges.
 ///
@@ -67,7 +77,7 @@ const BOUNDARY_MSRS: &[(u32, u32, &str)] = &[
 /// A non-zero result means the platform policy has voided the Ring 0 / Ring 3 boundary and needs
 /// to be corrected; the supervisor continues, because a list of registers compiled into the
 /// supervisor is not a better authority on a platform's needs than its reviewed policy.
-pub(crate) fn audit_boundary_msr_grants(gate: &PolicyGate) -> usize {
+fn audit_boundary_msr_grants(gate: &PolicyGate) -> usize {
     let mut granted = 0;
 
     for &(first, last, description) in BOUNDARY_MSRS {
@@ -115,7 +125,7 @@ const BOUNDARY_IO_PORTS: &[(u16, u16, &str)] =
 /// once when the policy is installed, asks the policy its own question, and changes nothing.
 /// Ports are probed one byte at a time, which is the granularity at which the policy describes
 /// them.
-pub(crate) fn audit_boundary_io_grants(gate: &PolicyGate) -> usize {
+fn audit_boundary_io_grants(gate: &PolicyGate) -> usize {
     let mut granted = 0;
 
     for &(first, last, description) in BOUNDARY_IO_PORTS {
@@ -249,5 +259,23 @@ mod tests {
             .build();
 
         assert_eq!(audit_boundary_io_grants(&policy.gate()), 0);
+    }
+
+    #[test]
+    fn test_boundary_audit_totals_both_halves() {
+        let policy = PolicyBuilder::new()
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Msr(vec![msr(0xC000_0080, 5, READ_WRITE)]))
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Io(vec![io(0x0CF8, 8, READ_WRITE)]))
+            .build();
+
+        // The five syscall MSRs plus the eight PCI configuration ports.
+        assert_eq!(audit_boundary_grants(&policy.gate()), 13);
+    }
+
+    #[test]
+    fn test_boundary_audit_reports_nothing_for_an_empty_policy() {
+        let policy = PolicyBuilder::new().build();
+
+        assert_eq!(audit_boundary_grants(&policy.gate()), 0);
     }
 }
