@@ -535,69 +535,50 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         Ok(())
     }
 
-    /// Initializes services from the HOB list.
+    /// Publishes the save-state metadata the read syscall depends on.
     ///
-    /// Discovers and processes the following HOBs in sequence:
-    /// 1. `MM_SUPV_PASS_DOWN_HOB_GUID` - policy gate, syscall interface, memory policy, IDT patching
-    /// 2. `MM_COMMON_REGION_HOB_GUID` - supervisor communication buffer
-    /// 3. `MM_COMM_BUFFER_HOB_GUID` - user communication buffer + status buffer
+    /// ## Safety
     ///
-    /// Finally, allocates the supervisor-to-user data buffer and stores the
-    /// assembled [`CommBufferConfig`].
-    fn init_policy_from_hob_list(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
-        // 1. Process the MP Information HOB (`gMpInformationHobGuid`) for the CPU count. It sizes
-        //    the Ring 3 stack array the PassDown HOB describes, so it is needed first.
-        let mp_information =
-            find_guid_hob(hob_hand_off_table, MP_INFORMATION_HOB_GUID).ok_or(CoreInitError::MpInformationHobMissing)?;
-
-        let number_of_cpus = self.parse_mp_information_hob(mp_information)?;
-
-        // 1b. Process the PassDown HOB (policy, syscall, memory policy)
-        let pass_down_data =
-            find_guid_hob(hob_hand_off_table, MM_SUPV_PASS_DOWN_HOB_GUID).ok_or(PassDownHobError::Missing)?;
-
-        // SAFETY: `pass_down_data` is a slice into the validated HOB list, so the buffer pointers
-        // it carries reference live memory as `init_from_pass_down_hob` requires.
-        let (sm_base, mmi_entry_size) = unsafe { self.init_from_pass_down_hob(pass_down_data, number_of_cpus)? };
-
+    /// `sm_base` must reference `number_of_cpus` resident SMBASE entries in MMRAM.
+    unsafe fn publish_save_state_metadata(&self, number_of_cpus: usize, sm_base: u64) {
         let save_state_info = SaveStateInfo { number_of_cpus, sm_base };
         security_state().set_save_state_info(save_state_info);
-        // SAFETY: `sm_base` came from the PassDown HOB the MM IPL published, so it references
-        // `number_of_cpus` resident SMBASE entries in MMRAM.
+        // SAFETY: this function's contract gives `sm_base` `number_of_cpus` readable entries.
         unsafe { crate::save_state::log_save_state_map(save_state_info) };
         log::info!("Save-state metadata initialized for {number_of_cpus} CPU(s) from SMBASE array at 0x{sm_base:016x}");
+    }
 
-        // 1b-ii. Process the MSEG SMRAM HOB (`gMsegSmramGuid`), if published. It carries the
-        //        MSEG region reserved for an STM. Each core programs the base into
-        //        IA32_SMM_MONITOR_CTL during per-core init. Platforms without STM/SEA
-        //        integration do not publish this HOB, so its absence is not an error.
+    /// Records the MSEG region reserved for an STM, when the platform published one.
+    ///
+    /// Each core programs the base into `IA32_SMM_MONITOR_CTL` during per-core init. Platforms
+    /// without STM or SEA integration do not publish the HOB, so its absence is not an error.
+    fn discover_mseg_base(&self, hob_hand_off_table: &PhaseHandoffInformationTable) {
         match find_guid_hob(hob_hand_off_table, MSEG_SMRAM_HOB_GUID).and_then(parse_mseg_smram_hob) {
             Some(mseg_base) => {
                 init_state().set_mseg_base(mseg_base);
                 log::info!("MSEG base 0x{mseg_base:x} discovered from MSEG SMRAM HOB");
             }
-            _ => log::warn!("No usable MSEG SMRAM HOB; IA32_SMM_MONITOR_CTL will not be programmed"),
+            None => log::warn!("No usable MSEG SMRAM HOB; IA32_SMM_MONITOR_CTL will not be programmed"),
         }
+    }
 
-        // 1c. Patch every core's SMI-handler IDT descriptor to the Rust IDT now that the
-        //     CPU count is known (the SMI entry blocks were already copied per SMBASE, so
-        //     each core must be patched, not just the BSP).
-        patch_smi_handler_idt(sm_base, number_of_cpus, mmi_entry_size);
-
-        // 2. Process the supervisor communication buffer HOB. Only one
-        //    MM_COMM_REGION_HOB is published (the supervisor one); the user
-        //    channel flows through MM_COMM_BUFFER_HOB_GUID below.
+    /// Adopts both communication buffers and stores the assembled configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CommBufferError`] when either HOB is missing, when a region one of them
+    /// describes cannot be adopted, or when the supervisor-to-user page cannot be allocated.
+    fn init_comm_buffers(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
+        // Only one MM_COMM_REGION_HOB is published, the supervisor one; the user channel flows
+        // through MM_COMM_BUFFER_HOB_GUID below.
         let supv_region_data = find_guid_hob(hob_hand_off_table, MM_COMMON_REGION_HOB_GUID)
             .ok_or(CommBufferError::CommRegionHobMissing)?;
         let (supv_comm_buffer, supv_comm_buffer_size, supv_comm_buffer_internal, supv_status_buffer) =
-            init_supv_comm_buffer(supv_region_data).inspect_err(|e| {
-                log::error!("Failed to initialize supervisor communication buffer: {e}");
-            })?;
+            init_supv_comm_buffer(supv_region_data)
+                .inspect_err(|e| log::error!("Failed to initialize supervisor communication buffer: {e}"))?;
 
-        // 3. Process the user communication buffer HOB. This still uses the
-        //    legacy `MM_COMM_BUFFER_HOB_GUID` so the user core's own HOB walk
-        //    keeps working (see the HACKHACK at the tail of
-        //    init_user_comm_buffer).
+        // The user channel still uses the legacy `MM_COMM_BUFFER_HOB_GUID` so the user core's own
+        // HOB walk keeps working (see the HACKHACK at the tail of `init_user_comm_buffer`).
         let (user_buffer_data, user_buffer_data_len) = {
             let data = find_guid_hob(hob_hand_off_table, MM_COMM_BUFFER_HOB_GUID)
                 .ok_or(CommBufferError::CommunicationBufferHobMissing)?;
@@ -606,19 +587,16 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // SAFETY: the pointer and length identify the original HOB payload in the writable live
         // HOB list. The shared slice used to locate it is no longer used while it is rewritten.
         let (user_comm_buffer, user_comm_buffer_size, user_comm_buffer_internal, user_status_buffer) = unsafe {
-            init_user_comm_buffer(user_buffer_data, user_buffer_data_len).inspect_err(|e| {
-                log::error!("Failed to initialize user communication buffer: {e}");
-            })?
+            init_user_comm_buffer(user_buffer_data, user_buffer_data_len)
+                .inspect_err(|e| log::error!("Failed to initialize user communication buffer: {e}"))?
         };
 
-        // 4. Allocate the supervisor-to-user data buffer
         let supv_to_user_buffer =
             security_state().page_allocator().allocate_pages_with_type(1, AllocationType::User).map_err(|e| {
                 log::error!("Failed to allocate page for supervisor-to-user buffer: {e}");
                 CommBufferError::AllocationFailed
             })?;
 
-        // Validate all buffers are non-zero
         if supv_comm_buffer == 0
             || user_comm_buffer == 0
             || user_status_buffer == 0
@@ -629,7 +607,6 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             return Err(CommBufferError::Missing.into());
         }
 
-        // Store the assembled communication buffer configuration
         security_state().set_comm_buffer_config(CommBufferConfig {
             supv_comm_buffer,
             supv_comm_buffer_internal,
@@ -647,6 +624,45 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         );
 
         Ok(())
+    }
+
+    /// Initializes the services the HOB list describes.
+    ///
+    /// Reads the MP Information HOB for the CPU count, which sizes everything that follows, then
+    /// the `PassDown` HOB for the policy gate, the syscall interface and the memory policy. It
+    /// then publishes the save-state metadata, records the optional MSEG region, patches every
+    /// core's SMI-handler IDT descriptor, and assembles the communication buffers.
+    ///
+    /// # Errors
+    ///
+    /// Reports the first stage that fails. A missing MP Information HOB and an unusable CPU count
+    /// are reported through [`CoreInitError`], a missing or malformed `PassDown` HOB through
+    /// [`PassDownHobError`], and the communication buffers through [`CommBufferError`]. A missing
+    /// MSEG HOB is not an error, because platforms without STM integration do not publish one.
+    fn init_policy_from_hob_list(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
+        // The CPU count sizes the Ring 3 stack array the PassDown HOB describes, so it is read
+        // before anything that depends on it.
+        let mp_information =
+            find_guid_hob(hob_hand_off_table, MP_INFORMATION_HOB_GUID).ok_or(CoreInitError::MpInformationHobMissing)?;
+        let number_of_cpus = self.parse_mp_information_hob(mp_information)?;
+
+        let pass_down_data =
+            find_guid_hob(hob_hand_off_table, MM_SUPV_PASS_DOWN_HOB_GUID).ok_or(PassDownHobError::Missing)?;
+        // SAFETY: `pass_down_data` is a slice into the validated HOB list, so the buffer pointers
+        // it carries reference live memory as `init_from_pass_down_hob` requires.
+        let (sm_base, mmi_entry_size) = unsafe { self.init_from_pass_down_hob(pass_down_data, number_of_cpus) }?;
+
+        // SAFETY: `sm_base` came from the PassDown HOB the MM IPL published, so it references
+        // `number_of_cpus` resident SMBASE entries in MMRAM.
+        unsafe { self.publish_save_state_metadata(number_of_cpus, sm_base) };
+
+        self.discover_mseg_base(hob_hand_off_table);
+
+        // The SMI entry blocks were already copied per SMBASE, so every core is patched here,
+        // not just the BSP.
+        patch_smi_handler_idt(sm_base, number_of_cpus, mmi_entry_size);
+
+        self.init_comm_buffers(hob_hand_off_table)
     }
 
     /// Returns the CPU count from the MP Information HOB.
