@@ -813,9 +813,13 @@ fn read_lma_register(view: &SaveStateView, width: u64, out: &mut [u8]) -> Syscal
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
-    use crate::mm_policy::{
-        ACCESS_ATTR_ALLOW, ACCESS_ATTR_DENY, RESOURCE_ATTR_COND_READ, RESOURCE_ATTR_READ, SaveStateDescriptorV1_0,
-        TYPE_SAVE_STATE,
+    use crate::{
+        MmSupervisorCore,
+        mm_policy::{
+            ACCESS_ATTR_ALLOW, ACCESS_ATTR_DENY, RESOURCE_ATTR_COND_READ, RESOURCE_ATTR_READ, SaveStateDescriptorV1_0,
+            TYPE_SAVE_STATE,
+        },
+        test_support,
     };
     use patina_internal_cpu::save_state::IO_TYPE_OUTPUT;
     use serial_test::serial;
@@ -1129,7 +1133,7 @@ mod tests {
 
     #[test]
     fn test_save_state_processor_id_from_cpu_manager() {
-        static SUPERVISOR: crate::MmSupervisorCore<TestPlatform, 4> = crate::MmSupervisorCore::new();
+        static SUPERVISOR: MmSupervisorCore<TestPlatform, 4> = MmSupervisorCore::new();
 
         assert_eq!(SUPERVISOR.cpu_manager().register_cpu(0x20, 2, false), Ok(2));
 
@@ -1147,7 +1151,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_log_save_state_map_does_nothing_when_debug_is_disabled() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let smram = FakeSmram::new(2);
         log::set_max_level(log::LevelFilter::Info);
 
@@ -1160,7 +1164,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_log_save_state_map_walks_every_cpu() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let smram = FakeSmram::new(3);
 
         // SAFETY: `smram` owns a live SMBASE array of three entries for the call.
@@ -1170,7 +1174,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_log_save_state_map_reports_an_smbase_that_overflows() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let mut smram = FakeSmram::new(1);
         smram.set_smbase(0, u64::MAX);
 
@@ -1181,7 +1185,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_log_save_state_map_skips_a_null_smbase_array() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
 
         // SAFETY: the null base is rejected before any read.
         unsafe { log_save_state_map(SaveStateInfo { number_of_cpus: 4, sm_base: 0 }) };
@@ -1190,7 +1194,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_log_save_state_map_skips_an_unusable_cpu_count() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let smram = FakeSmram::new(1);
         let mut info = smram.info();
         // A count this large cannot be turned into a byte length, so nothing is read.
@@ -1423,7 +1427,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_save_state_read_phase1_stages_against_the_initialized_cpu_count() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let smram = FakeSmram::new(2);
         security_state().set_save_state_info(smram.info());
 

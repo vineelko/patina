@@ -17,8 +17,10 @@ use patina::{
     pi::{mm_cis::EfiMmEntryContext, protocol::communication::EfiMmCommunicateHeader},
 };
 
+use crate::request_target::RequestTarget;
 use crate::{
-    CommBufferConfig, MmSupervisorCore, PlatformInfo,
+    MmSupervisorCore, PlatformInfo,
+    comm_buffer::CommBufferConfig,
     cpu::ApState,
     intrinsics::is_bsp,
     mailbox::{ApCommand, ApResponse},
@@ -135,19 +137,19 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// Returns the target that was serviced, or [`RequestTarget::None`] when there was
     /// nothing to do.
-    fn bsp_request_loop(&self, cpu_index: usize) -> crate::RequestTarget {
+    fn bsp_request_loop(&self, cpu_index: usize) -> RequestTarget {
         // Get communication buffer configuration
         let config = match security_state().comm_buffer_config() {
             Some(c) => c,
             None => {
                 // Not yet initialized, nothing to process
-                return crate::RequestTarget::None;
+                return RequestTarget::None;
             }
         };
 
         // Bail out only if neither status mailbox is wired up yet.
         if config.user_status_buffer == 0 && config.supv_status_buffer == 0 {
-            return crate::RequestTarget::None;
+            return RequestTarget::None;
         }
 
         // Read both status mailboxes. A buffer that hasn't been published yet
@@ -167,7 +169,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             MmCommBufferStatus::new()
         };
 
-        let target = crate::RequestTarget::select(&user_status, &supv_status);
+        let target = RequestTarget::select(&user_status, &supv_status);
 
         log::trace!(
             "Processing request: user_valid={}, supv_valid={}, target={:?}",
@@ -177,14 +179,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         );
 
         match target {
-            crate::RequestTarget::None => {
+            RequestTarget::None => {
                 // No pending request
             }
-            crate::RequestTarget::User => {
+            RequestTarget::User => {
                 // Request targets the User module (sync user MMI or async dispatch)
                 self.process_user_request(config, &user_status, cpu_index);
             }
-            crate::RequestTarget::Supervisor => {
+            RequestTarget::Supervisor => {
                 // Request targets the Supervisor
                 self.process_supervisor_request(config, &supv_status, cpu_index);
             }
@@ -779,7 +781,7 @@ mod tests {
     use crate::cpu::ApState;
     use crate::mailbox::{ApCommand, ApResponse};
     use crate::state::{init_state, security_state};
-    use crate::{CommBufferConfig, MmSupervisorCore};
+    use crate::{MmSupervisorCore, comm_buffer::CommBufferConfig, request_target::RequestTarget};
     use crate::{SupervisorMmiHandler, privilege_mgmt::mock};
     use core::sync::atomic::{AtomicUsize, Ordering};
     use patina::Guid;
@@ -906,7 +908,7 @@ mod tests {
     fn test_bsp_request_loop_returns_before_the_comm_buffer_is_published() {
         // The PassDown HOB has not been processed, so there is no configuration to act on.
         assert!(security_state().comm_buffer_config().is_none());
-        assert_eq!(TestCore::new().bsp_request_loop(0), crate::RequestTarget::None);
+        assert_eq!(TestCore::new().bsp_request_loop(0), RequestTarget::None);
     }
 
     #[test]
@@ -918,7 +920,7 @@ mod tests {
         security_state().set_comm_buffer_config(config);
 
         HANDLER_RESPONSE_SIZE.store(4, Ordering::SeqCst);
-        assert_eq!(TestCore::new().bsp_request_loop(0), crate::RequestTarget::Supervisor);
+        assert_eq!(TestCore::new().bsp_request_loop(0), RequestTarget::Supervisor);
 
         assert_eq!(HANDLER_CALLS.load(Ordering::SeqCst), 1);
         assert_eq!(buffers.supv_status.is_comm_buffer_valid, 0);
@@ -933,7 +935,7 @@ mod tests {
         config.supv_status_buffer = 0;
         security_state().set_comm_buffer_config(config);
 
-        assert_eq!(TestCore::new().bsp_request_loop(0), crate::RequestTarget::None);
+        assert_eq!(TestCore::new().bsp_request_loop(0), RequestTarget::None);
         assert_eq!(HANDLER_CALLS.load(Ordering::SeqCst), 0);
     }
 
@@ -948,7 +950,7 @@ mod tests {
         security_state().set_comm_buffer_config(config);
 
         HANDLER_RESPONSE_SIZE.store(4, Ordering::SeqCst);
-        assert_eq!(TestCore::new().bsp_request_loop(0), crate::RequestTarget::Supervisor);
+        assert_eq!(TestCore::new().bsp_request_loop(0), RequestTarget::Supervisor);
 
         assert_eq!(HANDLER_CALLS.load(Ordering::SeqCst), 1);
     }
@@ -974,7 +976,7 @@ mod tests {
             0
         });
 
-        assert_eq!(core.bsp_request_loop(0), crate::RequestTarget::User);
+        assert_eq!(core.bsp_request_loop(0), RequestTarget::User);
         mock::clear();
 
         assert_eq!(calls.get(), 1);

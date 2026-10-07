@@ -385,6 +385,8 @@ impl MmDispatcher {
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
+    use crate::test_support;
+
     use super::*;
 
     use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
@@ -638,7 +640,7 @@ mod tests {
 
     #[test]
     fn test_an_unsatisfied_depex_holds_the_driver_back() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let hobs = HobListBuffer::new()
             .module(MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, DRIVER_A, entry_of(driver_a))
             .guid_hob(MM_SUPERVISOR_DEPEX_HOB_GUID, &depex_payload(DRIVER_A, &depex_push(MISSING_PROTOCOL)))
@@ -772,7 +774,7 @@ mod tests {
 
     #[test]
     fn test_a_driver_that_fails_is_still_consumed() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let hobs = HobListBuffer::new()
             .module(MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, DRIVER_A, entry_of(failing_driver))
             .build();

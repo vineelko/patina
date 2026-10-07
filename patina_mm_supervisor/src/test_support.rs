@@ -13,9 +13,11 @@
 
 #![cfg_attr(coverage, coverage(off))]
 
-use crate::comm_buffer::MmCommonRegionHobData;
+use crate::comm_buffer::{MM_COMMON_REGION_HOB_GUID, MmCommonRegionHobData};
 use crate::mem::SharedPagingAllocator;
-use crate::pass_down_hob::MmSupvPassDownHobData;
+use crate::mm_core::init::MP_INFORMATION_HOB_GUID;
+use crate::mseg::MSEG_SMRAM_HOB_GUID;
+use crate::pass_down_hob::{MM_SUPV_PASS_DOWN_HOB_GUID, MM_SUPV_PASS_DOWN_HOB_REVISION, MmSupvPassDownHobData};
 use crate::smi_idt_patch::{FIXUP64_SMI_HANDLER_IDTR, PerCoreMmiEntryStructHdr};
 use crate::{
     MmSupervisorCore, PlatformInfo,
@@ -187,7 +189,7 @@ pub(crate) fn pass_down_hob_data(pass_down: &MmSupvPassDownHobData) -> [u8; size
 }
 pub(crate) fn valid_pass_down_hob() -> MmSupvPassDownHobData {
     MmSupvPassDownHobData {
-        revision: crate::MM_SUPV_PASS_DOWN_HOB_REVISION,
+        revision: MM_SUPV_PASS_DOWN_HOB_REVISION,
         reserved: 0,
         cpl3_stack_base: 0x10_0000,
         cpl3_stack_size: 0x4000,
@@ -255,12 +257,12 @@ pub(crate) fn mp_information_hob_data(number_of_cpus: usize) -> Vec<u8> {
 }
 pub(crate) fn policy_hob_list_with_cpu_count(number_of_cpus: usize, include_mseg: bool) -> RawHobList {
     let mut list = RawHobList::new();
-    list.push_guid_hob(crate::MP_INFORMATION_HOB_GUID, &mp_information_hob_data(number_of_cpus));
-    list.push_guid_hob(crate::MM_SUPV_PASS_DOWN_HOB_GUID, &pass_down_hob_data(&valid_pass_down_hob()));
+    list.push_guid_hob(MP_INFORMATION_HOB_GUID, &mp_information_hob_data(number_of_cpus));
+    list.push_guid_hob(MM_SUPV_PASS_DOWN_HOB_GUID, &pass_down_hob_data(&valid_pass_down_hob()));
     if include_mseg {
-        list.push_guid_hob(crate::MSEG_SMRAM_HOB_GUID, &mseg_smram_hob_data(0x0040_0000, 0x0040_0000, 0x0002_0000));
+        list.push_guid_hob(MSEG_SMRAM_HOB_GUID, &mseg_smram_hob_data(0x0040_0000, 0x0040_0000, 0x0002_0000));
     }
-    list.push_guid_hob(crate::MM_COMMON_REGION_HOB_GUID, &supv_comm_buffer_hob_data(0x10_0000, 2, 0x20_0000));
+    list.push_guid_hob(MM_COMMON_REGION_HOB_GUID, &supv_comm_buffer_hob_data(0x10_0000, 2, 0x20_0000));
     list.push_guid_hob(MM_COMM_BUFFER_HOB_GUID, &user_comm_buffer_hob_data(0x30_0000, 3, 0x40_0000));
     list.finish()
 }

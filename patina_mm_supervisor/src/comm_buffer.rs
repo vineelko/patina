@@ -29,6 +29,12 @@ use crate::{
     state::security_state,
 };
 
+/// GUID for `gMmCommonRegionHobGuid`.
+///
+/// `{ 0xd4ffc718, 0xfb82, 0x4274, { 0x9a, 0xfc, 0xaa, 0x8b, 0x1e, 0xef, 0x52, 0x93 } }`
+pub(crate) const MM_COMMON_REGION_HOB_GUID: patina::BinaryGuid =
+    patina::BinaryGuid::from_string("d4ffc718-fb82-4274-9afc-aa8b1eef5293");
+
 /// Why a communication buffer could not be adopted from the HOB list.
 ///
 /// The MM IPL describes both buffers from outside the supervisor's trust boundary, so each
@@ -337,6 +343,7 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use crate::mem;
+    use crate::test_support;
     use crate::test_support::*;
     use patina_paging::{MemoryAttributes, PageTable};
 
@@ -453,7 +460,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_init_supv_comm_buffer_adopts_a_supervisor_mapped_buffer_outside_mmram() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let mmram = PageAlignedMemory::new(mem::DEFAULT_PAGING_POOL_PAGES + 8);
         init_global_state_over(&mmram);
 
@@ -475,7 +482,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_init_supv_comm_buffer_rejects_a_buffer_inside_mmram() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let mmram = PageAlignedMemory::new(mem::DEFAULT_PAGING_POOL_PAGES + 8);
         init_global_state_over(&mmram);
 
@@ -491,7 +498,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_init_user_comm_buffer_redirects_the_hob_to_the_internal_copy() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let mmram = PageAlignedMemory::new(mem::DEFAULT_PAGING_POOL_PAGES + 8);
         init_global_state_over(&mmram);
 
@@ -516,7 +523,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_init_user_comm_buffer_rejects_a_user_mapped_buffer() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let mmram = PageAlignedMemory::new(mem::DEFAULT_PAGING_POOL_PAGES + 8);
         init_global_state_over(&mmram);
 

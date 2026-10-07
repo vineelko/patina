@@ -73,11 +73,9 @@ mod user_access_guard;
 /// resides in the `mm_core` module.
 pub use mm_core::MmSupervisorCore;
 
-// Publicly re-export the handler types since platform-specific handlers will need to reference these for
-// their function signatures and return types.
-pub use comm_buffer::CommBufferConfig;
-pub use request_target::RequestTarget;
-pub use smi_idt_patch::{SmiHandlerIdtPatchError, SmiHandlerIdtPatchInputError};
+/// Re-export the MMI handler descriptor for external use. Platforms name it in the
+/// signatures of the handlers they register, and the actual definition resides in the
+/// `supervisor_handlers` module.
 pub use supervisor_handlers::SupervisorMmiHandler;
 
 // The entry-point shim references `rust_main`, which is provided by the platform binary, and is
@@ -85,36 +83,6 @@ pub use supervisor_handlers::SupervisorMmiHandler;
 // so their harnesses can link.
 #[cfg(target_os = "uefi")]
 core::arch::global_asm!(include_str!("entry_point.asm"));
-
-/// GUID for `gMmCommonRegionHobGuid`.
-///
-/// `{ 0xd4ffc718, 0xfb82, 0x4274, { 0x9a, 0xfc, 0xaa, 0x8b, 0x1e, 0xef, 0x52, 0x93 } }`
-pub const MM_COMMON_REGION_HOB_GUID: patina::BinaryGuid =
-    patina::BinaryGuid::from_string("d4ffc718-fb82-4274-9afc-aa8b1eef5293");
-
-// GUID for gMmSupervisorPassDownHobGuid
-// { 0x3f2d2d1a, 0x7c6a, 0x4e2e, { 0x91, 0x2e, 0x5c, 0x4f, 0x5b, 0x8c, 0x2a, 0x9d } }
-/// GUID for the MM Supervisor `PassDown` HOB.
-pub const MM_SUPV_PASS_DOWN_HOB_GUID: patina::BinaryGuid =
-    patina::BinaryGuid::from_string("3f2d2d1a-7c6a-4e2e-912e-5c4f5b8c2a9d");
-
-// GUID for gMpInformationHobGuid (StandaloneMmPkg/Include/Guid/MpInformation.h)
-// { 0xba33f15d, 0x4000, 0x45c1, { 0x8e, 0x88, 0xf9, 0x16, 0x92, 0xd4, 0x57, 0xe3 } }
-/// GUID for the MP Information HOB, which carries the processor count and the
-/// `EFI_PROCESSOR_INFORMATION` array (APIC IDs) used by the save-state read path.
-pub const MP_INFORMATION_HOB_GUID: patina::BinaryGuid =
-    patina::BinaryGuid::from_string("ba33f15d-4000-45c1-8e88-f91692d457e3");
-
-// GUID for gMsegSmramGuid (UefiCpuPkg/UefiCpuPkg.dec)
-// { 0x5802bce4, 0xeeee, 0x4e33, { 0xa1, 0x30, 0xeb, 0xad, 0x27, 0xf0, 0xe4, 0x39 } }
-/// GUID for the MSEG SMRAM HOB, which carries the `EFI_SMRAM_DESCRIPTOR` for the
-/// MSEG region carved out of SMRAM for an STM. Only published by platforms that
-/// integrate STM/SEA support.
-pub const MSEG_SMRAM_HOB_GUID: patina::BinaryGuid =
-    patina::BinaryGuid::from_string("5802bce4-eeee-4e33-a130-ebad27f0e439");
-
-/// MM Supervisor `PassDown` HOB Revision
-pub const MM_SUPV_PASS_DOWN_HOB_REVISION: u32 = 2;
 
 /// A trait to be implemented by the platform to provide configuration values and types to be used
 /// by the MM Supervisor Core.
@@ -147,6 +115,8 @@ pub trait PlatformInfo: 'static {
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
+    use crate::comm_buffer::MM_COMMON_REGION_HOB_GUID;
+
     use super::*;
     use patina::standard::efi;
 

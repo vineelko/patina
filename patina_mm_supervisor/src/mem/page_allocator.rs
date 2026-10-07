@@ -777,7 +777,7 @@ impl PageAllocator {
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
-    use crate::mem::mmram_placement::classify_mmram_in_regions;
+    use crate::{mem::mmram_placement::classify_mmram_in_regions, test_support};
 
     /// Smallest region size `coalesced_smrr_range` will accept (256 KiB - 4 KiB).
     const MIN_SMRR_SIZE: u64 = SIZE_256KB as u64 - UEFI_PAGE_SIZE as u64;
@@ -853,7 +853,7 @@ mod tests {
 
     #[test]
     fn test_page_allocator_initialization_reserves_bookkeeping() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let fixture = AllocatorFixture::new();
 
         assert!(fixture.allocator.is_initialized());
@@ -1027,7 +1027,7 @@ mod tests {
 
     #[test]
     fn test_page_allocator_checked_free_is_atomic_on_type_mismatch() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let fixture = AllocatorFixture::new();
         let mut state = fixture.allocator.lock_state();
         let user = state.allocate(2, AllocationType::User).unwrap();
@@ -1079,7 +1079,7 @@ mod tests {
 
     #[test]
     fn test_page_allocator_public_free_reports_pages_that_are_not_allocated() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let fixture = AllocatorFixture::new();
         let last_page = fixture.base + (TEST_REGION_PAGES - 1) as u64 * UEFI_PAGE_SIZE as u64;
 
@@ -1092,7 +1092,7 @@ mod tests {
 
     #[test]
     fn test_page_allocator_marks_pre_allocated_regions_as_used() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let mut memory = Box::new(AlignedRegion([0u8; TEST_REGION_BYTES]));
         let base = memory.0.as_mut_ptr() as u64;
         let half = (TEST_REGION_BYTES / 2) as u64;
@@ -1141,7 +1141,7 @@ mod tests {
 
     #[test]
     fn test_page_allocator_rejects_free_crossing_region_end() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let fixture = AllocatorFixture::new();
         let mut state = fixture.allocator.lock_state();
         let allocation = state.allocate(TEST_REGION_PAGES - 1, AllocationType::User).unwrap();

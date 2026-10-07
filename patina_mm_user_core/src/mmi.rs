@@ -393,6 +393,8 @@ impl MmiDatabase {
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
+    use crate::test_support;
+
     use super::*;
     use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -401,7 +403,7 @@ mod tests {
 
     #[test]
     fn test_mmi_manage_reports_that_no_handler_is_registered() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let db = MmiDatabase::new();
 
         // Nothing is registered for this type, so the dispatch reports not found.

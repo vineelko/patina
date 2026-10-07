@@ -63,7 +63,9 @@ use patina_paging::{MemoryAttributes, PageTable};
 use zerocopy::FromBytes;
 
 use crate::error::MmSupervisorResult;
-use crate::pass_down_hob::{MmSupvPassDownHobData, PassDownHobError};
+use crate::pass_down_hob::{
+    MM_SUPV_PASS_DOWN_HOB_GUID, MM_SUPV_PASS_DOWN_HOB_REVISION, MmSupvPassDownHobData, PassDownHobError,
+};
 use crate::smrr::SmramRegion;
 use crate::state::security_state;
 
@@ -394,10 +396,10 @@ fn validate_pass_down_pointers(
     pass_down: &MmSupvPassDownHobData,
     is_inside_mmram: impl Fn(u64, u64) -> bool,
 ) -> MmSupervisorResult<()> {
-    if pass_down.revision != crate::MM_SUPV_PASS_DOWN_HOB_REVISION {
+    if pass_down.revision != MM_SUPV_PASS_DOWN_HOB_REVISION {
         return Err(PassDownHobError::InvalidRevision {
             found: pass_down.revision,
-            expected: crate::MM_SUPV_PASS_DOWN_HOB_REVISION,
+            expected: MM_SUPV_PASS_DOWN_HOB_REVISION,
         }
         .into());
     }
@@ -781,7 +783,7 @@ fn validate_pass_down<'a>(
     let data = hobs
         .into_iter()
         .find_map(|hob| match hob {
-            Hob::GuidHob(guid_hob, data) if guid_hob.name == crate::MM_SUPV_PASS_DOWN_HOB_GUID => Some(data),
+            Hob::GuidHob(guid_hob, data) if guid_hob.name == MM_SUPV_PASS_DOWN_HOB_GUID => Some(data),
             _ => None,
         })
         .ok_or(PassDownHobError::Missing)?;
@@ -1022,6 +1024,7 @@ fn validate_entry_point_attributes(entry_point: u64, attributes: MemoryAttribute
 mod tests {
     use super::*;
     use crate::error::MmSupervisorError;
+    use crate::pass_down_hob::{MM_SUPV_PASS_DOWN_HOB_GUID, MM_SUPV_PASS_DOWN_HOB_REVISION};
     use core::mem::size_of;
     use std::cell::RefCell;
 
@@ -1038,7 +1041,7 @@ mod tests {
 
     fn pass_down() -> MmSupvPassDownHobData {
         MmSupvPassDownHobData {
-            revision: crate::MM_SUPV_PASS_DOWN_HOB_REVISION,
+            revision: MM_SUPV_PASS_DOWN_HOB_REVISION,
             reserved: 0,
             cpl3_stack_base: 0x1000,
             cpl3_stack_size: 0x1000,
@@ -1251,7 +1254,7 @@ mod tests {
                 0x1000,
             ),
             init: allocation_module(HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID, 0x2000, 0x2000, 0x2100),
-            guid: guid_hob(crate::MM_SUPV_PASS_DOWN_HOB_GUID, size_of::<MmSupvPassDownHobData>()),
+            guid: guid_hob(MM_SUPV_PASS_DOWN_HOB_GUID, size_of::<MmSupvPassDownHobData>()),
             pass_down: pass_down(),
             end: HobHeader { r#type: END_OF_HOB_LIST, length: size_of::<HobHeader>() as u16, reserved: 0 },
         };
@@ -1873,7 +1876,7 @@ mod tests {
     #[test]
     fn test_mm_supervisor_hob_validation_pass_down_bad_revision() {
         let mut pd = pass_down();
-        pd.revision = crate::MM_SUPV_PASS_DOWN_HOB_REVISION + 1;
+        pd.revision = MM_SUPV_PASS_DOWN_HOB_REVISION + 1;
         assert!(matches!(
             validate_pass_down_pointers(&pd, |_, _| true),
             Err(MmSupervisorError::PassDownHob(PassDownHobError::InvalidRevision { .. }))
@@ -1900,7 +1903,7 @@ mod tests {
     #[test]
     fn test_mm_supervisor_hob_validation_pass_down_hob_errors_and_success() {
         let data = pass_down_bytes(&pass_down());
-        let matching = guid_hob(crate::MM_SUPV_PASS_DOWN_HOB_GUID, data.len());
+        let matching = guid_hob(MM_SUPV_PASS_DOWN_HOB_GUID, data.len());
         assert_eq!(validate_pass_down([Hob::GuidHob(&matching, &data)], |_, _| true), Ok(()));
 
         let unrelated = guid_hob(MM_SUPERVISOR_CORE_GUID, data.len());
@@ -1910,7 +1913,7 @@ mod tests {
         );
 
         let short_data = [0u8; 4];
-        let short = guid_hob(crate::MM_SUPV_PASS_DOWN_HOB_GUID, short_data.len());
+        let short = guid_hob(MM_SUPV_PASS_DOWN_HOB_GUID, short_data.len());
         assert_eq!(
             validate_pass_down([Hob::GuidHob(&short, &short_data)], |_, _| true),
             Err(PassDownHobError::TooSmall.into())

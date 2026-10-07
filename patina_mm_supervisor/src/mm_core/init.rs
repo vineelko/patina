@@ -32,21 +32,22 @@ use patina_internal_cpu::{interrupts::Interrupts, save_state::PROCESSOR_INFO_ENT
 use patina_paging::{MemoryAttributes, PageTable, PagingType, x64::X64PageTable};
 
 use crate::{
-    CommBufferConfig, MmSupervisorCore, PlatformInfo,
-    comm_buffer::{CommBufferError, init_supv_comm_buffer, init_user_comm_buffer},
+    MmSupervisorCore, PlatformInfo,
+    comm_buffer::{
+        CommBufferConfig, CommBufferError, MM_COMMON_REGION_HOB_GUID, init_supv_comm_buffer, init_user_comm_buffer,
+    },
     error::MmSupervisorResult,
     hob_validation::{self, HobValidationError},
     intrinsics::read_cr3,
-    mem::AllocationType,
-    mem::SharedPagingAllocator,
     mem::{
-        self, PageAllocator,
+        self, AllocationType, PageAllocator, SharedPagingAllocator,
         mmram_placement::{classify_mmram_in_regions, is_buffer_inside_mmram},
         page_allocator::coalesced_smrr_range,
     },
     mm_policy::{self, MemDescriptorV1_0, dump_policy, gate::PolicyGate, walk_page_table},
-    page_ownership::PageOwnership,
-    page_ownership::query_address_ownership,
+    mseg::MSEG_SMRAM_HOB_GUID,
+    page_ownership::{PageOwnership, query_address_ownership},
+    pass_down_hob::MM_SUPV_PASS_DOWN_HOB_GUID,
     save_state::{SaveStateInfo, validate_save_state_regions},
     smrr::{SmramRegion, configure_smm_code_access, smrr_initialize},
     state::{init_state, security_state},
@@ -59,6 +60,13 @@ use crate::mmram_bound::{establish_mmram_bound, supervisor_image_anchor};
 use crate::mseg::parse_mseg_smram_hob;
 use crate::pass_down_hob::{MmSupvPassDownHobData, PassDownHobError, parse_pass_down_hob};
 use crate::smi_idt_patch::patch_smi_handler_idt;
+
+// GUID for gMpInformationHobGuid (StandaloneMmPkg/Include/Guid/MpInformation.h)
+// { 0xba33f15d, 0x4000, 0x45c1, { 0x8e, 0x88, 0xf9, 0x16, 0x92, 0xd4, 0x57, 0xe3 } }
+/// GUID for the MP Information HOB, which carries the processor count and the
+/// `EFI_PROCESSOR_INFORMATION` array (APIC IDs) used by the save-state read path.
+pub(crate) const MP_INFORMATION_HOB_GUID: patina::BinaryGuid =
+    patina::BinaryGuid::from_string("ba33f15d-4000-45c1-8e88-f91692d457e3");
 
 pub(crate) fn validate_init_code_page(address: u64, attributes: MemoryAttributes) {
     if attributes.contains(MemoryAttributes::ExecuteProtect) {
@@ -526,14 +534,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     fn init_policy_from_hob_list(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
         // 1. Process the MP Information HOB (`gMpInformationHobGuid`) for the CPU count. It sizes
         //    the Ring 3 stack array the PassDown HOB describes, so it is needed first.
-        let mp_information = find_guid_hob(hob_hand_off_table, crate::MP_INFORMATION_HOB_GUID)
-            .ok_or(CoreInitError::MpInformationHobMissing)?;
+        let mp_information =
+            find_guid_hob(hob_hand_off_table, MP_INFORMATION_HOB_GUID).ok_or(CoreInitError::MpInformationHobMissing)?;
 
         let number_of_cpus = self.parse_mp_information_hob(mp_information)?;
 
         // 1b. Process the PassDown HOB (policy, syscall, memory policy)
         let pass_down_data =
-            find_guid_hob(hob_hand_off_table, crate::MM_SUPV_PASS_DOWN_HOB_GUID).ok_or(PassDownHobError::Missing)?;
+            find_guid_hob(hob_hand_off_table, MM_SUPV_PASS_DOWN_HOB_GUID).ok_or(PassDownHobError::Missing)?;
 
         // SAFETY: `pass_down_data` is a slice into the validated HOB list, so the buffer pointers
         // it carries reference live memory as `init_from_pass_down_hob` requires.
@@ -550,7 +558,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         //        MSEG region reserved for an STM. Each core programs the base into
         //        IA32_SMM_MONITOR_CTL during per-core init. Platforms without STM/SEA
         //        integration do not publish this HOB, so its absence is not an error.
-        match find_guid_hob(hob_hand_off_table, crate::MSEG_SMRAM_HOB_GUID).and_then(parse_mseg_smram_hob) {
+        match find_guid_hob(hob_hand_off_table, MSEG_SMRAM_HOB_GUID).and_then(parse_mseg_smram_hob) {
             Some(mseg_base) => {
                 init_state().set_mseg_base(mseg_base);
                 log::info!("MSEG base 0x{mseg_base:x} discovered from MSEG SMRAM HOB");
@@ -566,7 +574,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // 2. Process the supervisor communication buffer HOB. Only one
         //    MM_COMM_REGION_HOB is published (the supervisor one); the user
         //    channel flows through MM_COMM_BUFFER_HOB_GUID below.
-        let supv_region_data = find_guid_hob(hob_hand_off_table, crate::MM_COMMON_REGION_HOB_GUID)
+        let supv_region_data = find_guid_hob(hob_hand_off_table, MM_COMMON_REGION_HOB_GUID)
             .ok_or(CommBufferError::CommRegionHobMissing)?;
         let (supv_comm_buffer, supv_comm_buffer_size, supv_comm_buffer_internal, supv_status_buffer) =
             init_supv_comm_buffer(supv_region_data).inspect_err(|e| {
@@ -823,7 +831,7 @@ mod tests {
     use super::*;
     use crate::error::MmSupervisorError;
     use crate::hob_validation::HobValidationError;
-    use crate::mem;
+    use crate::{mem, test_support};
     use crate::{
         mem::{PageAllocator, PagingPoolAllocator},
         state::InitState,
@@ -966,7 +974,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_publish_hob_list_to_user_copies_the_list_and_reclaims_whole_pages() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let memory = PageAlignedMemory::new(mem::DEFAULT_PAGING_POOL_PAGES + 32);
         init_global_state_over(&memory);
@@ -1013,7 +1021,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_publish_hob_list_to_user_reports_a_failed_reclaim() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let memory = PageAlignedMemory::new(mem::DEFAULT_PAGING_POOL_PAGES + 32);
         init_global_state_over(&memory);
@@ -1041,7 +1049,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_publish_hob_list_to_user_rejects_a_list_outside_mmram() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let memory = PageAlignedMemory::new(mem::DEFAULT_PAGING_POOL_PAGES + 8);
         init_global_state_over(&memory);
@@ -1061,7 +1069,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_publish_hob_list_to_user_refuses_to_publish_without_a_page_table() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let memory = PageAlignedMemory::new(mem::DEFAULT_PAGING_POOL_PAGES + 8);
         let hob_list = smram_hob_list(&memory);
@@ -1247,14 +1255,14 @@ mod tests {
 
     #[test]
     fn test_init_policy_from_hob_list_reports_a_missing_pass_down_hob() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
 
         // Carries the MP Information HOB so initialization reaches the PassDown lookup and
         // stops there. Lists that get past this point reach steps that touch real MMRAM, so
         // the later required-HOB lookups are not reachable from a host test.
         let mut without_pass_down = RawHobList::new();
-        without_pass_down.push_guid_hob(crate::MP_INFORMATION_HOB_GUID, &mp_information_hob_data(2));
+        without_pass_down.push_guid_hob(MP_INFORMATION_HOB_GUID, &mp_information_hob_data(2));
         let without_pass_down = without_pass_down.finish();
 
         let result = supervisor.init_policy_from_hob_list(without_pass_down.handoff());
@@ -1263,7 +1271,7 @@ mod tests {
 
     #[test]
     fn test_init_policy_and_validate_reports_initialization_failure() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let hob_list = RawHobList::new().finish();
 
@@ -1301,7 +1309,7 @@ mod tests {
 
     #[test]
     fn test_parse_mp_information_hob_rejects_invalid_size() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let mut data = [0_u8; 16 + PROCESSOR_INFO_ENTRY_SIZE];
 
@@ -1316,7 +1324,7 @@ mod tests {
 
     #[test]
     fn test_parse_mp_information_hob_rejects_invalid_cpu_count() {
-        crate::test_support::init_test_logger();
+        test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let mut data = [0_u8; 16];
 

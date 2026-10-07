@@ -22,6 +22,15 @@ use zerocopy_derive::Immutable;
 
 use crate::error::MmSupervisorResult;
 
+// GUID for gMmSupervisorPassDownHobGuid
+// { 0x3f2d2d1a, 0x7c6a, 0x4e2e, { 0x91, 0x2e, 0x5c, 0x4f, 0x5b, 0x8c, 0x2a, 0x9d } }
+/// GUID for the MM Supervisor `PassDown` HOB.
+pub(crate) const MM_SUPV_PASS_DOWN_HOB_GUID: patina::BinaryGuid =
+    patina::BinaryGuid::from_string("3f2d2d1a-7c6a-4e2e-912e-5c4f5b8c2a9d");
+
+/// MM Supervisor `PassDown` HOB Revision
+pub(crate) const MM_SUPV_PASS_DOWN_HOB_REVISION: u32 = 2;
+
 /// Why the MM Supervisor `PassDown` HOB could not be used.
 ///
 /// The MM IPL produces this HOB outside the supervisor's trust boundary, so its revision,
@@ -130,15 +139,15 @@ pub(crate) fn parse_pass_down_hob(data: &[u8]) -> MmSupervisorResult<MmSupvPassD
         PassDownHobError::TooSmall
     })?;
 
-    if pass_down.revision != crate::MM_SUPV_PASS_DOWN_HOB_REVISION {
+    if pass_down.revision != MM_SUPV_PASS_DOWN_HOB_REVISION {
         log::error!(
             "Invalid PassDown HOB revision: {} (expected {})",
             pass_down.revision,
-            crate::MM_SUPV_PASS_DOWN_HOB_REVISION
+            MM_SUPV_PASS_DOWN_HOB_REVISION
         );
         return Err(PassDownHobError::InvalidRevision {
             found: pass_down.revision,
-            expected: crate::MM_SUPV_PASS_DOWN_HOB_REVISION,
+            expected: MM_SUPV_PASS_DOWN_HOB_REVISION,
         }
         .into());
     }
@@ -197,11 +206,8 @@ mod tests {
         assert_eq!(
             parse_pass_down_hob(&pass_down_hob_data(&pass_down))
                 .expect_err("invalid PassDown HOB revision should fail"),
-            PassDownHobError::InvalidRevision {
-                found: pass_down.revision,
-                expected: crate::MM_SUPV_PASS_DOWN_HOB_REVISION,
-            }
-            .into()
+            PassDownHobError::InvalidRevision { found: pass_down.revision, expected: MM_SUPV_PASS_DOWN_HOB_REVISION }
+                .into()
         );
     }
 

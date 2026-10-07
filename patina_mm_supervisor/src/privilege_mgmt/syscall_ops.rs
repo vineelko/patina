@@ -21,7 +21,7 @@
 use core::arch::asm;
 
 use crate::{
-    CommBufferConfig,
+    comm_buffer::CommBufferConfig,
     error::{MmSupervisorError, MmSupervisorResult},
     mem::AllocationType,
     mm_policy::{AccessType, Instruction, IoWidth},
