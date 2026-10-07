@@ -161,52 +161,73 @@ pub(crate) struct ParsedCommBuffer {
     status_address: u64,
 }
 
-fn parse_comm_buffer_fields(
-    address: u64,
-    pages: u64,
-    status_address: u64,
-    description: &str,
-) -> MmSupervisorResult<ParsedCommBuffer> {
-    let page_count = usize::try_from(pages).map_err(|_| {
-        log::error!("{description} page count {pages} does not fit the target architecture");
-        CommBufferError::InvalidSize { pages }
-    })?;
-    let size = pages.checked_mul(UEFI_PAGE_SIZE as u64).filter(|size| *size != 0).ok_or_else(|| {
-        log::error!("{description} page count {pages} produces an invalid byte size");
-        CommBufferError::InvalidSize { pages }
-    })?;
-    if address.checked_add(size).is_none() {
-        log::error!("{description} address 0x{address:016x} plus size 0x{size:x} overflows");
-        return Err(CommBufferError::InvalidSize { pages }.into());
+impl ParsedCommBuffer {
+    /// Records the region a communication buffer HOB described, once its page count and extent
+    /// are known to be usable.
+    ///
+    /// `description` names the buffer in the log when one of those checks rejects it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommBufferError::InvalidSize`] when the page count does not fit the target
+    /// architecture, when it is zero or produces a byte size that overflows, or when the region
+    /// would run past the end of the address space.
+    fn new(address: u64, pages: u64, status_address: u64, description: &str) -> MmSupervisorResult<Self> {
+        let page_count = usize::try_from(pages).map_err(|_| {
+            log::error!("{description} page count {pages} does not fit the target architecture");
+            CommBufferError::InvalidSize { pages }
+        })?;
+        let size = pages.checked_mul(UEFI_PAGE_SIZE as u64).filter(|size| *size != 0).ok_or_else(|| {
+            log::error!("{description} page count {pages} produces an invalid byte size");
+            CommBufferError::InvalidSize { pages }
+        })?;
+        if address.checked_add(size).is_none() {
+            log::error!("{description} address 0x{address:016x} plus size 0x{size:x} overflows");
+            return Err(CommBufferError::InvalidSize { pages }.into());
+        }
+
+        Ok(Self { address, page_count, size, status_address })
     }
 
-    Ok(ParsedCommBuffer { address, page_count, size, status_address })
-}
+    /// Reads the supervisor channel's region from an `MM_COMMON_REGION_HOB_GUID` payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommBufferError::HobTooSmall`] when the payload is shorter than
+    /// [`MmCommonRegionHobData`], and [`CommBufferError::InvalidSize`] when the region it
+    /// describes cannot be used.
+    pub(crate) fn from_supv_hob(data: &[u8]) -> MmSupervisorResult<Self> {
+        let (hob, _) = MmCommonRegionHobData::read_from_prefix(data).map_err(|_| {
+            log::error!(
+                "MM Common Region HOB data too small: {} < {}",
+                data.len(),
+                core::mem::size_of::<MmCommonRegionHobData>()
+            );
+            CommBufferError::HobTooSmall { found: data.len(), expected: core::mem::size_of::<MmCommonRegionHobData>() }
+        })?;
 
-pub(crate) fn parse_supv_comm_buffer_hob(data: &[u8]) -> MmSupervisorResult<ParsedCommBuffer> {
-    let (hob, _) = MmCommonRegionHobData::read_from_prefix(data).map_err(|_| {
-        log::error!(
-            "MM Common Region HOB data too small: {} < {}",
-            data.len(),
-            core::mem::size_of::<MmCommonRegionHobData>()
-        );
-        CommBufferError::HobTooSmall { found: data.len(), expected: core::mem::size_of::<MmCommonRegionHobData>() }
-    })?;
+        Self::new(hob.addr, hob.number_of_pages, hob.status_addr, "Supervisor communication buffer")
+    }
 
-    parse_comm_buffer_fields(hob.addr, hob.number_of_pages, hob.status_addr, "Supervisor communication buffer")
-}
+    /// Reads the user channel's region from an `MM_COMM_BUFFER_HOB_GUID` payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommBufferError::HobTooSmall`] when the payload is shorter than
+    /// [`MmCommonBufferHobData`], and [`CommBufferError::InvalidSize`] when the region it
+    /// describes cannot be used.
+    pub(crate) fn from_user_hob(data: &[u8]) -> MmSupervisorResult<Self> {
+        let (hob, _) = MmCommonBufferHobData::read_from_prefix(data).map_err(|_| {
+            log::error!(
+                "MM Communication Buffer HOB data too small: {} < {}",
+                data.len(),
+                core::mem::size_of::<MmCommonBufferHobData>()
+            );
+            CommBufferError::HobTooSmall { found: data.len(), expected: core::mem::size_of::<MmCommonBufferHobData>() }
+        })?;
 
-pub(crate) fn parse_user_comm_buffer_hob(data: &[u8]) -> MmSupervisorResult<ParsedCommBuffer> {
-    let (hob, _) = MmCommonBufferHobData::read_from_prefix(data).map_err(|_| {
-        log::error!(
-            "MM Communication Buffer HOB data too small: {} < {}",
-            data.len(),
-            core::mem::size_of::<MmCommonBufferHobData>()
-        );
-        CommBufferError::HobTooSmall { found: data.len(), expected: core::mem::size_of::<MmCommonBufferHobData>() }
-    })?;
-
-    parse_comm_buffer_fields(hob.physical_start, hob.number_of_pages, hob.status_buffer, "User communication buffer")
+        Self::new(hob.physical_start, hob.number_of_pages, hob.status_buffer, "User communication buffer")
+    }
 }
 
 /// Requires that `[address, address + size)` is usable as an external communication buffer:
@@ -268,7 +289,7 @@ fn require_external_comm_buffer_with(
 pub(crate) fn init_supv_comm_buffer(data: &[u8]) -> MmSupervisorResult<CommChannel> {
     log::info!("Found MM Common Region HOB (supervisor)");
 
-    let buffer = parse_supv_comm_buffer_hob(data)?;
+    let buffer = ParsedCommBuffer::from_supv_hob(data)?;
 
     require_external_comm_buffer(buffer.address, buffer.size, "Supervisor communication buffer");
     require_external_comm_buffer(
@@ -317,7 +338,7 @@ pub(crate) unsafe fn init_user_comm_buffer(data: *mut u8, data_len: usize) -> Mm
         // SAFETY: the caller guarantees that `data` points to `data_len` readable bytes. The
         // temporary shared slice is dropped before the payload is rewritten below.
         let bytes = unsafe { core::slice::from_raw_parts(data.cast_const(), data_len) };
-        parse_user_comm_buffer_hob(bytes)?
+        ParsedCommBuffer::from_user_hob(bytes)?
     };
 
     require_external_comm_buffer(buffer.address, buffer.size, "User communication buffer");
@@ -578,9 +599,9 @@ mod tests {
 
     #[test]
     fn test_parse_communication_buffer_hobs() {
-        let supv = parse_supv_comm_buffer_hob(&supv_comm_buffer_hob_data(0x10_0000, 2, 0x20_0000))
+        let supv = ParsedCommBuffer::from_supv_hob(&supv_comm_buffer_hob_data(0x10_0000, 2, 0x20_0000))
             .expect("valid supervisor communication buffer HOB should parse");
-        let user = parse_user_comm_buffer_hob(&user_comm_buffer_hob_data(0x30_0000, 3, 0x40_0000))
+        let user = ParsedCommBuffer::from_user_hob(&user_comm_buffer_hob_data(0x30_0000, 3, 0x40_0000))
             .expect("valid user communication buffer HOB should parse");
 
         assert_eq!(
@@ -609,12 +630,12 @@ mod tests {
         let user = user_comm_buffer_hob_data(0x30_0000, 1, 0x40_0000);
 
         assert_eq!(
-            parse_supv_comm_buffer_hob(&supv[..supv.len() - 1]),
+            ParsedCommBuffer::from_supv_hob(&supv[..supv.len() - 1]),
             Err(CommBufferError::HobTooSmall { found: supv.len() - 1, expected: size_of::<MmCommonRegionHobData>() }
                 .into())
         );
         assert_eq!(
-            parse_user_comm_buffer_hob(&user[..user.len() - 1]),
+            ParsedCommBuffer::from_user_hob(&user[..user.len() - 1]),
             Err(CommBufferError::HobTooSmall { found: user.len() - 1, expected: size_of::<MmCommonBufferHobData>() }
                 .into())
         );
@@ -624,11 +645,11 @@ mod tests {
     fn test_parse_communication_buffer_hobs_reject_invalid_ranges() {
         for (address, pages) in [(0x1000, 0), (0x1000, u64::MAX), (u64::MAX - 0xFFF, 1)] {
             assert_eq!(
-                parse_supv_comm_buffer_hob(&supv_comm_buffer_hob_data(address, pages, 0x20_0000)),
+                ParsedCommBuffer::from_supv_hob(&supv_comm_buffer_hob_data(address, pages, 0x20_0000)),
                 Err(CommBufferError::InvalidSize { pages }.into())
             );
             assert_eq!(
-                parse_user_comm_buffer_hob(&user_comm_buffer_hob_data(address, pages, 0x20_0000)),
+                ParsedCommBuffer::from_user_hob(&user_comm_buffer_hob_data(address, pages, 0x20_0000)),
                 Err(CommBufferError::InvalidSize { pages }.into())
             );
         }
