@@ -30,7 +30,7 @@ use crate::{
     mm_core::CoreInitError,
     mm_policy::{
         PolicyGateError,
-        helpers::{PageTableWalkError, PolicyValidationError},
+        policy_validation::{PageTableWalkError, PolicyValidationError},
     },
     mmram_bound::MmramBoundError,
     pass_down_hob::PassDownHobError,

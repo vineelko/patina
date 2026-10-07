@@ -23,11 +23,13 @@
 //!
 //! SPDX-License-Identifier: Apache-2.0
 
-pub(crate) mod gate;
-pub(crate) mod helpers;
+pub(crate) mod helper;
+pub(crate) mod policy_gate;
+pub(crate) mod policy_validation;
 
-pub(crate) use gate::{PolicyGate, PolicyGateError};
-pub(crate) use helpers::{dump_policy, walk_page_table};
+pub(crate) use helper::dump_policy;
+pub(crate) use policy_gate::{PolicyGate, PolicyGateError};
+pub(crate) use policy_validation::walk_page_table;
 
 use core::slice;
 
@@ -809,6 +811,22 @@ pub(crate) mod test_support {
             access_condition: condition as u32,
             reserved: 0,
         }
+    }
+
+    /// A policy exercising every recognized root type, with conforming descriptors.
+    pub(crate) fn full_policy() -> PolicyBuilder {
+        PolicyBuilder::new()
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Mem(vec![mem(0x1000, 0x2000, RESOURCE_ATTR_READ)]))
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Io(vec![io(0x60, 1, RESOURCE_ATTR_READ as u16)]))
+            .root(ACCESS_ATTR_DENY, Descriptors::Msr(vec![msr(0x1B, 1, RESOURCE_ATTR_WRITE as u16)]))
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Instruction(vec![instruction(Instruction::Hlt, 0x04)]))
+            .root(
+                ACCESS_ATTR_ALLOW,
+                Descriptors::SaveState(vec![
+                    save_state(SaveStateField::Rax, RESOURCE_ATTR_READ, SaveStateCondition::Unconditional),
+                    save_state(SaveStateField::IoTrap, RESOURCE_ATTR_COND_READ, SaveStateCondition::IoRead),
+                ]),
+            )
     }
 }
 
