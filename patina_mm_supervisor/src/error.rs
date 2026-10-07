@@ -25,7 +25,6 @@
 use crate::{
     comm_buffer::CommBufferError,
     hob_validation::HobValidationError,
-    init::{SmiHandlerIdtPatchError, SmiHandlerIdtPatchInputError},
     mailbox::MailboxError,
     mem::AllocError,
     mm_core::CoreInitError,
@@ -37,6 +36,7 @@ use crate::{
     pass_down_hob::PassDownHobError,
     privilege_mgmt::{call_gate::CallGateError, syscall_setup::SyscallSetupError},
     save_state::SaveStateValidationError,
+    smi_idt_patch::{SmiHandlerIdtPatchError, SmiHandlerIdtPatchInputError},
     smrr::SmrrError,
     supervisor_handlers::supv_request::unblock_memory::{PageUpdateError, UnblockError},
 };

@@ -241,4 +241,9 @@ mod tests {
             assert!(!format!("{err}").is_empty(), "every variant must render a message");
         }
     }
+
+    #[test]
+    fn test_pass_down_hob_layout_matches_c_abi() {
+        assert_eq!(core::mem::size_of::<MmSupvPassDownHobData>(), 64);
+    }
 }

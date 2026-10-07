@@ -55,10 +55,10 @@ use crate::{
 
 use super::CoreInitError;
 use crate::hob::{find_guid_hob, find_module};
-use crate::init::smi_idt_patch::patch_smi_handler_idt;
 use crate::mmram_bound::{establish_mmram_bound, supervisor_image_anchor};
 use crate::mseg::parse_mseg_smram_hob;
 use crate::pass_down_hob::{MmSupvPassDownHobData, PassDownHobError, parse_pass_down_hob};
+use crate::smi_idt_patch::patch_smi_handler_idt;
 
 pub(crate) fn validate_init_code_page(address: u64, attributes: MemoryAttributes) {
     if attributes.contains(MemoryAttributes::ExecuteProtect) {
@@ -1339,5 +1339,78 @@ mod tests {
         {
             assert!(catch_unwind(|| validate_init_code_page(0x1000, attributes)).is_err());
         }
+    }
+
+    #[test]
+    fn test_free_init_module_accepts_an_entirely_non_executable_image() {
+        let fixture = InitModuleFixture::new();
+        let base = fixture.init_module.alloc_descriptor.memory_base_address;
+        let size = fixture.init_module.alloc_descriptor.memory_length;
+        security_state()
+            .lock_page_table()
+            .as_mut()
+            .unwrap()
+            .map_memory_region(base, size, MemoryAttributes::Supervisor | MemoryAttributes::ExecuteProtect)
+            .unwrap();
+
+        fixture.free();
+
+        assert!(fixture.state.is_init_module_freed());
+        assert_eq!(security_state().page_allocator().get_allocation_type(base), None);
+    }
+
+    #[test]
+    fn test_free_init_module_rejects_missing_page_table() {
+        let fixture = InitModuleFixture::new();
+        *security_state().lock_page_table() = None;
+
+        fixture.assert_rejected("Page table required to validate MM Init module");
+    }
+
+    #[test]
+    fn test_free_init_module_rejects_an_unmapped_later_page() {
+        let fixture = InitModuleFixture::new();
+        let last_page = fixture.init_module.alloc_descriptor.memory_base_address + 2 * UEFI_PAGE_SIZE as u64;
+        security_state()
+            .lock_page_table()
+            .as_mut()
+            .unwrap()
+            .unmap_memory_region(last_page, UEFI_PAGE_SIZE as u64)
+            .unwrap();
+
+        fixture.assert_rejected("Failed to query MM Init module page");
+    }
+
+    #[test]
+    fn test_free_init_module_rejects_unprotected_later_code_pages() {
+        let fixture = InitModuleFixture::new();
+        let last_page = fixture.init_module.alloc_descriptor.memory_base_address + 2 * UEFI_PAGE_SIZE as u64;
+        for attributes in [MemoryAttributes::Supervisor, MemoryAttributes::ReadOnly] {
+            security_state()
+                .lock_page_table()
+                .as_mut()
+                .unwrap()
+                .map_memory_region(last_page, UEFI_PAGE_SIZE as u64, attributes)
+                .unwrap();
+            fixture.assert_rejected("must be supervisor-only, read-only and executable");
+        }
+    }
+
+    #[test]
+    fn test_free_init_module_does_not_mark_failed_free_as_complete() {
+        let fixture = InitModuleFixture::new();
+        let base = fixture.init_module.alloc_descriptor.memory_base_address;
+        let size = fixture.init_module.alloc_descriptor.memory_length;
+        let allocator = security_state().page_allocator();
+        allocator.free_pages(base, 3).unwrap();
+        assert_eq!(allocator.allocate_pages_with_type(3, AllocationType::User).unwrap(), base);
+        security_state()
+            .lock_page_table()
+            .as_mut()
+            .unwrap()
+            .map_memory_region(base, size, MemoryAttributes::Supervisor | MemoryAttributes::ReadOnly)
+            .unwrap();
+
+        fixture.assert_rejected("Failed to free MM Init module");
     }
 }

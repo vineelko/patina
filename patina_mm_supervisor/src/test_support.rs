@@ -14,9 +14,9 @@
 #![cfg_attr(coverage, coverage(off))]
 
 use crate::comm_buffer::MmCommonRegionHobData;
-use crate::init::*;
 use crate::mem::SharedPagingAllocator;
 use crate::pass_down_hob::MmSupvPassDownHobData;
+use crate::smi_idt_patch::{FIXUP64_SMI_HANDLER_IDTR, PerCoreMmiEntryStructHdr};
 use crate::{
     MmSupervisorCore, PlatformInfo,
     mem::AllocationType,
@@ -46,7 +46,6 @@ use patina::{
 use patina_internal_cpu::save_state::PROCESSOR_INFO_ENTRY_SIZE;
 use patina_paging::MemoryAttributes;
 use patina_paging::{PageTable, PagingType, x64::X64PageTable};
-use smi_idt_patch::{FIXUP64_SMI_HANDLER_IDTR, PerCoreMmiEntryStructHdr};
 use std::{
     alloc::{alloc_zeroed, dealloc, handle_alloc_error},
     panic::{AssertUnwindSafe, catch_unwind},

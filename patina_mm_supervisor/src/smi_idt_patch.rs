@@ -137,7 +137,7 @@ pub(crate) struct SmiHandlerIdtPatchInputs {
     pub(crate) mmi_entry_size_u64: u64,
 }
 
-pub(crate) fn validate_smi_handler_idt_patch_inputs(
+fn validate_smi_handler_idt_patch_inputs(
     sm_base_array: u64,
     number_of_cpus: u64,
     mmi_entry_size: u64,
@@ -175,7 +175,7 @@ pub(crate) fn validate_smi_handler_idt_patch_inputs(
     })
 }
 
-pub(crate) fn parse_smi_handler_idt_descriptor(mmi_entry: &[u8]) -> MmSupervisorResult<u64> {
+fn parse_smi_handler_idt_descriptor(mmi_entry: &[u8]) -> MmSupervisorResult<u64> {
     const TRAILING_SIZE_FIELD_SIZE: usize = core::mem::size_of::<u32>();
 
     let trailer_start =
@@ -298,4 +298,106 @@ pub(crate) fn patch_smi_handler_idt(sm_base_array: u64, number_of_cpus: u64, mmi
     log::info!(
         "Patched the SMI handler IDT descriptor on {patched}/{number_of_cpus} CPU(s): base=0x{idtr_base:016x}, limit=0x{idtr_limit:04x}"
     );
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage, coverage(off))]
+mod tests {
+    use super::*;
+    use core::mem::size_of;
+
+    use crate::test_support::mmi_entry;
+
+    #[test]
+    fn test_validate_smi_handler_idt_patch_inputs() {
+        let inputs = validate_smi_handler_idt_patch_inputs(0x1000, 4, 0x200, |base, size| {
+            base == 0x1000 && size == 4 * size_of::<u64>() as u64
+        })
+        .expect("valid patch inputs should pass");
+
+        assert_eq!(
+            inputs,
+            SmiHandlerIdtPatchInputs {
+                sm_base_array_size: 4 * size_of::<u64>(),
+                mmi_entry_size: 0x200,
+                mmi_entry_size_u64: 0x200,
+            }
+        );
+    }
+
+    #[test]
+    fn test_validate_smi_handler_idt_patch_inputs_rejects_invalid_values() {
+        assert_eq!(
+            validate_smi_handler_idt_patch_inputs(0x1000, 1, 0, |_, _| true),
+            Err(SmiHandlerIdtPatchInputError::ZeroEntrySize.into())
+        );
+        assert_eq!(
+            validate_smi_handler_idt_patch_inputs(0, 1, 0x100, |_, _| true),
+            Err(SmiHandlerIdtPatchInputError::MissingSmBaseArray.into())
+        );
+        assert_eq!(
+            validate_smi_handler_idt_patch_inputs(0x1000, 0, 0x100, |_, _| true),
+            Err(SmiHandlerIdtPatchInputError::MissingSmBaseArray.into())
+        );
+        assert_eq!(
+            validate_smi_handler_idt_patch_inputs(0x1000, u64::MAX, 0x100, |_, _| true),
+            Err(SmiHandlerIdtPatchInputError::SmBaseArraySizeOverflow.into())
+        );
+        assert_eq!(
+            validate_smi_handler_idt_patch_inputs(0x1000, 1, 0x100, |_, _| false),
+            Err(SmiHandlerIdtPatchInputError::SmBaseArrayOutsideMmram.into())
+        );
+        assert_eq!(
+            validate_smi_handler_idt_patch_inputs(u64::MAX - 3, 1, 0x100, |_, _| true),
+            Err(SmiHandlerIdtPatchInputError::SmBaseArrayOutsideMmram.into())
+        );
+        assert_eq!(
+            validate_smi_handler_idt_patch_inputs(0x1000, 1, isize::MAX as u64 + 1, |_, _| true),
+            Err(SmiHandlerIdtPatchInputError::EntrySizeTooLarge.into())
+        );
+    }
+
+    #[test]
+    fn test_parse_smi_handler_idt_descriptor() {
+        let entry = mmi_entry((FIXUP64_SMI_HANDLER_IDTR + 1) as u8, 0x1234_5678_9ABC_DEF0);
+
+        assert_eq!(parse_smi_handler_idt_descriptor(&entry), Ok(0x1234_5678_9ABC_DEF0));
+    }
+
+    #[test]
+    fn test_parse_smi_handler_idt_descriptor_rejects_malformed_metadata() {
+        assert_eq!(parse_smi_handler_idt_descriptor(&[0; 3]), Err(SmiHandlerIdtPatchError::EntryTooSmall.into()));
+
+        let mut oversized_structure = [0_u8; 4];
+        oversized_structure.copy_from_slice(&1_u32.to_ne_bytes());
+        assert_eq!(
+            parse_smi_handler_idt_descriptor(&oversized_structure),
+            Err(SmiHandlerIdtPatchError::FixupStructureOutOfBounds.into())
+        );
+
+        let mut short_header = vec![0_u8; 5];
+        short_header[1..].copy_from_slice(&1_u32.to_ne_bytes());
+        assert_eq!(
+            parse_smi_handler_idt_descriptor(&short_header),
+            Err(SmiHandlerIdtPatchError::FixupHeaderTooSmall.into())
+        );
+
+        let too_few_fixups = mmi_entry(FIXUP64_SMI_HANDLER_IDTR as u8, 0);
+        assert_eq!(
+            parse_smi_handler_idt_descriptor(&too_few_fixups),
+            Err(SmiHandlerIdtPatchError::Fixup64ArrayTooSmall { found: FIXUP64_SMI_HANDLER_IDTR as u8 }.into())
+        );
+
+        let mut out_of_bounds_fixup = mmi_entry((FIXUP64_SMI_HANDLER_IDTR + 1) as u8, 0);
+        out_of_bounds_fixup[8 + 6] = u8::MAX;
+        assert_eq!(
+            parse_smi_handler_idt_descriptor(&out_of_bounds_fixup),
+            Err(SmiHandlerIdtPatchError::Fixup64EntryOutOfBounds.into())
+        );
+    }
+
+    #[test]
+    fn test_mmi_entry_header_layout_matches_c_abi() {
+        assert_eq!(size_of::<PerCoreMmiEntryStructHdr>(), 22);
+    }
 }

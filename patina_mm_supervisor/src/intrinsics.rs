@@ -186,4 +186,9 @@ mod tests {
         assert_eq!(base, 0);
         assert_eq!(limit, 0);
     }
+
+    #[test]
+    fn test_descriptor_table_pointer_layout_matches_c_abi() {
+        assert_eq!(core::mem::size_of::<DescriptorTablePointer>(), 10);
+    }
 }

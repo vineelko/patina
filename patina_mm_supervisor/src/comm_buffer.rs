@@ -611,4 +611,9 @@ mod tests {
             assert!(!format!("{err}").is_empty(), "every variant must render a message");
         }
     }
+
+    #[test]
+    fn test_comm_region_hob_layout_matches_c_abi() {
+        assert_eq!(size_of::<MmCommonRegionHobData>(), 32);
+    }
 }

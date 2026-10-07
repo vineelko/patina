@@ -47,7 +47,6 @@ mod cpu;
 mod error;
 mod hob;
 mod hob_validation;
-mod init;
 mod intrinsics;
 mod mailbox;
 mod mem;
@@ -63,6 +62,7 @@ mod request_target;
 mod runtime;
 mod save_state;
 mod semaphore;
+mod smi_idt_patch;
 mod smrr;
 mod state;
 mod supervisor_handlers;
@@ -77,6 +77,7 @@ pub use mm_core::MmSupervisorCore;
 // their function signatures and return types.
 pub use comm_buffer::CommBufferConfig;
 pub use request_target::RequestTarget;
+pub use smi_idt_patch::{SmiHandlerIdtPatchError, SmiHandlerIdtPatchInputError};
 pub use supervisor_handlers::SupervisorMmiHandler;
 
 // The entry-point shim references `rust_main`, which is provided by the platform binary, and is
