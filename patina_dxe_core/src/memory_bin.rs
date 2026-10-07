@@ -902,8 +902,6 @@ pub(crate) fn extract_memory_type_info_from_hob(hob_list: &HobList) -> Option<Ve
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
-    use crate::test_support;
-
     use super::*;
     use patina::{SIZE_64KB, UEFI_PAGE_SIZE};
 
@@ -932,7 +930,7 @@ mod tests {
     /// Uses `contiguous_alloc_size` to compute a range large enough for all bins.
     #[cfg_attr(coverage, coverage(off))]
     fn init_bins(manager: &mut MemoryBinManager, base: u64, info: &[EFiMemoryTypeInformation]) {
-        test_support::init_test_logger();
+        crate::test_support::init_test_logger();
         let range_size = MemoryBinManager::contiguous_alloc_size(info).unwrap() as u64;
         assert!(manager.initialize_from_range(base, range_size, info), "init_bins failed");
     }
