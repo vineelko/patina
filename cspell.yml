@@ -146,6 +146,7 @@ words:
   - mdbook
   - mdscr
   - mmbase
+  - mmcore
   - mmiport
   - mmram
   - mpidr
