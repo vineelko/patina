@@ -150,10 +150,19 @@ cargo make build        # Full compilation
 cargo make test         # Run test suite
 cargo make patina-test  # Build with Patina test features enabled for on-platform tests
 cargo make doc          # Generate documentation
-cargo make cov          # Generate unit test code coverage
+cargo make coverage     # Generate unit test code coverage
 cargo make deny         # Check for security and license compliance in dependencies
 
 cargo make all   # Run the same commands used in CI/CD
+```
+
+Any arguments given after the task name are forwarded unchanged to the underlying `cargo` command, so the usual cargo
+flags work as expected:
+
+```bash
+cargo make check -p patina
+cargo make test -p patina --no-capture
+cargo make coverage -p patina
 ```
 
 Developers can run targeted commands based on the changes they've made and then run the full suite (`cargo make all`)
@@ -355,7 +364,7 @@ pub fn process_buffer(buffer: &mut [u8]) {
 # Makefile.toml - Documentation generation
 [tasks.doc]
 command = "cargo"
-args = ["doc", "@@split(INDIVIDUAL_PACKAGE_TARGETS, )"]
+args = ["doc", "@@split(CARGO_MAKE_TASK_ARGS,;)"]
 
 [tasks.doc-open]
 command = "cargo"

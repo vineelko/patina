@@ -172,11 +172,21 @@ cargo make build
 ```
 
 By default, the make compiles a developer build, but development or release can be indicated by using the "-p" flag
+*before* the task name. Note that `-p` before the task name selects the `cargo-make` profile, while `-p` after the task
+name is passed through to `cargo` as the usual package selector.
 
 ```shell
 cargo make -p development build-aarch64
    - or -
 cargo make -p release build-aarch64
+```
+
+Any arguments after the task name are forwarded to the underlying `cargo` command unchanged, so the normal cargo flags
+work:
+
+```shell
+cargo make build-x64 -p patina_dxe_core
+cargo make check -p patina --features foo
 ```
 
 ## Test
@@ -202,7 +212,7 @@ cargo make patina-test
 * Build on-platform tests in an individual package:
 
 ```shell
-cargo make patina-test -p patina
+cargo make patina-test -p patina_dxe_core
 ```
 
 ## Rust Version Updates
@@ -213,13 +223,13 @@ page in the mdbook. If you are updating the toolchain version, you must follow t
 
 ## Coverage
 
-The coverage command will generate test coverage data for all crates in the project.  To target a single crate, the
-name can be added to the command line.
+The coverage command will generate test coverage data for all crates in the project.  To target a single crate, pass
+`-p <crate>` just as you would to `cargo`.
 
 ```shell
 cargo make coverage
    - or -
-cargo make coverage dxe_core
+cargo make coverage -p patina_dxe_core
 ```
 
 ## Benchmarks
