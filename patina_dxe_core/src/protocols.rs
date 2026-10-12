@@ -104,13 +104,9 @@ pub fn core_uninstall_protocol_interface(
     log::info!("UninstallProtocolInterface: {:?} @ {:#x?}", OwnedGuid::from(protocol), interface);
 
     // Check if the handle/protocol/interface triple is legitimate
-    match PROTOCOL_DB.get_interface_for_handle(handle, protocol) {
-        Err(err) => return Err(err),
-        Ok(found_interface) => {
-            if found_interface != interface {
-                return Err(EfiError::NotFound);
-            }
-        }
+    let found_interface = PROTOCOL_DB.get_interface_for_handle(handle, protocol)?;
+    if found_interface != interface {
+        return Err(EfiError::NotFound);
     }
 
     //attempt to close all OPEN_BY_DRIVER usages.

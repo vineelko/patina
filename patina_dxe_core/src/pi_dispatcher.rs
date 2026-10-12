@@ -282,7 +282,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
                 dispatcher.arch_protocols_available =
                     Depex::from(ALL_ARCH_DEPEX).eval(&PROTOCOL_DB.registered_protocols());
             }
-            let driver_candidates: Vec<_> = dispatcher.pending_drivers.drain(..).collect();
+            let driver_candidates: Vec<_> = core::mem::take(&mut dispatcher.pending_drivers);
             let mut scheduled_driver_candidates = Vec::new();
             for mut candidate in driver_candidates {
                 log::debug!(target: "depex", "Evaluating depex for candidate: {} ({:?})", candidate.name.as_deref().unwrap_or("Unnamed"), OwnedGuid::from(candidate.file_name));
@@ -380,7 +380,7 @@ impl<P: PlatformInfo> PiDispatcher<P> {
 
         {
             let mut dispatcher = self.dispatcher_context.lock();
-            let fv_image_candidates: Vec<_> = dispatcher.pending_firmware_volume_images.drain(..).collect();
+            let fv_image_candidates: Vec<_> = core::mem::take(&mut dispatcher.pending_firmware_volume_images);
 
             for mut candidate in fv_image_candidates {
                 let depex_satisfied = match candidate.depex {
