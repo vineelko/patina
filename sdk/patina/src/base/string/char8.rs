@@ -707,6 +707,8 @@ impl<const N: usize> From<Char8Array<N>> for String {
 
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
+// These tests exercise the `PartialEq` impls (including `!=` and cross-type operands) directly.
+#[allow(clippy::manual_assert_eq)]
 mod tests {
     use super::*;
     use crate::char8;

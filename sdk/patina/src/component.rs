@@ -332,7 +332,7 @@ mod tests {
 
         // Two parsers should be registered for this HOB GUID since the HOBs are two unique types
         // (`TestHob` and `TestHob2`)
-        assert!(storage.get_hob_parsers(&HOB_GUID).len() == 2);
+        assert_eq!(storage.get_hob_parsers(&HOB_GUID).len(), 2);
 
         storage.add_hob(TestHob);
         assert!(storage.get_hob::<TestHob>().is_some());

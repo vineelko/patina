@@ -995,8 +995,8 @@ mod tests {
         );
         assert!(OrdGuid(g7) >= OrdGuid(g7));
         assert!(OrdGuid(g7) <= OrdGuid(g7));
-        assert!(OrdGuid(g7) != OrdGuid(g6));
-        assert!(OrdGuid(g7) == OrdGuid(g7));
+        assert_ne!(OrdGuid(g7), OrdGuid(g6));
+        assert_eq!(OrdGuid(g7), OrdGuid(g7));
         assert_eq!(g1.partial_cmp(&g2), Some(Ordering::Less));
         assert_eq!(g2.partial_cmp(&g1), Some(Ordering::Greater));
         assert_eq!(g1.partial_cmp(&g1), Some(Ordering::Equal));
