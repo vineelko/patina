@@ -93,7 +93,8 @@ fn mp_services_all_cores_started(
     let status = unsafe { (protocol.get_number_of_processors)(protocol_ptr, &raw mut total, &raw mut enabled) };
     u_assert_eq!(status, efi::Status::SUCCESS, "get_number_of_processors failed");
 
-    u_assert!(total >= 2, "expected a multiprocessor system, found {total} processor(s)");
+    log::info!("MP Services reports {total} total and {enabled} enabled processor(s)");
+    u_assert!(total >= 2, "expected a multiprocessor system");
     u_assert_eq!(enabled, total, "not all processors started");
 
     Ok(())
