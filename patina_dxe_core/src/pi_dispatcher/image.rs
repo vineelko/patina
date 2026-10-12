@@ -1515,17 +1515,7 @@ fn get_file_buffer_from_sfs(file_path: NonNull<Protocol>) -> Result<(Vec<u8>, ef
         }
         // For MEDIA_FILE_PATH_DP, file name is in the node data, but it needs to be converted to u16 code units for
         // the call to open, since the raw device path bytes are not guaranteed to be aligned.
-        let filename: Vec<u16> = node
-            .data()
-            .chunks_exact(2)
-            .map(|x: &[u8]| {
-                if let Ok(x_bytes) = x.try_into() {
-                    Ok(u16::from_le_bytes(x_bytes))
-                } else {
-                    Err(EfiError::InvalidParameter)
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let filename: Vec<u16> = node.data().as_chunks::<2>().0.iter().map(|x| u16::from_le_bytes(*x)).collect();
         let filename = Char16Str::from_units_until_nul(&filename)?;
 
         file = file.open(filename, efi::protocols::file::MODE_READ, 0)?;
