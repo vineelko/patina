@@ -61,6 +61,10 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
+// `c_variadic` is stable in Rust 1.99+ but still required to build on the MSRV.
+// When the MSRV is updated to >=1.99, `allow(stable_features)` and `feature(c_variadic)`
+// can be removed.
+#![allow(stable_features)]
 #![feature(c_variadic)]
 #![feature(allocator_api)]
 #![cfg_attr(coverage, feature(coverage_attribute))]
