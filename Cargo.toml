@@ -160,6 +160,10 @@ verbose_bit_mask = "allow"
 indexing_slicing = "deny"
 # restriction::undocumented_unsafe_blocks - Denied to ensure all unsafe blocks are documented with SAFETY comments.
 undocumented_unsafe_blocks = "deny"
+# style::redundant_field_names - Allowed because the `scroll` `Pread` derive outputs `field: field` initializers that
+#                                clippy flags. To prevent having to allow this clippy at every derived struct, it is
+#                                allowed globally. Can be removed if this behavior changes in the future.
+redundant_field_names = "allow"
 
 [workspace.lints.rust]
 # Set by cargo-llvm-cov during coverage runs. Declared here so gating
