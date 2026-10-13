@@ -16,7 +16,7 @@ workspace = true
 cfg-if = { workspace = true }
 gdbstub = { workspace = true }
 patina = { workspace = true, features = ["alloc"] }
-patina_internal_cpu = { workspace = true }
+patina_internal_cpu = { workspace = true, features = ["alloc"] }
 log = { workspace = true }
 spin = { workspace = true }
 patina_paging = { workspace = true  }
