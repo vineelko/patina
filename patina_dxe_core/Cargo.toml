@@ -25,7 +25,7 @@ uuid = { workspace = true  }
 patina = { workspace = true, features = ["alloc", "core"] }
 patina_ffs = { workspace = true }
 patina_internal_core = { workspace = true, features = ["alloc"] }
-patina_internal_cpu = { workspace = true }
+patina_internal_cpu = { workspace = true, features = ["alloc"] }
 patina_debugger = { workspace = true, features = ["alloc"] }
 patina_test = { workspace = true }
 zerocopy = { workspace = true }
@@ -40,7 +40,7 @@ patina_samples = { path = "../components/patina_samples" }
 patina = { path = "../sdk/patina", features = ["alloc", "core", "mockall"] }
 patina_ffs_extractors = { path = "../sdk/patina_ffs_extractors" }
 patina_internal_core = { path = "../core/patina_internal_core", features = ["alloc"] }
-patina_internal_cpu = { path = "../core/patina_internal_cpu", features = ["mockall"] }
+patina_internal_cpu = { path = "../core/patina_internal_cpu", features = ["alloc", "mockall"] }
 env_logger = { workspace = true }
 mockall = { workspace = true }
 serial_test = { workspace = true }
