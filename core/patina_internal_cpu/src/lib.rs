@@ -14,6 +14,7 @@
 #[cfg(target_arch = "x86_64")]
 pub mod gdt;
 pub mod interrupts;
+#[cfg(feature = "alloc")]
 pub mod mp;
 pub mod paging;
 pub mod save_state;
