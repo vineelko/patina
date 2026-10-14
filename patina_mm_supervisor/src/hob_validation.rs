@@ -958,9 +958,18 @@ fn validate_entry_point_attributes(entry_point: u64, attributes: MemoryAttribute
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
+    use core::mem::size_of;
+    use std::cell::RefCell;
+
+    use patina::pi::BootMode;
+    use patina::pi::hob::{
+        CPU, Capsule, EFI_RESOURCE_SYSTEM_MEMORY, FV, FV2, FV3, FirmwareVolume, FirmwareVolume2, FirmwareVolume3,
+        GUID_EXTENSION, GuidHob, HANDOFF, HobHeader, MEMORY_ALLOCATION, MemoryAllocation, MemoryAllocationHeader,
+        MemoryAllocationModule, RESOURCE_DESCRIPTOR, ResourceDescriptorV2, UEFI_CAPSULE,
+    };
 
     fn region(base: u64, size: u64) -> SmramRegion {
-        SmramRegion { base, size, pre_allocated: false }
+        SmramRegion::new(base, size, false)
     }
 
     fn pass_down() -> MmSupvPassDownHobData {
@@ -977,13 +986,198 @@ mod tests {
         }
     }
 
+    fn memory_allocation(base: u64, length: u64) -> MemoryAllocation {
+        MemoryAllocation {
+            header: HobHeader { r#type: MEMORY_ALLOCATION, length: size_of::<MemoryAllocation>() as u16, reserved: 0 },
+            alloc_descriptor: MemoryAllocationHeader {
+                name: MM_SUPERVISOR_CORE_GUID,
+                memory_base_address: base,
+                memory_length: length,
+                memory_type: efi::BOOT_SERVICES_CODE,
+                reserved: [0; 4],
+            },
+        }
+    }
+
+    fn allocation_module(
+        allocation_name: patina::BinaryGuid,
+        module_name: patina::BinaryGuid,
+        base: u64,
+        length: u64,
+        entry_point: u64,
+    ) -> MemoryAllocationModule {
+        MemoryAllocationModule {
+            header: HobHeader {
+                r#type: MEMORY_ALLOCATION,
+                length: size_of::<MemoryAllocationModule>() as u16,
+                reserved: 0,
+            },
+            alloc_descriptor: MemoryAllocationHeader {
+                name: allocation_name,
+                memory_base_address: base,
+                memory_length: length,
+                memory_type: efi::BOOT_SERVICES_CODE,
+                reserved: [0; 4],
+            },
+            module_name,
+            entry_point,
+        }
+    }
+
+    fn resource_descriptor(
+        owner: patina::BinaryGuid,
+        resource_type: u32,
+        base: u64,
+        length: u64,
+    ) -> ResourceDescriptor {
+        ResourceDescriptor {
+            header: HobHeader {
+                r#type: RESOURCE_DESCRIPTOR,
+                length: size_of::<ResourceDescriptor>() as u16,
+                reserved: 0,
+            },
+            owner,
+            resource_type,
+            resource_attribute: 0,
+            physical_start: base,
+            resource_length: length,
+        }
+    }
+
+    fn resource_descriptor_v2(resource_type: u32, base: u64, length: u64, attributes: u64) -> ResourceDescriptorV2 {
+        let mut descriptor =
+            ResourceDescriptorV2::from(resource_descriptor(MM_SUPERVISOR_CORE_GUID, resource_type, base, length));
+        descriptor.attributes = attributes;
+        descriptor
+    }
+
+    fn guid_hob(name: patina::BinaryGuid, data_len: usize) -> GuidHob {
+        GuidHob {
+            header: HobHeader { r#type: GUID_EXTENSION, length: (size_of::<GuidHob>() + data_len) as u16, reserved: 0 },
+            name,
+        }
+    }
+
+    fn pass_down_bytes(pass_down: &MmSupvPassDownHobData) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(size_of::<MmSupvPassDownHobData>());
+        bytes.extend_from_slice(&pass_down.revision.to_ne_bytes());
+        bytes.extend_from_slice(&pass_down.reserved.to_ne_bytes());
+        bytes.extend_from_slice(&pass_down.mm_supervisor_cpl3_stack_base.to_ne_bytes());
+        bytes.extend_from_slice(&pass_down.mm_supervisor_cpl3_per_core_stack_size.to_ne_bytes());
+        bytes.extend_from_slice(&pass_down.sm_base.to_ne_bytes());
+        bytes.extend_from_slice(&pass_down.mm_initialized_buffer.to_ne_bytes());
+        bytes.extend_from_slice(&pass_down.mm_supv_firmware_policy_buffer.to_ne_bytes());
+        bytes.extend_from_slice(&pass_down.mm_supv_firmware_policy_buffer_size.to_ne_bytes());
+        bytes.extend_from_slice(&pass_down.mmi_entrypoint_size.to_ne_bytes());
+        bytes
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_dump_each_hob_type() {
+        let handoff = PhaseHandoffInformationTable {
+            header: HobHeader {
+                r#type: HANDOFF,
+                length: size_of::<PhaseHandoffInformationTable>() as u16,
+                reserved: 0,
+            },
+            version: 1,
+            boot_mode: BootMode::BootWithFullConfiguration,
+            memory_top: 0x9000,
+            memory_bottom: 0x1000,
+            free_memory_top: 0x8000,
+            free_memory_bottom: 0x2000,
+            end_of_hob_list: 0,
+        };
+        let allocation = memory_allocation(0x1000, 0x1000);
+        let module = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_CORE_GUID,
+            0x2000,
+            0x1000,
+            0x2100,
+        );
+        let resource = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_SYSTEM_MEMORY, 0x3000, 0x1000);
+        let resource_v2 = resource_descriptor_v2(EFI_RESOURCE_SYSTEM_MEMORY, 0x4000, 0x1000, efi::MEMORY_WB);
+        let guid_data = [1, 2, 3, 4];
+        let guid = guid_hob(MM_SUPERVISOR_CORE_GUID, guid_data.len());
+        let firmware_volume = FirmwareVolume {
+            header: HobHeader { r#type: FV, length: size_of::<FirmwareVolume>() as u16, reserved: 0 },
+            base_address: 0x5000,
+            length: 0x1000,
+        };
+        let firmware_volume2 = FirmwareVolume2 {
+            header: HobHeader { r#type: FV2, length: size_of::<FirmwareVolume2>() as u16, reserved: 0 },
+            base_address: 0x6000,
+            length: 0x1000,
+            fv_name: MM_SUPERVISOR_CORE_GUID,
+            file_name: MM_SUPERVISOR_USER_GUID,
+        };
+        let firmware_volume3 = FirmwareVolume3 {
+            header: HobHeader { r#type: FV3, length: size_of::<FirmwareVolume3>() as u16, reserved: 0 },
+            base_address: 0x7000,
+            length: 0x1000,
+            authentication_status: 0,
+            extracted_fv: false.into(),
+            fv_name: MM_SUPERVISOR_CORE_GUID,
+            file_name: MM_SUPERVISOR_USER_GUID,
+        };
+        let cpu = patina::pi::hob::Cpu {
+            header: HobHeader { r#type: CPU, length: size_of::<patina::pi::hob::Cpu>() as u16, reserved: 0 },
+            size_of_memory_space: 48,
+            size_of_io_space: 16,
+            reserved: [0; 6],
+        };
+        let capsule = Capsule {
+            header: HobHeader { r#type: UEFI_CAPSULE, length: size_of::<Capsule>() as u16, reserved: 0 },
+            base_address: 0x8000,
+            length: 0x1000,
+        };
+
+        for hob in [
+            Hob::Handoff(&handoff),
+            Hob::MemoryAllocation(&allocation),
+            Hob::MemoryAllocationModule(&module),
+            Hob::ResourceDescriptor(&resource),
+            Hob::ResourceDescriptorV2(&resource_v2),
+            Hob::GuidHob(&guid, &guid_data),
+            Hob::FirmwareVolume(&firmware_volume),
+            Hob::FirmwareVolume2(&firmware_volume2),
+            Hob::FirmwareVolume3(&firmware_volume3),
+            Hob::Cpu(&cpu),
+            Hob::Capsule(&capsule),
+            Hob::Misc(0x1234),
+        ] {
+            dump_hob(hob);
+        }
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_dump_regions() {
+        dump_regions(&[]);
+        dump_regions(&[SmramRegion::new(0x1000, 0x1000, false), SmramRegion::new(0x2000, 0x2000, true)]);
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_checked_range_end() {
+        assert_eq!(checked_range_end("test", 0x1000, 0x1000), Ok(0x2000));
+        assert!(matches!(
+            checked_range_end("test", 0x1000, 0),
+            Err(HobValidationError::InvalidAddressRange { kind: "test", base: 0x1000, length: 0 })
+        ));
+        assert!(matches!(
+            checked_range_end("test", u64::MAX, 1),
+            Err(HobValidationError::InvalidAddressRange { kind: "test", base: u64::MAX, length: 1 })
+        ));
+    }
+
     #[test]
     fn test_mm_supervisor_hob_validation_ranges_overlap() {
         assert!(ranges_overlap((0, 0x1000), (0x800, 0x1000)));
         assert!(!ranges_overlap((0, 0x1000), (0x1000, 0x1000)));
         assert!(!ranges_overlap((0x1000, 0x1000), (0, 0x1000)));
-        // A zero-sized range at a shared boundary does not overlap.
+        // Empty ranges do not overlap, even when located inside another range.
         assert!(!ranges_overlap((0x1000, 0), (0, 0x1000)));
+        assert!(!ranges_overlap((0x800, 0), (0, 0x1000)));
     }
 
     #[test]
@@ -1001,6 +1195,18 @@ mod tests {
     #[test]
     fn test_mm_supervisor_hob_validation_empty_regions_rejected() {
         assert_eq!(validate_mmram_contiguous(&[]), Err(HobValidationError::NoMmramRegions));
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_invalid_mmram_ranges_rejected() {
+        assert!(matches!(
+            validate_mmram_contiguous(&[region(0x1000, 0)]),
+            Err(HobValidationError::InvalidAddressRange { kind: "MMRAM region", .. })
+        ));
+        assert!(matches!(
+            validate_mmram_contiguous(&[region(u64::MAX, 1)]),
+            Err(HobValidationError::InvalidAddressRange { kind: "MMRAM region", .. })
+        ));
     }
 
     #[test]
@@ -1045,12 +1251,128 @@ mod tests {
     }
 
     #[test]
+    fn test_mm_supervisor_hob_validation_memory_allocations() {
+        let outside = memory_allocation(0x3000, 0x1000);
+        assert_eq!(validate_memory_allocations([Hob::MemoryAllocation(&outside)], (0x1000, 0x1000)), Ok(()));
+
+        let inside = memory_allocation(0x1800, 0x1000);
+        assert_eq!(
+            validate_memory_allocations([Hob::MemoryAllocation(&inside)], (0x1000, 0x1000)),
+            Err(HobValidationError::MemoryAllocationInsideMmram { base: 0x1800, length: 0x1000 })
+        );
+
+        let invalid = memory_allocation(u64::MAX, 1);
+        assert!(matches!(
+            validate_memory_allocations([Hob::MemoryAllocation(&invalid)], (0x1000, 0x1000)),
+            Err(HobValidationError::InvalidAddressRange { kind: "memory allocation HOB", .. })
+        ));
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_allocation_modules() {
+        let first = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_CORE_GUID,
+            0x1000,
+            0x1000,
+            0x1000,
+        );
+        let second = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_USER_GUID,
+            0x2000,
+            0x1000,
+            0x2800,
+        );
+        assert_eq!(
+            validate_allocation_modules(
+                [Hob::MemoryAllocationModule(&first), Hob::MemoryAllocationModule(&second)],
+                |base, length| base >= 0x1000 && base.checked_add(length).is_some_and(|end| end <= 0x3000)
+            ),
+            Ok(())
+        );
+
+        let outside = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_CORE_GUID,
+            0x4000,
+            0x1000,
+            0x4000,
+        );
+        assert_eq!(
+            validate_allocation_modules([Hob::MemoryAllocationModule(&outside)], |_, _| false),
+            Err(HobValidationError::AllocationModuleOutsideMmram { base: 0x4000, length: 0x1000 })
+        );
+
+        let bad_entry = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_CORE_GUID,
+            0x1000,
+            0x1000,
+            0x2000,
+        );
+        assert_eq!(
+            validate_allocation_modules([Hob::MemoryAllocationModule(&bad_entry)], |_, _| true),
+            Err(HobValidationError::AllocationModuleEntryPointOutOfRange {
+                entry_point: 0x2000,
+                base: 0x1000,
+                length: 0x1000,
+            })
+        );
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_allocation_module_overlap_and_limit() {
+        let first = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_CORE_GUID,
+            0x1000,
+            0x2000,
+            0x1000,
+        );
+        let second = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_USER_GUID,
+            0x2000,
+            0x1000,
+            0x2000,
+        );
+        assert!(matches!(
+            validate_allocation_modules(
+                [Hob::MemoryAllocationModule(&first), Hob::MemoryAllocationModule(&second)],
+                |_, _| true
+            ),
+            Err(HobValidationError::AllocationModulesOverlap { .. })
+        ));
+
+        let module = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_CORE_GUID,
+            0x1000,
+            0x1000,
+            0x1000,
+        );
+        let hobs = (0..=MAX_ALLOC_MODULES).map(|_| Hob::MemoryAllocationModule(&module));
+        assert_eq!(
+            validate_allocation_modules(hobs, |_, _| true),
+            Err(HobValidationError::TooManyAllocationModules { limit: MAX_ALLOC_MODULES })
+        );
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_ignores_unrelated_allocation_modules() {
+        let module = allocation_module(MM_SUPERVISOR_CORE_GUID, MM_SUPERVISOR_CORE_GUID, u64::MAX, 1, u64::MAX);
+        assert_eq!(validate_allocation_modules([Hob::MemoryAllocationModule(&module)], |_, _| false), Ok(()));
+    }
+
+    #[test]
     fn test_mm_supervisor_hob_validation_entry_point_in_range() {
         assert!(entry_point_in_range(0x1000, 0x1000, 0x1000)); // at base
         assert!(entry_point_in_range(0x1800, 0x1000, 0x1000)); // interior
         assert!(!entry_point_in_range(0x2000, 0x1000, 0x1000)); // at end (exclusive)
         assert!(!entry_point_in_range(0x800, 0x1000, 0x1000)); // below base
         assert!(!entry_point_in_range(0, 0x1000, 0x1000)); // null
+        assert!(!entry_point_in_range(u64::MAX, u64::MAX - 1, 4)); // overflowing allocation
     }
 
     #[test]
@@ -1084,6 +1406,59 @@ mod tests {
     fn test_mm_supervisor_hob_validation_check_category_overlap_reports() {
         let result = check_category_overlap(&mut [(0, 0x2000), (0x1000, 0x1000)], "v2 I/O");
         assert!(matches!(result, Err(HobValidationError::ResourceDescriptorsOverlap { kind: "v2 I/O", .. })));
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_resource_descriptor_categories() {
+        let memory_a = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, 0x1000);
+        let memory_b = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_SYSTEM_MEMORY, 0x1800, 0x1000);
+        assert!(matches!(
+            validate_resource_descriptor_overlaps([
+                Hob::ResourceDescriptor(&memory_a),
+                Hob::ResourceDescriptor(&memory_b)
+            ]),
+            Err(HobValidationError::ResourceDescriptorsOverlap { kind: "v1 memory", .. })
+        ));
+
+        let io = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_IO, 0x1000, 0x1000);
+        let v2 = resource_descriptor_v2(EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, 0x1000, efi::MEMORY_WB);
+        assert_eq!(
+            validate_resource_descriptor_overlaps([
+                Hob::ResourceDescriptor(&memory_a),
+                Hob::ResourceDescriptor(&io),
+                Hob::ResourceDescriptorV2(&v2),
+            ]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_resource_descriptor_exemptions_and_limits() {
+        let normal = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, 0x1000);
+        let memory_type_info =
+            resource_descriptor(MEMORY_TYPE_INFO_HOB_GUID, EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, 0x1000);
+        assert_eq!(
+            validate_resource_descriptor_overlaps([
+                Hob::ResourceDescriptor(&normal),
+                Hob::ResourceDescriptor(&memory_type_info)
+            ]),
+            Ok(())
+        );
+
+        let hobs = (0..=MAX_RESOURCE_HOBS).map(|_| Hob::ResourceDescriptor(&normal));
+        assert_eq!(
+            validate_resource_descriptor_overlaps(hobs),
+            Err(HobValidationError::TooManyResourceDescriptors { kind: "v1 memory", limit: MAX_RESOURCE_HOBS })
+        );
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_resource_descriptor_invalid_range() {
+        let invalid = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_SYSTEM_MEMORY, u64::MAX, 1);
+        assert!(matches!(
+            validate_resource_descriptor_overlaps([Hob::ResourceDescriptor(&invalid)]),
+            Err(HobValidationError::InvalidAddressRange { kind: "v1 memory resource descriptor HOB", .. })
+        ));
     }
 
     #[test]
@@ -1126,6 +1501,19 @@ mod tests {
     }
 
     #[test]
+    fn test_mm_supervisor_hob_validation_v2_attributes_are_checked_across_hobs() {
+        let valid = resource_descriptor_v2(EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, 0x1000, efi::MEMORY_WB);
+        let invalid = resource_descriptor_v2(EFI_RESOURCE_IO, 0x2000, 0x100, efi::MEMORY_WB);
+        assert_eq!(
+            validate_resource_v2_memory_attributes([
+                Hob::ResourceDescriptorV2(&valid),
+                Hob::ResourceDescriptorV2(&invalid)
+            ]),
+            Err(HobValidationError::V2IoAttributesNotZero { base: 0x2000, attributes: efi::MEMORY_WB })
+        );
+    }
+
+    #[test]
     fn test_mm_supervisor_hob_validation_pass_down_all_null_pointers_ok() {
         // Null pointers are skipped, so an all-null (correct-revision) HOB validates.
         let mut pd = pass_down();
@@ -1133,37 +1521,200 @@ mod tests {
         pd.sm_base = 0;
         pd.mm_initialized_buffer = 0;
         pd.mm_supv_firmware_policy_buffer = 0;
-        assert_eq!(validate_pass_down_pointers(&pd), Ok(()));
+        assert_eq!(validate_pass_down_pointers(&pd, |_, _| false), Ok(()));
     }
 
     #[test]
     fn test_mm_supervisor_hob_validation_pass_down_pointer_outside_mmram() {
-        // The page allocator is uninitialized in unit tests, so any non-null
-        // pointer is reported as outside MMRAM.
-        let result = validate_pass_down_pointers(&pass_down());
-        assert!(matches!(result, Err(HobValidationError::PassDownPointerOutsideMmram { .. })));
+        let result = validate_pass_down_pointers(&pass_down(), |_, _| false);
+        assert_eq!(
+            result,
+            Err(HobValidationError::PassDownPointerOutsideMmram {
+                field: "mm_supervisor_cpl3_stack_base",
+                addr: 0x1000,
+                size: 0x1000,
+            })
+        );
     }
 
     #[test]
     fn test_mm_supervisor_hob_validation_pass_down_bad_revision() {
         let mut pd = pass_down();
         pd.revision = crate::MM_SUPV_PASS_DOWN_HOB_REVISION + 1;
-        assert!(matches!(validate_pass_down_pointers(&pd), Err(HobValidationError::PassDownInvalidRevision { .. })));
+        assert!(matches!(
+            validate_pass_down_pointers(&pd, |_, _| true),
+            Err(HobValidationError::PassDownInvalidRevision { .. })
+        ));
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_pass_down_pointer_sizes() {
+        let mut pd = pass_down();
+        pd.mm_supervisor_cpl3_per_core_stack_size = 0;
+        pd.mm_supv_firmware_policy_buffer_size = 0;
+        let checks = RefCell::new(Vec::new());
+
+        assert_eq!(
+            validate_pass_down_pointers(&pd, |addr, size| {
+                checks.borrow_mut().push((addr, size));
+                true
+            }),
+            Ok(())
+        );
+        assert_eq!(checks.into_inner(), [(0x1000, 1), (0x2000, size_of::<u64>() as u64), (0x3000, 1), (0x4000, 1)]);
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_pass_down_hob_errors_and_success() {
+        let data = pass_down_bytes(&pass_down());
+        let matching = guid_hob(crate::MM_SUPV_PASS_DOWN_HOB_GUID, data.len());
+        assert_eq!(validate_pass_down([Hob::GuidHob(&matching, &data)], |_, _| true), Ok(()));
+
+        let unrelated = guid_hob(MM_SUPERVISOR_CORE_GUID, data.len());
+        assert_eq!(
+            validate_pass_down([Hob::GuidHob(&unrelated, &data)], |_, _| true),
+            Err(HobValidationError::PassDownHobMissing)
+        );
+
+        let short_data = [0u8; 4];
+        let short = guid_hob(crate::MM_SUPV_PASS_DOWN_HOB_GUID, short_data.len());
+        assert_eq!(
+            validate_pass_down([Hob::GuidHob(&short, &short_data)], |_, _| true),
+            Err(HobValidationError::PassDownHobTooSmall)
+        );
     }
 
     #[test]
     fn test_mm_supervisor_hob_validation_push_range() {
         let mut ranges = [(0u64, 0u64); 2];
         let mut count = 0usize;
-        push_range(&mut ranges, &mut count, (0x1000, 0x100), "test");
-        push_range(&mut ranges, &mut count, (0x2000, 0x200), "test");
+        assert_eq!(push_range(&mut ranges, &mut count, (0x1000, 0x100), "test"), Ok(()));
+        assert_eq!(push_range(&mut ranges, &mut count, (0x2000, 0x200), "test"), Ok(()));
         assert_eq!(count, 2);
         assert_eq!(ranges.first(), Some(&(0x1000, 0x100)));
         assert_eq!(ranges.get(1), Some(&(0x2000, 0x200)));
-        // Exceeding capacity leaves both the count and the stored ranges unchanged.
-        push_range(&mut ranges, &mut count, (0x3000, 0x300), "test");
+        assert_eq!(
+            push_range(&mut ranges, &mut count, (0x3000, 0x300), "test"),
+            Err(HobValidationError::TooManyResourceDescriptors { kind: "test", limit: 2 })
+        );
         assert_eq!(count, 2);
         assert_eq!(ranges.get(1), Some(&(0x2000, 0x200)));
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_module_page_protection_dispatch() {
+        let core = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_CORE_GUID,
+            0x1000,
+            0x1000,
+            0x1100,
+        );
+        let user = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_USER_GUID,
+            0x2000,
+            0x2000,
+            0x2100,
+        );
+        let unrelated = allocation_module(MM_SUPERVISOR_CORE_GUID, MM_SUPERVISOR_CORE_GUID, 0x4000, 0x1000, 0x4100);
+        let page_checks = RefCell::new(Vec::new());
+        let entry_checks = RefCell::new(Vec::new());
+
+        assert_eq!(
+            verify_module_page_protections_with(
+                [
+                    Hob::MemoryAllocationModule(&core),
+                    Hob::MemoryAllocationModule(&user),
+                    Hob::MemoryAllocationModule(&unrelated),
+                ],
+                |base, length, required, forbidden| {
+                    page_checks.borrow_mut().push((base, length, required, forbidden));
+                    Ok(())
+                },
+                |entry_point| {
+                    entry_checks.borrow_mut().push(entry_point);
+                    Ok(())
+                }
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            page_checks.into_inner(),
+            [
+                (0x1000, 0x1000, MemoryAttributes::Supervisor, MemoryAttributes::empty()),
+                (0x2000, 0x2000, MemoryAttributes::empty(), MemoryAttributes::Supervisor),
+            ]
+        );
+        assert_eq!(entry_checks.into_inner(), [0x1100, 0x2100]);
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_aligned_page_attributes() {
+        let queried = RefCell::new(Vec::new());
+        assert_eq!(
+            verify_aligned_page_attributes(
+                0x1000,
+                0x2000,
+                MemoryAttributes::Supervisor,
+                MemoryAttributes::ReadOnly,
+                |addr, size| {
+                    queried.borrow_mut().push((addr, size));
+                    Some(MemoryAttributes::Supervisor)
+                }
+            ),
+            Ok(())
+        );
+        assert_eq!(queried.into_inner(), [(0x1000, 0x1000), (0x2000, 0x1000)]);
+
+        assert_eq!(
+            verify_aligned_page_attributes(
+                0x1000,
+                0x2000,
+                MemoryAttributes::Supervisor,
+                MemoryAttributes::empty(),
+                |addr, _| (addr == 0x1000).then_some(MemoryAttributes::Supervisor)
+            ),
+            Err(HobValidationError::PageAttributeQueryFailed { addr: 0x2000 })
+        );
+        assert_eq!(
+            verify_aligned_page_attributes(
+                0x1000,
+                0x1000,
+                MemoryAttributes::Supervisor,
+                MemoryAttributes::empty(),
+                |_, _| Some(MemoryAttributes::empty())
+            ),
+            Err(HobValidationError::PageMissingAttribute {
+                addr: 0x1000,
+                desired: MemoryAttributes::Supervisor.bits(),
+                found: 0,
+            })
+        );
+        assert_eq!(
+            verify_aligned_page_attributes(
+                0x1000,
+                0x1000,
+                MemoryAttributes::empty(),
+                MemoryAttributes::ReadOnly,
+                |_, _| Some(MemoryAttributes::ReadOnly)
+            ),
+            Err(HobValidationError::PageHasForbiddenAttribute {
+                addr: 0x1000,
+                forbidden: MemoryAttributes::ReadOnly.bits(),
+                found: MemoryAttributes::ReadOnly.bits(),
+            })
+        );
+        assert_eq!(
+            verify_aligned_page_attributes(
+                u64::MAX,
+                1,
+                MemoryAttributes::empty(),
+                MemoryAttributes::empty(),
+                |_, _| Some(MemoryAttributes::empty())
+            ),
+            Err(HobValidationError::PageAttributeQueryFailed { addr: u64::MAX })
+        );
     }
 
     #[test]
@@ -1175,10 +1726,36 @@ mod tests {
     }
 
     #[test]
+    fn test_mm_supervisor_hob_validation_verify_page_attributes_rejects_invalid_range() {
+        let required = MemoryAttributes::Supervisor;
+        assert_eq!(
+            verify_page_attributes(0x1000, 0, required, MemoryAttributes::empty()),
+            Err(HobValidationError::PageAttributeQueryFailed { addr: 0x1000 })
+        );
+        assert_eq!(
+            verify_page_attributes(u64::MAX, 1, required, MemoryAttributes::empty()),
+            Err(HobValidationError::PageAttributeQueryFailed { addr: u64::MAX })
+        );
+    }
+
+    #[test]
     fn test_mm_supervisor_hob_validation_verify_entry_point_executable_page_table_unavailable() {
         // The page table is uninitialized in unit tests, so the query reports it
         // as unavailable rather than panicking.
         assert_eq!(verify_entry_point_executable(0x1000), Err(HobValidationError::PageTableUnavailable));
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_entry_point_attributes() {
+        assert_eq!(validate_entry_point_attributes(0x1234, MemoryAttributes::empty()), Ok(()));
+        assert_eq!(
+            validate_entry_point_attributes(0x1234, MemoryAttributes::ExecuteProtect),
+            Err(HobValidationError::EntryPointNotExecutable { entry_point: 0x1234 })
+        );
+        assert_eq!(
+            verify_entry_point_executable(u64::MAX),
+            Err(HobValidationError::PageAttributeQueryFailed { addr: u64::MAX })
+        );
     }
 
     #[test]
@@ -1192,13 +1769,14 @@ mod tests {
     fn test_mm_supervisor_hob_validation_error_display_non_empty() {
         // Every error variant must produce a non-empty, human-readable message.
         let errors = [
-            HobValidationError::NullHobList,
             HobValidationError::NoMmramRegions,
+            HobValidationError::InvalidAddressRange { kind: "MMRAM region", base: 0x1000, length: 0 },
             HobValidationError::MmramRegionsOverlap { base_a: 0, size_a: 0x1000, base_b: 0x800, size_b: 0x1000 },
             HobValidationError::MmramNotContiguous { covered: 0x1000, span: 0x2000 },
             HobValidationError::MemoryAllocationInsideMmram { base: 0x1000, length: 0x1000 },
             HobValidationError::AllocationModuleOutsideMmram { base: 0x1000, length: 0x1000 },
             HobValidationError::AllocationModulesOverlap { base_a: 0, size_a: 0x1000, base_b: 0x800, size_b: 0x1000 },
+            HobValidationError::TooManyAllocationModules { limit: MAX_ALLOC_MODULES },
             HobValidationError::AllocationModuleEntryPointOutOfRange {
                 entry_point: 0x5000,
                 base: 0x1000,
@@ -1211,6 +1789,7 @@ mod tests {
                 base_b: 0x800,
                 size_b: 0x1000,
             },
+            HobValidationError::TooManyResourceDescriptors { kind: "v1 memory", limit: MAX_RESOURCE_HOBS },
             HobValidationError::V2ContainsUceAttribute { base: 0x1000, attributes: 0x1 },
             HobValidationError::V2InvalidCacheability { base: 0x1000, attributes: 0 },
             HobValidationError::V2IoAttributesNotZero { base: 0x1000, attributes: 0x4 },

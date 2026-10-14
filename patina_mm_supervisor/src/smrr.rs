@@ -378,4 +378,68 @@ mod tests {
         assert!(mask_reg_bit10_set(MASK_BIT_10));
         assert!(mask_reg_bit10_set(MASK_BIT_10 | MASK_VALID_BIT));
     }
+
+    #[test]
+    fn test_smrr_capability_bits_are_decoded_from_raw_registers() {
+        assert!(!smm_code_access_supported(0));
+        assert!(!smm_code_access_supported(!SMM_CODE_ACCESS_CHK_BIT));
+        assert!(smm_code_access_supported(SMM_CODE_ACCESS_CHK_BIT));
+
+        assert!(!mtrr_supported(0));
+        assert!(!mtrr_supported(!(1 << 12)));
+        assert!(mtrr_supported(1 << 12));
+
+        // The two MTRR_CAP capabilities are reported by distinct bits.
+        assert!(!smrr_supported(0));
+        assert!(smrr_supported(MTRR_CAP_SMRR_BIT));
+        assert!(!smrr_supported(MTRR_CAP_SMRR_EXT_BIT));
+
+        assert!(!smrr_ext_supported(0));
+        assert!(smrr_ext_supported(MTRR_CAP_SMRR_EXT_BIT));
+        assert!(!smrr_ext_supported(MTRR_CAP_SMRR_BIT));
+    }
+
+    #[test]
+    fn test_smrr_feature_control_update_sets_both_bits_and_preserves_the_rest() {
+        let expected = SMM_CODE_CHK_EN_BIT | SMM_FEATURE_CONTROL_LOCK_BIT;
+        assert_eq!(smm_feature_control_update(0), Some(expected));
+        assert_eq!(smm_feature_control_update(SMM_CODE_CHK_EN_BIT), Some(expected));
+        assert_eq!(smm_feature_control_update(SMM_FEATURE_CONTROL_LOCK_BIT), Some(expected));
+        // Unrelated bits are carried through untouched.
+        assert_eq!(smm_feature_control_update(0x10), Some(expected | 0x10));
+    }
+
+    #[test]
+    fn test_smrr_feature_control_update_skips_the_write_when_already_locked() {
+        // Both bits already set, so the MSR write is suppressed as redundant.
+        assert_eq!(smm_feature_control_update(SMM_CODE_CHK_EN_BIT | SMM_FEATURE_CONTROL_LOCK_BIT), None);
+        assert_eq!(smm_feature_control_update(u64::MAX), None);
+    }
+
+    #[test]
+    fn test_smrr_base_value_applies_write_back_type_and_base() {
+        assert_eq!(smrr_base_value(0, 0x0080_0000), 0x0080_0000 | u64::from(MTRR_CACHE_WRITE_BACK));
+        // A stale memory type in the register is replaced rather than OR-ed.
+        assert_eq!(smrr_base_value(0xFF, 0x0080_0000), 0x0080_0000 | u64::from(MTRR_CACHE_WRITE_BACK));
+        // Bits above [31:12] are preserved.
+        assert_eq!(
+            smrr_base_value(0xFFFF_FFFF_0000_0000, 0x1000_0000),
+            0xFFFF_FFFF_1000_0000 | u64::from(MTRR_CACHE_WRITE_BACK)
+        );
+    }
+
+    #[test]
+    fn test_smrr_enable_mask_sets_valid_and_bit10() {
+        assert_eq!(smrr_enable_mask(0), Some(MASK_VALID_BIT | MASK_BIT_10));
+        // The programmed range mask is preserved alongside the new bits.
+        assert_eq!(mask_reg_set_mask(0, 0x0080_0000), 0xFF80_0000);
+        assert_eq!(smrr_enable_mask(0xFF80_0000), Some(0xFF80_0000 | MASK_VALID_BIT | MASK_BIT_10));
+    }
+
+    #[test]
+    fn test_smrr_enable_mask_skips_an_already_finalized_range() {
+        // Bit 10 means the range is locked until reset, so no write must be issued.
+        assert_eq!(smrr_enable_mask(MASK_BIT_10), None);
+        assert_eq!(smrr_enable_mask(0xFF80_0000 | MASK_VALID_BIT | MASK_BIT_10), None);
+    }
 }
