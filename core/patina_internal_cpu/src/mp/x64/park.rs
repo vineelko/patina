@@ -142,7 +142,7 @@ pub(super) fn prepare(pages: &mut [u8]) -> Result<(), EfiError> {
         idtr: DescriptorTablePointer { limit: (core::mem::size_of::<Idt>() - 1) as u16, base: idt as u64 },
         stack_top: (stack + UEFI_PAGE_SIZE) as u64,
         parked_count: AtomicU32::new(0),
-        gdt: crate::gdt::minimal_long_mode_entries(),
+        gdt: crate::gdt::ap::minimal_long_mode_entries(),
     };
 
     // SAFETY: The data page is page-aligned, large enough for `ParkData`, and
