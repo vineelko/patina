@@ -498,7 +498,7 @@ impl LockedState<'_> {
 
 /// Maximum number of SMRAM regions collected on the stack while scanning the
 /// HOB list. The authoritative region metadata is stored in SMRAM afterwards.
-const MAX_TEMP_REGIONS: usize = 256;
+pub(crate) const MAX_TEMP_REGIONS: usize = 256;
 
 /// Selects the primary SMRR range from the scanned SMRAM regions and coalesces
 /// any physically adjacent regions into it.
