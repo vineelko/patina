@@ -12,6 +12,7 @@ use core::{arch::global_asm, cell::UnsafeCell};
 #[cfg(target_os = "uefi")]
 use patina::SIZE_4GB;
 
+#[cfg(any(target_os = "uefi", feature = "alloc"))]
 use crate::gdt::DescriptorTablePointer;
 
 pub(crate) const IDT_ENTRY_COUNT: usize = 256;
@@ -44,6 +45,7 @@ impl IdtEntry {
     }
 
     /// Creates a present interrupt gate (DPL 0) pointing to `address`.
+    #[cfg(any(target_os = "uefi", feature = "alloc"))]
     pub(crate) const fn interrupt_gate(address: u64, selector: u16, ist_index: u8) -> Self {
         Self {
             offset_low: address as u16,
@@ -64,14 +66,18 @@ pub(crate) struct Idt {
 }
 
 impl Idt {
+    // Off the UEFI targets these are only reached through the `mp` module, which needs `alloc`.
+    #[cfg(any(target_os = "uefi", feature = "alloc"))]
     pub(crate) const fn filled(entry: IdtEntry) -> Self {
         Self { entries: [entry; IDT_ENTRY_COUNT] }
     }
 
+    #[cfg(any(target_os = "uefi", feature = "alloc"))]
     pub(crate) fn entry_mut(&mut self, vector: usize) -> Option<&mut IdtEntry> {
         self.entries.get_mut(vector)
     }
 
+    #[cfg(any(target_os = "uefi", feature = "alloc"))]
     pub(crate) fn descriptor(&self) -> DescriptorTablePointer {
         DescriptorTablePointer {
             limit: (core::mem::size_of::<Self>() - 1) as u16,
