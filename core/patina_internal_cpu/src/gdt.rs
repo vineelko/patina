@@ -8,9 +8,10 @@
 //!
 #![cfg_attr(test, allow(dead_code))]
 #![cfg_attr(test, allow(unused_imports))]
+use core::ptr::{addr_of, addr_of_mut};
+#[cfg(any(feature = "alloc", test))]
 use core::{
     cell::UnsafeCell,
-    ptr::{addr_of, addr_of_mut},
     sync::atomic::{Ordering, fence},
 };
 use patina::SIZE_4GB;
@@ -122,8 +123,12 @@ const SPARE5_SEL: GdtEntry = GdtEntry {
 const STACK_SIZE: usize = 4096 * 5;
 
 const GDT_ENTRY_COUNT: usize = 11;
+// The AP GDT and its entry counts only exist for the `mp` module, which needs `alloc`.
+#[cfg(any(feature = "alloc", test))]
 const LONG_MODE_GDT_ENTRY_COUNT: usize = 8;
+#[cfg(any(feature = "alloc", test))]
 const TSS_DESCRIPTOR_ENTRY_COUNT: usize = 2;
+#[cfg(any(feature = "alloc", test))]
 const AP_GDT_ENTRY_COUNT: usize = LONG_MODE_GDT_ENTRY_COUNT + TSS_DESCRIPTOR_ENTRY_COUNT;
 
 // Segment selector values (GDT index * 8, RPL = 0)
@@ -230,6 +235,7 @@ pub(crate) struct DescriptorTablePointer {
 }
 
 /// Per-AP GDT containing the common long-mode entries and one TSS descriptor.
+#[cfg(any(feature = "alloc", test))]
 #[repr(C, align(8))]
 pub(crate) struct ApGdt {
     entries: UnsafeCell<[u64; AP_GDT_ENTRY_COUNT]>,
@@ -237,8 +243,10 @@ pub(crate) struct ApGdt {
 
 // SAFETY: Initialization happens before publication. The BSP may later restore
 // only the TSS descriptor immediately before resetting its owning AP.
+#[cfg(any(feature = "alloc", test))]
 unsafe impl Sync for ApGdt {}
 
+#[cfg(any(feature = "alloc", test))]
 impl ApGdt {
     pub(crate) const fn new() -> Self {
         Self { entries: UnsafeCell::new([0; AP_GDT_ENTRY_COUNT]) }
@@ -292,6 +300,7 @@ pub(crate) fn descriptor() -> DescriptorTablePointer {
 }
 
 /// Minimal GDT entries retaining the selectors used by long-mode Patina code.
+#[cfg(any(feature = "alloc", test))]
 pub(crate) fn minimal_long_mode_entries() -> [u64; 8] {
     [NULL_SEL.into(), 0, 0, 0, 0, 0, LINEAR_DATA64_SEL.into(), LINEAR_CODE64_SEL.into()]
 }
