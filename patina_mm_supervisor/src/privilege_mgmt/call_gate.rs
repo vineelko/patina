@@ -4,23 +4,6 @@
 //! for privilege level transitions. Call gates provide an alternative mechanism
 //! (besides syscall/sysret) for Ring 3 code to transition back to Ring 0.
 //!
-//! ## Call Gate Usage
-//!
-//! 1. When invoking a demoted routine, the supervisor sets up a call gate
-//!    pointing to the return address.
-//!
-//! 2. The demoted routine in Ring 3 can return to Ring 0 by doing a far call
-//!    to the call gate selector.
-//!
-//! 3. The CPU automatically transitions to Ring 0 and jumps to the address
-//!    in the call gate descriptor.
-//!
-//! ## TSS Usage
-//!
-//! The TSS is used to specify the Ring 0 stack pointer (RSP0) that the CPU
-//! will load when transitioning from Ring 3 to Ring 0 via an interrupt or
-//! call gate.
-//!
 //! ## License
 //!
 //! Copyright (c) Microsoft Corporation.
@@ -29,6 +12,8 @@
 //!
 use patina_paging::x64::{disable_write_protection, enable_write_protection};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
+
+use crate::error::MmSupervisorResult;
 
 // Firmware-only call-gate transfer assembly; included only for the UEFI target so host builds
 // (tests, doctests) can link.
@@ -64,6 +49,18 @@ const GDT_PROGRAMMED_SIZE: usize = TSS_DESC_OFFSET as usize + core::mem::size_of
 pub enum CallGateError {
     /// The GDT image does not contain the entries that need to be programmed.
     GdtTooSmall,
+}
+
+impl core::error::Error for CallGateError {}
+
+impl core::fmt::Display for CallGateError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::GdtTooSmall => {
+                write!(f, "the GDT image does not contain the privilege transition entries to program")
+            }
+        }
+    }
 }
 
 /// 64-bit Call Gate Descriptor.
@@ -229,7 +226,7 @@ pub unsafe fn get_current_gdt_base() -> u64 {
 ///
 /// The entry is read first so that fields the supervisor does not program (for example the call
 /// gate IST field) keep whatever the GDT was built with.
-fn update_entry<T, F>(gdt: &mut [u8], offset: usize, update: F) -> Result<(), CallGateError>
+fn update_entry<T, F>(gdt: &mut [u8], offset: usize, update: F) -> MmSupervisorResult<()>
 where
     T: FromBytes + IntoBytes + Immutable,
     F: FnOnce(&mut T),
@@ -271,7 +268,7 @@ fn program_privilege_transition_entries(
     gdt_base: u64,
     return_pointer: u64,
     cpl0_stack_ptr: u64,
-) -> Result<(), CallGateError> {
+) -> MmSupervisorResult<()> {
     let tss_addr = gdt_base.wrapping_add(u64::from(TSS_DESC_OFFSET));
 
     // Program the call gate descriptor for the return address.
@@ -336,6 +333,16 @@ pub unsafe extern "efiapi" fn setup_call_gate(return_pointer: u64, cpl0_stack_pt
 mod tests {
     use super::*;
     use zerocopy::FromZeros;
+
+    #[test]
+    fn test_call_gate_error_names_the_undersized_gdt() {
+        // The GDT image comes from outside the supervisor, so the one way programming can fail is
+        // an image that does not reach the entries being written.
+        assert_eq!(
+            format!("{}", CallGateError::GdtTooSmall),
+            "the GDT image does not contain the privilege transition entries to program"
+        );
+    }
 
     /// A zeroed GDT image large enough for the entries the supervisor programs.
     fn empty_gdt() -> Vec<u8> {
@@ -497,7 +504,7 @@ mod tests {
             let mut gdt = vec![0u8; size];
             assert_eq!(
                 program_privilege_transition_entries(&mut gdt, 0x1000, 0x2000, 0x3000),
-                Err(CallGateError::GdtTooSmall),
+                Err(CallGateError::GdtTooSmall.into()),
                 "unexpected result for a {size} byte GDT"
             );
         }
@@ -511,11 +518,11 @@ mod tests {
 
         assert_eq!(
             update_entry::<CallGateDescriptor, _>(&mut gdt, usize::MAX, |desc| desc.set_offset(0x1000)),
-            Err(CallGateError::GdtTooSmall)
+            Err(CallGateError::GdtTooSmall.into())
         );
         assert_eq!(
             update_entry::<TaskStateSegment, _>(&mut gdt, usize::MAX - 4, |tss| tss.io_map_base = 0),
-            Err(CallGateError::GdtTooSmall)
+            Err(CallGateError::GdtTooSmall.into())
         );
 
         // A rejected offset must leave the GDT untouched.

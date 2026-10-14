@@ -39,8 +39,8 @@ use patina::standard::efi::{ALLOCATE_ANY_PAGES, AllocateType, MemoryType, RUNTIM
 use patina::{UEFI_PAGE_SIZE, management_mode::supervisor::SyscallIndex};
 
 use crate::{
-    PageOwnership,
-    mm_policy::{AccessType, Instruction, IoWidth},
+    memory::page_ownership::PageOwnership,
+    policy::{AccessType, Instruction, IoWidth},
 };
 
 use super::{
@@ -425,10 +425,10 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         // Verify the range was allocated as User type (Ring 3 code should only free its own memory)
         // This prevents user code from freeing supervisor-internal allocations.
         match self.ops.allocation_type(addr) {
-            Some(crate::mem::AllocationType::User) => {
+            Some(crate::memory::AllocationType::User) => {
                 // Good - this is user-owned memory
             }
-            Some(crate::mem::AllocationType::Supervisor) => {
+            Some(crate::memory::AllocationType::Supervisor) => {
                 log::error!("FREE_PAGE: Address 0x{addr:x} is a supervisor allocation - access denied");
                 return Err(Status::SECURITY_VIOLATION);
             }
@@ -457,9 +457,9 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
     /// function registered during [`MmSupervisorCore`] initialization.
     ///
     /// Checks performed before dispatch:
-    /// - Procedure pointer is non-null
-    /// - Procedure pointer is within user-accessible memory (unblocked region)
-    /// - Argument pointer (if non-null) is within user-accessible memory
+    /// - Caller is the BSP
+    /// - Procedure pointer is non-null and user-owned
+    /// - Argument pointer (if non-null) is user-owned
     ///
     /// The remaining validation (CPU index range, BSP check, AP busy check) and
     /// the actual dispatch are handled by the registered AP startup function,
@@ -475,25 +475,54 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
 
         log::info!("START_AP_PROC: proc=0x{procedure:x}, cpu={cpu_index}, arg=0x{argument:x}");
 
-        // 1. Validate procedure pointer is non-null
+        // 1. Caller is the BSP. APs poll their mailbox for work the BSP dispatches, so an AP
+        //    reaching here is running a procedure already dispatched to it. Letting it dispatch
+        //    in turn would nest the MP state machine: it could contend for a mailbox the BSP is
+        //    filling, target itself and then spin the full AP timeout waiting for a response it
+        //    cannot post, or leave a second AP busy while the BSP believes every AP is penned.
+        if !self.ops.is_bsp() {
+            log::error!("START_AP_PROC: only the BSP may dispatch a procedure to an AP");
+            return Err(Status::ACCESS_DENIED);
+        }
+
+        // 2. Validate procedure pointer is non-null
         if procedure == 0 {
             log::error!("START_AP_PROC: Null procedure pointer");
             return Err(Status::INVALID_PARAMETER);
         }
 
-        // 2. Validate procedure pointer is within mapped memory via page table query
-        if self.ops.query_address_ownership(procedure, core::mem::size_of::<usize>() as u64).is_none() {
-            log::error!("START_AP_PROC: Procedure 0x{procedure:x} not in mapped memory");
-            return Err(Status::INVALID_PARAMETER);
+        // 3. The procedure runs demoted on the target AP, so it has to be user-owned. Accepting
+        //    any mapped address would let Ring 3 name a supervisor address to be run for it.
+        let procedure_size = core::mem::size_of::<usize>() as u64;
+        match self.ops.query_address_ownership(procedure, procedure_size) {
+            Some(PageOwnership::User) => {}
+            Some(owner) => {
+                log::error!("START_AP_PROC: Procedure 0x{procedure:x} is owned by {owner:?}, expected User");
+                return Err(Status::SECURITY_VIOLATION);
+            }
+            None => {
+                log::error!("START_AP_PROC: Procedure 0x{procedure:x} not in mapped memory");
+                return Err(Status::INVALID_PARAMETER);
+            }
         }
 
-        // 3. Validate argument pointer (if non-null) is within mapped memory
-        if argument != 0 && self.ops.query_address_ownership(argument, core::mem::size_of::<usize>() as u64).is_none() {
-            log::error!("START_AP_PROC: Argument 0x{argument:x} not in mapped memory");
-            return Err(Status::INVALID_PARAMETER);
+        // 4. The argument reaches the same Ring 3 procedure, which cannot read supervisor memory,
+        //    so a non-null argument must be user-owned too.
+        if argument != 0 {
+            match self.ops.query_address_ownership(argument, procedure_size) {
+                Some(PageOwnership::User) => {}
+                Some(owner) => {
+                    log::error!("START_AP_PROC: Argument 0x{argument:x} is owned by {owner:?}, expected User");
+                    return Err(Status::SECURITY_VIOLATION);
+                }
+                None => {
+                    log::error!("START_AP_PROC: Argument 0x{argument:x} not in mapped memory");
+                    return Err(Status::INVALID_PARAMETER);
+                }
+            }
         }
 
-        // 4. Delegate to the registered AP startup function
+        // 5. Delegate to the registered AP startup function
         match self.ops.start_ap_procedure(cpu_index, procedure, argument) {
             Some(0) => Ok(0),
             Some(status) => Err(Status::from_usize(status as usize)),
@@ -573,8 +602,8 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
             return Ok(0); // FALSE
         };
 
-        let buf_start = config.user_comm_buffer_internal;
-        let buf_end = buf_start.saturating_add(config.user_comm_buffer_size);
+        let buf_start = config.user.internal;
+        let buf_end = buf_start.saturating_add(config.user.size);
         let range_end = address.saturating_add(size);
 
         // Check that the range is non-empty and falls entirely within the user comm buffer.
@@ -610,9 +639,10 @@ pub extern "efiapi" fn syscall_dispatcher(
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
-    use crate::CommBufferConfig;
-    use crate::mem::{AllocationType, page_allocator::PageAllocError};
-    use crate::mm_policy::PolicyError;
+    use crate::comm_buffer::{CommBufferConfig, CommChannel};
+    use crate::error::MmSupervisorResult;
+    use crate::memory::{AllocError, AllocationType};
+    use crate::policy::PolicyGateError;
     use core::cell::RefCell;
 
     /// An action a handler asked its [`SyscallOps`] implementation to perform.
@@ -645,8 +675,8 @@ mod tests {
         msr_value: u64,
         io_value: u64,
         is_bsp: bool,
-        allocate_result: Result<u64, PageAllocError>,
-        free_result: Result<(), PageAllocError>,
+        allocate_result: MmSupervisorResult<u64>,
+        free_result: MmSupervisorResult<()>,
         allocation_type: Option<AllocationType>,
         /// Mapped addresses and their ownership; any other address is treated as unmapped.
         mapped: Vec<(u64, PageOwnership)>,
@@ -733,12 +763,12 @@ mod tests {
             self.is_bsp
         }
 
-        fn allocate_user_pages(&self, page_count: usize) -> Result<u64, PageAllocError> {
+        fn allocate_user_pages(&self, page_count: usize) -> MmSupervisorResult<u64> {
             self.record(Effect::AllocateUserPages(page_count));
             self.allocate_result
         }
 
-        fn free_user_pages(&self, addr: u64, page_count: usize) -> Result<(), PageAllocError> {
+        fn free_user_pages(&self, addr: u64, page_count: usize) -> MmSupervisorResult<()> {
             self.record(Effect::FreeUserPages(addr, page_count));
             self.free_result
         }
@@ -827,7 +857,10 @@ mod tests {
     #[test]
     fn test_check_policy_maps_decisions_to_status() {
         assert_eq!(check_policy("TEST", PolicyDecision::Allowed), Ok(()));
-        assert_eq!(check_policy("TEST", PolicyDecision::Denied(PolicyError::AccessDenied)), Err(Status::ACCESS_DENIED));
+        assert_eq!(
+            check_policy("TEST", PolicyDecision::Denied(PolicyGateError::AccessDenied.into())),
+            Err(Status::ACCESS_DENIED)
+        );
         assert_eq!(check_policy("TEST", PolicyDecision::Unavailable), Err(Status::NOT_READY));
     }
 
@@ -860,8 +893,7 @@ mod tests {
         let any = u64::from(ALLOCATE_ANY_PAGES);
         let data = u64::from(RUNTIME_SERVICES_DATA);
         let comm_buffer = CommBufferConfig {
-            user_comm_buffer_internal: 0x1_0000,
-            user_comm_buffer_size: 0x1000,
+            user: CommChannel { internal: 0x1_0000, size: 0x1000, ..Default::default() },
             ..Default::default()
         };
 
@@ -1024,8 +1056,10 @@ mod tests {
 
     #[test]
     fn test_rdmsr_denied_by_policy() {
-        let d =
-            dispatcher(MockOps { msr_policy: PolicyDecision::Denied(PolicyError::AccessDenied), ..Default::default() });
+        let d = dispatcher(MockOps {
+            msr_policy: PolicyDecision::Denied(PolicyGateError::AccessDenied.into()),
+            ..Default::default()
+        });
 
         assert_eq!(d.handle_rdmsr(&ctx(0, 0x1B, 0, 0)), Err(Status::ACCESS_DENIED));
         // The MSR must not be read once the policy denies the request.
@@ -1053,8 +1087,10 @@ mod tests {
 
     #[test]
     fn test_wrmsr_denied_by_policy() {
-        let d =
-            dispatcher(MockOps { msr_policy: PolicyDecision::Denied(PolicyError::AccessDenied), ..Default::default() });
+        let d = dispatcher(MockOps {
+            msr_policy: PolicyDecision::Denied(PolicyGateError::AccessDenied.into()),
+            ..Default::default()
+        });
 
         assert_eq!(d.handle_wrmsr(&ctx(0, 0x1B, 0x5A, 0)), Err(Status::ACCESS_DENIED));
         assert_eq!(d.ops.effects(), vec![Effect::CheckMsr(0x1B, AccessType::Write)]);
@@ -1077,7 +1113,7 @@ mod tests {
     #[test]
     fn test_privileged_instructions_respect_policy_denial() {
         let denied = dispatcher(MockOps {
-            instruction_policy: PolicyDecision::Denied(PolicyError::AccessDenied),
+            instruction_policy: PolicyDecision::Denied(PolicyGateError::AccessDenied.into()),
             ..Default::default()
         });
         assert_eq!(denied.handle_instruction(Instruction::Cli), Err(Status::ACCESS_DENIED));
@@ -1116,8 +1152,10 @@ mod tests {
         assert!(d.ops.effects().is_empty());
 
         // Denied by policy.
-        let d =
-            dispatcher(MockOps { io_policy: PolicyDecision::Denied(PolicyError::AccessDenied), ..Default::default() });
+        let d = dispatcher(MockOps {
+            io_policy: PolicyDecision::Denied(PolicyGateError::AccessDenied.into()),
+            ..Default::default()
+        });
         assert_eq!(d.handle_io_read(&ctx(0, 0xCF8, MM_IO_UINT8, 0)), Err(Status::ACCESS_DENIED));
         assert_eq!(d.ops.effects(), vec![Effect::CheckIo(0xCF8, IoWidth::Byte, AccessType::Read)]);
     }
@@ -1213,7 +1251,7 @@ mod tests {
 
     #[test]
     fn test_alloc_page_reports_allocator_failure() {
-        let d = dispatcher(MockOps { allocate_result: Err(PageAllocError::OutOfMemory), ..Default::default() });
+        let d = dispatcher(MockOps { allocate_result: Err(AllocError::OutOfMemory.into()), ..Default::default() });
 
         assert_eq!(
             d.handle_alloc_page(&ctx(0, u64::from(ALLOCATE_ANY_PAGES), u64::from(RUNTIME_SERVICES_DATA), 4)),
@@ -1265,7 +1303,7 @@ mod tests {
     #[test]
     fn test_free_page_reports_allocator_failure() {
         // A page in the range belongs to someone else, so the checked free fails.
-        let d = dispatcher(MockOps { free_result: Err(PageAllocError::NotAllocated), ..Default::default() });
+        let d = dispatcher(MockOps { free_result: Err(AllocError::NotAllocated.into()), ..Default::default() });
 
         assert_eq!(d.handle_free_page(&ctx(0, 0x2000, 3, 0)), Err(Status::SECURITY_VIOLATION));
         assert_eq!(d.ops.effects(), vec![Effect::FreeUserPages(0x2000, 3)]);
@@ -1318,6 +1356,39 @@ mod tests {
     }
 
     #[test]
+    fn test_start_ap_proc_refuses_a_caller_that_is_not_the_bsp() {
+        // An AP reaching here is already running a procedure the BSP dispatched to it, so a
+        // nested dispatch must not reach the mailbox at all.
+        let d =
+            dispatcher(MockOps { is_bsp: false, mapped: vec![(0x1000, PageOwnership::User)], ..Default::default() });
+
+        assert_eq!(d.handle_start_ap_proc(&ctx(0, 0x1000, 1, 0)), Err(Status::ACCESS_DENIED));
+        assert!(d.ops.effects().is_empty(), "a non-BSP caller was dispatched to an AP");
+    }
+
+    #[test]
+    fn test_start_ap_proc_refuses_a_supervisor_owned_procedure() {
+        // The procedure runs demoted on the target AP. Accepting a supervisor-owned address here
+        // is what let Ring 3 pick code for the supervisor to run in Ring 0.
+        let d = dispatcher(MockOps { mapped: vec![(0x1000, PageOwnership::Supervisor)], ..Default::default() });
+
+        assert_eq!(d.handle_start_ap_proc(&ctx(0, 0x1000, 1, 0)), Err(Status::SECURITY_VIOLATION));
+        assert!(d.ops.effects().is_empty(), "a supervisor-owned procedure was dispatched to an AP");
+    }
+
+    #[test]
+    fn test_start_ap_proc_refuses_a_supervisor_owned_argument() {
+        // The argument reaches the same Ring 3 procedure, which cannot read supervisor memory.
+        let d = dispatcher(MockOps {
+            mapped: vec![(0x1000, PageOwnership::User), (0x3000, PageOwnership::Supervisor)],
+            ..Default::default()
+        });
+
+        assert_eq!(d.handle_start_ap_proc(&ctx(0, 0x1000, 1, 0x3000)), Err(Status::SECURITY_VIOLATION));
+        assert!(d.ops.effects().is_empty(), "a supervisor-owned argument was dispatched to an AP");
+    }
+
+    #[test]
     fn test_start_ap_proc_propagates_failures() {
         // AP startup has not been registered yet.
         let d =
@@ -1356,8 +1427,7 @@ mod tests {
     #[test]
     fn test_mm_is_comm_buffer_range_checks() {
         let config = CommBufferConfig {
-            user_comm_buffer_internal: 0x1_0000,
-            user_comm_buffer_size: 0x1000,
+            user: CommChannel { internal: 0x1_0000, size: 0x1000, ..Default::default() },
             ..Default::default()
         };
         let d = dispatcher(MockOps { comm_buffer: Some(config), ..Default::default() });

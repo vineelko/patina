@@ -12,6 +12,11 @@
 //!
 //! - **`MSR_IA32_LSTAR`**: Contains the 64-bit RIP for syscall entry (`SyscallCenter`)
 //!
+//! - **`MSR_IA32_FMASK`**: RFLAGS bits the CPU clears on `syscall` entry. `syscall` performs
+//!   no other flag sanitization, so this is the only thing preventing Ring 3 from choosing the
+//!   flags Ring 0 executes under - most importantly DF, which reverses compiler-emitted
+//!   `rep movs`, and AC, which suppresses SMAP.
+//!
 //! - **`MSR_IA32_EFER`**: Extended Feature Enable Register
 //!   - Bit 0 (SCE) must be set to enable syscall/sysret
 //!
@@ -24,6 +29,7 @@
 //!
 //! SPDX-License-Identifier: Apache-2.0
 //!
+use core::fmt;
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
@@ -36,6 +42,18 @@ pub enum SyscallSetupError {
     AlreadyInitialized,
     /// Invalid CPU index (exceeds configured CPU count).
     InvalidCpuIndex,
+}
+
+impl core::error::Error for SyscallSetupError {}
+
+impl fmt::Display for SyscallSetupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotInitialized => write!(f, "the syscall interface has not been initialized"),
+            Self::AlreadyInitialized => write!(f, "the syscall interface is already initialized"),
+            Self::InvalidCpuIndex => write!(f, "the CPU index exceeds the configured CPU count"),
+        }
+    }
 }
 
 /// Internal state for the syscall interface.
@@ -53,6 +71,7 @@ struct SyscallInterfaceState<const MAX_CPUS: usize> {
 }
 
 impl<const MAX_CPUS: usize> SyscallInterfaceState<MAX_CPUS> {
+    /// Creates the state every field zeroed, before [`SyscallInterface::init`] fills it in.
     const fn new() -> Self {
         Self { num_cpus: 0, cpl3_stack_base: 0, stack_size: 0 }
     }
@@ -154,6 +173,16 @@ impl<const MAX_CPUS: usize> Default for SyscallInterface<MAX_CPUS> {
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_syscall_setup_error_displays_each_variant() {
+        assert_eq!(format!("{}", SyscallSetupError::NotInitialized), "the syscall interface has not been initialized");
+        assert_eq!(
+            format!("{}", SyscallSetupError::AlreadyInitialized),
+            "the syscall interface is already initialized"
+        );
+        assert_eq!(format!("{}", SyscallSetupError::InvalidCpuIndex), "the CPU index exceeds the configured CPU count");
+    }
 
     #[test]
     fn test_new_interface_is_uninitialized() {
