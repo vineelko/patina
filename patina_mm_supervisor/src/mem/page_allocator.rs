@@ -1207,10 +1207,408 @@ mod tests {
 
     /// Smallest region size `coalesced_smrr_range` will accept (256 KiB - 4 KiB).
     const MIN_SMRR_SIZE: u64 = SIZE_256KB as u64 - UEFI_PAGE_SIZE as u64;
+    const TEST_REGION_PAGES: usize = 16;
+    const TEST_REGION_BYTES: usize = TEST_REGION_PAGES * UEFI_PAGE_SIZE;
+
+    #[repr(align(4096))]
+    struct AlignedRegion([u8; TEST_REGION_BYTES]);
+
+    struct AllocatorFixture {
+        allocator: PageAllocator,
+        base: u64,
+        _memory: Box<AlignedRegion>,
+    }
+
+    impl AllocatorFixture {
+        fn new() -> Self {
+            let mut memory = Box::new(AlignedRegion([0xA5; TEST_REGION_BYTES]));
+            let base = memory.0.as_mut_ptr() as u64;
+            let allocator = PageAllocator::new();
+            let regions = [SmramRegion::new(base, TEST_REGION_BYTES as u64, false)];
+
+            // SAFETY: `memory` is page-aligned, exclusively owned by the fixture,
+            // remains live with the allocator, and covers the declared region.
+            unsafe {
+                allocator.init_from_regions(&regions).unwrap();
+            }
+
+            Self { allocator, base, _memory: memory }
+        }
+    }
 
     /// Builds a `SmramRegion` list from `(base, size, pre_allocated)` tuples.
     fn regions_from(entries: &[(u64, u64, bool)]) -> Vec<SmramRegion> {
-        entries.iter().map(|&(base, size, pre_allocated)| SmramRegion { base, size, pre_allocated }).collect()
+        entries.iter().map(|&(base, size, pre_allocated)| SmramRegion::new(base, size, pre_allocated)).collect()
+    }
+
+    fn smram_hob_payload(declared_count: u32, descriptors: &[SmramDescriptor]) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(size_of::<SmramReserveHobData>() + size_of_val(descriptors));
+        payload.extend_from_slice(&declared_count.to_ne_bytes());
+        payload.extend_from_slice(&0u32.to_ne_bytes());
+        for descriptor in descriptors {
+            payload.extend_from_slice(&descriptor.physical_start.to_ne_bytes());
+            payload.extend_from_slice(&descriptor.cpu_start.to_ne_bytes());
+            payload.extend_from_slice(&descriptor.physical_size.to_ne_bytes());
+            payload.extend_from_slice(&descriptor.region_state.to_ne_bytes());
+        }
+        payload
+    }
+
+    #[test]
+    fn test_page_allocator_uninitialized_operations() {
+        let allocator = PageAllocator::new();
+
+        assert!(!allocator.is_initialized());
+        assert_eq!(allocator.region_count(), 0);
+        assert_eq!(allocator.total_page_count(), 0);
+        assert_eq!(allocator.free_page_count(), 0);
+        assert_eq!(allocator.allocate_pages(1), Err(PageAllocError::NotInitialized));
+        assert_eq!(allocator.free_pages(UEFI_PAGE_SIZE as u64, 1), Err(PageAllocError::NotInitialized));
+        assert_eq!(allocator.get_allocation_type(UEFI_PAGE_SIZE as u64), None);
+        assert!(!allocator.is_region_inside_mmram(UEFI_PAGE_SIZE as u64, UEFI_PAGE_SIZE as u64));
+
+        // SAFETY: a null HOB pointer is explicitly rejected before dereference.
+        unsafe {
+            assert_eq!(allocator.init_from_hob_list(ptr::null()), Err(PageAllocError::NotInitialized));
+        }
+
+        let mut state = allocator.lock_state();
+        assert!(state.regions().is_empty());
+        assert!(state.regions_mut().is_empty());
+        assert!(state.alloc_bitmap().is_empty());
+        assert!(state.type_bitmap().is_empty());
+        let (alloc_bitmap, type_bitmap) = state.bitmaps_mut();
+        assert!(alloc_bitmap.is_empty());
+        assert!(type_bitmap.is_empty());
+    }
+
+    #[test]
+    fn test_page_allocator_initialization_reserves_bookkeeping() {
+        crate::test_support::init_test_logger();
+        let fixture = AllocatorFixture::new();
+
+        assert!(fixture.allocator.is_initialized());
+        assert_eq!(fixture.allocator.region_count(), 1);
+        assert_eq!(fixture.allocator.total_page_count(), TEST_REGION_PAGES);
+        assert_eq!(fixture.allocator.free_page_count(), TEST_REGION_PAGES - 1);
+        assert_eq!(fixture.allocator.allocated_page_count(AllocationType::Supervisor), 1);
+        assert_eq!(fixture.allocator.allocated_page_count(AllocationType::User), 0);
+        assert_eq!(fixture.allocator.get_allocation_type(fixture.base), Some(AllocationType::Supervisor));
+        assert_eq!(fixture.allocator.allocate_pages(0), Err(PageAllocError::OutOfMemory));
+        assert_eq!(fixture.allocator.free_pages(fixture.base + 1, 1), Err(PageAllocError::NotAligned));
+        assert_eq!(fixture.allocator.free_pages(fixture.base, 0), Err(PageAllocError::InvalidAddress));
+        assert_eq!(
+            fixture.allocator.free_pages(fixture.base + TEST_REGION_BYTES as u64, 1),
+            Err(PageAllocError::InvalidAddress)
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_rejects_double_initialization() {
+        let fixture = AllocatorFixture::new();
+        let regions = [SmramRegion::new(fixture.base, TEST_REGION_BYTES as u64, false)];
+
+        // SAFETY: the fixture owns the page-aligned region for its full declared size.
+        unsafe {
+            assert_eq!(fixture.allocator.init_from_regions(&regions), Err(PageAllocError::AlreadyInitialized));
+        }
+        assert_eq!(fixture.allocator.free_page_count(), TEST_REGION_PAGES - 1);
+    }
+
+    #[test]
+    fn test_page_allocator_validates_regions_before_writing_bookkeeping() {
+        let allocator = PageAllocator::new();
+        let empty: [SmramRegion; 0] = [];
+        let unaligned = [SmramRegion::new(0x1001, UEFI_PAGE_SIZE as u64, false)];
+        let partial_page = [SmramRegion::new(0x1000, UEFI_PAGE_SIZE as u64 - 1, false)];
+        let overflowing = [SmramRegion::new(u64::MAX - UEFI_PAGE_SIZE as u64 + 1, UEFI_PAGE_SIZE as u64, false)];
+        let overlapping = [
+            SmramRegion::new(0x1000, 2 * UEFI_PAGE_SIZE as u64, false),
+            SmramRegion::new(0x2000, UEFI_PAGE_SIZE as u64, false),
+        ];
+
+        // SAFETY: these invalid descriptors are rejected before any address is dereferenced.
+        unsafe {
+            assert_eq!(allocator.init_from_regions(&empty), Err(PageAllocError::NotInitialized));
+            assert_eq!(allocator.init_from_regions(&unaligned), Err(PageAllocError::NotAligned));
+            assert_eq!(allocator.init_from_regions(&partial_page), Err(PageAllocError::NotAligned));
+            assert_eq!(allocator.init_from_regions(&overflowing), Err(PageAllocError::InvalidAddress));
+            assert_eq!(allocator.init_from_regions(&overlapping), Err(PageAllocError::InvalidAddress));
+        }
+        assert!(!allocator.is_initialized());
+    }
+
+    #[test]
+    fn test_page_allocator_tracks_types_and_uses_first_fit() {
+        let fixture = AllocatorFixture::new();
+        let mut state = fixture.allocator.lock_state();
+
+        let supervisor = state.allocate(2, AllocationType::Supervisor).unwrap();
+        let user = state.allocate(3, AllocationType::User).unwrap();
+
+        assert_eq!(supervisor, fixture.base + UEFI_PAGE_SIZE as u64);
+        assert_eq!(user, fixture.base + 3 * UEFI_PAGE_SIZE as u64);
+        assert_eq!(state.allocation_type(supervisor), Some(AllocationType::Supervisor));
+        assert_eq!(state.allocation_type(user), Some(AllocationType::User));
+        assert_eq!(state.allocation_type(user + 1), Some(AllocationType::User));
+        assert_eq!(state.allocated_page_count(AllocationType::Supervisor), 3);
+        assert_eq!(state.allocated_page_count(AllocationType::User), 3);
+        assert_eq!(state.free_page_count(), TEST_REGION_PAGES - 6);
+    }
+
+    #[test]
+    fn test_page_allocator_public_allocate_and_free_api() {
+        let fixture = AllocatorFixture::new();
+
+        let supervisor = fixture.allocator.allocate_pages(2).unwrap();
+        let user = fixture.allocator.allocate_pages_with_type(3, AllocationType::User).unwrap();
+
+        assert_eq!(fixture.allocator.get_allocation_type(supervisor), Some(AllocationType::Supervisor));
+        assert_eq!(fixture.allocator.get_allocation_type(user), Some(AllocationType::User));
+        assert_eq!(fixture.allocator.allocated_page_count(AllocationType::Supervisor), 3);
+        assert_eq!(fixture.allocator.allocated_page_count(AllocationType::User), 3);
+        assert!(fixture.allocator.is_region_inside_mmram(user, 3 * UEFI_PAGE_SIZE as u64));
+
+        assert_eq!(
+            fixture.allocator.free_pages_checked(user, 3, AllocationType::Supervisor),
+            Err(PageAllocError::InvalidAddress)
+        );
+        assert_eq!(fixture.allocator.free_pages_checked(user, 3, AllocationType::User), Ok(()));
+        assert_eq!(fixture.allocator.free_pages(supervisor, 2), Ok(()));
+        assert_eq!(fixture.allocator.free_pages(supervisor, 2), Err(PageAllocError::NotAllocated));
+        assert_eq!(fixture.allocator.free_page_count(), TEST_REGION_PAGES - 1);
+    }
+
+    #[test]
+    fn test_page_allocator_checked_free_is_atomic_on_type_mismatch() {
+        crate::test_support::init_test_logger();
+        let fixture = AllocatorFixture::new();
+        let mut state = fixture.allocator.lock_state();
+        let user = state.allocate(2, AllocationType::User).unwrap();
+
+        assert_eq!(state.free_checked(user, 2, AllocationType::Supervisor), Err(PageAllocError::InvalidAddress));
+        assert_eq!(state.allocation_type(user), Some(AllocationType::User));
+        assert_eq!(state.allocation_type(user + UEFI_PAGE_SIZE as u64), Some(AllocationType::User));
+
+        assert_eq!(state.free_checked(user, 2, AllocationType::User), Ok(()));
+        assert_eq!(state.free(user, 2), Err(PageAllocError::NotAllocated));
+        assert_eq!(state.free(user, 0), Err(PageAllocError::InvalidAddress));
+    }
+
+    #[test]
+    fn test_page_allocator_rejects_a_free_whose_page_count_overflows() {
+        let fixture = AllocatorFixture::new();
+        let mut state = fixture.allocator.lock_state();
+
+        // Starting one page into the region makes the page index plus the count overflow.
+        let second_page = fixture.base + UEFI_PAGE_SIZE as u64;
+        assert_eq!(state.free(second_page, usize::MAX), Err(PageAllocError::InvalidAddress));
+    }
+
+    #[test]
+    fn test_page_allocator_rejects_a_free_outside_every_region() {
+        let fixture = AllocatorFixture::new();
+        let mut state = fixture.allocator.lock_state();
+
+        // An address below the region start belongs to no region at all.
+        assert_eq!(state.free(UEFI_PAGE_SIZE as u64, 1), Err(PageAllocError::InvalidAddress));
+    }
+
+    #[test]
+    fn test_page_allocator_public_free_rejects_unaligned_addresses() {
+        let fixture = AllocatorFixture::new();
+        let unaligned = fixture.base + 1;
+
+        assert_eq!(fixture.allocator.free_pages(unaligned, 1), Err(PageAllocError::NotAligned));
+        assert_eq!(
+            fixture.allocator.free_pages_checked(unaligned, 1, AllocationType::User),
+            Err(PageAllocError::NotAligned)
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_public_free_reports_pages_that_are_not_allocated() {
+        crate::test_support::init_test_logger();
+        let fixture = AllocatorFixture::new();
+        let last_page = fixture.base + (TEST_REGION_PAGES - 1) as u64 * UEFI_PAGE_SIZE as u64;
+
+        assert_eq!(fixture.allocator.free_pages(last_page, 1), Err(PageAllocError::NotAllocated));
+        assert_eq!(
+            fixture.allocator.free_pages_checked(last_page, 1, AllocationType::User),
+            Err(PageAllocError::NotAllocated)
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_marks_pre_allocated_regions_as_used() {
+        crate::test_support::init_test_logger();
+        let mut memory = Box::new(AlignedRegion([0u8; TEST_REGION_BYTES]));
+        let base = memory.0.as_mut_ptr() as u64;
+        let half = (TEST_REGION_BYTES / 2) as u64;
+        let allocator = PageAllocator::new();
+        // The second half is handed over pre-allocated, so none of it is available.
+        let regions = [SmramRegion::new(base, half, false), SmramRegion::new(base + half, half, true)];
+
+        // SAFETY: `memory` is page-aligned, owned by this test, and covers both regions.
+        unsafe { allocator.init_from_regions(&regions).unwrap() };
+
+        assert_eq!(allocator.region_count(), 2);
+        assert_eq!(allocator.total_page_count(), TEST_REGION_PAGES);
+        // Every pre-allocated page plus the bookkeeping page is charged to the supervisor.
+        assert_eq!(allocator.allocated_page_count(AllocationType::Supervisor), TEST_REGION_PAGES / 2 + 1);
+        assert_eq!(allocator.free_page_count(), TEST_REGION_PAGES / 2 - 1);
+    }
+
+    #[test]
+    fn test_page_allocator_rejects_an_empty_allocation_request() {
+        let fixture = AllocatorFixture::new();
+
+        assert_eq!(
+            fixture.allocator.allocate_pages_with_type(0, AllocationType::User),
+            Err(PageAllocError::OutOfMemory)
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_reports_an_allocation_larger_than_the_region() {
+        let fixture = AllocatorFixture::new();
+
+        assert_eq!(
+            fixture.allocator.allocate_pages_with_type(TEST_REGION_PAGES + 1, AllocationType::User),
+            Err(PageAllocError::OutOfMemory)
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_rejects_a_null_hob_list() {
+        let allocator = PageAllocator::new();
+
+        // SAFETY: the null pointer is rejected before any dereference.
+        let result = unsafe { allocator.init_from_hob_list(core::ptr::null()) };
+        assert_eq!(result.map(|_| ()), Err(PageAllocError::NotInitialized));
+    }
+
+    #[test]
+    fn test_page_allocator_rejects_an_empty_region_list() {
+        let allocator = PageAllocator::new();
+
+        // SAFETY: an empty list is rejected before any region is read.
+        let result = unsafe { allocator.init_from_regions(&[]) };
+        assert_eq!(result, Err(PageAllocError::NotInitialized));
+    }
+
+    #[test]
+    fn test_page_allocator_rejects_free_crossing_region_end() {
+        crate::test_support::init_test_logger();
+        let fixture = AllocatorFixture::new();
+        let mut state = fixture.allocator.lock_state();
+        let allocation = state.allocate(TEST_REGION_PAGES - 1, AllocationType::User).unwrap();
+        let last_page = fixture.base + (TEST_REGION_PAGES - 1) as u64 * UEFI_PAGE_SIZE as u64;
+
+        assert_eq!(state.free(last_page, 2), Err(PageAllocError::InvalidAddress));
+        assert_eq!(state.free(allocation, TEST_REGION_PAGES), Err(PageAllocError::InvalidAddress));
+        assert_eq!(state.allocated_page_count(AllocationType::User), TEST_REGION_PAGES - 1);
+    }
+
+    #[test]
+    fn test_page_allocator_mmram_range_checks_do_not_overflow() {
+        let fixture = AllocatorFixture::new();
+        let state = fixture.allocator.lock_state();
+
+        assert!(state.is_region_inside_mmram(fixture.base, TEST_REGION_BYTES as u64));
+        assert!(state.is_region_inside_mmram(fixture.base + TEST_REGION_BYTES as u64, 0));
+        assert!(!state.is_region_inside_mmram(
+            fixture.base + TEST_REGION_BYTES as u64 - UEFI_PAGE_SIZE as u64,
+            2 * UEFI_PAGE_SIZE as u64
+        ));
+        assert!(!state.is_region_inside_mmram(u64::MAX - 1, 2));
+    }
+
+    #[test]
+    fn test_page_allocator_collects_unaligned_hob_payload_safely() {
+        let descriptors = [
+            SmramDescriptor {
+                physical_start: 0x8000_0000,
+                cpu_start: 0x8000_0000,
+                physical_size: 2 * UEFI_PAGE_SIZE as u64,
+                region_state: 0,
+            },
+            SmramDescriptor {
+                physical_start: 0x9000_0000,
+                cpu_start: 0x9000_0000,
+                physical_size: UEFI_PAGE_SIZE as u64,
+                region_state: EFI_ALLOCATED,
+            },
+        ];
+        let payload = smram_hob_payload(descriptors.len() as u32, &descriptors);
+        let mut unaligned = vec![0xFF];
+        unaligned.extend_from_slice(&payload);
+        let mut regions = [SmramRegion::default(); MAX_TEMP_REGIONS];
+        let mut count = 0;
+
+        PageAllocator::collect_smram_regions(&unaligned[1..], &mut regions, &mut count).unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(regions[0], SmramRegion::new(descriptors[0].physical_start, descriptors[0].physical_size, false));
+        assert_eq!(regions[1], SmramRegion::new(descriptors[1].physical_start, descriptors[1].physical_size, true));
+    }
+
+    #[test]
+    fn test_page_allocator_collect_clamps_truncated_descriptor_list() {
+        let descriptor = SmramDescriptor {
+            physical_start: 0x8000_0000,
+            cpu_start: 0x8000_0000,
+            physical_size: UEFI_PAGE_SIZE as u64,
+            region_state: 0,
+        };
+        let payload = smram_hob_payload(2, &[descriptor]);
+        let mut regions = [SmramRegion::default(); MAX_TEMP_REGIONS];
+        let mut count = 0;
+
+        PageAllocator::collect_smram_regions(&payload, &mut regions, &mut count).unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(regions[0].base, descriptor.physical_start);
+    }
+
+    #[test]
+    fn test_page_allocator_collect_handles_short_payload_and_full_output() {
+        let descriptor = SmramDescriptor {
+            physical_start: 0x8000_0000,
+            cpu_start: 0x8000_0000,
+            physical_size: UEFI_PAGE_SIZE as u64,
+            region_state: 0,
+        };
+        let payload = smram_hob_payload(1, &[descriptor]);
+        let mut regions = [SmramRegion::default(); MAX_TEMP_REGIONS];
+        let mut count = 0;
+
+        PageAllocator::collect_smram_regions(
+            &payload[..size_of::<SmramReserveHobData>() - 1],
+            &mut regions,
+            &mut count,
+        )
+        .unwrap();
+        assert_eq!(count, 0);
+
+        count = MAX_TEMP_REGIONS;
+        assert_eq!(
+            PageAllocator::collect_smram_regions(&payload, &mut regions, &mut count),
+            Err(PageAllocError::OutOfMemory)
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_calculates_bookkeeping_requirements() {
+        let valid = [SmramRegion::new(0x8000_0000, TEST_REGION_BYTES as u64, false)];
+        let allocated = [SmramRegion::new(0x8000_0000, TEST_REGION_BYTES as u64, true)];
+        let too_small = [SmramRegion::new(0x8000_0000, 1, false)];
+        let unaligned = [SmramRegion::new(0x8000_0001, TEST_REGION_BYTES as u64, false)];
+
+        assert_eq!(PageAllocator::calculate_bookkeeping(&valid), Ok((valid[0].base, 1)));
+        assert_eq!(PageAllocator::calculate_bookkeeping(&allocated), Err(PageAllocError::OutOfMemory));
+        assert_eq!(PageAllocator::calculate_bookkeeping(&too_small), Err(PageAllocError::OutOfMemory));
+        assert_eq!(PageAllocator::calculate_bookkeeping(&unaligned), Err(PageAllocError::NotAligned));
     }
 
     #[test]
@@ -1239,11 +1637,17 @@ mod tests {
     }
 
     #[test]
+    fn test_page_allocator_coalesced_smrr_range_overflow_returns_none() {
+        let regions = regions_from(&[(u64::MAX - MIN_SMRR_SIZE + 1, MIN_SMRR_SIZE, false)]);
+        assert_eq!(coalesced_smrr_range(&regions), None);
+    }
+
+    #[test]
     fn test_page_allocator_coalesced_smrr_range_single_valid_region() {
         let base = 0x8000_0000u64;
         let size = SIZE_256KB as u64;
         let regions = regions_from(&[(base, size, false)]);
-        assert_eq!(coalesced_smrr_range(&regions), Some(SmramRegion { base, size, pre_allocated: false }));
+        assert_eq!(coalesced_smrr_range(&regions), Some(SmramRegion::new(base, size, false)));
     }
 
     #[test]
@@ -1260,10 +1664,7 @@ mod tests {
         let small = (0x8000_0000u64, SIZE_256KB as u64, false);
         let large = (0x9000_0000u64, SIZE_256KB as u64 * 4, false);
         let regions = regions_from(&[small, large]);
-        assert_eq!(
-            coalesced_smrr_range(&regions),
-            Some(SmramRegion { base: large.0, size: large.1, pre_allocated: false })
-        );
+        assert_eq!(coalesced_smrr_range(&regions), Some(SmramRegion::new(large.0, large.1, false)));
     }
 
     #[test]
@@ -1283,10 +1684,7 @@ mod tests {
         let above_size = SIZE_256KB as u64 * 2;
         let above = (base + size, above_size, false);
         let regions = regions_from(&[(base, size, false), above]);
-        assert_eq!(
-            coalesced_smrr_range(&regions),
-            Some(SmramRegion { base, size: size + above_size, pre_allocated: false })
-        );
+        assert_eq!(coalesced_smrr_range(&regions), Some(SmramRegion::new(base, size + above_size, false)));
     }
 
     #[test]
@@ -1299,10 +1697,7 @@ mod tests {
         let size = SIZE_256KB as u64 * 6; // selected as the largest region
         let below = (low_base, below_size, false);
         let regions = regions_from(&[below, (base, size, false)]);
-        assert_eq!(
-            coalesced_smrr_range(&regions),
-            Some(SmramRegion { base: low_base, size: size + below_size, pre_allocated: false })
-        );
+        assert_eq!(coalesced_smrr_range(&regions), Some(SmramRegion::new(low_base, size + below_size, false)));
     }
 
     #[test]
@@ -1324,6 +1719,6 @@ mod tests {
         // SMRR must cover a single contiguous physical range.
         let above = (base + size, size, true);
         let regions = regions_from(&[(base, size, false), above]);
-        assert_eq!(coalesced_smrr_range(&regions), Some(SmramRegion { base, size: size * 2, pre_allocated: false }));
+        assert_eq!(coalesced_smrr_range(&regions), Some(SmramRegion::new(base, size * 2, false)));
     }
 }
