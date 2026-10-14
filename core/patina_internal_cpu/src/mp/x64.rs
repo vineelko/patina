@@ -69,7 +69,7 @@ pub struct ApContext {
     /// Task state used to reset the stack before terminal double-fault handling.
     tss: crate::gdt::TaskStateSegment,
     /// GDT containing this AP's unique TSS descriptor.
-    gdt: crate::gdt::ApGdt,
+    gdt: crate::gdt::ap::ApGdt,
     /// Descriptor-table operand used by the assembly entry path.
     gdtr: crate::gdt::DescriptorTablePointer,
 }
@@ -84,7 +84,7 @@ impl ApContext {
             apic_id: AtomicU32::new(APIC_ID_INVALID),
             sm: ApStateMachine::new(),
             tss: crate::gdt::TaskStateSegment::new(0),
-            gdt: crate::gdt::ApGdt::new(),
+            gdt: crate::gdt::ap::ApGdt::new(),
             gdtr: crate::gdt::DescriptorTablePointer { limit: 0, base: 0 },
         }
     }
