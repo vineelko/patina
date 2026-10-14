@@ -996,13 +996,7 @@ impl Iterator for FileSectionIterator<'_> {
 
 #[cfg(test)]
 mod unit_tests {
-    use std::{
-        collections::HashMap,
-        env,
-        error::Error,
-        fs::{self, File},
-        path::Path,
-    };
+    use std::{collections::HashMap, env, error::Error, fs, path::Path};
 
     use crate::standard::efi;
     use core::{mem, sync::atomic::AtomicBool};
@@ -1120,7 +1114,7 @@ mod unit_tests {
         let fv = FirmwareVolume::new(&fv_bytes).unwrap();
 
         let expected_values =
-            serde_yaml::from_reader::<File, TargetValues>(File::open(root.join("DXEFV_expected_values.yml"))?)?;
+            toml::from_str::<TargetValues>(&fs::read_to_string(root.join("DXEFV_expected_values.toml"))?)?;
 
         test_firmware_volume_worker(fv, expected_values, &NullSectionExtractor {})
     }
@@ -1133,7 +1127,7 @@ mod unit_tests {
         let fv = FirmwareVolume::new(&fv_bytes).unwrap();
 
         let expected_values =
-            serde_yaml::from_reader::<File, TargetValues>(File::open(root.join("GIGANTOR_expected_values.yml"))?)?;
+            toml::from_str::<TargetValues>(&fs::read_to_string(root.join("GIGANTOR_expected_values.toml"))?)?;
 
         test_firmware_volume_worker(fv, expected_values, &NullSectionExtractor {})
     }
@@ -1144,9 +1138,8 @@ mod unit_tests {
 
         let fv_bytes = fs::read(root.join("FVMAIN_COMPACT.Fv"))?;
 
-        let expected_values = serde_yaml::from_reader::<File, TargetValues>(File::open(
-            root.join("FVMAIN_COMPACT_expected_values.yml"),
-        )?)?;
+        let expected_values =
+            toml::from_str::<TargetValues>(&fs::read_to_string(root.join("FVMAIN_COMPACT_expected_values.toml"))?)?;
 
         struct TestExtractor {
             invoked: AtomicBool,

@@ -62,7 +62,6 @@ safe-mmio = { workspace = true }
 scroll = { workspace = true }
 uuid = { workspace = true }
 serde = { workspace = true, optional = true }
-serde_yaml = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 spin = { workspace = true }
 zerocopy = { workspace = true }
@@ -72,12 +71,12 @@ zerocopy-derive = { workspace = true }
 uart_16550 = { workspace = true }
 
 [dev-dependencies]
+alloc-no-stdlib = { workspace = true }
+brotli-decompressor = { workspace = true, default-features = false }
 criterion = { workspace = true }
 mockall = { workspace = true }
 serde = { workspace = true }
-serde_yaml = { workspace = true }
-brotli-decompressor = { workspace = true, default-features = false }
-alloc-no-stdlib = { workspace = true }
+toml = { workspace = true }
 # trybuild is intentionally only used in patina crate dependencies because
 # of unique requirements to test proc macro results. It can be moved to
 # the workspace level if a need arises in the future.
@@ -90,7 +89,6 @@ alloc = ["dep:goblin", "dep:fixedbitset"]
 mockall = ["dep:mockall", "std"]
 global_allocator = []
 serde = ["alloc", "dep:serde", "serde/alloc", "dep:serde_json"]
-serde-with-yaml = ["serde", "dep:serde_yaml"]
 
 unstable = ["unstable-device-path"]
 unstable-device-path = []

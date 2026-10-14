@@ -781,13 +781,7 @@ mod test {
     use patina::pi::fw_fs::{self, ffs, fv};
     use patina::standard::efi;
     use serde::Deserialize;
-    use std::{
-        collections::HashMap,
-        env,
-        error::Error,
-        fs::{self, File},
-        path::Path,
-    };
+    use std::{collections::HashMap, env, error::Error, fs, path::Path};
     use uuid::Uuid;
 
     use crate::{
@@ -980,7 +974,7 @@ mod test {
         let fv = VolumeRef::new(&fv_bytes).unwrap();
 
         let expected_values =
-            serde_yaml::from_reader::<File, TargetValues>(File::open(root.join("DXEFV_expected_values.yml"))?)?;
+            toml::from_str::<TargetValues>(&fs::read_to_string(root.join("DXEFV_expected_values.toml"))?)?;
 
         test_firmware_volume_ref_worker(&fv, expected_values, &NullExtractor {})
     }
@@ -994,7 +988,7 @@ mod test {
         let fv = VolumeRef::new(&fv_bytes).unwrap();
 
         let expected_values =
-            serde_yaml::from_reader::<File, TargetValues>(File::open(root.join("GIGANTOR_expected_values.yml"))?)?;
+            toml::from_str::<TargetValues>(&fs::read_to_string(root.join("GIGANTOR_expected_values.toml"))?)?;
 
         test_firmware_volume_ref_worker(&fv, expected_values, &NullExtractor {})
     }
@@ -1006,9 +1000,8 @@ mod test {
 
         let fv_bytes = fs::read(root.join("FVMAIN_COMPACT.Fv"))?;
 
-        let expected_values = serde_yaml::from_reader::<File, TargetValues>(File::open(
-            root.join("FVMAIN_COMPACT_expected_values.yml"),
-        )?)?;
+        let expected_values =
+            toml::from_str::<TargetValues>(&fs::read_to_string(root.join("FVMAIN_COMPACT_expected_values.toml"))?)?;
 
         struct TestExtractor {
             invoked: AtomicBool,
@@ -1395,7 +1388,7 @@ mod test {
         let root = Path::new(&env::var("CARGO_MANIFEST_DIR")?).join("test_resources");
         let original_fv_bytes: Vec<u8> = fs::read(root.join("LZMATEST.Fv"))?;
         let expected_values =
-            serde_yaml::from_reader::<File, TargetValues>(File::open(root.join("LZMATEST_expected_values.yml"))?)?;
+            toml::from_str::<TargetValues>(&fs::read_to_string(root.join("LZMATEST_expected_values.toml"))?)?;
 
         let fv_ref = VolumeRef::new(&original_fv_bytes).map_err(stringify)?;
         let fv: Volume = (&fv_ref, &LzmaExtractorComposer {} as &dyn SectionExtractor).try_into().map_err(stringify)?;

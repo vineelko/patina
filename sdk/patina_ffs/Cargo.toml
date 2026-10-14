@@ -17,10 +17,10 @@ patina = {workspace = true, features = ["alloc"]}
 log = {workspace = true}
 
 [dev-dependencies]
+lzma-rust2 = { workspace = true, features = ["encoder"] }
 serde = {workspace = true}
 uuid = {workspace = true}
-serde_yaml = {workspace = true}
-lzma-rust2 = { workspace = true, features = ["encoder"] }
+toml = {workspace = true}
 
 [features]
 # All non-std features to test in CI
