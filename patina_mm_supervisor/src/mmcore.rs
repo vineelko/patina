@@ -268,3 +268,123 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> Default for MmSupervisorCore<P, MAX
         Self::new()
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage, coverage(off))]
+mod tests {
+    use super::*;
+    use core::sync::atomic::Ordering;
+
+    struct TestPlatform;
+
+    impl PlatformInfo for TestPlatform {}
+
+    #[test]
+    fn test_supervisor_default_matches_new() {
+        let supervisor: MmSupervisorCore<TestPlatform, 2> = MmSupervisorCore::default();
+
+        assert_eq!(supervisor.cpu_manager().max_cpus(), 2);
+        assert_eq!(supervisor.cpu_manager().registered_count(), 0);
+        assert!(!supervisor.initialized.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_core_init_error_displays_each_variant() {
+        assert_eq!(
+            format!("{}", CoreInitError::InitializedBufferUnavailable),
+            "the per-core initialized buffer has not been published yet"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::CpuIndexOutOfRange { index: 4, len: 2 }),
+            "CPU index 4 is outside the 2-slot per-core array"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::CpuIndexAlreadyRegistered { index: 1, existing: 0x10, requested: 0x30 }),
+            "CPU index 1 is already registered to APIC 16, cannot register APIC 48"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::UserEntryPointMissing),
+            "no user entry point is configured for the BSP to demote to"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::InitModuleRegionMissing),
+            "the HOB list described no MM Init module allocation"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::MpInformationHobMissing),
+            "the MP Information HOB is missing from the HOB list"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::MpInformationHobMalformed),
+            "the MP Information HOB is too short or its processor entries do not fit"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::InvalidCpuCount { found: 9, maximum: 4 }),
+            "the producer reported 9 CPUs, more than the supported maximum of 4"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::InitializedBufferInvalid),
+            "the per-core initialized buffer is not addressable or not resident in MMRAM"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::HobListTooLargeToCopy { size: 0x1_0000_0000_0000 }),
+            "the HOB list of 0x1000000000000 bytes does not fit the target architecture"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::PageTableUnavailable),
+            "no page table is installed to map a region for the user core"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::HobListCopyNotMapped { base: 0x1000, size: 0x2000 }),
+            "the HOB list copy at 0x0000000000001000 (0x2000 bytes) could not be mapped read-only"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::Cpl3StackRegionInvalid { base: 0, per_core_size: 0x2000, num_cpus: 4 }),
+            "the PassDown HOB describes no usable Ring 3 stack region \
+             (base 0x0000000000000000, 0x2000 bytes per core, 4 CPUs)"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::Cpl3StackRegionOutsideMmram { base: 0x1000, size: 0x8000 }),
+            "the Ring 3 stacks at 0x0000000000001000 (0x8000 bytes) are not inside MMRAM"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::Cpl3StacksNotMapped { base: 0x1000, size: 0x8000 }),
+            "the Ring 3 stacks at 0x0000000000001000 (0x8000 bytes) are not usable by Ring 3"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::InterruptManagerInit(EfiError::Unsupported)),
+            format!("the interrupt manager could not be initialized: {}", EfiError::Unsupported)
+        );
+    }
+
+    #[test]
+    fn test_core_init_error_exposes_its_wrapped_sources() {
+        use core::error::Error;
+
+        let error = CoreInitError::InterruptManagerInit(EfiError::DeviceError);
+        assert!(error.source().is_some(), "the wrapped EfiError should be reachable as a source");
+
+        // Variants that wrap nothing report no source.
+        assert!(CoreInitError::UserEntryPointMissing.source().is_none());
+
+        // The wrapped status is part of the identity.
+        assert_ne!(
+            CoreInitError::InterruptManagerInit(EfiError::DeviceError),
+            CoreInitError::InterruptManagerInit(EfiError::Unsupported)
+        );
+    }
+
+    #[test]
+    fn test_core_init_error_separates_a_claimed_slot_from_a_bad_index() {
+        // An occupied slot is an in-range index, so it must not compare equal to a bounds failure.
+        assert_ne!(
+            CoreInitError::CpuIndexAlreadyRegistered { index: 1, existing: 0x10, requested: 0x30 },
+            CoreInitError::CpuIndexOutOfRange { index: 1, len: 8 }
+        );
+        // The claimant is part of the identity, so two different intruders stay distinguishable.
+        assert_ne!(
+            CoreInitError::CpuIndexAlreadyRegistered { index: 1, existing: 0x10, requested: 0x30 },
+            CoreInitError::CpuIndexAlreadyRegistered { index: 1, existing: 0x10, requested: 0x40 }
+        );
+    }
+}
