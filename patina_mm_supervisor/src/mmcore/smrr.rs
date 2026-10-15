@@ -396,3 +396,313 @@ pub(crate) fn coalesced_smrr_range(regions: &[MmramRegion]) -> Option<MmramRegio
     log::info!("SMRR Base: 0x{smrr_base:x}, SMRR Size: 0x{smrr_size:x}");
     Some(MmramRegion::new(u64::from(smrr_base), u64::from(smrr_size), false))
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_smrr_error_displays_each_variant() {
+        assert_eq!(format!("{}", SmrrError::MtrrUnsupported), "unsupported CPU: MTRRs are not supported");
+        assert_eq!(format!("{}", SmrrError::SmrrUnsupported), "unsupported CPU: SMRRs are not supported");
+        assert_eq!(
+            format!("{}", SmrrError::SmrrExtUnsupported),
+            "unsupported CPU: the extended SMRR capability is not supported"
+        );
+        assert_eq!(
+            format!("{}", SmrrError::SmmCodeAccessCheckUnsupported),
+            "unsupported CPU: SMM Code Access Check is not supported"
+        );
+        assert_eq!(
+            format!("{}", SmrrError::RangeNotAddressable { base: 0x1_0000_0000, size: 0x80_0000 }),
+            "SMRAM region [0x100000000, +0x800000) does not fit the 32-bit SMRR registers"
+        );
+        assert_eq!(
+            format!("{}", SmrrError::RangeNotAligned { base: 0x801000, size: 0x800000 }),
+            "SMRAM region base 0x801000 size 0x800000 does not meet the SMRR alignment and size requirements"
+        );
+    }
+
+    #[test]
+    fn test_smrr_verify_accepts_minimum_size() {
+        // A 4 KiB region at base 0 is the smallest valid configuration.
+        assert!(verify_smrr_base_size(0, SIZE_4KB));
+    }
+
+    #[test]
+    fn test_smrr_verify_accepts_naturally_aligned_regions() {
+        // Base is naturally aligned to the (power-of-two) size.
+        assert!(verify_smrr_base_size(0x0080_0000, 0x0080_0000));
+        assert!(verify_smrr_base_size(0x1000_0000, 0x1000_0000));
+        assert!(verify_smrr_base_size(0x0000_8000, SIZE_4KB));
+    }
+
+    #[test]
+    fn test_smrr_verify_rejects_size_below_4kb() {
+        assert!(!verify_smrr_base_size(0, 0));
+        assert!(!verify_smrr_base_size(0, SIZE_4KB - 1));
+        assert!(!verify_smrr_base_size(0, 0x800));
+    }
+
+    #[test]
+    fn test_smrr_verify_rejects_non_power_of_two_size() {
+        assert!(!verify_smrr_base_size(0, 0x3000));
+        assert!(!verify_smrr_base_size(0, 0x5000));
+        assert!(!verify_smrr_base_size(0, SIZE_4KB + 1));
+    }
+
+    #[test]
+    fn test_smrr_verify_rejects_misaligned_base() {
+        // Base must be aligned to the size; these are off by 4 KiB or unaligned.
+        assert!(!verify_smrr_base_size(SIZE_4KB, 0x0080_0000));
+        assert!(!verify_smrr_base_size(0x0080_1000, 0x0080_0000));
+        assert!(!verify_smrr_base_size(0x0000_1000, 0x0000_2000));
+    }
+
+    #[test]
+    fn test_smrr_get_power_of_two32_returns_zero_for_zero() {
+        assert_eq!(get_power_of_two32(0), 0);
+    }
+
+    #[test]
+    fn test_smrr_get_power_of_two32_exact_powers_are_unchanged() {
+        assert_eq!(get_power_of_two32(1), 1);
+        assert_eq!(get_power_of_two32(2), 2);
+        assert_eq!(get_power_of_two32(SIZE_4KB), SIZE_4KB);
+        assert_eq!(get_power_of_two32(0x0080_0000), 0x0080_0000);
+        assert_eq!(get_power_of_two32(0x8000_0000), 0x8000_0000);
+    }
+
+    #[test]
+    fn test_smrr_get_power_of_two32_rounds_down_to_previous_power() {
+        assert_eq!(get_power_of_two32(3), 2);
+        assert_eq!(get_power_of_two32(0x0080_0001), 0x0080_0000);
+        assert_eq!(get_power_of_two32(0x00FF_FFFF), 0x0080_0000);
+        assert_eq!(get_power_of_two32(u32::MAX), 0x8000_0000);
+    }
+
+    #[test]
+    fn test_smrr_base_reg_set_memtype_sets_low_byte_only() {
+        // Memory type occupies bits [7:0]; all other bits must be preserved.
+        assert_eq!(base_reg_set_memtype(0, MTRR_CACHE_WRITE_BACK), u64::from(MTRR_CACHE_WRITE_BACK));
+        // Existing memory-type bits are replaced, not OR-ed.
+        assert_eq!(base_reg_set_memtype(0xFF, MTRR_CACHE_WRITE_BACK), u64::from(MTRR_CACHE_WRITE_BACK));
+        // Upper bits outside [7:0] are left untouched.
+        assert_eq!(
+            base_reg_set_memtype(0x1234_5600, MTRR_CACHE_WRITE_BACK),
+            0x1234_5600 | u64::from(MTRR_CACHE_WRITE_BACK)
+        );
+    }
+
+    #[test]
+    fn test_smrr_base_reg_set_base_sets_phys_addr_bits() {
+        // Base address occupies bits [31:12].
+        assert_eq!(base_reg_set_base(0, 0x0080_0000), 0x0080_0000);
+        // Bits below [12] of the supplied base are ignored (masked out).
+        assert_eq!(base_reg_set_base(0, 0x0080_0FFF), 0x0080_0000);
+        // Existing [31:12] bits are replaced while [11:0] and [63:32] are preserved.
+        assert_eq!(base_reg_set_base(0xFFFF_FFFF_FFFF_FFFF, 0x0080_0000), 0xFFFF_FFFF_0080_0FFF);
+    }
+
+    #[test]
+    fn test_smrr_mask_reg_set_mask_computes_size_mask() {
+        // Mask field = ~(size - 1) restricted to [31:12].
+        assert_eq!(mask_reg_set_mask(0, SIZE_4KB), 0xFFFF_F000);
+        assert_eq!(mask_reg_set_mask(0, 0x0080_0000), 0xFF80_0000);
+        assert_eq!(mask_reg_set_mask(0, 0x1000_0000), 0xF000_0000);
+        // Bits outside [31:12] of `raw` are preserved.
+        assert_eq!(mask_reg_set_mask(0xFFFF_FFFF_0000_0FFF, 0x0080_0000), 0xFFFF_FFFF_FF80_0FFF);
+    }
+
+    #[test]
+    fn test_smrr_mask_reg_bit10_detection() {
+        assert!(!mask_reg_bit10_set(0));
+        assert!(!mask_reg_bit10_set(MASK_VALID_BIT));
+        assert!(mask_reg_bit10_set(MASK_BIT_10));
+        assert!(mask_reg_bit10_set(MASK_BIT_10 | MASK_VALID_BIT));
+    }
+
+    #[test]
+    fn test_smrr_capability_bits_are_decoded_from_raw_registers() {
+        assert!(!smm_code_access_supported(0));
+        assert!(!smm_code_access_supported(!SMM_CODE_ACCESS_CHK_BIT));
+        assert!(smm_code_access_supported(SMM_CODE_ACCESS_CHK_BIT));
+
+        assert!(!mtrr_supported(0));
+        assert!(!mtrr_supported(!(1 << 12)));
+        assert!(mtrr_supported(1 << 12));
+
+        // The two MTRR_CAP capabilities are reported by distinct bits.
+        assert!(!smrr_supported(0));
+        assert!(smrr_supported(MTRR_CAP_SMRR_BIT));
+        assert!(!smrr_supported(MTRR_CAP_SMRR_EXT_BIT));
+
+        assert!(!smrr_ext_supported(0));
+        assert!(smrr_ext_supported(MTRR_CAP_SMRR_EXT_BIT));
+        assert!(!smrr_ext_supported(MTRR_CAP_SMRR_BIT));
+    }
+
+    #[test]
+    fn test_smrr_feature_control_update_sets_both_bits_and_preserves_the_rest() {
+        let expected = SMM_CODE_CHK_EN_BIT | SMM_FEATURE_CONTROL_LOCK_BIT;
+        assert_eq!(smm_feature_control_update(0), Some(expected));
+        assert_eq!(smm_feature_control_update(SMM_CODE_CHK_EN_BIT), Some(expected));
+        assert_eq!(smm_feature_control_update(SMM_FEATURE_CONTROL_LOCK_BIT), Some(expected));
+        // Unrelated bits are carried through untouched.
+        assert_eq!(smm_feature_control_update(0x10), Some(expected | 0x10));
+    }
+
+    #[test]
+    fn test_smrr_feature_control_update_skips_the_write_when_already_locked() {
+        // Both bits already set, so the MSR write is suppressed as redundant.
+        assert_eq!(smm_feature_control_update(SMM_CODE_CHK_EN_BIT | SMM_FEATURE_CONTROL_LOCK_BIT), None);
+        assert_eq!(smm_feature_control_update(u64::MAX), None);
+    }
+
+    #[test]
+    fn test_smrr_base_value_applies_write_back_type_and_base() {
+        assert_eq!(smrr_base_value(0, 0x0080_0000), 0x0080_0000 | u64::from(MTRR_CACHE_WRITE_BACK));
+        // A stale memory type in the register is replaced rather than OR-ed.
+        assert_eq!(smrr_base_value(0xFF, 0x0080_0000), 0x0080_0000 | u64::from(MTRR_CACHE_WRITE_BACK));
+        // Bits above [31:12] are preserved.
+        assert_eq!(
+            smrr_base_value(0xFFFF_FFFF_0000_0000, 0x1000_0000),
+            0xFFFF_FFFF_1000_0000 | u64::from(MTRR_CACHE_WRITE_BACK)
+        );
+    }
+
+    #[test]
+    fn test_smrr_enable_mask_sets_valid_and_bit10() {
+        assert_eq!(smrr_enable_mask(0), Some(MASK_VALID_BIT | MASK_BIT_10));
+        // The programmed range mask is preserved alongside the new bits.
+        assert_eq!(mask_reg_set_mask(0, 0x0080_0000), 0xFF80_0000);
+        assert_eq!(smrr_enable_mask(0xFF80_0000), Some(0xFF80_0000 | MASK_VALID_BIT | MASK_BIT_10));
+    }
+
+    #[test]
+    fn test_smrr_enable_mask_skips_an_already_finalized_range() {
+        // Bit 10 means the range is locked until reset, so no write must be issued.
+        assert_eq!(smrr_enable_mask(MASK_BIT_10), None);
+        assert_eq!(smrr_enable_mask(0xFF80_0000 | MASK_VALID_BIT | MASK_BIT_10), None);
+    }
+
+    /// Builds SMRAM descriptors from `(base, size, pre_allocated)` triples.
+    fn regions_from(entries: &[(u64, u64, bool)]) -> Vec<MmramRegion> {
+        entries.iter().map(|&(base, size, pre_allocated)| MmramRegion::new(base, size, pre_allocated)).collect()
+    }
+
+    /// Smallest region size `coalesced_smrr_range` will accept (256 KiB - 4 KiB).
+    const MIN_SMRR_SIZE: u64 = SIZE_256KB as u64 - UEFI_PAGE_SIZE as u64;
+
+    #[test]
+    fn test_coalesced_smrr_range_empty_returns_none() {
+        assert_eq!(coalesced_smrr_range(&[]), None);
+    }
+
+    #[test]
+    fn test_coalesced_smrr_range_region_too_small_returns_none() {
+        let regions = regions_from(&[(0x0010_0000, MIN_SMRR_SIZE - UEFI_PAGE_SIZE as u64, false)]);
+        assert_eq!(coalesced_smrr_range(&regions), None);
+    }
+
+    #[test]
+    fn test_coalesced_smrr_range_below_1mb_returns_none() {
+        // Base below 1 MiB is rejected even when the region is large enough.
+        let regions = regions_from(&[(0x0008_0000, SIZE_256KB as u64, false)]);
+        assert_eq!(coalesced_smrr_range(&regions), None);
+    }
+
+    #[test]
+    fn test_coalesced_smrr_range_above_4gb_returns_none() {
+        // A range whose end exceeds 4 GiB is rejected.
+        let regions = regions_from(&[(0xFFFF_F000, SIZE_256KB as u64, false)]);
+        assert_eq!(coalesced_smrr_range(&regions), None);
+    }
+
+    #[test]
+    fn test_coalesced_smrr_range_overflow_returns_none() {
+        let regions = regions_from(&[(u64::MAX - MIN_SMRR_SIZE + 1, MIN_SMRR_SIZE, false)]);
+        assert_eq!(coalesced_smrr_range(&regions), None);
+    }
+
+    #[test]
+    fn test_coalesced_smrr_range_single_valid_region() {
+        let base = 0x8000_0000u64;
+        let size = SIZE_256KB as u64;
+        let regions = regions_from(&[(base, size, false)]);
+        assert_eq!(coalesced_smrr_range(&regions), Some(MmramRegion::new(base, size, false)));
+    }
+
+    #[test]
+    fn test_coalesced_smrr_range_rejects_non_power_of_two_size() {
+        // A region large enough to be selected but whose size is not a power of
+        // two fails SMRR verification and is rejected.
+        let base = 0x8000_0000u64;
+        let regions = regions_from(&[(base, MIN_SMRR_SIZE, false)]);
+        assert_eq!(coalesced_smrr_range(&regions), None);
+    }
+
+    #[test]
+    fn test_coalesced_smrr_range_selects_largest_region() {
+        let small = (0x8000_0000u64, SIZE_256KB as u64, false);
+        let large = (0x9000_0000u64, SIZE_256KB as u64 * 4, false);
+        let regions = regions_from(&[small, large]);
+        assert_eq!(coalesced_smrr_range(&regions), Some(MmramRegion::new(large.0, large.1, false)));
+    }
+
+    #[test]
+    fn test_coalesced_smrr_range_ignores_pre_allocated_for_selection() {
+        // A pre-allocated region cannot be selected as the primary range, so with
+        // no other usable region the result is None.
+        let regions = regions_from(&[(0x8000_0000, SIZE_256KB as u64, true)]);
+        assert_eq!(coalesced_smrr_range(&regions), None);
+    }
+
+    #[test]
+    fn test_coalesced_smrr_range_coalesces_adjacent_upward() {
+        // Selected (larger) region extends upward into the adjacent region; the
+        // coalesced size is a power of two with a naturally aligned base.
+        let base = 0x8000_0000u64;
+        let size = SIZE_256KB as u64 * 6; // selected as the largest region
+        let above_size = SIZE_256KB as u64 * 2;
+        let above = (base + size, above_size, false);
+        let regions = regions_from(&[(base, size, false), above]);
+        assert_eq!(coalesced_smrr_range(&regions), Some(MmramRegion::new(base, size + above_size, false)));
+    }
+
+    #[test]
+    fn test_coalesced_smrr_range_coalesces_adjacent_downward() {
+        // Selected (larger) region extends downward into the adjacent region;
+        // the coalesced size is a power of two with a naturally aligned base.
+        let low_base = 0x8000_0000u64;
+        let below_size = SIZE_256KB as u64 * 2;
+        let base = low_base + below_size;
+        let size = SIZE_256KB as u64 * 6; // selected as the largest region
+        let below = (low_base, below_size, false);
+        let regions = regions_from(&[below, (base, size, false)]);
+        assert_eq!(coalesced_smrr_range(&regions), Some(MmramRegion::new(low_base, size + below_size, false)));
+    }
+
+    #[test]
+    fn test_coalesced_smrr_range_rejects_non_power_of_two_coalesced_size() {
+        // Coalescing yields 0xC0000 bytes, which is not a power of two, so the
+        // range is rejected rather than causing a later panic in smrr_initialize.
+        let base = 0x8000_0000u64;
+        let size = SIZE_256KB as u64 * 2; // 0x80000, selected
+        let above = (base + size, SIZE_256KB as u64, false); // + 0x40000 => 0xC0000
+        let regions = regions_from(&[(base, size, false), above]);
+        assert_eq!(coalesced_smrr_range(&regions), None);
+    }
+
+    #[test]
+    fn test_coalesced_smrr_range_coalesces_pre_allocated_adjacent() {
+        let base = 0x8000_0000u64;
+        let size = SIZE_256KB as u64;
+        // A physically adjacent pre-allocated region is still coalesced, since the
+        // SMRR must cover a single contiguous physical range.
+        let above = (base + size, size, true);
+        let regions = regions_from(&[(base, size, false), above]);
+        assert_eq!(coalesced_smrr_range(&regions), Some(MmramRegion::new(base, size * 2, false)));
+    }
+}

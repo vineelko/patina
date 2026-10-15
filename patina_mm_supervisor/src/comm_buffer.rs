@@ -323,31 +323,298 @@ fn require_external_comm_buffer_with(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use crate::memory;
+    use crate::test_support;
+    use crate::test_support::*;
+    use patina_paging::{MemoryAttributes, PageTable};
 
     #[test]
     fn test_comm_buffer_config_default_is_zeroed() {
         let cfg = CommBufferConfig::default();
-        assert_eq!(cfg.supv_comm_buffer, 0);
-        assert_eq!(cfg.supv_comm_buffer_internal, 0);
-        assert_eq!(cfg.supv_comm_buffer_size, 0);
-        assert_eq!(cfg.user_comm_buffer, 0);
-        assert_eq!(cfg.user_comm_buffer_internal, 0);
-        assert_eq!(cfg.user_comm_buffer_size, 0);
-        assert_eq!(cfg.user_status_buffer, 0);
-        assert_eq!(cfg.supv_status_buffer, 0);
+        assert_eq!(cfg.supervisor, CommChannel::default());
+        assert_eq!(cfg.user, CommChannel::default());
+        assert_eq!(cfg.supervisor.external, 0);
+        assert_eq!(cfg.supervisor.internal, 0);
+        assert_eq!(cfg.supervisor.size, 0);
+        assert_eq!(cfg.supervisor.status, 0);
+        assert_eq!(cfg.user.external, 0);
+        assert_eq!(cfg.user.internal, 0);
+        assert_eq!(cfg.user.size, 0);
+        assert_eq!(cfg.user.status, 0);
         assert_eq!(cfg.supv_to_user_buffer, 0);
         assert_eq!(cfg.supv_to_user_buffer_size, 0);
     }
 
     #[test]
     fn test_comm_buffer_config_is_copy() {
-        let cfg = CommBufferConfig { supv_comm_buffer: 0x1000, user_comm_buffer: 0x2000, ..Default::default() };
+        let cfg = CommBufferConfig {
+            supervisor: CommChannel { external: 0x1000, ..Default::default() },
+            user: CommChannel { external: 0x2000, ..Default::default() },
+            ..Default::default()
+        };
         let copied = cfg; // relies on `Copy`
-        assert_eq!(copied.supv_comm_buffer, 0x1000);
-        assert_eq!(copied.user_comm_buffer, 0x2000);
+        assert_eq!(copied.supervisor.external, 0x1000);
+        assert_eq!(copied.user.external, 0x2000);
         // `cfg` is still usable after the copy.
-        assert_eq!(cfg.supv_comm_buffer, 0x1000);
+        assert_eq!(cfg.supervisor.external, 0x1000);
+    }
+
+    #[test]
+    fn test_require_external_comm_buffer_accepts_a_supervisor_mapped_buffer_outside_mmram() {
+        require_external_comm_buffer_with(
+            0x1000,
+            0x1000,
+            "Test buffer",
+            overlaps(false),
+            owned_as(Some(PageOwnership::Supervisor)),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Test buffer at 0x0000000000001000-0x0000000000002000 overlaps MMRAM")]
+    fn test_require_external_comm_buffer_rejects_a_buffer_touching_mmram() {
+        // The copy-back would otherwise turn a payload chosen outside MM into an MMRAM write.
+        // Ownership is supervisor-only here, so the MMRAM rule is what has to reject it.
+        require_external_comm_buffer_with(
+            0x1000,
+            0x1000,
+            "Test buffer",
+            overlaps(true),
+            owned_as(Some(PageOwnership::Supervisor)),
+        );
+    }
+
+    #[test]
+    fn test_require_external_comm_buffer_checks_mmram_before_ownership() {
+        // A buffer in MMRAM must be refused on that ground alone, without the ownership query
+        // getting a chance to accept it.
+        let queried = core::cell::Cell::new(false);
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            require_external_comm_buffer_with(0x1000, 0x1000, "Test buffer", overlaps(true), |_, _| {
+                queried.set(true);
+                Some(PageOwnership::Supervisor)
+            });
+        }));
+
+        assert!(result.is_err());
+        assert!(!queried.get(), "ownership was queried for a buffer already known to be in MMRAM");
+    }
+
+    #[test]
+    #[should_panic(expected = "Test buffer at 0x0000000000001000-0x0000000000002000 is mapped user-accessible")]
+    fn test_require_external_comm_buffer_rejects_a_user_mapped_buffer() {
+        require_external_comm_buffer_with(
+            0x1000,
+            0x1000,
+            "Test buffer",
+            overlaps(false),
+            owned_as(Some(PageOwnership::User)),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Test buffer at 0x0000000000001000-0x0000000000002000 is unmapped")]
+    fn test_require_external_comm_buffer_rejects_an_unmapped_buffer() {
+        require_external_comm_buffer_with(0x1000, 0x1000, "Test buffer", overlaps(false), owned_as(None));
+    }
+
+    #[test]
+    fn test_require_external_comm_buffer_queries_the_whole_buffer() {
+        let mmram_range = core::cell::Cell::new(None);
+        let owner_range = core::cell::Cell::new(None);
+
+        require_external_comm_buffer_with(
+            0x2000,
+            0x3000,
+            "Test buffer",
+            |address, size| {
+                mmram_range.set(Some((address, size)));
+                false
+            },
+            |address, size| {
+                owner_range.set(Some((address, size)));
+                Some(PageOwnership::Supervisor)
+            },
+        );
+
+        // Both rules must see the full span, or a buffer whose tail reaches MMRAM or a
+        // user-mapped page would pass.
+        assert_eq!(mmram_range.get(), Some((0x2000, 0x3000)));
+        assert_eq!(owner_range.get(), Some((0x2000, 0x3000)));
+    }
+
+    #[test]
+    #[serial]
+    fn test_from_supv_hob_builds_a_channel_from_a_buffer_outside_mmram() {
+        test_support::init_test_logger();
+        let mmram = PageAlignedMemory::new(memory::DEFAULT_PAGING_POOL_PAGES + 8);
+        init_global_state_over(&mmram);
+
+        // The MM IPL's buffer lives outside MMRAM and is mapped supervisor-only.
+        let external = PageAlignedMemory::new(3);
+        map_supervisor_only(&external);
+        let status = external.base() + 2 * UEFI_PAGE_SIZE as u64;
+        let data = supv_comm_buffer_hob_data(external.base(), 2, status);
+
+        let channel = CommChannel::from_supv_hob(&data).expect("build the supervisor channel");
+
+        assert_eq!(channel.external, external.base());
+        assert_eq!(channel.size, 2 * UEFI_PAGE_SIZE as u64);
+        assert_eq!(channel.status, status);
+        // Ring 3 works on the internal copy, so it comes from supervisor-owned MMRAM.
+        assert_eq!(
+            security_state().page_allocator().get_allocation_type(channel.internal),
+            Some(AllocationType::Supervisor)
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_from_supv_hob_rejects_a_buffer_inside_mmram() {
+        test_support::init_test_logger();
+        let mmram = PageAlignedMemory::new(memory::DEFAULT_PAGING_POOL_PAGES + 8);
+        init_global_state_over(&mmram);
+
+        // A buffer the MM IPL placed inside MMRAM turns the supervisor's response copy into an
+        // MMRAM write with a payload chosen outside MM.
+        let data = supv_comm_buffer_hob_data(mmram.base(), 1, mmram.base());
+
+        let result = catch_unwind(|| CommChannel::from_supv_hob(&data));
+
+        assert!(result.is_err(), "a communication buffer inside MMRAM produced a channel");
+    }
+
+    #[test]
+    #[serial]
+    fn test_from_user_hob_redirects_the_hob_to_the_internal_copy() {
+        test_support::init_test_logger();
+        let mmram = PageAlignedMemory::new(memory::DEFAULT_PAGING_POOL_PAGES + 8);
+        init_global_state_over(&mmram);
+
+        let external = PageAlignedMemory::new(3);
+        map_supervisor_only(&external);
+        let status = external.base() + 2 * UEFI_PAGE_SIZE as u64;
+        let mut data = user_comm_buffer_hob_data(external.base(), 2, status);
+
+        // SAFETY: `data` is a live, writable payload of exactly one `MmCommonBufferHobData`, and
+        // no references into it are held across the call.
+        let channel =
+            unsafe { CommChannel::from_user_hob(data.as_mut_ptr(), data.len()) }.expect("build the user channel");
+
+        assert_eq!(channel.external, external.base());
+        assert_eq!(channel.size, 2 * UEFI_PAGE_SIZE as u64);
+        assert_eq!(channel.status, status);
+        assert_eq!(security_state().page_allocator().get_allocation_type(channel.internal), Some(AllocationType::User));
+        // The user module reads the HOB after demotion, so it must name the internal copy.
+        assert_eq!(u64::from_ne_bytes(data[0..8].try_into().expect("eight bytes")), channel.internal);
+    }
+
+    #[test]
+    #[serial]
+    fn test_from_user_hob_rejects_a_user_mapped_buffer() {
+        test_support::init_test_logger();
+        let mmram = PageAlignedMemory::new(memory::DEFAULT_PAGING_POOL_PAGES + 8);
+        init_global_state_over(&mmram);
+
+        // A user-accessible buffer would let a demoted driver rewrite a request while it is
+        // being serviced.
+        let external = PageAlignedMemory::new(2);
+        {
+            let mut pt_guard = security_state().lock_page_table();
+            let pt = pt_guard.as_mut().expect("a page table is installed");
+            pt.map_memory_region(external.base(), external.size(), MemoryAttributes::ExecuteProtect)
+                .expect("map the external buffer");
+        }
+        let mut data = user_comm_buffer_hob_data(external.base(), 1, external.base() + UEFI_PAGE_SIZE as u64);
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: `data` is a live, writable payload of exactly one `MmCommonBufferHobData`.
+            unsafe { CommChannel::from_user_hob(data.as_mut_ptr(), data.len()) }
+        }));
+
+        assert!(result.is_err(), "a user-accessible communication buffer produced a channel");
+    }
+
+    #[test]
+    fn test_parse_communication_buffer_hobs_reject_truncated_data() {
+        let supv = supv_comm_buffer_hob_data(0x10_0000, 1, 0x20_0000);
+        let mut user = user_comm_buffer_hob_data(0x30_0000, 1, 0x40_0000);
+        let user_len = user.len() - 1;
+
+        // A short payload is rejected while reading the HOB, before anything is allocated, so
+        // these reach no global state.
+        assert_eq!(
+            CommChannel::from_supv_hob(&supv[..supv.len() - 1]),
+            Err(CommBufferError::CommRegionHobTooSmall {
+                found: supv.len() - 1,
+                expected: size_of::<MmCommonRegionHobData>()
+            }
+            .into())
+        );
+        // SAFETY: `user` is a live, writable payload and no references into it are held across
+        // the call. The truncated length stops the read before the HOB is rewritten.
+        let user_result = unsafe { CommChannel::from_user_hob(user.as_mut_ptr(), user_len) };
+        assert_eq!(
+            user_result,
+            Err(CommBufferError::CommunicationBufferHobTooSmall {
+                found: user_len,
+                expected: size_of::<MmCommonBufferHobData>()
+            }
+            .into())
+        );
+    }
+
+    #[test]
+    fn test_parse_communication_buffer_hobs_reject_invalid_ranges() {
+        for (address, pages) in [(0x1000, 0), (0x1000, u64::MAX), (u64::MAX - 0xFFF, 1)] {
+            // The range is checked before the external buffer is required or anything is
+            // allocated, so a bad page count is reported without reaching global state.
+            assert_eq!(
+                CommChannel::from_supv_hob(&supv_comm_buffer_hob_data(address, pages, 0x20_0000)),
+                Err(CommBufferError::InvalidSize { pages }.into())
+            );
+
+            let mut user = user_comm_buffer_hob_data(address, pages, 0x20_0000);
+            let user_len = user.len();
+            // SAFETY: `user` is a live, writable payload and no references into it are held
+            // across the call. The range check stops the work before the HOB is rewritten.
+            let user_result = unsafe { CommChannel::from_user_hob(user.as_mut_ptr(), user_len) };
+            assert_eq!(user_result, Err(CommBufferError::InvalidSize { pages }.into()));
+        }
+    }
+
+    #[test]
+    fn test_comm_buffer_error_displays_each_variant() {
+        let errors = [
+            CommBufferError::CommRegionHobMissing,
+            CommBufferError::CommunicationBufferHobMissing,
+            CommBufferError::CommRegionHobTooSmall { found: 31, expected: 32 },
+            CommBufferError::CommunicationBufferHobTooSmall { found: 31, expected: 32 },
+            CommBufferError::InvalidSize { pages: 0 },
+            CommBufferError::AllocationFailed,
+            CommBufferError::Missing,
+        ];
+        for err in errors {
+            assert!(!format!("{err}").is_empty(), "every variant must render a message");
+        }
+
+        // The two short payload variants carry the same sizes, so the HOB each one names is the
+        // only thing telling them apart in the log.
+        assert_ne!(
+            format!("{}", CommBufferError::CommRegionHobTooSmall { found: 31, expected: 32 }),
+            format!("{}", CommBufferError::CommunicationBufferHobTooSmall { found: 31, expected: 32 })
+        );
+    }
+
+    #[test]
+    fn test_comm_region_hob_layout_matches_c_abi() {
+        assert_eq!(size_of::<MmCommonRegionHobData>(), 32);
     }
 }
