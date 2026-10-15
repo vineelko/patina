@@ -183,3 +183,158 @@ pub(crate) fn is_buffer_inside_mmram(base: u64, size: u64) -> bool {
 pub(crate) fn buffer_overlaps_mmram(base: u64, size: u64) -> bool {
     !matches!(security_state().page_allocator().classify_mmram(base, size), Some(MmramPlacement::Outside))
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage, coverage(off))]
+mod tests {
+    use crate::test_support;
+
+    use super::*;
+    use std::panic::catch_unwind;
+
+    #[test]
+    fn test_mmram_bound_errors_render_each_variant_distinctly() {
+        // The anchor is the address the CPU proved is MMRAM, so a mismatch names it: that value
+        // is what tells a platform owner which descriptors the HOB list got wrong.
+        assert_eq!(
+            format!("{}", MmramBoundError::AnchorOutsideRegions { anchor: 0x7000_0000 }),
+            "the scanned descriptors do not cover the supervisor image anchor 0x0000000070000000"
+        );
+        assert_eq!(
+            format!("{}", MmramBoundError::NoSmrrRange),
+            "no scanned region meets the SMRR base and size requirements"
+        );
+        assert_ne!(
+            format!("{}", MmramBoundError::AnchorOutsideRegions { anchor: 0x1000 }),
+            format!("{}", MmramBoundError::AnchorOutsideRegions { anchor: 0x2000 })
+        );
+    }
+
+    #[test]
+    fn test_establish_mmram_bound_returns_the_derived_range() {
+        let regions = [MmramRegion::new(0x1000, 0x2000, false)];
+        let range = MmramRegion::new(0x1000, 0x2000, false);
+
+        assert_eq!(establish_mmram_bound(&regions, 0x1500, |_| Some(range)), Ok(range));
+    }
+
+    #[test]
+    fn test_establish_mmram_bound_rejects_descriptors_that_do_not_cover_the_anchor() {
+        // A HOB list describing MMRAM somewhere other than where the supervisor is executing is
+        // refused outright, and before a range is selected from it.
+        let regions = [MmramRegion::new(0x1000, 0x2000, false)];
+        let selected = core::cell::Cell::new(false);
+
+        let result = establish_mmram_bound(&regions, 0x4000, |_| {
+            selected.set(true);
+            Some(MmramRegion::new(0x1000, 0x2000, false))
+        });
+
+        assert_eq!(result, Err(MmramBoundError::AnchorOutsideRegions { anchor: 0x4000 }.into()));
+        assert!(!selected.get(), "a range was selected from descriptors that had already failed");
+    }
+
+    #[test]
+    fn test_establish_mmram_bound_covers_a_region_end_to_end() {
+        let regions = [MmramRegion::new(0x1000, 0x2000, false)];
+        let range = MmramRegion::new(0x1000, 0x2000, false);
+
+        assert!(establish_mmram_bound(&regions, 0x1000, |_| Some(range)).is_ok());
+        assert!(establish_mmram_bound(&regions, 0x2fff, |_| Some(range)).is_ok());
+        assert_eq!(
+            establish_mmram_bound(&regions, 0x3000, |_| Some(range)),
+            Err(MmramBoundError::AnchorOutsideRegions { anchor: 0x3000 }.into())
+        );
+    }
+
+    #[test]
+    fn test_establish_mmram_bound_rejects_regions_without_an_smrr_range() {
+        let regions = [MmramRegion::new(0x1000, 0x2000, false)];
+
+        assert_eq!(establish_mmram_bound(&regions, 0x1000, |_| None), Err(MmramBoundError::NoSmrrRange.into()));
+    }
+
+    #[test]
+    fn test_supervisor_image_anchor_points_into_the_supervisor_image() {
+        // The anchor is only meaningful if it is a real address in this image.
+        assert_eq!(supervisor_image_anchor(), &raw const IMAGE_ANCHOR as u64);
+        assert_ne!(supervisor_image_anchor(), 0);
+    }
+
+    /// Builds SMRAM descriptors from `(base, size, pre_allocated)` triples.
+    fn regions_from(specs: &[(u64, u64, bool)]) -> Vec<MmramRegion> {
+        specs.iter().map(|&(base, size, pre)| MmramRegion::new(base, size, pre)).collect()
+    }
+
+    #[test]
+    fn test_regions_contain_address() {
+        let regions = regions_from(&[(0x1000, 0x2000, false), (0x8000, 0x1000, true)]);
+
+        assert!(regions_contain(&regions, 0x1000));
+        assert!(regions_contain(&regions, 0x2fff));
+        // Pre-allocated regions still describe MMRAM, so they anchor just as well.
+        assert!(regions_contain(&regions, 0x8000));
+        assert!(!regions_contain(&regions, 0x0fff));
+        assert!(!regions_contain(&regions, 0x3000));
+        assert!(!regions_contain(&regions, 0x9000));
+        assert!(!regions_contain(&[], 0x1000));
+    }
+
+    #[test]
+    fn test_regions_contain_address_does_not_overflow() {
+        let regions = regions_from(&[(u64::MAX - 0xfff, 0x2000, false)]);
+
+        // The declared extent wraps, so nothing can be shown to be inside it.
+        assert!(!regions_contain(&regions, u64::MAX));
+    }
+
+    #[test]
+    fn test_classify_coverage() {
+        let regions = [(0x1000, 0x2000), (0x2000, 0x3000)];
+        let classify = |addr, size| classify_coverage(addr, size, regions.iter().copied());
+
+        assert_eq!(classify(0x1000, 0x1000), MmramPlacement::Inside);
+        // Adjacent regions cover the range jointly, so this is wholly inside.
+        assert_eq!(classify(0x1000, 0x2000), MmramPlacement::Inside);
+        assert_eq!(classify(0x4000, 0x1000), MmramPlacement::Outside);
+        assert_eq!(classify(0x2800, 0x1000), MmramPlacement::PartlyInside);
+        assert_eq!(classify(0x0800, 0x1000), MmramPlacement::PartlyInside);
+        assert_eq!(classify(0x1000, 0), MmramPlacement::Outside);
+        // A range whose end overflows fails closed.
+        assert_eq!(classify(u64::MAX, 0x1000), MmramPlacement::PartlyInside);
+        assert_eq!(classify_coverage(0x1000, 0x1000, core::iter::empty()), MmramPlacement::Outside);
+    }
+
+    #[test]
+    fn test_mmram_placement_resolves_to_containment() {
+        assert!(MmramPlacement::Inside.is_inside(0x1000, 0x1000));
+        assert!(!MmramPlacement::Outside.is_inside(0x1000, 0x1000));
+    }
+
+    #[test]
+    fn test_mmram_placement_rejects_a_range_crossing_the_boundary() {
+        test_support::init_test_logger();
+
+        // A range that is neither wholly in nor wholly out of MMRAM has no safe reading, so it is
+        // reported as the configuration error it is rather than resolved either way.
+        let result = catch_unwind(|| MmramPlacement::PartlyInside.is_inside(0x1000, 0x1000));
+        assert!(result.is_err());
+
+        // A size that overflows the end address still produces a message rather than a second panic.
+        let result = catch_unwind(|| MmramPlacement::PartlyInside.is_inside(u64::MAX, 0x1000));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_is_buffer_inside_mmram_fails_closed_before_allocator_initialization() {
+        assert!(!is_buffer_inside_mmram(0x1000, 0x1000));
+        assert!(!is_buffer_inside_mmram(u64::MAX, 1));
+    }
+    #[test]
+    fn test_buffer_overlaps_mmram_fails_closed_before_allocator_initialization() {
+        // Nothing can be shown to lie outside MMRAM before the regions are known, so a buffer the
+        // supervisor is asked to treat as non-MM memory is reported as overlapping instead.
+        assert!(buffer_overlaps_mmram(0x1000, 0x1000));
+        assert!(buffer_overlaps_mmram(u64::MAX, 1));
+    }
+}
