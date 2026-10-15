@@ -1028,3 +1028,329 @@ pub fn init_protocol_support(st: &mut EfiSystemTable) {
 
     st.boot_services().set(bs);
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage, coverage(off))]
+mod tests {
+    use super::*;
+    use crate::test_support;
+    use patina::driver::{
+        OPEN_PROTOCOL_BY_CHILD_CONTROLLER, OPEN_PROTOCOL_BY_DRIVER, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE,
+        OPEN_PROTOCOL_EXCLUSIVE, OPEN_PROTOCOL_GET, OPEN_PROTOCOL_TEST,
+    };
+
+    const TEST_GUID: efi::Guid =
+        efi::Guid::from_fields(0x6dc9ceae, 0x63c9, 0x4fe7, 0x96, 0xac, &[0x44, 0xed, 0x34, 0x4f, 0x5a, 0xb1]);
+    const OTHER_GUID: efi::Guid =
+        efi::Guid::from_fields(0x6d1928ce, 0xefde, 0x4600, 0xa3, 0xb7, &[0xf9, 0x2e, 0xa9, 0xc2, 0x7e, 0x2b]);
+    const TEST_INTERFACE: usize = 0x1234;
+
+    fn with_locked_state<F: Fn() + std::panic::RefUnwindSafe>(f: F) {
+        test_support::with_clean_global_lock(|| {
+            test_support::init_test_logger();
+            f();
+        })
+        .unwrap();
+    }
+
+    fn new_handle(guid: efi::Guid, interface: usize) -> efi::Handle {
+        core_install_protocol_interface(None, guid, interface as *mut c_void).unwrap()
+    }
+
+    /// Calls the raw `open_protocol` with a non-null protocol and interface out-pointer.
+    fn open(
+        handle: efi::Handle,
+        agent: efi::Handle,
+        controller: efi::Handle,
+        attributes: u32,
+    ) -> (efi::Status, *mut c_void) {
+        let mut interface: *mut c_void = core::ptr::dangling_mut();
+        let mut protocol = TEST_GUID;
+        // SAFETY: `protocol` and `interface` point to active locals.
+        let status =
+            unsafe { open_protocol(handle, &raw mut protocol, &raw mut interface, agent, controller, attributes) };
+        (status, interface)
+    }
+
+    fn usage_count(handle: efi::Handle) -> usize {
+        PROTOCOL_DB.get_open_protocol_information_by_protocol(handle, TEST_GUID).unwrap().len()
+    }
+
+    #[test]
+    fn test_open_protocol_null_protocol_is_invalid_parameter() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let mut interface: *mut c_void = core::ptr::null_mut();
+            // SAFETY: `interface` points to an active local. The null protocol is rejected before use.
+            let status = unsafe {
+                open_protocol(
+                    handle,
+                    core::ptr::null_mut(),
+                    &raw mut interface,
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                    OPEN_PROTOCOL_GET,
+                )
+            };
+            assert_eq!(status, efi::Status::INVALID_PARAMETER);
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_null_interface_requires_test_protocol() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let mut protocol = TEST_GUID;
+            // SAFETY: `protocol` points to an active local. A null interface is allowed for TEST_PROTOCOL only.
+            let (get_status, test_status) = unsafe {
+                (
+                    open_protocol(
+                        handle,
+                        &raw mut protocol,
+                        core::ptr::null_mut(),
+                        core::ptr::null_mut(),
+                        core::ptr::null_mut(),
+                        OPEN_PROTOCOL_GET,
+                    ),
+                    open_protocol(
+                        handle,
+                        &raw mut protocol,
+                        core::ptr::null_mut(),
+                        core::ptr::null_mut(),
+                        core::ptr::null_mut(),
+                        OPEN_PROTOCOL_TEST,
+                    ),
+                )
+            };
+            assert_eq!(get_status, efi::Status::INVALID_PARAMETER);
+            assert_eq!(test_status, efi::Status::SUCCESS);
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_null_or_invalid_handle_is_invalid_parameter() {
+        with_locked_state(|| {
+            new_handle(TEST_GUID, TEST_INTERFACE);
+            assert_eq!(
+                open(core::ptr::null_mut(), core::ptr::null_mut(), core::ptr::null_mut(), OPEN_PROTOCOL_GET).0,
+                efi::Status::INVALID_PARAMETER
+            );
+            assert_eq!(
+                open(0x9999 as efi::Handle, core::ptr::null_mut(), core::ptr::null_mut(), OPEN_PROTOCOL_GET).0,
+                efi::Status::INVALID_PARAMETER
+            );
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_unsupported_protocol_returns_unsupported_and_null_interface() {
+        with_locked_state(|| {
+            let handle = new_handle(OTHER_GUID, TEST_INTERFACE);
+            let (status, interface) = open(handle, core::ptr::null_mut(), core::ptr::null_mut(), OPEN_PROTOCOL_GET);
+            assert_eq!(status, efi::Status::UNSUPPORTED);
+            assert!(interface.is_null());
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_invalid_attributes_are_invalid_parameter() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let agent = new_handle(OTHER_GUID, 0x10);
+            for attributes in [
+                0,
+                OPEN_PROTOCOL_GET | OPEN_PROTOCOL_EXCLUSIVE,
+                OPEN_PROTOCOL_BY_CHILD_CONTROLLER | OPEN_PROTOCOL_BY_DRIVER,
+                0x100,
+                u32::MAX,
+            ] {
+                assert_eq!(open(handle, agent, agent, attributes).0, efi::Status::INVALID_PARAMETER, "{attributes:#x}");
+            }
+            assert_eq!(usage_count(handle), 0);
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_missing_agent_is_invalid_parameter() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let controller = new_handle(OTHER_GUID, 0x10);
+            for attributes in [
+                OPEN_PROTOCOL_BY_CHILD_CONTROLLER,
+                OPEN_PROTOCOL_BY_DRIVER,
+                OPEN_PROTOCOL_EXCLUSIVE,
+                OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE,
+            ] {
+                assert_eq!(
+                    open(handle, core::ptr::null_mut(), controller, attributes).0,
+                    efi::Status::INVALID_PARAMETER,
+                    "{attributes:#x}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_missing_controller_is_invalid_parameter() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let agent = new_handle(OTHER_GUID, 0x10);
+            for attributes in
+                [OPEN_PROTOCOL_BY_CHILD_CONTROLLER, OPEN_PROTOCOL_BY_DRIVER, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE]
+            {
+                assert_eq!(
+                    open(handle, agent, core::ptr::null_mut(), attributes).0,
+                    efi::Status::INVALID_PARAMETER,
+                    "{attributes:#x}"
+                );
+            }
+            // EXCLUSIVE does not need a controller.
+            assert_eq!(open(handle, agent, core::ptr::null_mut(), OPEN_PROTOCOL_EXCLUSIVE).0, efi::Status::SUCCESS);
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_by_child_controller_same_as_handle_is_invalid_parameter() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let agent = new_handle(OTHER_GUID, 0x10);
+            assert_eq!(
+                open(handle, agent, handle, OPEN_PROTOCOL_BY_CHILD_CONTROLLER).0,
+                efi::Status::INVALID_PARAMETER
+            );
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_exclusive_holder_denies_driver_and_exclusive_opens() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let agent = new_handle(OTHER_GUID, 0x10);
+            let other_agent = new_handle(OTHER_GUID, 0x20);
+
+            assert_eq!(open(handle, agent, core::ptr::null_mut(), OPEN_PROTOCOL_EXCLUSIVE).0, efi::Status::SUCCESS);
+            for attributes in [OPEN_PROTOCOL_BY_DRIVER, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE, OPEN_PROTOCOL_EXCLUSIVE] {
+                assert_eq!(
+                    open(handle, other_agent, handle, attributes).0,
+                    efi::Status::ACCESS_DENIED,
+                    "{attributes:#x}"
+                );
+            }
+            // The same agent asking for EXCLUSIVE again is also denied, ALREADY_STARTED only applies to BY_DRIVER.
+            assert_eq!(open(handle, agent, handle, OPEN_PROTOCOL_EXCLUSIVE).0, efi::Status::ACCESS_DENIED);
+            assert_eq!(usage_count(handle), 1);
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_by_driver_same_agent_and_controller_is_already_started_and_returns_interface() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let agent = new_handle(OTHER_GUID, 0x10);
+            let controller = new_handle(OTHER_GUID, 0x20);
+
+            assert_eq!(open(handle, agent, controller, OPEN_PROTOCOL_BY_DRIVER).0, efi::Status::SUCCESS);
+
+            let (status, interface) = open(handle, agent, controller, OPEN_PROTOCOL_BY_DRIVER);
+            assert_eq!(status, efi::Status::ALREADY_STARTED);
+            assert_eq!(interface as usize, TEST_INTERFACE);
+            assert_eq!(usage_count(handle), 1);
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_by_driver_same_agent_different_controller_is_access_denied() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let agent = new_handle(OTHER_GUID, 0x10);
+            let controller = new_handle(OTHER_GUID, 0x20);
+
+            // Matches edk2 CoreOpenProtocol() behavior, where ALREADY_STARTED needs an identical agent,
+            // controller and attributes.
+            assert_eq!(open(handle, agent, controller, OPEN_PROTOCOL_BY_DRIVER).0, efi::Status::SUCCESS);
+            assert_eq!(open(handle, agent, handle, OPEN_PROTOCOL_BY_DRIVER).0, efi::Status::ACCESS_DENIED);
+            assert_eq!(usage_count(handle), 1);
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_by_driver_different_agent_is_access_denied() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let agent = new_handle(OTHER_GUID, 0x10);
+            let other_agent = new_handle(OTHER_GUID, 0x20);
+
+            assert_eq!(open(handle, agent, handle, OPEN_PROTOCOL_BY_DRIVER).0, efi::Status::SUCCESS);
+            assert_eq!(open(handle, other_agent, handle, OPEN_PROTOCOL_BY_DRIVER).0, efi::Status::ACCESS_DENIED);
+            assert_eq!(usage_count(handle), 1);
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_by_driver_exclusive_same_agent_is_already_started() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let agent = new_handle(OTHER_GUID, 0x10);
+
+            assert_eq!(open(handle, agent, handle, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE).0, efi::Status::SUCCESS);
+            let (status, interface) = open(handle, agent, handle, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE);
+            assert_eq!(status, efi::Status::ALREADY_STARTED);
+            assert_eq!(interface as usize, TEST_INTERFACE);
+            assert_eq!(usage_count(handle), 1);
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_by_driver_exclusive_different_agent_is_access_denied() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let agent = new_handle(OTHER_GUID, 0x10);
+            let other_agent = new_handle(OTHER_GUID, 0x20);
+
+            assert_eq!(open(handle, agent, handle, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE).0, efi::Status::SUCCESS);
+            assert_eq!(
+                open(handle, other_agent, handle, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE).0,
+                efi::Status::ACCESS_DENIED
+            );
+            assert_eq!(usage_count(handle), 1);
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_exclusive_with_no_release_by_driver_holder_is_access_denied() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let agent = new_handle(OTHER_GUID, 0x10);
+            let other_agent = new_handle(OTHER_GUID, 0x20);
+
+            // Neither agent has a driver binding, so DisconnectController cannot release the BY_DRIVER usage.
+            assert_eq!(open(handle, agent, handle, OPEN_PROTOCOL_BY_DRIVER).0, efi::Status::SUCCESS);
+            for attributes in [OPEN_PROTOCOL_EXCLUSIVE, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE] {
+                assert_eq!(
+                    open(handle, other_agent, handle, attributes).0,
+                    efi::Status::ACCESS_DENIED,
+                    "{attributes:#x}"
+                );
+                // Upgrading the holder's own BY_DRIVER usage is not ALREADY_STARTED, so it is also denied.
+                assert_eq!(open(handle, agent, handle, attributes).0, efi::Status::ACCESS_DENIED, "{attributes:#x}");
+            }
+            assert_eq!(usage_count(handle), 1);
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_shared_open_while_by_driver_held_is_not_already_started() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let driver = new_handle(OTHER_GUID, 0x10);
+            let agent = new_handle(OTHER_GUID, 0x20);
+
+            assert_eq!(open(handle, driver, handle, OPEN_PROTOCOL_BY_DRIVER).0, efi::Status::SUCCESS);
+            for _ in 0..2 {
+                let (status, interface) = open(handle, agent, core::ptr::null_mut(), OPEN_PROTOCOL_GET);
+                assert_eq!(status, efi::Status::SUCCESS);
+                assert_eq!(interface as usize, TEST_INTERFACE);
+            }
+        });
+    }
+}
