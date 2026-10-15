@@ -543,10 +543,12 @@ The `open_protocol` function executes the following logic:
 2. If the `EXCLUSIVE` flag is set in the attributes, retrive all current usages for the `handle` and if any of those
 usages indicate that the `protocol` is open `BY_DRIVER`, then execute
 [`core_disconnect_controller`](driver_model.md#disconnecting-a-controller) to close the protocol usage.
-3. Call `add_protocol_usage` to insert a new usage representing this open operation into the protocol database. Note: in
-most cases where there is an error returned from `add_protocol_usage`, the error is simply returned. but in the special
-case of `ALREADY_STARTED` with a requested attribute containing `BY_DRIVER`, the interface pointer is also returned.
-Also, if the requested attribute contained `TEST_PROTOCOL`, then the interface is not returned on success.
+3. Call `add_protocol_usage` to insert a new usage representing this open operation into the protocol database. Errors
+from `add_protocol_usage` are returned as-is. This includes `ALREADY_STARTED`, which is returned when the same agent
+already has the protocol open with `BY_DRIVER` or `BY_DRIVER | EXCLUSIVE` for the same controller. A different agent, or
+the same agent with a different controller, gets `ACCESS_DENIED`. The raw `open_protocol` function additionally writes
+the interface pointer in that case, as the EDK II implementation does. Also, if the requested attribute contained
+`TEST_PROTOCOL`, then the interface is not returned on success.
 
 ### Close Protocol Interface
 

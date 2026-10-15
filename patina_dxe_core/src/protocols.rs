@@ -1339,6 +1339,27 @@ mod tests {
     }
 
     #[test]
+    fn test_open_protocol_repeated_shared_open_increments_open_count_even_with_exclusive_holder() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let agent = new_handle(OTHER_GUID, 0x10);
+            let other_agent = new_handle(OTHER_GUID, 0x20);
+
+            assert_eq!(
+                open(handle, other_agent, core::ptr::null_mut(), OPEN_PROTOCOL_EXCLUSIVE).0,
+                efi::Status::SUCCESS
+            );
+            for _ in 0..2 {
+                assert_eq!(open(handle, agent, core::ptr::null_mut(), OPEN_PROTOCOL_GET).0, efi::Status::SUCCESS);
+            }
+
+            let usages = PROTOCOL_DB.get_open_protocol_information_by_protocol(handle, TEST_GUID).unwrap();
+            assert_eq!(usages.len(), 2);
+            assert_eq!(usages.iter().find(|usage| usage.attributes == OPEN_PROTOCOL_GET).unwrap().open_count, 2);
+        });
+    }
+
+    #[test]
     fn test_open_protocol_shared_open_while_by_driver_held_is_not_already_started() {
         with_locked_state(|| {
             let handle = new_handle(TEST_GUID, TEST_INTERFACE);
