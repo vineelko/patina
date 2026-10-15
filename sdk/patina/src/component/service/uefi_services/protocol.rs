@@ -206,6 +206,7 @@ impl<P: ProtocolInterface> Clone for ProtocolToken<P> {
 impl<P: ProtocolInterface> Copy for ProtocolToken<P> {}
 
 /// Errors that can occur when using [`ProtocolServices`].
+#[non_exhaustive]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ProtocolError {
     /// A provided parameter was invalid.
