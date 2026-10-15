@@ -46,7 +46,7 @@ Build the example MM Supervisor binary:
 cargo build --target x86_64-unknown-uefi --bin example_mm_supervisor --features x64,save_state_amd,supv --no-default-features
 ```
 
-The output PE/COFF binary with AMD features enabled will be at:
+The output PE/COFF binary with the AMD64 save state layout will be at:
 
 ```text
 target/x86_64-unknown-uefi/release/example_mm_supervisor.efi
@@ -157,6 +157,22 @@ impl PlatformInfo for MyPlatform {
         MY_HANDLERS
     }
 }
+```
+
+### Selecting the Save State Layout
+
+Intel and AMD lay out the SMRAM save state differently, and `EFI_MM_CPU_PROTOCOL.ReadSaveState()` has to read the
+right one. The layout is chosen at build time, and only the chosen one is compiled into the binary:
+
+- By default the supervisor reads the Intel x64 layout (`SMRAM_SAVE_STATE_MAP64`).
+- With the `save_state_amd` Cargo feature it reads the AMD64 layout (`AMD_SMRAM_SAVE_STATE_MAP64`).
+
+Pick the layout the platform's save state actually uses, which is not always the CPUID vendor. For example, an
+emulator may always present an AMD64-style save state. Enable the feature from the platform binary crate:
+
+```toml
+[dependencies]
+patina_mm_supervisor = { version = "*", features = ["save_state_amd"] }
 ```
 
 ### Integration with MM IPL

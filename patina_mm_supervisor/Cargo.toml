@@ -35,5 +35,5 @@ serial_test = { workspace = true }
 default = []
 std = []
 doc = []
-save_state_intel = ["patina_internal_cpu/save_state_intel"]
+# Read the SMRAM save state with the AMD64 layout. The Intel x64 layout is used otherwise.
 save_state_amd = ["patina_internal_cpu/save_state_amd"]

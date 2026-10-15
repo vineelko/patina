@@ -167,10 +167,13 @@ mod tests {
         });
         assert_eq!(state.comm_buffer_config().unwrap().supervisor.external, 0x1000);
 
-        state.set_save_state_info(SaveStateInfo { number_of_cpus: 4, sm_base: 0x3000 });
-        state.set_save_state_info(SaveStateInfo { number_of_cpus: 8, sm_base: 0x9000 });
+        // SAFETY: the SMBASE addresses are placeholders that nothing in this test reads through.
+        let (first, second) =
+            unsafe { (SaveStateInfo::new(4, 0x3000).unwrap(), SaveStateInfo::new(8, 0x9000).unwrap()) };
+        state.set_save_state_info(first);
+        state.set_save_state_info(second);
         let info = state.save_state_info().unwrap();
-        assert_eq!((info.number_of_cpus, info.sm_base), (4, 0x3000));
+        assert_eq!((info.number_of_cpus(), info.smbase_array()), (4, 0x3000));
     }
 
     #[test]

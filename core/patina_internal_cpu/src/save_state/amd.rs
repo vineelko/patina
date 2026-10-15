@@ -46,7 +46,7 @@ const IO_SIZE_WORD: u32 = bit!(5);
 // set, so it does not need a named constant in the decode path.
 
 /// AMD-specific offsets and behaviour constants.
-pub const VENDOR_CONSTANTS: VendorConstants = VendorConstants {
+pub(super) const VENDOR_CONSTANTS: VendorConstants = VendorConstants {
     smmrevid_offset: 0x02FC,
     io_info_offset: 0x02C0,
     efer_offset: 0x02D0,
@@ -165,7 +165,7 @@ const CR4_HI: u16 = 0x034C;
 ///
 /// Returns `None` for pseudo-registers (IO, LMA, `ProcessorId`) and for
 /// `LdtInfo` (not supported in AMD's save state map).
-pub fn register_info(reg: MmSaveStateRegister) -> Option<RegisterInfo> {
+pub(super) fn register_info(reg: MmSaveStateRegister) -> Option<RegisterInfo> {
     match reg {
         MmSaveStateRegister::GdtBase => {
             Some(RegisterInfo { lo_offset: GDTR_BASE_LO, hi_offset: GDTR_BASE_HI, native_width: 8 })
@@ -244,7 +244,7 @@ pub fn register_info(reg: MmSaveStateRegister) -> Option<RegisterInfo> {
 /// - Bits \[31:16\]: I/O port address.
 ///
 /// Returns `None` if the data-size encoding is invalid (value 2 is reserved).
-pub fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
+pub(super) fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
     if io_field & IO_TRAP_VALID == 0 {
         return None;
     }
@@ -267,7 +267,7 @@ pub fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
 /// for a save state with the given raw `SMMRevId`.
 /// Always return true because this is not really used.
 ///
-pub fn io_info_supported(_smm_rev_id: u32) -> bool {
+pub(super) fn io_info_supported(_smm_rev_id: u32) -> bool {
     true
 }
 

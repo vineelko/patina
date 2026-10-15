@@ -211,7 +211,7 @@ fn parse_smi_handler_idt_descriptor(mmi_entry: &[u8]) -> MmSupervisorResult<u64>
 
 /// Patches every core's SMI-handler IDT descriptor to point to the Rust IDT.
 ///
-/// Each per-core MMI entry (copied to `sm_base[i] + 0x8000` during C relocation)
+/// Each per-core MMI entry (copied to `sm_base_array[i] + 0x8000` during C relocation)
 /// carries a `Fixup64[FIXUP64_SMI_HANDLER_IDTR]` slot holding the address of the
 /// `IA32_DESCRIPTOR` that core's SMI entry `lidt`s.
 ///

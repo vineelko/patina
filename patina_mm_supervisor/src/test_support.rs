@@ -165,7 +165,7 @@ pub(crate) fn pass_down_hob_data(pass_down: &MmSupvPassDownHobData) -> [u8; size
     let fields = [
         pass_down.cpl3_stack_base,
         pass_down.cpl3_stack_size,
-        pass_down.sm_base,
+        pass_down.sm_base_array,
         pass_down.mm_initialized_buffer,
         pass_down.firmware_policy_buffer,
         pass_down.firmware_policy_buffer_size,
@@ -184,7 +184,7 @@ pub(crate) fn valid_pass_down_hob() -> MmSupvPassDownHobData {
         reserved: 0,
         cpl3_stack_base: 0x10_0000,
         cpl3_stack_size: 0x4000,
-        sm_base: 0x20_0000,
+        sm_base_array: 0x20_0000,
         mm_initialized_buffer: 0x30_0000,
         firmware_policy_buffer: 0x40_0000,
         firmware_policy_buffer_size: 0x2000,

@@ -45,7 +45,7 @@ patina_mtrr = { workspace = true, features = ["mockall"] }
 std = []
 alloc = ["patina/alloc"]
 mockall = ["dep:mockall", "std"]
-save_state_intel = []
+# Read the SMRAM save state with the AMD64 layout. The Intel x64 layout is used otherwise.
 save_state_amd = []
 # All non-std features to test in CI
 ci_features = []

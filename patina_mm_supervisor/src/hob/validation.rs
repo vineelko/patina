@@ -399,7 +399,7 @@ fn validate_pass_down_pointers(
 
     let checks: [(&'static str, u64, u64); 4] = [
         ("cpl3_stack_base", pass_down.cpl3_stack_base, pass_down.cpl3_stack_size.max(1)),
-        ("sm_base", pass_down.sm_base, core::mem::size_of::<u64>() as u64),
+        ("sm_base_array", pass_down.sm_base_array, core::mem::size_of::<u64>() as u64),
         ("mm_initialized_buffer", pass_down.mm_initialized_buffer, 1),
         ("firmware_policy_buffer", pass_down.firmware_policy_buffer, pass_down.firmware_policy_buffer_size.max(1)),
     ];
@@ -1016,7 +1016,7 @@ mod tests {
             reserved: 0,
             cpl3_stack_base: 0x1000,
             cpl3_stack_size: 0x1000,
-            sm_base: 0x2000,
+            sm_base_array: 0x2000,
             mm_initialized_buffer: 0x3000,
             firmware_policy_buffer: 0x4000,
             firmware_policy_buffer_size: 0x1000,
@@ -1102,7 +1102,7 @@ mod tests {
         bytes.extend_from_slice(&pass_down.reserved.to_ne_bytes());
         bytes.extend_from_slice(&pass_down.cpl3_stack_base.to_ne_bytes());
         bytes.extend_from_slice(&pass_down.cpl3_stack_size.to_ne_bytes());
-        bytes.extend_from_slice(&pass_down.sm_base.to_ne_bytes());
+        bytes.extend_from_slice(&pass_down.sm_base_array.to_ne_bytes());
         bytes.extend_from_slice(&pass_down.mm_initialized_buffer.to_ne_bytes());
         bytes.extend_from_slice(&pass_down.firmware_policy_buffer.to_ne_bytes());
         bytes.extend_from_slice(&pass_down.firmware_policy_buffer_size.to_ne_bytes());
@@ -1804,7 +1804,7 @@ mod tests {
         // Null pointers are skipped, so an all-null (correct-revision) HOB validates.
         let mut pd = pass_down();
         pd.cpl3_stack_base = 0;
-        pd.sm_base = 0;
+        pd.sm_base_array = 0;
         pd.mm_initialized_buffer = 0;
         pd.firmware_policy_buffer = 0;
         assert_eq!(validate_pass_down_pointers(&pd, |_, _| false), Ok(()));

@@ -108,7 +108,7 @@ pub(crate) struct MmSupvPassDownHobData {
     /// Per-CPU stack size for CPL3
     pub cpl3_stack_size: u64,
     /// Pointer to the per-CPU SMBASE array.
-    pub sm_base: u64,
+    pub sm_base_array: u64,
     /// MM Initialized buffer base address
     pub mm_initialized_buffer: u64,
     /// MM Supervisor firmware policy buffer base address
@@ -178,7 +178,7 @@ mod tests {
 
         assert_eq!(parsed.revision, expected.revision);
         assert_eq!(parsed.cpl3_stack_base, expected.cpl3_stack_base);
-        assert_eq!(parsed.sm_base, expected.sm_base);
+        assert_eq!(parsed.sm_base_array, expected.sm_base_array);
         assert_eq!(parsed.firmware_policy_buffer, expected.firmware_policy_buffer);
         assert_eq!(parsed.mmi_entry_size, expected.mmi_entry_size);
     }
@@ -234,7 +234,7 @@ mod tests {
             PassDownHobError::Missing,
             PassDownHobError::TooSmall,
             PassDownHobError::InvalidRevision { found: 3, expected: 2 },
-            PassDownHobError::PointerOutsideMmram { field: "sm_base", addr: 0x1000, size: 8 },
+            PassDownHobError::PointerOutsideMmram { field: "sm_base_array", addr: 0x1000, size: 8 },
             PassDownHobError::NullFirmwarePolicyBuffer,
             PassDownHobError::FirmwarePolicyBufferSizeUnsupported { size: u64::MAX },
             PassDownHobError::FirmwarePolicyBufferOverflows { base: u64::MAX - 0xFFF, size: 0x1000 },

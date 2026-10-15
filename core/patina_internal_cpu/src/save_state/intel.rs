@@ -27,7 +27,7 @@ const IO_MISC_TYPE_OUT_IMMEDIATE: u32 = 8;
 const IO_MISC_TYPE_IN_IMMEDIATE: u32 = 9;
 
 /// Intel-specific offsets and behaviour constants.
-pub const VENDOR_CONSTANTS: VendorConstants = VendorConstants {
+pub(super) const VENDOR_CONSTANTS: VendorConstants = VendorConstants {
     smmrevid_offset: 0x02FC,
     io_info_offset: 0x03A4,
     efer_offset: 0x03E0,
@@ -118,7 +118,7 @@ const CR4: u16 = 0x0240;
 ///
 /// Returns `None` for pseudo-registers (IO, LMA, `ProcessorId`) - those are
 /// handled separately - and for unsupported registers (limits, `LdtInfo`).
-pub fn register_info(reg: MmSaveStateRegister) -> Option<RegisterInfo> {
+pub(super) fn register_info(reg: MmSaveStateRegister) -> Option<RegisterInfo> {
     match reg {
         // Descriptor table bases (split hi/lo u32 - non-contiguous on Intel)
         MmSaveStateRegister::GdtBase => Some(RegisterInfo { lo_offset: GDTR_BASE_LO, hi_offset: GDTR_BASE_HI, native_width: 8 }),
@@ -190,7 +190,7 @@ pub fn register_info(reg: MmSaveStateRegister) -> Option<RegisterInfo> {
 ///
 /// Returns `None` if `SmiFlag` is 0 (SMI was not caused by I/O) or the I/O
 /// type is not a simple IN or OUT (e.g. string / REP I/O).
-pub fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
+pub(super) fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
     log::trace!("Parsing IOMisc field: 0x{io_field:08x}");
 
     // Check SmiFlag.
@@ -229,7 +229,7 @@ pub fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
 /// Must be above 0x30004
 ///
 /// older revisions do not carry I/O trap information.
-pub fn io_info_supported(smm_rev_id: u32) -> bool {
+pub(super) fn io_info_supported(smm_rev_id: u32) -> bool {
     smm_rev_id >= VENDOR_CONSTANTS.min_rev_id_io
 }
 

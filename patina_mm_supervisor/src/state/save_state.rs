@@ -21,10 +21,12 @@
 //!
 //! ## Vendor Selection
 //!
-//! The SMRAM save state layout (Intel vs AMD) is selected at build time
-//! via Cargo features on the `patina` crate (`save_state_intel` or
-//! `save_state_amd`).  All vendor-specific register offsets and I/O field
-//! parsing live in the SDK; this module is vendor-agnostic.
+//! The SMRAM save state vendor (Intel vs AMD) is chosen at build time by the
+//! `save_state_amd` Cargo feature, and only that layout is compiled in. Each
+//! read copies the target CPU's map out of the [`SaveStateInfo`] as a
+//! [`SaveState`], which does every offset lookup and field decode and
+//! reports failures as [`SaveStateError`]. This module applies the policy and
+//! turns those errors into the syscall's EFI status.
 //!
 //! ## License
 //!
@@ -38,10 +40,8 @@ use crate::{
 };
 use patina::standard::efi::Status;
 use patina_internal_cpu::save_state::{
-    self, IA32_EFER_LMA, IO_INFO_SIZE, IO_TYPE_INPUT, LMA_32BIT, LMA_64BIT, MmSaveStateIoInfo, MmSaveStateRegister,
-    RegisterInfo,
+    IO_INFO_SIZE, IO_TYPE_INPUT, MmSaveStateRegister, SMRAM_SAVE_STATE_MAP_SIZE, SaveState, SaveStateError,
 };
-use zerocopy::IntoBytes;
 
 use crate::{
     intrinsics::current_apic_id,
@@ -114,98 +114,169 @@ impl core::fmt::Display for SaveStateValidationError {
     }
 }
 
-/// Size in bytes of one `SMRAM_SAVE_STATE_MAP` region.
-///
-/// The relocation code sets every CPU's save-state size to
-/// `sizeof(SMRAM_SAVE_STATE_MAP)` - a fixed 0x400-byte region spanning
-/// SMBASE+0x7C00..SMBASE+0x8000 (Intel SDM Vol 3C, §34.4). Because it is
-/// identical for every CPU, it is a constant here rather than a per-CPU array
-/// passed through the HOB.
-const SMRAM_SAVE_STATE_MAP_SIZE: u64 = 0x400;
+/// Size of one save-state map, as a `u64` for address arithmetic.
+const MAP_SIZE: u64 = SMRAM_SAVE_STATE_MAP_SIZE as u64;
 
-/// Offset of the `SMRAM_SAVE_STATE_MAP` from a CPU's SMBASE.
+/// The per-CPU SMBASE array the MM IPL hands over in the `PassDown` HOB, and the CPU count.
 ///
-/// A fixed architectural offset (Intel SDM Vol 3C, §34.4;
-/// `SMRAM_SAVE_STATE_MAP_OFFSET` in `MdePkg`). The per-CPU save-state region base
-/// is `sm_base[i] + SMRAM_SAVE_STATE_MAP_OFFSET`, derived here so the loader only
-/// has to pass the raw SMBASE array.
-const SMRAM_SAVE_STATE_MAP_OFFSET: u64 = 0xfc00;
-
-/// Per-CPU save-state metadata needed by the save-state read syscall.
-///
-/// Assembled at initialization from two public sources instead of the private
-/// `SMM_CPU_PRIVATE_DATA` layout:
-///
-/// - `number_of_cpus` comes from the MP Information HOB (`gMpInformationHobGuid`).
-/// - `sm_base` (the per-CPU SMBASE array) is passed through the MM Supervisor
-///   `PassDown` HOB. The save-state region base is derived as
-///   `sm_base[i] + SMRAM_SAVE_STATE_MAP_OFFSET` with the fixed
-///   [`SMRAM_SAVE_STATE_MAP_SIZE`].
+/// The array holds one `u64` SMBASE per CPU. [`get_save_state`](Self::get_save_state)
+/// copies one CPU's save state map out of SMRAM as a [`SaveState`].
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SaveStateInfo {
     /// Number of CPUs (from `MP_INFORMATION_HOB_DATA.NumberOfProcessors`).
-    pub(crate) number_of_cpus: usize,
-    /// Pointer to the per-CPU SMBASE array (`u64[number_of_cpus]`).
-    pub(crate) sm_base: u64,
+    number_of_cpus: usize,
+    /// Address of the SMBASE array (`u64[number_of_cpus]`).
+    smbase_array: u64,
+}
+
+impl SaveStateInfo {
+    /// Records where the SMBASE array lives.
+    ///
+    /// ## Errors
+    ///
+    /// Returns [`SaveStateValidationError::UnusableSmBaseArray`] when `number_of_cpus` is 0,
+    /// when `smbase_array` is null or not aligned for `u64`, or when the end of the array
+    /// does not fit in a `u64`.
+    ///
+    /// ## Safety
+    ///
+    /// This function checks the shape of the array but cannot check that its memory is
+    /// readable. [`smbase`](Self::smbase), [`save_state_map_base`](Self::save_state_map_base),
+    /// and [`get_save_state`](Self::get_save_state) read through `smbase_array`, so before
+    /// the first such call:
+    ///
+    /// - The `number_of_cpus` `u64` SMBASE values at `smbase_array` must be initialized and
+    ///   readable.
+    /// - For every CPU for which `save_state_map_base` returns an address,
+    ///   `SMRAM_SAVE_STATE_MAP_SIZE` bytes at that address must be readable. Only
+    ///   `get_save_state` reads them.
+    ///
+    /// Both must stay true for as long as those methods are called. The value may be built
+    /// before [`validate_save_state_regions`] checks the regions, as long as each check
+    /// finishes before the first read it covers.
+    pub(crate) unsafe fn new(number_of_cpus: usize, smbase_array: u64) -> Result<Self, SaveStateValidationError> {
+        let invalid = SaveStateValidationError::UnusableSmBaseArray { base: smbase_array, count: number_of_cpus };
+        let array_size = number_of_cpus
+            .checked_mul(core::mem::size_of::<u64>())
+            .and_then(|size| u64::try_from(size).ok())
+            .filter(|size| *size != 0)
+            .ok_or(invalid)?;
+        if smbase_array == 0
+            || !smbase_array.is_multiple_of(core::mem::align_of::<u64>() as u64)
+            || smbase_array.checked_add(array_size).is_none()
+        {
+            return Err(invalid);
+        }
+
+        Ok(Self { number_of_cpus, smbase_array })
+    }
+
+    /// Returns the number of CPUs.
+    pub(crate) fn number_of_cpus(&self) -> usize {
+        self.number_of_cpus
+    }
+
+    /// Returns the address of the SMBASE array.
+    pub(crate) fn smbase_array(&self) -> u64 {
+        self.smbase_array
+    }
+
+    /// Returns the size of the SMBASE array in bytes.
+    pub(crate) fn smbase_array_size(&self) -> u64 {
+        // `new` checked that this product fits in a `u64`.
+        (self.number_of_cpus * core::mem::size_of::<u64>()) as u64
+    }
+
+    /// Returns the SMBASE the array records for CPU `cpu_index`.
+    ///
+    /// ## Errors
+    ///
+    /// Returns [`SaveStateError::InvalidParameter`] when `cpu_index` is not below the CPU
+    /// count.
+    pub(crate) fn smbase(&self, cpu_index: usize) -> Result<u64, SaveStateError> {
+        if cpu_index >= self.number_of_cpus {
+            return Err(SaveStateError::InvalidParameter);
+        }
+
+        // SAFETY: `SaveStateInfo::new` checked that `smbase_array` is a non-null, aligned array of
+        // `number_of_cpus` `u64` entries, its contract makes them initialized and readable, and
+        // `cpu_index` is below that count.
+        Ok(unsafe { (self.smbase_array as *const u64).add(cpu_index).read() })
+    }
+
+    /// Returns the address of the save state map of CPU `cpu_index`.
+    ///
+    /// ## Errors
+    ///
+    /// Returns the errors of [`smbase`](Self::smbase) and of [`SaveState::map_base`].
+    pub(crate) fn save_state_map_base(&self, cpu_index: usize) -> Result<u64, SaveStateError> {
+        SaveState::map_base(self.smbase(cpu_index)?)
+    }
+
+    /// Copies the save state map of CPU `cpu_index` out of SMRAM.
+    ///
+    /// ## Errors
+    ///
+    /// Returns the errors of [`smbase`](Self::smbase) and of [`SaveState::from_smbase`].
+    pub(crate) fn get_save_state(&self, cpu_index: u64) -> Result<SaveState, SaveStateError> {
+        usize::try_from(cpu_index)
+            .map_err(|_| SaveStateError::InvalidParameter)
+            .and_then(|cpu_index| self.smbase(cpu_index))
+            .and_then(|smbase| {
+                // SAFETY: the contract of `SaveStateInfo::new` makes the map of every SMBASE in
+                // the array readable.
+                unsafe { SaveState::from_smbase(smbase) }
+            })
+            .inspect_err(|error| log::error!("Save state read for CPU {cpu_index}: {error}"))
+    }
 }
 
 /// Requires every per-CPU save-state region the `PassDown` HOB describes to lie inside MMRAM and
 /// to be mapped supervisor-only.
 ///
-/// The save-state syscall turns `sm_base[i] + SMRAM_SAVE_STATE_MAP_OFFSET` into a slice and hands
+/// The save-state syscall turns `smbase_array[i] + SMRAM_SAVE_STATE_MAP_OFFSET` into a slice and hands
 /// selected bytes of it back to Ring 3. The MM IPL supplies those SMBASEs and sits outside the
 /// supervisor's trust boundary, so an entry that is never checked is an arbitrary read primitive:
 /// proving the array itself is in MMRAM says nothing about where its contents point. Checking all
-/// of them once, here, is what lets [`get_save_state_view`] treat them as sound later.
+/// of them once, here, is what lets [`SaveStateInfo::get_save_state`] treat them as sound later.
 ///
 /// Being inside MMRAM is not on its own enough. A save-state map holds a CPU's saved context, and
 /// the syscall exists so Ring 3 can read parts of it under policy; a page Ring 3 can reach
 /// directly hands it the whole map and lets it rewrite what the supervisor is about to read.
 /// Supervisor-only mapping is what keeps the syscall the only way in.
 pub(crate) fn validate_save_state_regions(
-    sm_base: u64,
-    number_of_cpus: usize,
+    info: &SaveStateInfo,
     is_inside_mmram: impl Fn(u64, u64) -> bool,
     is_supervisor_owned: impl Fn(u64, u64) -> bool,
 ) -> MmSupervisorResult<()> {
-    let unusable_array = SaveStateValidationError::UnusableSmBaseArray { base: sm_base, count: number_of_cpus };
-
-    let array_size = number_of_cpus
-        .checked_mul(core::mem::size_of::<u64>())
-        .and_then(|size| u64::try_from(size).ok())
-        .filter(|size| *size != 0)
-        .ok_or(unusable_array)?;
-    // Alignment is required as well as containment, because the array is read back as `&[u64]`.
-    if sm_base == 0
-        || !sm_base.is_multiple_of(core::mem::align_of::<u64>() as u64)
-        || sm_base.checked_add(array_size).is_none()
-        || !is_inside_mmram(sm_base, array_size)
-    {
-        return Err(unusable_array.into());
+    // `SaveStateInfo::new` already rejected a null, empty, misaligned, or overflowing array.
+    let (smbase_array, number_of_cpus) = (info.smbase_array(), info.number_of_cpus());
+    let array_size = info.smbase_array_size();
+    if !is_inside_mmram(smbase_array, array_size) {
+        return Err(SaveStateValidationError::UnusableSmBaseArray { base: smbase_array, count: number_of_cpus }.into());
     }
-    if !is_supervisor_owned(sm_base, array_size) {
-        return Err(
-            SaveStateValidationError::SmBaseArrayNotSupervisorOwned { base: sm_base, count: number_of_cpus }.into()
-        );
+    if !is_supervisor_owned(smbase_array, array_size) {
+        return Err(SaveStateValidationError::SmBaseArrayNotSupervisorOwned {
+            base: smbase_array,
+            count: number_of_cpus,
+        }
+        .into());
     }
 
-    // SAFETY: the checks above establish that `sm_base` is a non-null, aligned array of
-    // `number_of_cpus` initialized `u64` entries lying entirely inside supervisor-owned MMRAM.
-    // The MM IPL populates it before launching the supervisor and it stays resident for the
-    // supervisor's lifetime.
-    let sm_bases = unsafe { core::slice::from_raw_parts(sm_base as *const u64, number_of_cpus) };
-
-    for (cpu_index, &smbase) in sm_bases.iter().enumerate() {
-        let Some(map_base) = smbase
-            .checked_add(SMRAM_SAVE_STATE_MAP_OFFSET)
-            .filter(|_| smbase != 0)
-            .filter(|base| base.checked_add(SMRAM_SAVE_STATE_MAP_SIZE).is_some())
-            .filter(|base| is_inside_mmram(*base, SMRAM_SAVE_STATE_MAP_SIZE))
-        else {
-            return Err(SaveStateValidationError::UnusableSaveStateRegion { cpu_index, smbase }.into());
-        };
-        if !is_supervisor_owned(map_base, SMRAM_SAVE_STATE_MAP_SIZE) {
-            return Err(SaveStateValidationError::SaveStateRegionNotSupervisorOwned { cpu_index, smbase }.into());
+    // The checks above prove the SMBASE array, so the entries can be read through `info`.
+    for cpu_index in 0..number_of_cpus {
+        let smbase = info
+            .smbase(cpu_index)
+            .map_err(|_| SaveStateValidationError::UnusableSmBaseArray { base: smbase_array, count: number_of_cpus })?;
+        match info.save_state_map_base(cpu_index) {
+            Ok(map_base) if is_inside_mmram(map_base, MAP_SIZE) => {
+                if !is_supervisor_owned(map_base, MAP_SIZE) {
+                    return Err(
+                        SaveStateValidationError::SaveStateRegionNotSupervisorOwned { cpu_index, smbase }.into()
+                    );
+                }
+            }
+            _ => return Err(SaveStateValidationError::UnusableSaveStateRegion { cpu_index, smbase }.into()),
         }
     }
 
@@ -285,6 +356,8 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
         }
     };
 
+    // Phase 1 only stages a request once the metadata exists, so this does not fail in practice.
+    let info = save_state_info()?;
     let write_size = validate_read_request(&holder, current_apic_id(), protocol, width, buffer)?;
 
     let mut out = [0u8; IO_INFO_SIZE];
@@ -297,12 +370,9 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
         // Special case: PROCESSOR_ID - always allowed, no policy check.
         read_processor_id(holder.cpu_index, out)?;
     } else {
-        let view = get_save_state_view(save_state_info()?, holder.cpu_index).inspect_err(|status| {
-            log::error!(
-                "SAVE_STATE_READ2: Unable to get save state view for CPU {}: {:#x}",
-                holder.cpu_index,
-                status.as_usize()
-            );
+        let state = info.get_save_state(holder.cpu_index).map_err(|error| {
+            log::error!("SAVE_STATE_READ2: Unable to read the save state of CPU {}: {error}", holder.cpu_index);
+            save_state_error_status(error)
         })?;
 
         let Some(gate) = security_state().policy_gate() else {
@@ -310,7 +380,7 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
             return Err(Status::NOT_READY);
         };
 
-        read_gated_register(&view, gate, holder.register, width, out)?;
+        read_gated_register(&state, gate, holder.register, width, out)?;
     }
 
     // SAFETY: `validate_read_request` confirmed `buffer` is a user-owned region of at least
@@ -370,16 +440,16 @@ fn validate_read_request(
 }
 
 /// Applies the MM security policy to a save-state read and, when allowed, extracts the
-/// register value from `view` into `out`.
+/// register value from `state` into `out`.
 fn read_gated_register(
-    view: &SaveStateView,
+    state: &SaveState,
     gate: &PolicyGate,
     register: MmSaveStateRegister,
     width: u64,
     out: &mut [u8],
 ) -> SyscallResult {
     let policy_checks = policy_checks_for_register(register);
-    let condition = if policy_checks.is_empty() { None } else { inspect_io_condition(view) };
+    let condition = if policy_checks.is_empty() { None } else { inspect_io_condition(state) };
 
     // An IO read needs the trap condition; if it can't be determined the CPU did
     // not trap an I/O instruction, which is NOT_FOUND rather than a policy denial.
@@ -397,14 +467,18 @@ fn read_gated_register(
         }
     }
 
-    // Dispatch to the appropriate read handler.  Each handler reads from the
-    // save state `view` and writes into the validated `out` buffer using only
-    // safe slice operations.
-    match register {
-        MmSaveStateRegister::Io => read_io_register(view, out),
-        MmSaveStateRegister::Lma => read_lma_register(view, width, out),
-        _ => read_architectural_register(view, register, width, out),
-    }
+    // Dispatch to the matching reader. Each one decodes `state` and writes into
+    // the validated `out` buffer, reporting failures as `SaveStateError`.
+    let width = usize::try_from(width).map_err(|_| Status::INVALID_PARAMETER)?;
+    let result = match register {
+        MmSaveStateRegister::Io => state.read_io_register(out),
+        MmSaveStateRegister::Lma => state.read_lma_register(width, out),
+        _ => state.read_architectural_register(register, width, out),
+    };
+    result.map(|()| 0).map_err(|error| {
+        log::error!("SAVE_STATE_READ2: Reading {register:?} failed: {error}");
+        save_state_error_status(error)
+    })
 }
 
 /// Returns the per-CPU save-state metadata captured at initialization.
@@ -419,135 +493,35 @@ fn save_state_info() -> Result<SaveStateInfo, Status> {
 
 /// Returns the number of CPUs from the save-state metadata.
 fn get_number_of_cpus() -> Result<usize, Status> {
-    Ok(save_state_info()?.number_of_cpus)
+    Ok(save_state_info()?.number_of_cpus())
 }
 
 /// Logs the per-CPU SMBASE and the save-state window derived from it.
 ///
 /// This mirrors the CPU relocation table the C `PiSmmCpuDxeSmm` driver emits and
 /// gives the same at-a-glance view when diagnosing save-state or SMBASE issues.
-///
-/// ## Safety
-///
-/// `info.sm_base` must reference a readable array of at least
-/// `info.number_of_cpus` `u64` SMBASE entries that stays resident for the call.
-pub(crate) unsafe fn log_save_state_map(info: SaveStateInfo) {
+pub(crate) fn log_save_state_map(info: SaveStateInfo) {
     if !log::log_enabled!(log::Level::Debug) {
         return;
     }
 
-    if info.sm_base == 0 {
-        log::warn!("SMBASE array pointer is null; skipping the save-state map dump");
-        return;
-    }
-
-    let num_cpus = info.number_of_cpus;
-
-    // Read the array as bytes so an unaligned producer address does not create an invalid
-    // `&[u64]`.
-    let Some(array_bytes) = num_cpus.checked_mul(core::mem::size_of::<u64>()) else {
-        log::warn!("SMBASE array size for {num_cpus} CPU(s) overflows");
-        return;
-    };
-
-    // SAFETY: The caller guarantees `sm_base` covers `num_cpus` initialized `u64` entries.
-    let sm_base_bytes = unsafe { core::slice::from_raw_parts(info.sm_base as *const u8, array_bytes) };
-
-    for (cpu_index, smbase_bytes) in sm_base_bytes.chunks_exact(core::mem::size_of::<u64>()).enumerate() {
-        let smbase = u64::from_ne_bytes(smbase_bytes.try_into().expect("SMBASE chunks are exactly 8 bytes"));
-        match smbase.checked_add(SMRAM_SAVE_STATE_MAP_OFFSET) {
-            Some(save_state) => log::debug!(
+    for cpu_index in 0..info.number_of_cpus() {
+        let smbase = match info.smbase(cpu_index) {
+            Ok(smbase) => smbase,
+            Err(error) => {
+                log::error!("CPU[{cpu_index:03}]  has no SMBASE entry: {error}");
+                continue;
+            }
+        };
+        match info.save_state_map_base(cpu_index) {
+            Ok(save_state) => log::debug!(
                 "CPU[{cpu_index:03}]  SMBASE=0x{smbase:016x}  SaveState=0x{save_state:016x}  Size=0x{SMRAM_SAVE_STATE_MAP_SIZE:08x}"
             ),
-            None => log::error!("CPU[{cpu_index:03}]  SMBASE=0x{smbase:016x} overflows the save-state offset"),
+            Err(error) => {
+                log::error!("CPU[{cpu_index:03}]  SMBASE=0x{smbase:016x} has no usable save-state map: {error}");
+            }
         }
     }
-}
-
-/// A read-only byte view over a CPU's SMRAM save state region.
-struct SaveStateView {
-    bytes: &'static [u8],
-}
-
-impl SaveStateView {
-    /// Creates a view over `size` bytes of the save state region at `base`.
-    ///
-    /// ## Safety
-    ///
-    /// `base` must point to a readable SMRAM save state region of at least
-    /// `size` bytes that is not mutated for the lifetime of the view and lives
-    /// for the duration of the program.
-    unsafe fn new(base: *const u8, size: usize) -> Self {
-        // SAFETY: guaranteed by the caller's contract.
-        Self { bytes: unsafe { core::slice::from_raw_parts(base, size) } }
-    }
-
-    /// Reads the byte at `offset`. Panics if `offset` is out of range.
-    fn read_u8(&self, offset: usize) -> u8 {
-        *self.bytes.get(offset).expect("save state offset within region")
-    }
-
-    /// Reads a little-endian `u16` at `offset`. Panics on an out-of-range offset (see `read_u8`).
-    fn read_u16(&self, offset: usize) -> u16 {
-        let bytes = self.bytes.get(offset..offset + 2).expect("save state offset within region");
-        u16::from_le_bytes(bytes.try_into().expect("slice length is 2"))
-    }
-
-    /// Reads a little-endian `u32` at `offset`. Panics on an out-of-range offset (see `read_u8`).
-    fn read_u32(&self, offset: usize) -> u32 {
-        let bytes = self.bytes.get(offset..offset + 4).expect("save state offset within region");
-        u32::from_le_bytes(bytes.try_into().expect("slice length is 4"))
-    }
-
-    /// Reads a little-endian `u64` at `offset`. Panics on an out-of-range offset (see `read_u8`).
-    fn read_u64(&self, offset: usize) -> u64 {
-        let bytes = self.bytes.get(offset..offset + 8).expect("save state offset within region");
-        u64::from_le_bytes(bytes.try_into().expect("slice length is 8"))
-    }
-}
-
-/// Builds a [`SaveStateView`] for the given CPU index.
-///
-/// The region base is derived from the CPU's SMBASE as
-/// `sm_base[cpu_index] + SMRAM_SAVE_STATE_MAP_OFFSET`, with the SMBASE array
-/// passed through the MM Supervisor `PassDown` HOB. The region length is the fixed
-/// [`SMRAM_SAVE_STATE_MAP_SIZE`].
-fn get_save_state_view(info: SaveStateInfo, cpu_index: u64) -> Result<SaveStateView, Status> {
-    let num_cpus = info.number_of_cpus;
-    let Ok(cpu_index_usize) = usize::try_from(cpu_index) else {
-        log::error!("Save state read: CPU index {cpu_index} does not fit the target architecture");
-        return Err(Status::INVALID_PARAMETER);
-    };
-    if cpu_index_usize >= num_cpus {
-        log::error!("Save state read: CPU index {cpu_index} >= NumberOfCpus {num_cpus}");
-        return Err(Status::INVALID_PARAMETER);
-    }
-
-    if info.sm_base == 0 {
-        log::error!("SmBase array pointer is null");
-        return Err(Status::NOT_READY);
-    }
-
-    // The SMBASE array holds `num_cpus` per-CPU SMBASE values set up by the
-    // relocation code. The save-state region base is `SmBase + 0xfc00` and every
-    // region is the fixed `SMRAM_SAVE_STATE_MAP_SIZE`.
-    //
-    // SAFETY: `validate_save_state_regions` proved during initialization that `sm_base` is a
-    // non-null, aligned array of at least `num_cpus` initialized `u64` entries inside MMRAM, and
-    // MMRAM is not writable from outside MM, so it still describes that array here.
-    let sm_bases = unsafe { core::slice::from_raw_parts(info.sm_base as *const u64, num_cpus) };
-
-    let smbase = *sm_bases.get(cpu_index_usize).ok_or(Status::INVALID_PARAMETER)?;
-    if smbase == 0 {
-        log::error!("SmBase[{cpu_index}] is null");
-        return Err(Status::INVALID_PARAMETER);
-    }
-    let base = smbase.checked_add(SMRAM_SAVE_STATE_MAP_OFFSET).ok_or(Status::INVALID_PARAMETER)?;
-
-    // SAFETY: `validate_save_state_regions` proved during initialization that this entry's
-    // `SMRAM_SAVE_STATE_MAP_SIZE` region lies inside MMRAM, which is stable while this SMI is
-    // serviced and lives for the program's duration.
-    Ok(unsafe { SaveStateView::new(base as *const u8, SMRAM_SAVE_STATE_MAP_SIZE as usize) })
 }
 
 /// Determines the actual number of bytes that will be written to the user buffer.
@@ -565,7 +539,7 @@ fn actual_write_size(register: MmSaveStateRegister, width: u64) -> usize {
             }
         }
         _ => {
-            if let Some(info) = save_state::register_info(register) {
+            if let Some(info) = SaveState::register_info(register) {
                 if width == 2 && info.native_width >= 2 {
                     2
                 } else if width == 4 && info.native_width >= 4 {
@@ -620,198 +594,33 @@ fn read_processor_id(cpu_index: u64, out: &mut [u8]) -> SyscallResult {
     Ok(0)
 }
 
-/// Inspects the I/O condition (IN vs OUT) from the save state for policy checking.
+/// Returns the I/O condition (IN vs OUT) that caused the SMI, for policy checking.
 ///
-/// Reads the vendor-specific IO field from the CPU's save state and uses the
-/// SDK's [`save_state::parse_io_field`] to determine whether the I/O trap was
-/// caused by an IN or OUT instruction.
-fn inspect_io_condition(view: &SaveStateView) -> Option<SaveStateCondition> {
-    let vc = save_state::vendor_constants();
-
-    // Verify the save state revision supports IO info before reading the field.
-    let smm_rev_id = view.read_u32(vc.smmrevid_offset as usize);
-    assert!(
-        save_state::io_info_supported(smm_rev_id),
-        "SMMRevId {smm_rev_id:#x} does not expose I/O info; legacy hardware is not supported"
-    );
-
-    // Read the vendor-specific IO information field.
-    let io_field = view.read_u32(vc.io_info_offset as usize);
-    // Intentionally commented out to avoid info leakage.
-    // log::info!("Inspecting IO condition: IO field = 0x{:x}", io_field);
-
-    // Use the SDK's vendor-specific parser.
-    let parsed = save_state::parse_io_field(io_field)?;
-    match parsed.io_type {
+/// Returns `None` when the SMI was not an I/O trap, or when the save state revision predates
+/// I/O trap information. Either way the policy check then runs without a trap condition, so
+/// only unconditional descriptors can allow the read.
+fn inspect_io_condition(state: &SaveState) -> Option<SaveStateCondition> {
+    let io_info = match state.io_info() {
+        Ok(io_info) => io_info?,
+        Err(error) => {
+            log::error!("SAVE_STATE_READ2: {error}; reading the save state without an I/O trap condition");
+            return None;
+        }
+    };
+    match io_info.io_type {
         IO_TYPE_INPUT => Some(SaveStateCondition::IoRead),
         _ => Some(SaveStateCondition::IoWrite),
     }
 }
 
-/// Reads an architectural register from the vendor save state map into `out`.
-fn read_architectural_register(
-    view: &SaveStateView,
-    register: MmSaveStateRegister,
-    width: u64,
-    out: &mut [u8],
-) -> SyscallResult {
-    let Some(info) = save_state::register_info(register) else {
-        log::error!("Register {register:?} not found in save state map");
-        return Err(Status::NOT_FOUND);
-    };
-
-    read_register_field(view, register, info, width, out)
-}
-
-/// Copies `width` bytes of the field described by `info` out of `view` into `out`.
-///
-/// `register` is carried through for diagnostics only.
-fn read_register_field(
-    view: &SaveStateView,
-    register: MmSaveStateRegister,
-    info: RegisterInfo,
-    width: u64,
-    out: &mut [u8],
-) -> SyscallResult {
-    let lo = info.lo_offset as usize;
-    if width == 0 {
-        log::error!("Register {register:?} does not support 0-byte read");
-        return Err(Status::NOT_FOUND);
-    } else if width == 2 {
-        if info.native_width < 2 {
-            log::error!("Register {register:?} does not support 2-byte read");
-            return Err(Status::INVALID_PARAMETER);
-        }
-        // Read the low 2 bytes (AMD segment selectors, DT limits).
-        out.get_mut(..2).ok_or(Status::BUFFER_TOO_SMALL)?.copy_from_slice(&view.read_u16(lo).to_le_bytes());
-    } else if width == 4 {
-        if info.native_width < 4 {
-            log::error!("Register {register:?} does not support 4-byte read");
-            return Err(Status::INVALID_PARAMETER);
-        }
-        // Read the low 4 bytes.
-        out.get_mut(..4).ok_or(Status::BUFFER_TOO_SMALL)?.copy_from_slice(&view.read_u32(lo).to_le_bytes());
-    } else if width == 8 {
-        if info.native_width != 8 {
-            log::error!("Register {register:?} does not support 8-byte read");
-            return Err(Status::INVALID_PARAMETER);
-        }
-        // Read lo u32 then hi u32 (handles both contiguous and split
-        // layouts) and write them as two adjacent u32 (matching C
-        // split-register behaviour).
-        let out_len = out.len();
-        out.get_mut(..4)
-            .ok_or_else(|| {
-                log::error!("Register {register:?}: output buffer holds {out_len} bytes, need 8");
-                Status::BUFFER_TOO_SMALL
-            })?
-            .copy_from_slice(&view.read_u32(lo).to_le_bytes());
-        out.get_mut(4..8)
-            .ok_or_else(|| {
-                log::error!("Register {register:?}: output buffer holds {out_len} bytes, need 8");
-                Status::BUFFER_TOO_SMALL
-            })?
-            .copy_from_slice(&view.read_u32(info.hi_offset as usize).to_le_bytes());
-    } else {
-        log::error!("Register {register:?} does not support {width}-byte read");
-        return Err(Status::INVALID_PARAMETER);
+/// Maps a save state failure onto the status the syscall reports.
+fn save_state_error_status(error: SaveStateError) -> Status {
+    match error {
+        SaveStateError::InvalidParameter | SaveStateError::UnsupportedWidth { .. } => Status::INVALID_PARAMETER,
+        SaveStateError::RegisterNotMapped(_) | SaveStateError::NoIoTrap => Status::NOT_FOUND,
+        SaveStateError::BufferTooSmall { .. } => Status::BUFFER_TOO_SMALL,
+        SaveStateError::IoInfoUnsupported { .. } => Status::UNSUPPORTED,
     }
-
-    Ok(0)
-}
-
-/// Reads the IO pseudo-register and writes an `EFI_MM_SAVE_STATE_IO_INFO`
-/// structure to `out`.
-///
-/// The IO pseudo-register provides information about the I/O instruction that
-/// triggered the SMI, including the port, width, direction, and data value.
-fn read_io_register(view: &SaveStateView, out: &mut [u8]) -> SyscallResult {
-    let vc = save_state::vendor_constants();
-
-    // 1. Read SMMRevId to verify IO info is available.
-    let smm_rev_id = view.read_u32(vc.smmrevid_offset as usize);
-    assert!(
-        save_state::io_info_supported(smm_rev_id),
-        "SMMRevId {smm_rev_id:#x} does not expose I/O info; legacy hardware is not supported"
-    );
-
-    // 2. Read the vendor-specific IO information field and parse it.
-    let io_field = view.read_u32(vc.io_info_offset as usize);
-    let parsed = if let Some(p) = save_state::parse_io_field(io_field) {
-        p
-    } else {
-        log::error!("IO_READ: IO field 0x{io_field:x} did not indicate a valid I/O trap");
-        return Err(Status::NOT_FOUND);
-    };
-
-    // 3. Read I/O data from RAX (only the significant bytes).
-    let rax = vc.rax_offset as usize;
-    let io_data: u64 = match parsed.byte_count {
-        1 => u64::from(view.read_u8(rax)),
-        2 => u64::from(view.read_u16(rax)),
-        4 => u64::from(view.read_u32(rax)),
-        _ => {
-            log::error!("IO_READ: Unsupported byte count: {}", parsed.byte_count);
-            0
-        }
-    };
-
-    // 4. Serialize the EFI_MM_SAVE_STATE_IO_INFO structure into the output buffer.
-    let io_info = MmSaveStateIoInfo {
-        io_data,
-        io_port: parsed.io_port,
-        _pad0: [0; 2],
-        io_width: parsed.io_width,
-        io_type: parsed.io_type,
-        _pad1: [0; 4],
-    };
-    let out_len = out.len();
-    let out = out.get_mut(..IO_INFO_SIZE).ok_or_else(|| {
-        log::error!("IO_READ: output buffer holds {out_len} bytes, need {IO_INFO_SIZE}");
-        Status::BUFFER_TOO_SMALL
-    })?;
-    out.copy_from_slice(io_info.as_bytes());
-
-    Ok(0)
-}
-
-/// Reads the LMA pseudo-register (processor Long Mode Active state) into `out`.
-///
-/// Returns `LMA_32BIT` (32) or `LMA_64BIT` (64) depending on the `IA32_EFER.LMA`
-/// bit in the save state.
-fn read_lma_register(view: &SaveStateView, width: u64, out: &mut [u8]) -> SyscallResult {
-    let vc = save_state::vendor_constants();
-
-    // AMD64 always operates in 64-bit mode during SMM.
-    let lma_value = if vc.lma_always_64 {
-        LMA_64BIT
-    } else {
-        // Read IA32_EFER from the save state.
-        let efer = view.read_u64(vc.efer_offset as usize);
-        if (efer & IA32_EFER_LMA) != 0 { LMA_64BIT } else { LMA_32BIT }
-    };
-
-    let out_len = out.len();
-    if width == 4 {
-        out.get_mut(..4)
-            .ok_or_else(|| {
-                log::error!("LMA read: output buffer holds {out_len} bytes, need 4");
-                Status::BUFFER_TOO_SMALL
-            })?
-            .copy_from_slice(&(lma_value as u32).to_le_bytes());
-    } else if width == 8 {
-        out.get_mut(..8)
-            .ok_or_else(|| {
-                log::error!("LMA read: output buffer holds {out_len} bytes, need 8");
-                Status::BUFFER_TOO_SMALL
-            })?
-            .copy_from_slice(&lma_value.to_le_bytes());
-    } else {
-        log::error!("LMA read: unsupported width {width}, expected 4 or 8");
-        return Err(Status::INVALID_PARAMETER);
-    }
-
-    Ok(0)
 }
 
 #[cfg(test)]
@@ -826,8 +635,12 @@ mod tests {
         },
         test_support,
     };
-    use patina_internal_cpu::save_state::IO_TYPE_OUTPUT;
+    use patina_internal_cpu::save_state::{
+        IA32_EFER_LMA, IO_TYPE_OUTPUT, IO_WIDTH_UINT8, IO_WIDTH_UINT16, IO_WIDTH_UINT32, LMA_64BIT, MmSaveStateIoInfo,
+        SMRAM_SAVE_STATE_MAP_OFFSET, SaveStateBytes, vendor_constants,
+    };
     use serial_test::serial;
+    use zerocopy::IntoBytes;
 
     struct TestPlatform;
 
@@ -845,7 +658,7 @@ mod tests {
     impl FakeSmram {
         /// Builds an SMBASE array of `num_cpus` entries all pointing at a single backing region.
         fn new(num_cpus: usize) -> Self {
-            let region_size = (SMRAM_SAVE_STATE_MAP_OFFSET + SMRAM_SAVE_STATE_MAP_SIZE) as usize;
+            let region_size = SMRAM_SAVE_STATE_MAP_OFFSET as usize + SMRAM_SAVE_STATE_MAP_SIZE;
             let region = vec![0u8; region_size].into_boxed_slice();
             let smbase = region.as_ptr() as u64;
             Self { region, sm_bases: vec![smbase; num_cpus].into_boxed_slice() }
@@ -853,7 +666,10 @@ mod tests {
 
         /// Returns the metadata the save-state syscall would receive from the `PassDown` HOB.
         fn info(&self) -> SaveStateInfo {
-            SaveStateInfo { number_of_cpus: self.sm_bases.len(), sm_base: self.sm_bases.as_ptr() as u64 }
+            // SAFETY: every SMBASE in `sm_bases` points at `region`, whose map window holds a full
+            // `SMRAM_SAVE_STATE_MAP_SIZE` map, and both live as long as this `FakeSmram`.
+            unsafe { SaveStateInfo::new(self.sm_bases.len(), self.sm_bases.as_ptr() as u64) }
+                .expect("the fake SMBASE array is valid")
         }
 
         /// Returns the save-state map bytes (the `SMBASE + 0xfc00` window).
@@ -882,6 +698,12 @@ mod tests {
                 .iter()
                 .any(|&(base, len)| addr >= base && addr.checked_add(size).is_some_and(|end| end <= base + len))
         }
+    }
+
+    /// Wraps an SMBASE array that the validator must reject before it reads any entry.
+    fn unchecked_info(smbase_array: u64, number_of_cpus: usize) -> SaveStateInfo {
+        // SAFETY: each caller passes an array the validator rejects before reading through it.
+        unsafe { SaveStateInfo::new(number_of_cpus, smbase_array) }.expect("the array has a valid shape")
     }
 
     /// Answers "supervisor-owned" for every range, isolating the containment rules.
@@ -929,17 +751,51 @@ mod tests {
     }
 
     #[test]
+    fn test_save_state_info_new_rejects_an_unusable_array() {
+        let smbase_entries = [0u64; 2];
+        let array = smbase_entries.as_ptr() as u64;
+
+        // A null array, an empty array, an extent that overflows, a misaligned array, and a
+        // count whose byte size overflows.
+        for (base, count) in [(0, 2), (array, 0), (u64::MAX - 7, 2), (array + 1, 2), (array, usize::MAX)] {
+            // SAFETY: each array is rejected before it is read.
+            let result = unsafe { SaveStateInfo::new(count, base) };
+            assert_eq!(
+                result.err(),
+                Some(SaveStateValidationError::UnusableSmBaseArray { base, count }),
+                "array at {base:#x} with {count} entries"
+            );
+        }
+    }
+
+    #[test]
+    fn test_save_state_info_looks_up_smbase_and_map_base_by_cpu_index() {
+        let smbase_entries = [0x3000_0000u64, u64::MAX - 0x1_0000, 0, u64::MAX];
+        // SAFETY: `smbase_entries` holds four entries and outlives every call below, none of which
+        // reads a map.
+        let info = unsafe { SaveStateInfo::new(smbase_entries.len(), smbase_entries.as_ptr() as u64) }.unwrap();
+        assert_eq!(info.smbase_array_size(), 32);
+
+        assert_eq!(info.smbase(0), Ok(0x3000_0000));
+        assert_eq!(info.smbase(2), Ok(0));
+        assert_eq!(info.smbase(4), Err(SaveStateError::InvalidParameter));
+
+        assert_eq!(info.save_state_map_base(0), Ok(0x3000_FC00));
+        assert_eq!(info.save_state_map_base(1), Ok(u64::MAX - 0x400));
+        // A null SMBASE, an SMBASE whose map ends past the address space, and an index past the
+        // array.
+        for cpu_index in [2, 3, 4] {
+            assert_eq!(info.save_state_map_base(cpu_index), Err(SaveStateError::InvalidParameter));
+        }
+    }
+
+    #[test]
     fn test_validate_save_state_regions_accepts_regions_inside_mmram() {
         let smram = FakeSmram::new(2);
         let info = smram.info();
 
         assert_eq!(
-            validate_save_state_regions(
-                info.sm_base,
-                info.number_of_cpus,
-                inside_any(fake_smram_ranges(&smram)),
-                all_supervisor_owned
-            ),
+            validate_save_state_regions(&info, inside_any(fake_smram_ranges(&smram)), all_supervisor_owned),
             Ok(())
         );
     }
@@ -951,13 +807,8 @@ mod tests {
         let info = smram.info();
 
         assert_eq!(
-            validate_save_state_regions(
-                info.sm_base,
-                info.number_of_cpus,
-                inside_any(fake_smram_ranges(&smram)),
-                |_, _| false
-            ),
-            Err(SaveStateValidationError::SmBaseArrayNotSupervisorOwned { base: info.sm_base, count: 2 }.into())
+            validate_save_state_regions(&info, inside_any(fake_smram_ranges(&smram)), |_, _| false),
+            Err(SaveStateValidationError::SmBaseArrayNotSupervisorOwned { base: info.smbase_array(), count: 2 }.into())
         );
     }
 
@@ -970,15 +821,10 @@ mod tests {
         let array_size = (smram.sm_bases.len() * core::mem::size_of::<u64>()) as u64;
 
         // Only the array itself is supervisor-owned; the maps it points at are not.
-        let owned = move |addr: u64, size: u64| addr == info.sm_base && size == array_size;
+        let owned = move |addr: u64, size: u64| addr == info.smbase_array() && size == array_size;
 
         assert_eq!(
-            validate_save_state_regions(
-                info.sm_base,
-                info.number_of_cpus,
-                inside_any(fake_smram_ranges(&smram)),
-                owned
-            ),
+            validate_save_state_regions(&info, inside_any(fake_smram_ranges(&smram)), owned),
             Err(SaveStateValidationError::SaveStateRegionNotSupervisorOwned {
                 cpu_index: 0,
                 smbase: smram.sm_bases[0]
@@ -991,38 +837,9 @@ mod tests {
     fn test_validate_save_state_regions_rejects_an_array_outside_mmram_without_reading_it() {
         // The array has to be refused before it is dereferenced, so this points at an address
         // that would fault if the check were done in the wrong order.
-        let result = validate_save_state_regions(0xdead_0000, 4, |_, _| false, all_supervisor_owned);
+        let result = validate_save_state_regions(&unchecked_info(0xdead_0000, 4), |_, _| false, all_supervisor_owned);
 
         assert_eq!(result, Err(SaveStateValidationError::UnusableSmBaseArray { base: 0xdead_0000, count: 4 }.into()));
-    }
-
-    #[test]
-    fn test_validate_save_state_regions_rejects_an_unusable_array() {
-        let smram = FakeSmram::new(2);
-        let sm_base = smram.info().sm_base;
-
-        // Containment is answered yes throughout, so each case is rejected on its own ground:
-        // a null base, an empty array, and an extent that overflows.
-        for (base, count) in [(0, 2), (sm_base, 0), (u64::MAX - 7, 2)] {
-            assert_eq!(
-                validate_save_state_regions(base, count, |_, _| true, all_supervisor_owned),
-                Err(SaveStateValidationError::UnusableSmBaseArray { base, count }.into()),
-                "array at 0x{base:x} with {count} entries should be rejected"
-            );
-        }
-    }
-
-    #[test]
-    fn test_validate_save_state_regions_rejects_a_misaligned_array() {
-        // The array is read back as `&[u64]`, so a misaligned base is refused even when its
-        // extent is acceptable.
-        let smram = FakeSmram::new(2);
-        let base = smram.info().sm_base + 1;
-
-        assert_eq!(
-            validate_save_state_regions(base, 2, |_, _| true, all_supervisor_owned),
-            Err(SaveStateValidationError::UnusableSmBaseArray { base, count: 2 }.into())
-        );
     }
 
     #[test]
@@ -1033,12 +850,7 @@ mod tests {
         smram.set_smbase(1, 0x1000);
 
         assert_eq!(
-            validate_save_state_regions(
-                smram.info().sm_base,
-                2,
-                inside_any(fake_smram_ranges(&smram)),
-                all_supervisor_owned
-            ),
+            validate_save_state_regions(&smram.info(), inside_any(fake_smram_ranges(&smram)), all_supervisor_owned),
             Err(SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 1, smbase: 0x1000 }.into())
         );
     }
@@ -1049,12 +861,7 @@ mod tests {
         smram.set_smbase(0, 0);
 
         assert_eq!(
-            validate_save_state_regions(
-                smram.info().sm_base,
-                2,
-                inside_any(fake_smram_ranges(&smram)),
-                all_supervisor_owned
-            ),
+            validate_save_state_regions(&smram.info(), inside_any(fake_smram_ranges(&smram)), all_supervisor_owned),
             Err(SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 0, smbase: 0 }.into())
         );
     }
@@ -1065,23 +872,17 @@ mod tests {
         smram.set_smbase(0, u64::MAX);
 
         assert_eq!(
-            validate_save_state_regions(smram.info().sm_base, 1, |_, _| true, all_supervisor_owned),
+            validate_save_state_regions(&smram.info(), |_, _| true, all_supervisor_owned),
             Err(SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 0, smbase: u64::MAX }.into())
         );
     }
 
     /// Builds a zeroed save-state map whose `SMMRevId` advertises I/O trap support.
-    fn new_save_state_map() -> Box<[u8; SMRAM_SAVE_STATE_MAP_SIZE as usize]> {
-        let mut map = Box::new([0u8; SMRAM_SAVE_STATE_MAP_SIZE as usize]);
-        let constants = save_state::vendor_constants();
+    fn new_save_state_map() -> Box<SaveStateBytes> {
+        let mut map = Box::new([0u8; SMRAM_SAVE_STATE_MAP_SIZE]);
+        let constants = vendor_constants();
         write_u32(&mut map[..], constants.smmrevid_offset as usize, constants.min_rev_id_io);
         map
-    }
-
-    /// Creates a view over `map`, which the caller must keep alive and unmodified.
-    fn view_over(map: &[u8]) -> SaveStateView {
-        // SAFETY: the caller keeps `map` alive and immutable for the lifetime of the view.
-        unsafe { SaveStateView::new(map.as_ptr(), map.len()) }
     }
 
     fn write_u32(buffer: &mut [u8], offset: usize, value: u32) {
@@ -1092,30 +893,23 @@ mod tests {
         buffer[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
     }
 
-    /// Encodes an I/O trap field that the active vendor decodes with the requested direction
-    /// and transfer size.
-    ///
-    /// Intel (`IOMisc`) and AMD (`IO_DWord`) disagree on the meaning of bit 0, so an encoding
-    /// for each layout is probed against the active parser.
+    /// Encodes an Intel `IOMisc` field that decodes with the requested direction and size.
+    #[cfg(not(feature = "save_state_amd"))]
     fn io_trap_field(port: u16, input: bool, byte_count: usize) -> u32 {
-        let port_bits = u32::from(port) << 16;
-        // Intel: SmiFlag | Length (bits 3:1) | Type IN(1)/OUT(0) (bits 7:4).
-        let intel = port_bits | (u32::from(input) << 4) | ((byte_count as u32) << 1) | 1;
-        // AMD: Valid (bit 1) | SZ8 (bit 4) / SZ16 (bit 5) / SZ32 (default) | Direction (bit 0).
-        let amd_size = match byte_count {
+        // SmiFlag | Length (bits 3:1) | Type IN(1)/OUT(0) (bits 7:4).
+        (u32::from(port) << 16) | (u32::from(input) << 4) | ((byte_count as u32) << 1) | 1
+    }
+
+    /// Encodes an AMD `IO_DWord` field that decodes with the requested direction and size.
+    #[cfg(feature = "save_state_amd")]
+    fn io_trap_field(port: u16, input: bool, byte_count: usize) -> u32 {
+        // Valid (bit 1) | SZ8 (bit 4) / SZ16 (bit 5) / SZ32 (default) | Direction (bit 0).
+        let size = match byte_count {
             1 => 1 << 4,
             2 => 1 << 5,
             _ => 0,
         };
-        let amd = port_bits | amd_size | (1 << 1) | u32::from(input);
-
-        let expected = if input { IO_TYPE_INPUT } else { IO_TYPE_OUTPUT };
-        [intel, amd]
-            .into_iter()
-            .find(|field| {
-                save_state::parse_io_field(*field).is_some_and(|p| p.io_type == expected && p.byte_count == byte_count)
-            })
-            .expect("an I/O trap encoding exists for the active vendor")
+        (u32::from(port) << 16) | size | (1 << 1) | u32::from(input)
     }
 
     /// Builds a policy buffer containing a single save-state policy root.
@@ -1199,8 +993,7 @@ mod tests {
         let smram = FakeSmram::new(2);
         log::set_max_level(log::LevelFilter::Info);
 
-        // SAFETY: the level check short-circuits before the SMBASE array is read.
-        unsafe { log_save_state_map(smram.info()) };
+        log_save_state_map(smram.info());
 
         log::set_max_level(log::LevelFilter::Trace);
     }
@@ -1211,8 +1004,7 @@ mod tests {
         test_support::init_test_logger();
         let smram = FakeSmram::new(3);
 
-        // SAFETY: `smram` owns a live SMBASE array of three entries for the call.
-        unsafe { log_save_state_map(smram.info()) };
+        log_save_state_map(smram.info());
     }
 
     #[test]
@@ -1222,73 +1014,49 @@ mod tests {
         let mut smram = FakeSmram::new(1);
         smram.set_smbase(0, u64::MAX);
 
-        // SAFETY: the SMBASE array is still a live one-entry array; only its value is bogus.
-        unsafe { log_save_state_map(smram.info()) };
+        log_save_state_map(smram.info());
     }
 
     #[test]
-    #[serial]
-    fn test_log_save_state_map_skips_a_null_smbase_array() {
-        test_support::init_test_logger();
-
-        // SAFETY: the null base is rejected before any read.
-        unsafe { log_save_state_map(SaveStateInfo { number_of_cpus: 4, sm_base: 0 }) };
+    fn test_save_state_error_status_maps_each_error() {
+        let register = MmSaveStateRegister::Rax;
+        let cases = [
+            (SaveStateError::InvalidParameter, Status::INVALID_PARAMETER),
+            (SaveStateError::RegisterNotMapped(register), Status::NOT_FOUND),
+            (SaveStateError::UnsupportedWidth { register, width: 3 }, Status::INVALID_PARAMETER),
+            (SaveStateError::BufferTooSmall { needed: 8, available: 4 }, Status::BUFFER_TOO_SMALL),
+            (SaveStateError::NoIoTrap, Status::NOT_FOUND),
+            (SaveStateError::IoInfoUnsupported { smm_rev_id: 0x30003 }, Status::UNSUPPORTED),
+        ];
+        for (error, status) in cases {
+            assert_eq!(save_state_error_status(error), status, "{error:?}");
+        }
     }
 
     #[test]
-    #[serial]
-    fn test_log_save_state_map_skips_an_unusable_cpu_count() {
-        test_support::init_test_logger();
-        let smram = FakeSmram::new(1);
-        let mut info = smram.info();
-        // A count this large cannot be turned into a byte length, so nothing is read.
-        info.number_of_cpus = usize::MAX;
-
-        // SAFETY: the count is rejected before the SMBASE array is touched.
-        unsafe { log_save_state_map(info) };
-    }
-
-    #[test]
-    fn test_read_register_field_rejects_a_short_split_buffer() {
-        // A split 8-byte read writes two adjacent u32, so both halves check the buffer.
+    fn test_read_gated_register_reports_reader_errors_as_statuses() {
+        // Unrestricted policy, so each result below comes from the reader, not the gate.
+        let policy = build_policy(ACCESS_ATTR_ALLOW, &[]);
+        let gate = gate_over(&policy);
         let map = new_save_state_map();
-        let view = view_over(&map[..]);
-        let info = save_state::register_info(MmSaveStateRegister::Rax).expect("RAX has a register entry");
-
-        // Too short for the low half.
-        let mut low_half = [0u8; 2];
-        assert_eq!(
-            read_register_field(&view, MmSaveStateRegister::Rax, info, 8, &mut low_half),
-            Err(Status::BUFFER_TOO_SMALL)
-        );
-
-        // Room for the low half only, so the high half is refused.
-        let mut high_half = [0u8; 4];
-        assert_eq!(
-            read_register_field(&view, MmSaveStateRegister::Rax, info, 8, &mut high_half),
-            Err(Status::BUFFER_TOO_SMALL)
-        );
-    }
-
-    #[test]
-    fn test_read_lma_register_rejects_short_buffers() {
-        let map = new_save_state_map();
-        let view = view_over(&map[..]);
-
-        let mut small = [0u8; 2];
-        assert_eq!(read_lma_register(&view, 4, &mut small), Err(Status::BUFFER_TOO_SMALL));
-
-        let mut medium = [0u8; 4];
-        assert_eq!(read_lma_register(&view, 8, &mut medium), Err(Status::BUFFER_TOO_SMALL));
-    }
-
-    #[test]
-    fn test_read_lma_register_rejects_an_unsupported_width() {
-        let map = new_save_state_map();
-        let view = view_over(&map[..]);
-
+        let state = SaveState::new(*map);
         let mut out = [0u8; 8];
-        assert_eq!(read_lma_register(&view, 2, &mut out), Err(Status::INVALID_PARAMETER));
+
+        // A 16-byte read is wider than any register.
+        assert_eq!(
+            read_gated_register(&state, &gate, MmSaveStateRegister::Rbx, 16, &mut [0u8; 16]),
+            Err(Status::INVALID_PARAMETER)
+        );
+        // `LdtInfo` has no entry in either vendor map.
+        assert_eq!(
+            read_gated_register(&state, &gate, MmSaveStateRegister::LdtInfo, 8, &mut out),
+            Err(Status::NOT_FOUND)
+        );
+        // The buffer is shorter than the requested width.
+        assert_eq!(
+            read_gated_register(&state, &gate, MmSaveStateRegister::Rbx, 8, &mut out[..4]),
+            Err(Status::BUFFER_TOO_SMALL)
+        );
     }
 
     #[test]
@@ -1330,6 +1098,10 @@ mod tests {
         assert_eq!(actual_write_size(MmSaveStateRegister::Rax, 4), 4);
         assert_eq!(actual_write_size(MmSaveStateRegister::Rax, 8), 8);
         assert_eq!(actual_write_size(MmSaveStateRegister::Rax, 16), 0);
+
+        // The layouts disagree on register widths: CR4 is 8 bytes on AMD but only 4 on Intel.
+        let cr4_width = if cfg!(feature = "save_state_amd") { 8 } else { 0 };
+        assert_eq!(actual_write_size(MmSaveStateRegister::Cr4, 8), cr4_width);
     }
 
     #[test]
@@ -1344,38 +1116,19 @@ mod tests {
     }
 
     #[test]
-    fn test_save_state_io_register_serialization() {
-        const IO_PORT: u16 = 0xB2;
-        const IO_DATA: u8 = 0x5A;
+    fn test_io_trap_field_round_trips() {
+        // The helper encodes for the selected vendor; this pins that its encoding decodes as
+        // intended, so the tests built on it are exercising the direction and size they claim to.
+        for (input, expected_type) in [(true, IO_TYPE_INPUT), (false, IO_TYPE_OUTPUT)] {
+            for (byte_count, expected_width) in [(1usize, IO_WIDTH_UINT8), (2, IO_WIDTH_UINT16), (4, IO_WIDTH_UINT32)] {
+                let mut map = new_save_state_map();
+                let field = io_trap_field(0x70, input, byte_count);
+                write_u32(&mut map[..], vendor_constants().io_info_offset as usize, field);
 
-        let constants = save_state::vendor_constants();
-        let mut save_state_bytes = Box::new([0u8; SMRAM_SAVE_STATE_MAP_SIZE as usize]);
-        let revision = constants.min_rev_id_io;
-        save_state_bytes[constants.smmrevid_offset as usize..constants.smmrevid_offset as usize + 4]
-            .copy_from_slice(&revision.to_le_bytes());
-
-        // This encodes a valid one-byte IN for both the Intel and AMD save-state layouts.
-        let io_field = (u32::from(IO_PORT) << 16) | (1 << 4) | (1 << 1) | 1;
-        save_state_bytes[constants.io_info_offset as usize..constants.io_info_offset as usize + 4]
-            .copy_from_slice(&io_field.to_le_bytes());
-        save_state_bytes[constants.rax_offset as usize] = IO_DATA;
-
-        // SAFETY: the boxed save-state map remains alive and immutable while `view` is used.
-        let view = unsafe { SaveStateView::new(save_state_bytes.as_ptr(), save_state_bytes.len()) };
-        let mut out = [0xFF; IO_INFO_SIZE];
-
-        assert_eq!(read_io_register(&view, &mut out), Ok(0));
-
-        let parsed = save_state::parse_io_field(io_field).unwrap();
-        let expected = MmSaveStateIoInfo {
-            io_data: u64::from(IO_DATA),
-            io_port: IO_PORT,
-            _pad0: [0; 2],
-            io_width: parsed.io_width,
-            io_type: parsed.io_type,
-            _pad1: [0; 4],
-        };
-        assert_eq!(out, expected.as_bytes());
+                let io_info = SaveState::new(*map).io_info().unwrap().expect("the encoding records an I/O trap");
+                assert_eq!((io_info.io_type, io_info.io_width, io_info.io_port), (expected_type, expected_width, 0x70));
+            }
+        }
     }
 
     #[test]
@@ -1411,53 +1164,29 @@ mod tests {
     }
 
     #[test]
-    fn test_save_state_view_reads_little_endian_fields() {
-        let mut map = new_save_state_map();
-        map[0x10] = 0xA5;
-        map[0x20..0x22].copy_from_slice(&0xBEEFu16.to_le_bytes());
-        write_u32(&mut map[..], 0x30, 0xDEAD_BEEF);
-        write_u64(&mut map[..], 0x40, 0x0123_4567_89AB_CDEF);
-
-        let view = view_over(map.as_slice());
-
-        assert_eq!(view.read_u8(0x10), 0xA5);
-        assert_eq!(view.read_u16(0x20), 0xBEEF);
-        assert_eq!(view.read_u32(0x30), 0xDEAD_BEEF);
-        assert_eq!(view.read_u64(0x40), 0x0123_4567_89AB_CDEF);
-    }
-
-    #[test]
-    #[should_panic(expected = "save state offset within region")]
-    fn test_save_state_view_rejects_offset_past_region() {
-        let map = new_save_state_map();
-        view_over(map.as_slice()).read_u8(SMRAM_SAVE_STATE_MAP_SIZE as usize);
-    }
-
-    #[test]
-    fn test_save_state_view_derived_from_smbase_array() {
+    fn test_get_save_state_reads_with_the_layout_selected_by_the_build() {
         let mut smram = FakeSmram::new(2);
-        smram.map_mut()[0x10] = 0x77;
-        let info = smram.info();
+        // A distinct value at each vendor's RAX offset shows which layout the copied state reads.
+        smram.map_mut()[0x035C..0x0364].copy_from_slice(&0x1111u64.to_le_bytes());
+        smram.map_mut()[0x03F8..0x0400].copy_from_slice(&0x2222u64.to_le_bytes());
 
-        let view = get_save_state_view(info, 1).expect("view for a valid CPU index");
-        assert_eq!(view.read_u8(0x10), 0x77);
+        let state = smram.info().get_save_state(1).expect("state for a valid CPU index");
+        let mut out = [0u8; 8];
+        assert_eq!(state.read_architectural_register(MmSaveStateRegister::Rax, 8, &mut out), Ok(()));
+        let expected = if cfg!(feature = "save_state_amd") { 0x2222 } else { 0x1111 };
+        assert_eq!(u64::from_le_bytes(out), expected);
     }
 
     #[test]
-    fn test_save_state_view_rejects_invalid_metadata() {
+    fn test_get_save_state_rejects_invalid_metadata() {
         let mut smram = FakeSmram::new(2);
-        let info = smram.info();
 
         // CPU index beyond the reported CPU count.
-        assert_eq!(get_save_state_view(info, 2).err(), Some(Status::INVALID_PARAMETER));
+        assert_eq!(smram.info().get_save_state(2).err(), Some(SaveStateError::InvalidParameter));
 
         // A null SMBASE entry means the CPU was never relocated.
         smram.set_smbase(0, 0);
-        assert_eq!(get_save_state_view(smram.info(), 0).err(), Some(Status::INVALID_PARAMETER));
-
-        // A null SMBASE array means the PassDown HOB was never processed.
-        let no_array = SaveStateInfo { number_of_cpus: 2, sm_base: 0 };
-        assert_eq!(get_save_state_view(no_array, 0).err(), Some(Status::NOT_READY));
+        assert_eq!(smram.info().get_save_state(0).err(), Some(SaveStateError::InvalidParameter));
     }
 
     #[test]
@@ -1561,6 +1290,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_save_state_read_phase2_consumes_the_staged_request() {
+        // Phase 2 needs the metadata, so publish it as initialization would.
+        let smram = FakeSmram::new(4);
+        security_state().set_save_state_info(smram.info());
+
         // Staged as this CPU so the hand-off reaches the checks the test is about.
         assert_eq!(stage_read_request(current_apic_id(), 0x1000, 38, 0, 4), Ok(0));
 
@@ -1581,188 +1314,65 @@ mod tests {
     }
 
     #[test]
-    fn test_read_architectural_register_widths() {
-        let rax = save_state::register_info(MmSaveStateRegister::Rax).expect("RAX is mapped on both vendors");
-        let mut map = new_save_state_map();
-        write_u32(&mut map[..], rax.lo_offset as usize, 0x1122_3344);
-        write_u32(&mut map[..], rax.hi_offset as usize, 0x5566_7788);
-        let view = view_over(map.as_slice());
-
-        let mut out = [0u8; 8];
-        assert_eq!(read_architectural_register(&view, MmSaveStateRegister::Rax, 2, &mut out[..2]), Ok(0));
-        assert_eq!(u16::from_le_bytes(out[..2].try_into().unwrap()), 0x3344);
-
-        assert_eq!(read_architectural_register(&view, MmSaveStateRegister::Rax, 4, &mut out[..4]), Ok(0));
-        assert_eq!(u32::from_le_bytes(out[..4].try_into().unwrap()), 0x1122_3344);
-
-        assert_eq!(read_architectural_register(&view, MmSaveStateRegister::Rax, 8, &mut out), Ok(0));
-        assert_eq!(u64::from_le_bytes(out), 0x5566_7788_1122_3344);
-    }
-
-    #[test]
-    fn test_read_architectural_register_rejects_unmapped_register() {
-        let map = new_save_state_map();
-        let view = view_over(map.as_slice());
-        let mut out = [0u8; 8];
-
-        // `LdtInfo` is absent from both vendor maps, and pseudo-registers are handled elsewhere.
-        assert_eq!(
-            read_architectural_register(&view, MmSaveStateRegister::LdtInfo, 8, &mut out),
-            Err(Status::NOT_FOUND)
-        );
-        assert_eq!(read_architectural_register(&view, MmSaveStateRegister::Io, 8, &mut out), Err(Status::NOT_FOUND));
-    }
-
-    #[test]
-    fn test_read_register_field_enforces_native_width() {
-        let map = new_save_state_map();
-        let view = view_over(map.as_slice());
-        let mut out = [0u8; 8];
-
-        let byte = RegisterInfo { lo_offset: 0x10, hi_offset: 0, native_width: 1 };
-        let word = RegisterInfo { lo_offset: 0x10, hi_offset: 0, native_width: 2 };
-        let dword = RegisterInfo { lo_offset: 0x10, hi_offset: 0x14, native_width: 4 };
-        let reg = MmSaveStateRegister::Rax;
-
-        assert_eq!(read_register_field(&view, reg, word, 0, &mut out), Err(Status::NOT_FOUND));
-        assert_eq!(read_register_field(&view, reg, byte, 2, &mut out), Err(Status::INVALID_PARAMETER));
-        assert_eq!(read_register_field(&view, reg, word, 4, &mut out), Err(Status::INVALID_PARAMETER));
-        assert_eq!(read_register_field(&view, reg, dword, 8, &mut out), Err(Status::INVALID_PARAMETER));
-        assert_eq!(read_register_field(&view, reg, dword, 3, &mut out), Err(Status::INVALID_PARAMETER));
-
-        // A buffer shorter than the requested width is caught before any copy.
-        assert_eq!(read_register_field(&view, reg, word, 2, &mut out[..1]), Err(Status::BUFFER_TOO_SMALL));
-        assert_eq!(read_register_field(&view, reg, dword, 4, &mut out[..2]), Err(Status::BUFFER_TOO_SMALL));
-    }
-
-    #[test]
-    fn test_read_lma_register() {
-        let constants = save_state::vendor_constants();
-        let mut map = new_save_state_map();
-        write_u64(&mut map[..], constants.efer_offset as usize, IA32_EFER_LMA);
-        let view = view_over(map.as_slice());
-
-        let mut out = [0u8; 8];
-        assert_eq!(read_lma_register(&view, 8, &mut out), Ok(0));
-        assert_eq!(u64::from_le_bytes(out), LMA_64BIT);
-
-        assert_eq!(read_lma_register(&view, 4, &mut out[..4]), Ok(0));
-        assert_eq!(u32::from_le_bytes(out[..4].try_into().unwrap()), LMA_64BIT as u32);
-
-        assert_eq!(read_lma_register(&view, 2, &mut out), Err(Status::INVALID_PARAMETER));
-        assert_eq!(read_lma_register(&view, 8, &mut out[..4]), Err(Status::BUFFER_TOO_SMALL));
-    }
-
-    #[test]
-    fn test_read_lma_register_reports_32_bit_mode() {
-        let constants = save_state::vendor_constants();
-        let mut map = new_save_state_map();
-        write_u64(&mut map[..], constants.efer_offset as usize, 0);
-        let view = view_over(map.as_slice());
-
-        // AMD64 is always in long mode during MM, so only Intel can report 32-bit.
-        let expected = if constants.lma_always_64 { LMA_64BIT } else { LMA_32BIT };
-        let mut out = [0u8; 8];
-        assert_eq!(read_lma_register(&view, 8, &mut out), Ok(0));
-        assert_eq!(u64::from_le_bytes(out), expected);
-    }
-
-    #[test]
-    fn test_read_io_register_rejects_a_save_state_without_an_io_trap() {
-        let map = new_save_state_map();
-        let view = view_over(map.as_slice());
-        let mut out = [0u8; IO_INFO_SIZE];
-
-        // A zeroed I/O field means the SMI was not caused by an I/O instruction.
-        assert_eq!(read_io_register(&view, &mut out), Err(Status::NOT_FOUND));
-    }
-
-    #[test]
-    fn test_read_io_register_reports_wider_transfers() {
-        const IO_PORT: u16 = 0x70;
-
-        let constants = save_state::vendor_constants();
-        let mut out = [0u8; IO_INFO_SIZE];
-
-        for (byte_count, rax, expected_data) in [(2usize, 0xAABB_CCDDu32, 0xCCDDu64), (4, 0xAABB_CCDD, 0xAABB_CCDD)] {
-            let mut map = new_save_state_map();
-            let io_field = io_trap_field(IO_PORT, true, byte_count);
-            write_u32(&mut map[..], constants.io_info_offset as usize, io_field);
-            write_u32(&mut map[..], constants.rax_offset as usize, rax);
-
-            assert_eq!(read_io_register(&view_over(map.as_slice()), &mut out), Ok(0));
-
-            let parsed = save_state::parse_io_field(io_field).unwrap();
-            let expected = MmSaveStateIoInfo {
-                io_data: expected_data,
-                io_port: IO_PORT,
-                _pad0: [0; 2],
-                io_width: parsed.io_width,
-                io_type: parsed.io_type,
-                _pad1: [0; 4],
-            };
-            assert_eq!(out, expected.as_bytes());
-        }
-    }
-
-    #[test]
-    fn test_read_io_register_rejects_a_short_buffer() {
-        let constants = save_state::vendor_constants();
-        let mut map = new_save_state_map();
-        write_u32(&mut map[..], constants.io_info_offset as usize, io_trap_field(0x70, true, 1));
-
-        let mut out = [0u8; IO_INFO_SIZE];
-        assert_eq!(
-            read_io_register(&view_over(map.as_slice()), &mut out[..IO_INFO_SIZE - 1]),
-            Err(Status::BUFFER_TOO_SMALL)
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "does not expose I/O info")]
-    fn test_read_io_register_panics_on_legacy_save_state_revision() {
-        let constants = save_state::vendor_constants();
-        // AMD always reports I/O info, so only Intel can observe an unsupported revision.
-        assert!(!constants.lma_always_64, "vendor always exposes I/O info");
-
-        let mut map = new_save_state_map();
-        write_u32(&mut map[..], constants.smmrevid_offset as usize, constants.min_rev_id_io - 1);
-        let mut out = [0u8; IO_INFO_SIZE];
-
-        let _ = read_io_register(&view_over(map.as_slice()), &mut out);
-    }
-
-    #[test]
     fn test_inspect_io_condition_maps_direction_to_policy_condition() {
-        let constants = save_state::vendor_constants();
+        let constants = vendor_constants();
         let mut map = new_save_state_map();
 
         write_u32(&mut map[..], constants.io_info_offset as usize, io_trap_field(0xB2, true, 1));
-        assert_eq!(inspect_io_condition(&view_over(map.as_slice())), Some(SaveStateCondition::IoRead));
+        assert_eq!(inspect_io_condition(&SaveState::new(*map)), Some(SaveStateCondition::IoRead));
 
         write_u32(&mut map[..], constants.io_info_offset as usize, io_trap_field(0xB2, false, 1));
-        assert_eq!(inspect_io_condition(&view_over(map.as_slice())), Some(SaveStateCondition::IoWrite));
+        assert_eq!(inspect_io_condition(&SaveState::new(*map)), Some(SaveStateCondition::IoWrite));
 
         write_u32(&mut map[..], constants.io_info_offset as usize, 0);
-        assert_eq!(inspect_io_condition(&view_over(map.as_slice())), None);
+        assert_eq!(inspect_io_condition(&SaveState::new(*map)), None);
     }
 
     #[test]
-    #[should_panic(expected = "does not expose I/O info")]
-    fn test_inspect_io_condition_panics_on_legacy_save_state_revision() {
-        let constants = save_state::vendor_constants();
-        // AMD always reports I/O info, so only Intel can observe an unsupported revision.
-        assert!(!constants.lma_always_64, "vendor always exposes I/O info");
+    fn test_inspect_io_condition_decodes_with_the_view_layout() {
+        // Bit 0 is the IN/OUT direction on AMD but the "SMI was an I/O trap" flag on Intel. Here
+        // Intel decodes length 1 (bits 3:1) and type OUT (bits 7:4 clear), while AMD decodes a
+        // valid record (bit 1) for a 32-bit IN.
+        let field = (0xB2 << 16) | (1 << 1) | 1;
+        let expected =
+            if cfg!(feature = "save_state_amd") { SaveStateCondition::IoRead } else { SaveStateCondition::IoWrite };
 
         let mut map = new_save_state_map();
-        write_u32(&mut map[..], constants.smmrevid_offset as usize, constants.min_rev_id_io - 1);
+        write_u32(&mut map[..], vendor_constants().io_info_offset as usize, field);
+        assert_eq!(inspect_io_condition(&SaveState::new(*map)), Some(expected));
+    }
 
-        let _ = inspect_io_condition(&view_over(map.as_slice()));
+    #[cfg(not(feature = "save_state_amd"))]
+    #[test]
+    fn test_inspect_io_condition_ignores_a_legacy_save_state_revision() {
+        // AMD always reports I/O info, so only the Intel layout can observe an unsupported revision.
+        let constants = vendor_constants();
+        let mut map = new_save_state_map();
+        write_u32(&mut map[..], constants.smmrevid_offset as usize, constants.min_rev_id_io - 1);
+        // The field records an IN trap, so a `None` below comes from the revision alone.
+        write_u32(&mut map[..], constants.io_info_offset as usize, io_trap_field(0xB2, true, 1));
+        let state = SaveState::new(*map);
+
+        assert_eq!(inspect_io_condition(&state), None);
+
+        // Without a trap condition, a descriptor that allows RAX only on an I/O read does not
+        // apply, and the IO pseudo-register has nothing to report.
+        let policy = build_policy(
+            ACCESS_ATTR_ALLOW,
+            &[descriptor(SaveStateField::Rax, RESOURCE_ATTR_COND_READ, SaveStateCondition::IoRead)],
+        );
+        let gate = gate_over(&policy);
+        let mut out = [0u8; IO_INFO_SIZE];
+        assert_eq!(
+            read_gated_register(&state, &gate, MmSaveStateRegister::Rax, 8, &mut out),
+            Err(Status::ACCESS_DENIED)
+        );
+        assert_eq!(read_gated_register(&state, &gate, MmSaveStateRegister::Io, 4, &mut out), Err(Status::NOT_FOUND));
     }
 
     #[test]
     fn test_read_gated_register_allows_a_permitted_register() {
-        let rbx = save_state::register_info(MmSaveStateRegister::Rbx).expect("RBX is mapped on both vendors");
+        let rbx = SaveState::register_info(MmSaveStateRegister::Rbx).expect("RBX is mapped on both vendors");
         let mut map = new_save_state_map();
         write_u32(&mut map[..], rbx.lo_offset as usize, 0x0000_0042);
         write_u32(&mut map[..], rbx.hi_offset as usize, 0);
@@ -1772,10 +1382,7 @@ mod tests {
         let gate = gate_over(&policy);
 
         let mut out = [0u8; 8];
-        assert_eq!(
-            read_gated_register(&view_over(map.as_slice()), &gate, MmSaveStateRegister::Rbx, 8, &mut out),
-            Ok(0)
-        );
+        assert_eq!(read_gated_register(&SaveState::new(*map), &gate, MmSaveStateRegister::Rbx, 8, &mut out), Ok(0));
         assert_eq!(u64::from_le_bytes(out), 0x42);
     }
 
@@ -1787,14 +1394,14 @@ mod tests {
 
         let mut out = [0u8; 8];
         assert_eq!(
-            read_gated_register(&view_over(map.as_slice()), &gate, MmSaveStateRegister::Rax, 8, &mut out),
+            read_gated_register(&SaveState::new(*map), &gate, MmSaveStateRegister::Rax, 8, &mut out),
             Err(Status::ACCESS_DENIED)
         );
     }
 
     #[test]
     fn test_read_gated_register_allows_rax_with_an_unconditional_descriptor() {
-        let rax = save_state::register_info(MmSaveStateRegister::Rax).expect("RAX is mapped on both vendors");
+        let rax = SaveState::register_info(MmSaveStateRegister::Rax).expect("RAX is mapped on both vendors");
         let mut map = new_save_state_map();
         write_u32(&mut map[..], rax.lo_offset as usize, 0x9999_0001);
         write_u32(&mut map[..], rax.hi_offset as usize, 0);
@@ -1806,10 +1413,7 @@ mod tests {
         let gate = gate_over(&policy);
 
         let mut out = [0u8; 8];
-        assert_eq!(
-            read_gated_register(&view_over(map.as_slice()), &gate, MmSaveStateRegister::Rax, 8, &mut out),
-            Ok(0)
-        );
+        assert_eq!(read_gated_register(&SaveState::new(*map), &gate, MmSaveStateRegister::Rax, 8, &mut out), Ok(0));
         assert_eq!(u64::from_le_bytes(out), 0x9999_0001);
     }
 
@@ -1823,7 +1427,7 @@ mod tests {
         // rather than a policy denial.
         let mut out = [0u8; IO_INFO_SIZE];
         assert_eq!(
-            read_gated_register(&view_over(map.as_slice()), &gate, MmSaveStateRegister::Io, 4, &mut out),
+            read_gated_register(&SaveState::new(*map), &gate, MmSaveStateRegister::Io, 4, &mut out),
             Err(Status::NOT_FOUND)
         );
     }
@@ -1833,7 +1437,7 @@ mod tests {
         const IO_PORT: u16 = 0xB2;
         const IO_DATA: u8 = 0x5A;
 
-        let constants = save_state::vendor_constants();
+        let constants = vendor_constants();
         let io_field = io_trap_field(IO_PORT, true, 1);
         let mut map = new_save_state_map();
         write_u32(&mut map[..], constants.io_info_offset as usize, io_field);
@@ -1850,23 +1454,21 @@ mod tests {
         let gate = gate_over(&policy);
 
         let mut out = [0u8; IO_INFO_SIZE];
-        assert_eq!(read_gated_register(&view_over(map.as_slice()), &gate, MmSaveStateRegister::Io, 4, &mut out), Ok(0));
+        assert_eq!(read_gated_register(&SaveState::new(*map), &gate, MmSaveStateRegister::Io, 4, &mut out), Ok(0));
 
-        let parsed = save_state::parse_io_field(io_field).unwrap();
         let expected = MmSaveStateIoInfo {
             io_data: u64::from(IO_DATA),
             io_port: IO_PORT,
-            _pad0: [0; 2],
-            io_width: parsed.io_width,
-            io_type: parsed.io_type,
-            _pad1: [0; 4],
+            io_width: IO_WIDTH_UINT8,
+            io_type: IO_TYPE_INPUT,
+            ..Default::default()
         };
         assert_eq!(out, expected.as_bytes());
     }
 
     #[test]
     fn test_read_gated_register_denies_an_io_read_with_the_wrong_condition() {
-        let constants = save_state::vendor_constants();
+        let constants = vendor_constants();
         let mut map = new_save_state_map();
         write_u32(&mut map[..], constants.io_info_offset as usize, io_trap_field(0xB2, true, 1));
 
@@ -1879,14 +1481,14 @@ mod tests {
 
         let mut out = [0u8; IO_INFO_SIZE];
         assert_eq!(
-            read_gated_register(&view_over(map.as_slice()), &gate, MmSaveStateRegister::Io, 4, &mut out),
+            read_gated_register(&SaveState::new(*map), &gate, MmSaveStateRegister::Io, 4, &mut out),
             Err(Status::ACCESS_DENIED)
         );
     }
 
     #[test]
     fn test_read_gated_register_reads_lma_without_policy_gating() {
-        let constants = save_state::vendor_constants();
+        let constants = vendor_constants();
         let mut map = new_save_state_map();
         write_u64(&mut map[..], constants.efer_offset as usize, IA32_EFER_LMA);
 
@@ -1894,10 +1496,7 @@ mod tests {
         let gate = gate_over(&policy);
 
         let mut out = [0u8; 8];
-        assert_eq!(
-            read_gated_register(&view_over(map.as_slice()), &gate, MmSaveStateRegister::Lma, 8, &mut out),
-            Ok(0)
-        );
+        assert_eq!(read_gated_register(&SaveState::new(*map), &gate, MmSaveStateRegister::Lma, 8, &mut out), Ok(0));
         assert_eq!(u64::from_le_bytes(out), LMA_64BIT);
     }
 }

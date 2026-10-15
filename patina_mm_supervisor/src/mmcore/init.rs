@@ -26,7 +26,10 @@ use patina::{
         hob::{self, Hob, PhaseHandoffInformationTable},
     },
 };
-use patina_internal_cpu::{interrupts::Interrupts, save_state::PROCESSOR_INFO_ENTRY_SIZE};
+use patina_internal_cpu::{
+    interrupts::Interrupts,
+    save_state::{PROCESSOR_INFO_ENTRY_SIZE, VENDOR_NAME},
+};
 use patina_paging::{MemoryAttributes, PageTable, PagingType, x64::X64PageTable};
 
 use crate::{
@@ -460,15 +463,16 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
     /// Publishes the save-state metadata the read syscall depends on.
     ///
-    /// ## Safety
-    ///
-    /// `sm_base` must reference `number_of_cpus` resident SMBASE entries in MMRAM.
-    unsafe fn publish_save_state_metadata(&self, number_of_cpus: usize, sm_base: u64) {
-        let save_state_info = SaveStateInfo { number_of_cpus, sm_base };
+    /// `save_state_info` must have passed [`check_save_state_regions`](Self::check_save_state_regions).
+    fn publish_save_state_metadata(&self, save_state_info: SaveStateInfo) {
         security_state().set_save_state_info(save_state_info);
-        // SAFETY: this function's contract gives `sm_base` `number_of_cpus` readable entries.
-        unsafe { crate::state::save_state::log_save_state_map(save_state_info) };
-        log::info!("Save-state metadata initialized for {number_of_cpus} CPU(s) from SMBASE array at 0x{sm_base:016x}");
+        crate::state::save_state::log_save_state_map(save_state_info);
+        log::info!(
+            "Save-state metadata initialized for {} CPU(s) from SMBASE array at 0x{:016x} \
+             using the {VENDOR_NAME} save-state layout",
+            save_state_info.number_of_cpus(),
+            save_state_info.smbase_array()
+        );
     }
 
     /// Records the MSEG region reserved for an STM, when the platform published one.
@@ -562,17 +566,17 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             find_guid_hob(hob_hand_off_table, MM_SUPV_PASS_DOWN_HOB_GUID).ok_or(PassDownHobError::Missing)?;
         // SAFETY: `pass_down_data` is a slice into the validated HOB list, so the buffer pointers
         // it carries reference live memory as `init_from_pass_down_hob` requires.
-        let (sm_base, mmi_entry_size) = unsafe { self.init_from_pass_down_hob(pass_down_data, number_of_cpus) }?;
+        let (save_state_info, mmi_entry_size) =
+            unsafe { self.init_from_pass_down_hob(pass_down_data, number_of_cpus) }?;
 
-        // SAFETY: `sm_base` came from the PassDown HOB the MM IPL published, so it references
-        // `number_of_cpus` resident SMBASE entries in MMRAM.
-        unsafe { self.publish_save_state_metadata(number_of_cpus, sm_base) };
+        // `init_from_pass_down_hob` has just checked every save-state region it describes.
+        self.publish_save_state_metadata(save_state_info);
 
         self.discover_mseg_base(hob_hand_off_table);
 
         // The SMI entry blocks were already copied per SMBASE, so every core is patched here,
         // not just the BSP.
-        patch_smi_handler_idt(sm_base, number_of_cpus, mmi_entry_size);
+        patch_smi_handler_idt(save_state_info.smbase_array(), number_of_cpus, mmi_entry_size);
 
         self.init_comm_buffers(hob_hand_off_table)
     }
@@ -680,12 +684,16 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// The save-state syscall reads these regions on Ring 3's behalf, so they are proven once
     /// here rather than trusted at each read.
-    fn check_save_state_regions(&self, sm_base: u64, number_of_cpus: usize) -> MmSupervisorResult<()> {
-        validate_save_state_regions(sm_base, number_of_cpus, is_buffer_inside_mmram, |base, size| {
+    fn check_save_state_regions(&self, save_state_info: &SaveStateInfo) -> MmSupervisorResult<()> {
+        validate_save_state_regions(save_state_info, is_buffer_inside_mmram, |base, size| {
             matches!(query_address_ownership(base, size), Some(PageOwnership::Supervisor))
         })
         .inspect_err(|e| log::error!("PassDown HOB does not describe usable save-state regions: {e}"))?;
-        log::info!("Validated save-state regions for {number_of_cpus} CPU(s) from SMBASE array at 0x{sm_base:016x}");
+        log::info!(
+            "Validated save-state regions for {} CPU(s) from SMBASE array at 0x{:016x}",
+            save_state_info.number_of_cpus(),
+            save_state_info.smbase_array()
+        );
 
         Ok(())
     }
@@ -781,7 +789,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// unblocked memory tracker. The stacks are mapped before the page-table walk so the
     /// descriptors it generates see their final attributes.
     ///
-    /// Returns `(sm_base_array, mmi_entry_size)` carried by the HOB.
+    /// Returns the checked save-state metadata and the `mmi_entry_size` carried by the HOB.
     ///
     /// ## Safety
     ///
@@ -793,11 +801,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         &self,
         data: &[u8],
         number_of_cpus: usize,
-    ) -> MmSupervisorResult<(u64, u64)> {
+    ) -> MmSupervisorResult<(SaveStateInfo, u64)> {
         let MmSupvPassDownHobData {
             cpl3_stack_base,
             cpl3_stack_size,
-            sm_base,
+            sm_base_array,
             mm_initialized_buffer,
             firmware_policy_buffer,
             firmware_policy_buffer_size,
@@ -809,7 +817,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // memory of the size they declare.
         unsafe { self.store_mm_initialized_slots(mm_initialized_buffer, number_of_cpus) }?;
 
-        self.check_save_state_regions(sm_base, number_of_cpus)?;
+        // SAFETY: `check_save_state_regions` proves the SMBASE array and every map it describes
+        // before anything reads through them, and the MM IPL keeps them resident for the
+        // supervisor's lifetime.
+        let save_state_info = unsafe { SaveStateInfo::new(number_of_cpus, sm_base_array) }
+            .inspect_err(|e| log::error!("PassDown HOB does not describe a usable SMBASE array: {e}"))?;
+        self.check_save_state_regions(&save_state_info)?;
 
         // SAFETY: as above, for the firmware policy buffer and the size reported beside it.
         let memory_policy_buffer =
@@ -822,7 +835,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // `MEMORY_POLICY_DESCRIPTORS_PER_PAGE` descriptors and stays resident.
         unsafe { self.record_unblocked_memory(memory_policy_buffer) }?;
 
-        Ok((sm_base, mmi_entry_size))
+        Ok((save_state_info, mmi_entry_size))
     }
 }
 
