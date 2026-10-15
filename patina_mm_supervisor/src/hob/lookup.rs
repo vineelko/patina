@@ -56,3 +56,79 @@ pub(crate) fn find_guid_hob(
     }
     None
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage, coverage(off))]
+mod tests {
+    use super::*;
+    use patina::management_mode::supervisor::{
+        MM_SUPERVISOR_CORE_GUID, MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID,
+        MM_SUPERVISOR_USER_GUID,
+    };
+    use patina::pi::guid::HOB_MEMORY_ALLOC_MODULE_GUID;
+
+    use crate::comm_buffer::MM_COMMON_REGION_HOB_GUID;
+    use crate::hob::pass_down::MM_SUPV_PASS_DOWN_HOB_GUID;
+    use crate::test_support::*;
+
+    #[test]
+    fn test_find_module_selects_init_and_core_allocations() {
+        let init = allocation_module(HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID, 0x10_1234);
+        let mut core =
+            allocation_module(MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_CORE_GUID, 0x20_1234);
+        core.alloc_descriptor.memory_base_address = 0x20_0000;
+        let hobs = [Hob::MemoryAllocationModule(&core), Hob::MemoryAllocationModule(&init)];
+
+        assert_eq!(find_module(hobs.clone(), HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID), Some(&init));
+        assert_eq!(
+            find_module(hobs.clone(), MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_CORE_GUID),
+            Some(&core)
+        );
+        assert_eq!(find_module(hobs, MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID), None);
+    }
+
+    #[test]
+    fn test_find_module_selects_matching_user_module() {
+        let wrong_allocation = allocation_module(MM_SUPERVISOR_CORE_GUID, MM_SUPERVISOR_USER_GUID, 0x1111);
+        let wrong_module =
+            allocation_module(MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_CORE_GUID, 0x2222);
+        let matching = allocation_module(MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_USER_GUID, 0x3333);
+
+        assert_eq!(
+            find_module(
+                [
+                    Hob::MemoryAllocationModule(&wrong_allocation),
+                    Hob::MemoryAllocationModule(&wrong_module),
+                    Hob::MemoryAllocationModule(&matching),
+                ],
+                MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+                MM_SUPERVISOR_USER_GUID,
+            ),
+            Some(&matching)
+        );
+        assert_eq!(
+            find_module(
+                [Hob::MemoryAllocationModule(&wrong_allocation), Hob::MemoryAllocationModule(&wrong_module)],
+                MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+                MM_SUPERVISOR_USER_GUID,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_guid_hob_selects_first_matching_hob() {
+        // A HOB list is built in eight-byte units, so every payload here is one unit long.
+        // Two of them carry the same GUID, which is what shows that the first match wins.
+        let mut list = RawHobList::new();
+        list.push_guid_hob(MM_SUPV_PASS_DOWN_HOB_GUID, &[0x11; 8]);
+        list.push_guid_hob(MM_COMMON_REGION_HOB_GUID, &[0x22; 8]);
+        list.push_guid_hob(MM_COMMON_REGION_HOB_GUID, &[0x44; 8]);
+        let list = list.finish();
+
+        assert_eq!(find_guid_hob(list.handoff(), MM_COMMON_REGION_HOB_GUID), Some([0x22; 8].as_slice()));
+        assert_eq!(find_guid_hob(list.handoff(), MM_SUPV_PASS_DOWN_HOB_GUID), Some([0x11; 8].as_slice()));
+        // A GUID no HOB carries is a miss, not a match on the nearest one.
+        assert_eq!(find_guid_hob(list.handoff(), MM_SUPERVISOR_CORE_GUID), None);
+    }
+}
