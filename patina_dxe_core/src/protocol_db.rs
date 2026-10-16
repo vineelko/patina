@@ -787,6 +787,24 @@ impl SpinLockedProtocolDb {
         self.lock().add_protocol_usage(handle, protocol, agent_handle, controller_handle, attributes)
     }
 
+    /// Validates the handles and attributes of an `EFI_BOOT_SERVICES.OpenProtocol()` request without recording a usage.
+    ///
+    /// This lets callers reject invalid requests before performing side effects (such as disconnecting drivers).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`INVALID_PARAMETER`](efi::Status::INVALID_PARAMETER) if a handle is invalid, `attributes` is not an
+    /// allowed value, or a handle that `attributes` requires is missing.
+    pub fn validate_open_protocol_parameters(
+        &self,
+        handle: efi::Handle,
+        agent_handle: Option<efi::Handle>,
+        controller_handle: Option<efi::Handle>,
+        attributes: u32,
+    ) -> Result<(), EfiError> {
+        self.lock().new_open_protocol_info(handle, agent_handle, controller_handle, attributes).map(|_| ())
+    }
+
     /// Removes a protocol usage from the specified handle/protocol.
     ///
     /// This function generally matches the behavior of `EFI_BOOT_SERVICES.CloseProtocol()` API in the UEFI spec 2.10

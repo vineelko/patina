@@ -43,10 +43,10 @@ pub const OPEN_PROTOCOL_BY_DRIVER: u32 = efi::OPEN_PROTOCOL_BY_DRIVER;
 
 /// Used by applications to gain exclusive access to a protocol interface.
 ///
-/// Any [`OPEN_PROTOCOL_BY_DRIVER`] holders owned by other agents are first removed with
-/// `disconnect_controller`. The open will fail with `ACCESS_DENIED` if any `BY_DRIVER` holder
-/// remains afterward. While the interface is held, every other `BY_DRIVER` or `EXCLUSIVE` open
-/// request, including a repeat request from the same agent, fails with `ACCESS_DENIED`.
+/// Any [`OPEN_PROTOCOL_BY_DRIVER`] holders are first removed with `disconnect_controller`. The open
+/// will fail with `ACCESS_DENIED` if any of them remain afterward. While the interface is held, every
+/// other `BY_DRIVER` or `EXCLUSIVE` open request, including a repeat request from the same agent,
+/// fails with `ACCESS_DENIED`.
 ///
 /// The caller is not treated as a driver managing a controller (unlike in [`OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE`]):
 ///
@@ -60,11 +60,10 @@ pub const OPEN_PROTOCOL_EXCLUSIVE: u32 = efi::OPEN_PROTOCOL_EXCLUSIVE;
 ///
 /// Used by a driver to gain exclusive access to a protocol interface.
 ///
-/// Any [`OPEN_PROTOCOL_BY_DRIVER`] holders owned by other agents are first removed with
-/// `disconnect_controller`. The open will fail with `ACCESS_DENIED` if any `BY_DRIVER` holder
-/// remains afterward. While the interface is held, every other `BY_DRIVER` or `EXCLUSIVE` open
-/// request fails with `ACCESS_DENIED`. A repeat request from the same agent for the same controller
-/// returns `ALREADY_STARTED`.
+/// Any [`OPEN_PROTOCOL_BY_DRIVER`] holders are first removed with `disconnect_controller`. The open
+/// will fail with `ACCESS_DENIED` if any of them remain afterward. While the interface is held, every
+/// other `BY_DRIVER` or `EXCLUSIVE` open request fails with `ACCESS_DENIED`. A repeat request from
+/// the same agent for the same controller returns `ALREADY_STARTED`.
 ///
 /// The caller is treated as a driver managing the controller as with [`OPEN_PROTOCOL_BY_DRIVER`]
 /// (and unlike [`OPEN_PROTOCOL_EXCLUSIVE`]).

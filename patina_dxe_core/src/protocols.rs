@@ -431,25 +431,50 @@ pub unsafe fn core_open_protocol(
     controller_handle: Option<efi::Handle>,
     attributes: u32,
 ) -> Result<*mut c_void, EfiError> {
-    // if attributes has exclusive flag set, then attempt to disconnect any other drivers that have the requested protocol
-    // open on this handle BY_DRIVER.
+    // Reject invalid requests before any side effect (such as disconnecting drivers) takes place.
+    PROTOCOL_DB.validate_open_protocol_parameters(handle, agent_handle, controller_handle, attributes)?;
+
+    // EXCLUSIVE (and BY_DRIVER | EXCLUSIVE) first request every BY_DRIVER holder to release the protocol.
     if (attributes & driver::OPEN_PROTOCOL_EXCLUSIVE) != 0 {
         let usages = match PROTOCOL_DB.get_open_protocol_information_by_protocol(handle, protocol) {
             Err(EfiError::NotFound) => Vec::new(),
             Err(err) => return Err(err),
             Ok(usages) => usages,
         };
-        if let Some(usage) = usages.iter().find(|x| {
-            (x.attributes & driver::OPEN_PROTOCOL_BY_DRIVER) != 0
-                && (x.attributes & driver::OPEN_PROTOCOL_EXCLUSIVE) == 0
-                && x.agent_handle != agent_handle
-        }) && {
-            // SAFETY: handles are validated inside core_disconnect_controller. The implicit UEFI
-            // spec assumption that driver bindings remain valid for the duration of the call
-            // cannot be verified here; see core_disconnect_controller's safety documentation.
-            unsafe { core_disconnect_controller(handle, usage.agent_handle, None) }.is_err()
-        } {
-            return Err(EfiError::AccessDenied);
+
+        // An existing exclusive holder cannot be preempted, add_protocol_usage reports it below.
+        if !usages.iter().any(|usage| (usage.attributes & driver::OPEN_PROTOCOL_EXCLUSIVE) != 0) {
+            // The loop stops when a BY_DRIVER holder no longer exists, a disconnect fails, or
+            // a holder that was already disconnected still has a BY_DRIVER usage.
+            let mut disconnected_agents = Vec::new();
+            loop {
+                let usages = match PROTOCOL_DB.get_open_protocol_information_by_protocol(handle, protocol) {
+                    Err(EfiError::NotFound) => break,
+                    Err(err) => return Err(err),
+                    Ok(usages) => usages,
+                };
+
+                let Some(usage) = usages.iter().find(|usage| (usage.attributes & driver::OPEN_PROTOCOL_BY_DRIVER) != 0)
+                else {
+                    break;
+                };
+
+                // A driver whose Stop() succeeds without closing its BY_DRIVER usage could allow the loop to
+                // run infinitely. The UEFI spec states that ACCESS_DENIED should be returned when a BY_DRIVER
+                // usage remains after DisconnectController() is called, so that case is denied here.
+                if disconnected_agents.contains(&usage.agent_handle) {
+                    return Err(EfiError::AccessDenied);
+                }
+
+                // SAFETY: handles are validated inside core_disconnect_controller. The implicit UEFI
+                // spec assumption that driver bindings remain valid for the duration of the call
+                // cannot be verified here. See core_disconnect_controller's safety documentation.
+                // Note: A failed disconnect is reported as ACCESS_DENIED immediately.
+                if unsafe { core_disconnect_controller(handle, usage.agent_handle, None) }.is_err() {
+                    return Err(EfiError::AccessDenied);
+                }
+                disconnected_agents.push(usage.agent_handle);
+            }
         }
     }
 
@@ -1068,6 +1093,7 @@ pub fn init_protocol_support(st: &mut EfiSystemTable) {
 mod tests {
     use super::*;
     use crate::test_support;
+    use core::sync::atomic::{AtomicUsize, Ordering};
     use patina::driver::{
         OPEN_PROTOCOL_BY_CHILD_CONTROLLER, OPEN_PROTOCOL_BY_DRIVER, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE,
         OPEN_PROTOCOL_EXCLUSIVE, OPEN_PROTOCOL_GET, OPEN_PROTOCOL_TEST,
@@ -1108,6 +1134,70 @@ mod tests {
 
     fn usage_count(handle: efi::Handle) -> usize {
         PROTOCOL_DB.get_open_protocol_information_by_protocol(handle, TEST_GUID).unwrap().len()
+    }
+
+    static STOP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    extern "efiapi" fn driver_supported_or_start_unused(
+        _this: *mut efi::protocols::driver_binding::Protocol,
+        _controller_handle: efi::Handle,
+        _remaining_device_path: *mut efi::protocols::device_path::Protocol,
+    ) -> efi::Status {
+        efi::Status::UNSUPPORTED
+    }
+
+    /// Closes the driver's `BY_DRIVER` open of `TEST_GUID` on the controller.
+    extern "efiapi" fn driver_stop_and_close(
+        this: *mut efi::protocols::driver_binding::Protocol,
+        controller_handle: efi::Handle,
+        _number_of_children: usize,
+        _child_handle_buffer: *mut efi::Handle,
+    ) -> efi::Status {
+        STOP_CALLS.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: `this` is the leaked binding installed by `new_driver_agent`.
+        let agent = unsafe { (*this).driver_binding_handle };
+        match core_close_protocol(controller_handle, TEST_GUID, agent, Some(controller_handle)) {
+            Ok(()) => efi::Status::SUCCESS,
+            Err(err) => err.into(),
+        }
+    }
+
+    /// Reports success without closing the driver's `BY_DRIVER` open.
+    extern "efiapi" fn driver_stop_without_close(
+        _this: *mut efi::protocols::driver_binding::Protocol,
+        _controller_handle: efi::Handle,
+        _number_of_children: usize,
+        _child_handle_buffer: *mut efi::Handle,
+    ) -> efi::Status {
+        STOP_CALLS.fetch_add(1, Ordering::SeqCst);
+        efi::Status::SUCCESS
+    }
+
+    /// Returns a new agent handle with a Driver Binding Protocol that uses `stop`.
+    fn new_driver_agent(
+        stop: extern "efiapi" fn(
+            *mut efi::protocols::driver_binding::Protocol,
+            efi::Handle,
+            usize,
+            *mut efi::Handle,
+        ) -> efi::Status,
+    ) -> efi::Handle {
+        let agent = new_handle(OTHER_GUID, 0x30);
+        let binding = Box::leak(Box::new(efi::protocols::driver_binding::Protocol {
+            version: 10,
+            supported: driver_supported_or_start_unused,
+            start: driver_supported_or_start_unused,
+            stop,
+            driver_binding_handle: agent,
+            image_handle: agent,
+        }));
+        core_install_protocol_interface(
+            Some(agent),
+            efi::protocols::driver_binding::PROTOCOL_GUID,
+            core::ptr::from_mut(binding).cast(),
+        )
+        .unwrap();
+        agent
     }
 
     #[test]
@@ -1256,6 +1346,27 @@ mod tests {
     }
 
     #[test]
+    fn test_open_protocol_invalid_request_does_not_disconnect_existing_holders() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let agent = new_handle(OTHER_GUID, 0x10);
+            let other_agent = new_handle(OTHER_GUID, 0x20);
+            assert_eq!(open(handle, agent, handle, OPEN_PROTOCOL_BY_DRIVER).0, efi::Status::SUCCESS);
+
+            // The request is invalid (no agent), so it is rejected without any side effect on the BY_DRIVER holder.
+            assert_eq!(
+                open(handle, core::ptr::null_mut(), handle, OPEN_PROTOCOL_EXCLUSIVE).0,
+                efi::Status::INVALID_PARAMETER
+            );
+            assert_eq!(
+                open(handle, other_agent, core::ptr::null_mut(), OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE).0,
+                efi::Status::INVALID_PARAMETER
+            );
+            assert_eq!(usage_count(handle), 1);
+        });
+    }
+
+    #[test]
     fn test_open_protocol_exclusive_holder_denies_driver_and_exclusive_opens() {
         with_locked_state(|| {
             let handle = new_handle(TEST_GUID, TEST_INTERFACE);
@@ -1368,6 +1479,78 @@ mod tests {
                 // Upgrading the holder's own BY_DRIVER usage is not ALREADY_STARTED, so it is also denied.
                 assert_eq!(open(handle, agent, handle, attributes).0, efi::Status::ACCESS_DENIED, "{attributes:#x}");
             }
+            assert_eq!(usage_count(handle), 1);
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_exclusive_disconnects_by_driver_holder() {
+        with_locked_state(|| {
+            for attributes in [OPEN_PROTOCOL_EXCLUSIVE, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE] {
+                let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+                let holder = new_driver_agent(driver_stop_and_close);
+                let agent = new_handle(OTHER_GUID, 0x20);
+                assert_eq!(open(handle, holder, handle, OPEN_PROTOCOL_BY_DRIVER).0, efi::Status::SUCCESS);
+
+                STOP_CALLS.store(0, Ordering::SeqCst);
+                let (status, interface) = open(handle, agent, handle, attributes);
+                assert_eq!(status, efi::Status::SUCCESS, "{attributes:#x}");
+                assert_eq!(interface as usize, TEST_INTERFACE);
+                assert_eq!(STOP_CALLS.load(Ordering::SeqCst), 1, "{attributes:#x}");
+
+                let usages = PROTOCOL_DB.get_open_protocol_information_by_protocol(handle, TEST_GUID).unwrap();
+                assert_eq!(usages.len(), 1);
+                assert_eq!(usages[0].agent_handle, Some(agent));
+                assert_eq!(usages[0].attributes, attributes);
+            }
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_exclusive_disconnects_requesting_agents_own_by_driver_usage() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let agent = new_driver_agent(driver_stop_and_close);
+            assert_eq!(open(handle, agent, handle, OPEN_PROTOCOL_BY_DRIVER).0, efi::Status::SUCCESS);
+
+            STOP_CALLS.store(0, Ordering::SeqCst);
+            assert_eq!(open(handle, agent, handle, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE).0, efi::Status::SUCCESS);
+            assert_eq!(STOP_CALLS.load(Ordering::SeqCst), 1);
+
+            let usages = PROTOCOL_DB.get_open_protocol_information_by_protocol(handle, TEST_GUID).unwrap();
+            assert_eq!(usages.len(), 1);
+            assert_eq!(usages[0].attributes, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE);
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_exclusive_with_holder_that_stays_open_after_stop_is_access_denied() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let holder = new_driver_agent(driver_stop_without_close);
+            let agent = new_handle(OTHER_GUID, 0x20);
+            assert_eq!(open(handle, holder, handle, OPEN_PROTOCOL_BY_DRIVER).0, efi::Status::SUCCESS);
+
+            STOP_CALLS.store(0, Ordering::SeqCst);
+            assert_eq!(open(handle, agent, handle, OPEN_PROTOCOL_EXCLUSIVE).0, efi::Status::ACCESS_DENIED);
+            assert_eq!(STOP_CALLS.load(Ordering::SeqCst), 1);
+            assert_eq!(usage_count(handle), 1);
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_exclusive_does_not_disconnect_existing_exclusive_holder() {
+        with_locked_state(|| {
+            let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+            let holder = new_driver_agent(driver_stop_and_close);
+            let agent = new_handle(OTHER_GUID, 0x20);
+            assert_eq!(open(handle, holder, handle, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE).0, efi::Status::SUCCESS);
+
+            STOP_CALLS.store(0, Ordering::SeqCst);
+            for attributes in [OPEN_PROTOCOL_EXCLUSIVE, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE] {
+                assert_eq!(open(handle, agent, handle, attributes).0, efi::Status::ACCESS_DENIED, "{attributes:#x}");
+            }
+            assert_eq!(STOP_CALLS.load(Ordering::SeqCst), 0);
             assert_eq!(usage_count(handle), 1);
         });
     }

@@ -539,10 +539,15 @@ database does not have access to these APIs.
 The `open_protocol` function executes the following logic:
 
 1. Validate inputs: `protocol` and `interface` pointers must not be null (null `interface` is permitted for
-`TEST_PROTOCOL` attribute), `agent` and `controller` handles must be valid.
-2. If the `EXCLUSIVE` flag is set in the attributes, retrive all current usages for the `handle` and if any of those
-usages indicate that the `protocol` is open `BY_DRIVER`, then execute
-[`core_disconnect_controller`](driver_model.md#disconnecting-a-controller) to close the protocol usage.
+`TEST_PROTOCOL` attribute), `agent` and `controller` handles must be valid, and the attributes must be valid for the
+supplied handles. Invalid requests are rejected before any other step runs.
+2. If the `EXCLUSIVE` flag is set in the attributes and no usage is already open `EXCLUSIVE`, the current usages for
+the `handle` are repeatedly retrieved and, while a usage open `BY_DRIVER` is present,
+[`core_disconnect_controller`](driver_model.md#disconnecting-a-controller) is called to close it, the usage list is
+re-fetched before looking again. This is done because disconnecting one agent can change what is on the usage list. If a
+disconnect fails, `ACCESS_DENIED` is returned immediately without calling `add_protocol_usage`. `ACCESS_DENIED` is also
+returned if an agent that was already disconnected still has the protocol open `BY_DRIVER`, for example when its
+`Stop()` succeeds without closing the protocol.
 3. Call `add_protocol_usage` to insert a new usage representing this open operation into the protocol database. Errors
 from `add_protocol_usage` are returned as-is. This includes `ALREADY_STARTED`, which is returned when the same agent
 already has the protocol open with `BY_DRIVER` or `BY_DRIVER | EXCLUSIVE` for the same controller. A different agent, or
