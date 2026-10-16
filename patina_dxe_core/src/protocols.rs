@@ -410,6 +410,64 @@ pub unsafe extern "efiapi" fn handle_protocol(
     }
 }
 
+/// Opens a protocol interface on a handle, recording the usage in the protocol database.
+///
+/// Returns the interface pointer.
+///
+/// # Errors
+///
+/// Returns the status codes `EFI_BOOT_SERVICES.OpenProtocol()` defines.
+///
+/// # Safety
+///
+/// The implicit UEFI spec assumption that driver bindings remain valid for the duration of the
+/// call cannot be verified here, see `core_disconnect_controller`'s safety documentation. This
+/// function inherits that same caveat when `attributes` has `EXCLUSIVE` set, since preempting an
+/// existing `BY_DRIVER` holder calls `core_disconnect_controller`.
+pub unsafe fn core_open_protocol(
+    handle: efi::Handle,
+    protocol: efi::Guid,
+    agent_handle: Option<efi::Handle>,
+    controller_handle: Option<efi::Handle>,
+    attributes: u32,
+) -> Result<*mut c_void, EfiError> {
+    // if attributes has exclusive flag set, then attempt to disconnect any other drivers that have the requested protocol
+    // open on this handle BY_DRIVER.
+    if (attributes & driver::OPEN_PROTOCOL_EXCLUSIVE) != 0 {
+        let usages = match PROTOCOL_DB.get_open_protocol_information_by_protocol(handle, protocol) {
+            Err(EfiError::NotFound) => Vec::new(),
+            Err(err) => return Err(err),
+            Ok(usages) => usages,
+        };
+        if let Some(usage) = usages.iter().find(|x| {
+            (x.attributes & driver::OPEN_PROTOCOL_BY_DRIVER) != 0
+                && (x.attributes & driver::OPEN_PROTOCOL_EXCLUSIVE) == 0
+                && x.agent_handle != agent_handle
+        }) && {
+            // SAFETY: handles are validated inside core_disconnect_controller. The implicit UEFI
+            // spec assumption that driver bindings remain valid for the duration of the call
+            // cannot be verified here; see core_disconnect_controller's safety documentation.
+            unsafe { core_disconnect_controller(handle, usage.agent_handle, None) }.is_err()
+        } {
+            return Err(EfiError::AccessDenied);
+        }
+    }
+
+    PROTOCOL_DB.add_protocol_usage(handle, protocol, agent_handle, controller_handle, attributes)?;
+
+    PROTOCOL_DB.get_interface_for_handle(handle, protocol)
+}
+
+/// Closes a protocol usage previously opened by [`core_open_protocol`].
+pub fn core_close_protocol(
+    handle: efi::Handle,
+    protocol: efi::Guid,
+    agent_handle: efi::Handle,
+    controller_handle: Option<efi::Handle>,
+) -> Result<(), EfiError> {
+    PROTOCOL_DB.remove_protocol_usage(handle, protocol, Some(agent_handle), controller_handle, None)
+}
+
 /// Opens a protocol interface on a handle with usage tracking.
 ///
 /// # Safety
@@ -442,55 +500,31 @@ unsafe extern "efiapi" fn open_protocol(
     let controller_handle =
         PROTOCOL_DB.validate_handle(controller_handle).map_or_else(|_err| None, |_ok| Some(controller_handle));
 
-    // if attributes has exclusive flag set, then attempt to disconnect any other drivers that have the requested protocol
-    // open on this handle BY_DRIVER.
-    if (attributes & driver::OPEN_PROTOCOL_EXCLUSIVE) != 0 {
-        let usages = match PROTOCOL_DB.get_open_protocol_information_by_protocol(handle, protocol) {
-            Err(EfiError::NotFound) => Vec::new(),
+    // SAFETY: handles are validated above. The implicit UEFI spec assumption that driver bindings
+    // remain valid for the duration of the call cannot be verified here. See
+    // core_disconnect_controller's safety documentation.
+    let desired_interface =
+        match unsafe { core_open_protocol(handle, protocol, agent_handle, controller_handle, attributes) } {
+            Ok(interface) => interface,
+            Err(EfiError::Unsupported) => {
+                if !interface.is_null() {
+                    // SAFETY: Caller must ensure that interface is a valid pointer if it is non-null.
+                    unsafe { interface.write_unaligned(core::ptr::null_mut()) };
+                }
+                return efi::Status::UNSUPPORTED;
+            }
+            Err(EfiError::AlreadyStarted) => {
+                // Matches EDK II behavior to hand back the interface, since a bus driver treats this as non-fatal.
+                if !interface.is_null()
+                    && let Ok(desired_interface) = PROTOCOL_DB.get_interface_for_handle(handle, protocol)
+                {
+                    // SAFETY: Caller must ensure that interface is a valid pointer if it is non-null.
+                    unsafe { interface.write_unaligned(desired_interface) };
+                }
+                return efi::Status::ALREADY_STARTED;
+            }
             Err(err) => return err.into(),
-            Ok(usages) => usages,
         };
-        if let Some(usage) = usages.iter().find(|x| {
-            (x.attributes & driver::OPEN_PROTOCOL_BY_DRIVER) != 0
-                && (x.attributes & driver::OPEN_PROTOCOL_EXCLUSIVE) == 0
-                && x.agent_handle != agent_handle
-        }) && {
-            // SAFETY: handles are validated inside core_disconnect_controller. The implicit UEFI
-            // spec assumption that driver bindings remain valid for the duration of the call
-            // cannot be verified here; see core_disconnect_controller's safety documentation.
-            unsafe { core_disconnect_controller(handle, usage.agent_handle, None) }.is_err()
-        } {
-            return efi::Status::ACCESS_DENIED;
-        }
-    }
-
-    match PROTOCOL_DB.add_protocol_usage(handle, protocol, agent_handle, controller_handle, attributes) {
-        Err(EfiError::Unsupported) => {
-            if !interface.is_null() {
-                // SAFETY: Caller must ensure that interface is a valid pointer if it is non-null.
-                unsafe { interface.write_unaligned(core::ptr::null_mut()) };
-            }
-            return efi::Status::UNSUPPORTED;
-        }
-        Err(EfiError::AlreadyStarted) if (attributes & driver::OPEN_PROTOCOL_BY_DRIVER) != 0 => {
-            //For already started interface is still returned.
-            let desired_interface = PROTOCOL_DB
-                .get_interface_for_handle(handle, protocol)
-                .expect("Already Started can't happen if protocol doesn't exist.");
-            if !interface.is_null() {
-                // SAFETY: Caller must ensure that interface is a valid pointer if it is non-null.
-                unsafe { interface.write_unaligned(desired_interface) };
-            }
-            return efi::Status::ALREADY_STARTED;
-        }
-        Ok(()) | Err(EfiError::AlreadyStarted) => (),
-        Err(err) => return err.into(),
-    }
-
-    let desired_interface = match PROTOCOL_DB.get_interface_for_handle(handle, protocol) {
-        Err(err) => return err.into(),
-        Ok(found) => found,
-    };
 
     if attributes != driver::OPEN_PROTOCOL_TEST {
         // SAFETY: Caller must ensure that interface is a valid pointer if it is non-null.
@@ -533,7 +567,7 @@ unsafe extern "efiapi" fn close_protocol(
         // SAFETY: Caller must ensure that protocol is a valid pointer. It is checked for null above.
         unsafe { protocol.read_unaligned() }
     };
-    match PROTOCOL_DB.remove_protocol_usage(handle, protocol_guid, Some(agent_handle), controller_handle, None) {
+    match core_close_protocol(handle, protocol_guid, agent_handle, controller_handle) {
         Err(err) => err.into(),
         Ok(()) => efi::Status::SUCCESS,
     }
