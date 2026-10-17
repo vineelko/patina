@@ -551,9 +551,9 @@ returned if an agent that was already disconnected still has the protocol open `
 3. Call `add_protocol_usage` to insert a new usage representing this open operation into the protocol database. Errors
 from `add_protocol_usage` are returned as-is. This includes `ALREADY_STARTED`, which is returned when the same agent
 already has the protocol open with `BY_DRIVER` or `BY_DRIVER | EXCLUSIVE` for the same controller. A different agent, or
-the same agent with a different controller, gets `ACCESS_DENIED`. The raw `open_protocol` function additionally writes
-the interface pointer in that case, as the EDK II implementation does. Also, if the requested attribute contained
-`TEST_PROTOCOL`, then the interface is not returned on success.
+the same agent with a different controller, gets `ACCESS_DENIED`. The raw `open_protocol` function additionally
+writes the interface pointer in that case, as the EDK II implementation does. For `TEST_PROTOCOL`, the interface output
+is ignored on both success and failure.
 
 ### Close Protocol Interface
 

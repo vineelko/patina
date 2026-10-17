@@ -532,7 +532,7 @@ unsafe extern "efiapi" fn open_protocol(
         match unsafe { core_open_protocol(handle, protocol, agent_handle, controller_handle, attributes) } {
             Ok(interface) => interface,
             Err(EfiError::Unsupported) => {
-                if !interface.is_null() {
+                if attributes != driver::OPEN_PROTOCOL_TEST && !interface.is_null() {
                     // SAFETY: Caller must ensure that interface is a valid pointer if it is non-null.
                     unsafe { interface.write_unaligned(core::ptr::null_mut()) };
                 }
@@ -1273,6 +1273,19 @@ mod tests {
             let (status, interface) = open(handle, core::ptr::null_mut(), core::ptr::null_mut(), OPEN_PROTOCOL_GET);
             assert_eq!(status, efi::Status::UNSUPPORTED);
             assert!(interface.is_null());
+        });
+    }
+
+    #[test]
+    fn test_open_protocol_test_protocol_preserves_interface() {
+        with_locked_state(|| {
+            for (guid, expected_status) in [(TEST_GUID, efi::Status::SUCCESS), (OTHER_GUID, efi::Status::UNSUPPORTED)] {
+                let handle = new_handle(guid, TEST_INTERFACE);
+                let (status, interface) =
+                    open(handle, core::ptr::null_mut(), core::ptr::null_mut(), OPEN_PROTOCOL_TEST);
+                assert_eq!(status, expected_status);
+                assert_eq!(interface, core::ptr::dangling_mut());
+            }
         });
     }
 
