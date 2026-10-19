@@ -239,48 +239,48 @@ fn core_connect_single_controller(
     driver_bindings.retain(|x| !driver_candidates.contains(x));
     driver_candidates.append(&mut driver_bindings);
 
-    // loop until no more drivers can be started on handle.
+    // Every time Supported() returns EFI_SUCCESS (and Start() is called), the search restarts with the highest
+    // precedence candidate and stops once no remaining candidate is supported.
     let mut one_started = false;
+    let device_path = remaining_device_path.map_or(core::ptr::null_mut(), core::ptr::NonNull::as_ptr);
     loop {
-        let mut started_drivers = Vec::new();
-        for driver_binding_interface in driver_candidates.clone() {
-            // SAFETY: driver_binding_interface is a clone of driver_candidates which is created above.
-            // The pointer should be valid as long as driver_candidates is successfully allocated.
+        let mut started_index = None;
+        for (index, &driver_binding_interface) in driver_candidates.iter().enumerate() {
+            // SAFETY: driver_binding_interface comes from driver_candidates, which is built above from valid driver
+            // binding protocol instances.
             let driver_binding = unsafe { &mut *(driver_binding_interface) };
-            let device_path = remaining_device_path.map_or(core::ptr::null_mut(), core::ptr::NonNull::as_ptr);
 
             perf!(perf_driver_binding_support_begin, driver_binding.driver_binding_handle, controller_handle);
 
-            // Driver claims support; attempt to start it.
             // SAFETY: driver_binding_interface is a valid pointer to a driver binding protocol instance
             // as ensured by the construction of driver_candidates above.
             let status =
                 unsafe { (driver_binding.supported)(driver_binding_interface, controller_handle, device_path) };
-            if status == efi::Status::SUCCESS {
-                perf!(perf_driver_binding_support_end, driver_binding.driver_binding_handle, controller_handle);
 
-                started_drivers.push(driver_binding_interface);
+            perf!(perf_driver_binding_support_end, driver_binding.driver_binding_handle, controller_handle);
 
-                perf!(perf_driver_binding_start_begin, driver_binding.driver_binding_handle, controller_handle);
-
-                // SAFETY: driver_binding_interface is a valid pointer to a driver binding protocol instance
-                // as ensured by the construction of driver_candidates above.
-                let status =
-                    unsafe { (driver_binding.start)(driver_binding_interface, controller_handle, device_path) };
-                if status == efi::Status::SUCCESS {
-                    one_started = true;
-                }
-
-                perf!(perf_driver_binding_start_end, driver_binding.driver_binding_handle, controller_handle);
-            } else {
-                perf!(perf_driver_binding_support_end, driver_binding.driver_binding_handle, controller_handle);
+            if status != efi::Status::SUCCESS {
                 continue;
             }
-        }
-        if started_drivers.is_empty() {
+
+            perf!(perf_driver_binding_start_begin, driver_binding.driver_binding_handle, controller_handle);
+
+            // SAFETY: driver_binding_interface is a valid pointer to a driver binding protocol instance
+            // as ensured by the construction of driver_candidates above.
+            let status = unsafe { (driver_binding.start)(driver_binding_interface, controller_handle, device_path) };
+            if status == efi::Status::SUCCESS {
+                one_started = true;
+            }
+
+            perf!(perf_driver_binding_start_end, driver_binding.driver_binding_handle, controller_handle);
+
+            started_index = Some(index);
             break;
         }
-        driver_candidates.retain(|x| !started_drivers.contains(x));
+        let Some(index) = started_index else {
+            break;
+        };
+        driver_candidates.remove(index);
     }
 
     if one_started {
@@ -1362,6 +1362,62 @@ mod tests {
             // Verify that support was checked but start was not called
             assert_eq!(SUPPORTED_CALL_COUNT.load(Ordering::SeqCst), 1); // Since we're using mock_supported_failure
             assert_eq!(START_CALL_COUNT.load(Ordering::SeqCst), 1); // Start should never be called
+        });
+    }
+
+    #[test]
+    fn test_core_connect_single_controller_restarts_search_after_start() {
+        use std::sync::Mutex;
+
+        // Records ('S', version) for Supported() and ('B', version) for Start(), in call order.
+        static EVENTS: Mutex<Vec<(char, u32)>> = Mutex::new(Vec::new());
+
+        // The highest version driver (30) only supports the controller once the version 20 driver has started.
+        extern "efiapi" fn supported(
+            this: *mut efi::protocols::driver_binding::Protocol,
+            _controller_handle: efi::Handle,
+            _remaining_device_path: *mut efi::protocols::device_path::Protocol,
+        ) -> efi::Status {
+            // SAFETY: `this` is a binding installed by this test that stays allocated.
+            let version = unsafe { (*this).version };
+            let mut events = EVENTS.lock().unwrap();
+            events.push(('S', version));
+            match version {
+                20 => efi::Status::SUCCESS,
+                30 if events.contains(&('B', 20)) => efi::Status::SUCCESS,
+                _ => efi::Status::UNSUPPORTED,
+            }
+        }
+
+        extern "efiapi" fn start(
+            this: *mut efi::protocols::driver_binding::Protocol,
+            _controller_handle: efi::Handle,
+            _remaining_device_path: *mut efi::protocols::device_path::Protocol,
+        ) -> efi::Status {
+            // SAFETY: `this` is a binding installed by this test that stays allocated.
+            EVENTS.lock().unwrap().push(('B', unsafe { (*this).version }));
+            efi::Status::SUCCESS
+        }
+
+        with_locked_state(|| {
+            EVENTS.lock().unwrap().clear();
+            let controller = new_test_handle(0x1111);
+            for version in [30, 20, 10] {
+                let driver = new_test_handle(0x2222);
+                let binding = Box::leak(create_driver_binding(version, driver, supported, start, mock_stop_success));
+                PROTOCOL_DB
+                    .install_protocol_interface(
+                        Some(driver),
+                        efi::protocols::driver_binding::PROTOCOL_GUID,
+                        core::ptr::from_mut(binding).cast(),
+                    )
+                    .unwrap();
+            }
+
+            assert_eq!(core_connect_single_controller(controller, Vec::new(), None), Ok(()));
+
+            // After version 20 starts, the search restarts at version 30 before version 10 is tried.
+            assert_eq!(*EVENTS.lock().unwrap(), [('S', 30), ('S', 20), ('B', 20), ('S', 30), ('B', 30), ('S', 10)]);
         });
     }
 
