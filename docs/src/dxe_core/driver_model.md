@@ -87,7 +87,8 @@ and will be stopped when `core_disconnect_controller` is called.
 
 The caller can narrow the scope of the disconnect operation by supplying the optional `driver_handle` parameter to the
 function. If this parameter is supplied, then only that specific driver will be stopped, rather than all of the drivers
-managing the controller.
+managing the controller. The supplied handle must support a non-null Driver Binding protocol interface, otherwise
+`INVALID_PARAMETER` is returned even when the driver is not managing the controller.
 
 ### Shutting Down a Driver
 

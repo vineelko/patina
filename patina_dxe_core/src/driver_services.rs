@@ -436,7 +436,12 @@ pub unsafe fn core_disconnect_controller(
     PROTOCOL_DB.validate_handle(controller_handle)?;
 
     if let Some(handle) = driver_image_handle {
-        PROTOCOL_DB.validate_handle(handle)?;
+        let binding = PROTOCOL_DB
+            .get_interface_for_handle(handle, efi::protocols::driver_binding::PROTOCOL_GUID)
+            .map_err(|_| EfiError::InvalidParameter)?;
+        if binding.is_null() {
+            return Err(EfiError::InvalidParameter);
+        }
     }
 
     if let Some(handle) = child_handle {
@@ -1857,6 +1862,53 @@ mod tests {
                 DRIVER_STOP_CALLED.load(Ordering::SeqCst) > 0,
                 "Driver should be fully stopped when specified child is the only child"
             );
+        });
+    }
+
+    #[test]
+    fn test_core_disconnect_controller_invalid_driver_binding_is_invalid_parameter() {
+        with_locked_state(|| {
+            let controller = new_test_handle(0x1111);
+            for null_binding in [false, true] {
+                let driver = new_test_handle(0x2222);
+                if null_binding {
+                    PROTOCOL_DB
+                        .install_protocol_interface(
+                            Some(driver),
+                            efi::protocols::driver_binding::PROTOCOL_GUID,
+                            core::ptr::null_mut(),
+                        )
+                        .unwrap();
+                }
+
+                // SAFETY: Neither handle has a usable driver binding, so no driver callback can run.
+                let result = unsafe { core_disconnect_controller(controller, Some(driver), None) };
+                assert_eq!(result, Err(EfiError::InvalidParameter), "null_binding: {null_binding}");
+
+                // SAFETY: The raw entry point validates the same handles before invoking any callback.
+                let status = unsafe { disconnect_controller(controller, driver, core::ptr::null_mut()) };
+                assert_eq!(status, efi::Status::INVALID_PARAMETER, "null_binding: {null_binding}");
+            }
+        });
+    }
+
+    #[test]
+    fn test_core_disconnect_controller_non_managing_driver_succeeds() {
+        with_locked_state(|| {
+            let controller = new_test_handle(0x1111);
+            let driver = new_test_handle(0x2222);
+            let mut binding = create_default_driver_binding(10, driver);
+            PROTOCOL_DB
+                .install_protocol_interface(
+                    Some(driver),
+                    efi::protocols::driver_binding::PROTOCOL_GUID,
+                    core::ptr::from_mut(binding.as_mut()).cast(),
+                )
+                .unwrap();
+
+            // SAFETY: The driver binding remains allocated throughout the call.
+            let result = unsafe { core_disconnect_controller(controller, Some(driver), None) };
+            assert_eq!(result, Ok(()));
         });
     }
 
