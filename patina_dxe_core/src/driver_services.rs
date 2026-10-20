@@ -477,6 +477,7 @@ pub unsafe fn core_disconnect_controller(
     }
 
     let mut one_or_more_drivers_disconnected = false;
+    let mut stop_error = None;
     let no_drivers = drivers_managing_controller.is_empty();
     for driver_handle in drivers_managing_controller {
         let controller_info = match PROTOCOL_DB.get_open_protocol_information(controller_handle) {
@@ -564,12 +565,14 @@ pub unsafe fn core_disconnect_controller(
                 unsafe { (driver_binding.stop)(driver_binding_interface, controller_handle, 0, core::ptr::null_mut()) };
         }
         perf!(perf_driver_binding_stop_end, driver_binding.driver_binding_handle, controller_handle);
-        if status == efi::Status::SUCCESS {
-            one_or_more_drivers_disconnected = true;
+        match EfiError::status_to_result(status) {
+            Ok(()) => one_or_more_drivers_disconnected = true,
+            Err(err) => stop_error = Some(err),
         }
     }
 
-    if one_or_more_drivers_disconnected || no_drivers { Ok(()) } else { Err(EfiError::NotFound) }
+    // Reports a Stop() failure (EFI_DEVICE_ERROR, EFI_OUT_OF_RESOURCES) when no driver could be disconnected.
+    if one_or_more_drivers_disconnected || no_drivers { Ok(()) } else { Err(stop_error.unwrap_or(EfiError::NotFound)) }
 }
 
 /// Raw UEFI `DisconnectController()` entry point installed into the boot
@@ -1909,6 +1912,32 @@ mod tests {
             // SAFETY: The driver binding remains allocated throughout the call.
             let result = unsafe { core_disconnect_controller(controller, Some(driver), None) };
             assert_eq!(result, Ok(()));
+        });
+    }
+
+    #[test]
+    fn test_core_disconnect_controller_returns_stop_failure_status() {
+        extern "efiapi" fn mock_stop_device_error(
+            _this: *mut efi::protocols::driver_binding::Protocol,
+            _controller_handle: efi::Handle,
+            _num_children: usize,
+            _child_handle_buffer: *mut efi::Handle,
+        ) -> efi::Status {
+            efi::Status::DEVICE_ERROR
+        }
+
+        with_locked_state(|| {
+            let controller = new_test_handle(0x1111);
+            setup_driver_managing_controller(
+                controller,
+                efi::protocols::device_path::PROTOCOL_GUID,
+                mock_stop_device_error,
+                &[],
+            );
+
+            // SAFETY: The driver binding installed above remains allocated throughout the call.
+            let result = unsafe { core_disconnect_controller(controller, None, None) };
+            assert_eq!(result, Err(EfiError::DeviceError));
         });
     }
 
