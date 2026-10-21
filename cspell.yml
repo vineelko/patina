@@ -199,6 +199,7 @@ words:
   - rposition
   - ruint
   - rustification
+  - rustonomicon
   - rwlock
   - sgram
   - smbus
