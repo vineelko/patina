@@ -96,6 +96,10 @@ unsafe extern "efiapi" fn install_protocol_interface(
 ///
 /// This function is safe because `interface` is an opaque pointer used for
 /// comparison but never dereferenced. All other parameters are value types.
+///
+/// Instances the core marked non-removable (FV, FVB and device path instances
+/// the dispatcher depends on, see #1126) are never uninstalled and
+/// `ACCESS_DENIED` is returned.
 pub fn core_uninstall_protocol_interface(
     handle: efi::Handle,
     protocol: efi::Guid,
@@ -107,6 +111,10 @@ pub fn core_uninstall_protocol_interface(
     let found_interface = PROTOCOL_DB.get_interface_for_handle(handle, protocol)?;
     if found_interface != interface {
         return Err(EfiError::NotFound);
+    }
+
+    if PROTOCOL_DB.is_protocol_non_removable(handle, protocol)? {
+        return Err(EfiError::AccessDenied);
     }
 
     //attempt to close all OPEN_BY_DRIVER usages.
@@ -1603,5 +1611,48 @@ mod tests {
                 assert_eq!(interface as usize, TEST_INTERFACE);
             }
         });
+    }
+
+    #[test]
+    fn uninstall_should_refuse_a_non_removable_protocol() {
+        test_support::with_clean_global_lock(|| {
+            let interface = 0x1234 as *mut c_void;
+            let handle = core_install_protocol_interface(None, TEST_GUID, interface).unwrap();
+
+            assert_eq!(Ok(()), PROTOCOL_DB.set_protocol_non_removable(handle, TEST_GUID, true));
+            assert_eq!(Err(EfiError::AccessDenied), core_uninstall_protocol_interface(handle, TEST_GUID, interface));
+            assert_eq!(Ok(interface), PROTOCOL_DB.get_interface_for_handle(handle, TEST_GUID));
+            assert_eq!(Ok(()), PROTOCOL_DB.set_protocol_non_removable(handle, TEST_GUID, false));
+            assert_eq!(Ok(()), core_uninstall_protocol_interface(handle, TEST_GUID, interface));
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn reinstall_should_refuse_a_non_removable_protocol() {
+        test_support::with_clean_global_lock(|| {
+            let interface1 = 0x1234 as *mut c_void;
+            let interface2 = 0x5678 as *mut c_void;
+            let mut guid1 = TEST_GUID;
+            let handle = core_install_protocol_interface(None, TEST_GUID, interface1).unwrap();
+
+            assert_eq!(Ok(()), PROTOCOL_DB.set_protocol_non_removable(handle, TEST_GUID, true));
+            // SAFETY: `guid1` is a local that outlives the call, so the protocol pointer is valid; the
+            // interface pointers are opaque and only compared, never dereferenced.
+            let status = unsafe { reinstall_protocol_interface(handle, &raw mut guid1, interface1, interface2) };
+            assert_eq!(efi::Status::ACCESS_DENIED, status);
+            assert_eq!(Ok(interface1), PROTOCOL_DB.get_interface_for_handle(handle, TEST_GUID));
+            assert_eq!(Ok(vec![TEST_GUID]), PROTOCOL_DB.get_protocols_on_handle(handle));
+            assert_eq!(Ok(true), PROTOCOL_DB.is_protocol_non_removable(handle, TEST_GUID));
+
+            assert_eq!(Ok(()), PROTOCOL_DB.set_protocol_non_removable(handle, TEST_GUID, false));
+            // SAFETY: as above; guid1 is still a valid local.
+            let status = unsafe { reinstall_protocol_interface(handle, &raw mut guid1, interface1, interface2) };
+            assert_eq!(efi::Status::SUCCESS, status);
+            assert_eq!(Ok(interface2), PROTOCOL_DB.get_interface_for_handle(handle, TEST_GUID));
+            assert_eq!(Ok(vec![TEST_GUID]), PROTOCOL_DB.get_protocols_on_handle(handle));
+            assert_eq!(Ok(false), PROTOCOL_DB.is_protocol_non_removable(handle, TEST_GUID));
+        })
+        .unwrap();
     }
 }

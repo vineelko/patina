@@ -110,6 +110,7 @@ struct ProtocolInstance {
     interface: *mut c_void,
     opened_by_driver: bool,
     opened_by_exclusive: bool,
+    non_removable: bool,
     usage: Vec<OpenProtocolInformation>,
 }
 
@@ -259,8 +260,13 @@ impl ProtocolDb {
         }
 
         //create a new protocol instance to match the input.
-        let protocol_instance =
-            ProtocolInstance { interface, opened_by_driver: false, opened_by_exclusive: false, usage: Vec::new() };
+        let protocol_instance = ProtocolInstance {
+            interface,
+            opened_by_driver: false,
+            opened_by_exclusive: false,
+            non_removable: false,
+            usage: Vec::new(),
+        };
 
         // Attempt to add the protocol to the set of protocols on this handle.
         // This should never fail since we already checked for existence above.
@@ -482,6 +488,32 @@ impl ProtocolDb {
         }
 
         status
+    }
+
+    fn set_protocol_non_removable(
+        &mut self,
+        handle: efi::Handle,
+        protocol: efi::Guid,
+        non_removable: bool,
+    ) -> Result<(), EfiError> {
+        self.validate_handle(handle)?;
+
+        let key = handle as usize;
+        let handle_instance = self.handles.get_mut(&key).ok_or(EfiError::NotFound)?;
+        let instance = handle_instance.get_mut(&OrdGuid(protocol)).ok_or(EfiError::NotFound)?;
+
+        instance.non_removable = non_removable;
+
+        Ok(())
+    }
+
+    fn is_protocol_non_removable(&self, handle: efi::Handle, protocol: efi::Guid) -> Result<bool, EfiError> {
+        self.validate_handle(handle)?;
+
+        let key = handle as usize;
+        let handle_instance = self.handles.get(&key).ok_or(EfiError::NotFound)?;
+        let instance = handle_instance.get(&OrdGuid(protocol)).ok_or(EfiError::NotFound)?;
+        Ok(instance.non_removable)
     }
 
     fn get_open_protocol_information_by_protocol(
@@ -827,6 +859,37 @@ impl SpinLockedProtocolDb {
         self.lock().remove_protocol_usage(handle, protocol, agent_handle, controller_handle, attributes)
     }
 
+    /// Returns whether the specified protocol is marked non-removable.
+    ///
+    /// See [`Self::set_protocol_non_removable`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`INVALID_PARAMETER`](efi::Status::INVALID_PARAMETER) if incorrect parameters are given.
+    /// Returns [`NOT_FOUND`](efi::Status::NOT_FOUND) if the handle does not support the specified protocol.
+    pub fn is_protocol_non_removable(&self, handle: efi::Handle, protocol: efi::Guid) -> Result<bool, EfiError> {
+        self.lock().is_protocol_non_removable(handle, protocol)
+    }
+
+    /// Sets or clears the non-removable flag on the specified protocol.
+    ///
+    /// Patina extension, not a UEFI API: `core_uninstall_protocol_interface` (and also `ReinstallProtocolInterface`)
+    /// refuses a non-removable instance with `ACCESS_DENIED`.
+    /// Used by the core to protect the FV, FVB and device path instances the dispatcher depends on.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`INVALID_PARAMETER`](efi::Status::INVALID_PARAMETER) if incorrect parameters are given.
+    /// Returns [`NOT_FOUND`](efi::Status::NOT_FOUND) if the handle does not support the specified protocol.
+    pub fn set_protocol_non_removable(
+        &self,
+        handle: efi::Handle,
+        protocol: efi::Guid,
+        non_removable: bool,
+    ) -> Result<(), EfiError> {
+        self.lock().set_protocol_non_removable(handle, protocol, non_removable)
+    }
+
     /// Returns open protocol information for the given handle/protocol.
     ///
     /// This function generally matches the behavior of `EFI_BOOT_SERVICES.OpenProtocolInformation()` API in the UEFI spec
@@ -948,6 +1011,7 @@ mod tests {
                 interface: interface1,
                 opened_by_driver: false,
                 opened_by_exclusive: false,
+                non_removable: false,
                 usage: Vec::new(),
             };
             let key = handle as usize;
@@ -1009,6 +1073,64 @@ mod tests {
             let mut db = SPIN_LOCKED_PROTOCOL_DB.lock();
             let protocol_instance = db.handles.get_mut(&key).unwrap();
             assert!(protocol_instance.contains_key(&OrdGuid(guid1)));
+        });
+    }
+
+    #[test]
+    fn set_protocol_non_removable_should_set_and_clear_flag() {
+        with_locked_state(|| {
+            static SPIN_LOCKED_PROTOCOL_DB: SpinLockedProtocolDb = SpinLockedProtocolDb::new();
+
+            let uuid1 = Uuid::from_str("0e896c7a-57dc-4987-bc22-abc3a8263210").unwrap();
+            let guid1 = efi::Guid::from_bytes(uuid1.as_bytes());
+            let interface1: *mut c_void = 0x1234 as *mut c_void;
+
+            let (handle1, _) = SPIN_LOCKED_PROTOCOL_DB.install_protocol_interface(None, guid1, interface1).unwrap();
+
+            assert_eq!(Ok(false), SPIN_LOCKED_PROTOCOL_DB.is_protocol_non_removable(handle1, guid1));
+
+            assert_eq!(Ok(()), SPIN_LOCKED_PROTOCOL_DB.set_protocol_non_removable(handle1, guid1, true));
+
+            assert_eq!(Ok(true), SPIN_LOCKED_PROTOCOL_DB.is_protocol_non_removable(handle1, guid1));
+
+            assert_eq!(Ok(()), SPIN_LOCKED_PROTOCOL_DB.set_protocol_non_removable(handle1, guid1, false));
+
+            assert_eq!(Ok(false), SPIN_LOCKED_PROTOCOL_DB.is_protocol_non_removable(handle1, guid1));
+        });
+    }
+
+    #[test]
+    fn non_removable_accessors_should_reject_bad_handle_or_protocol() {
+        with_locked_state(|| {
+            static SPIN_LOCKED_PROTOCOL_DB: SpinLockedProtocolDb = SpinLockedProtocolDb::new();
+
+            let uuid1 = Uuid::from_str("0e896c7a-57dc-4987-bc22-abc3a8263210").unwrap();
+            let uuid2 = Uuid::from_str("39578142-57dc-4987-bc22-abc3a8263210").unwrap();
+            let guid1 = efi::Guid::from_bytes(uuid1.as_bytes());
+            let guid2 = efi::Guid::from_bytes(uuid2.as_bytes());
+            let interface1: *mut c_void = 0x1234 as *mut c_void;
+
+            let (handle1, _) = SPIN_LOCKED_PROTOCOL_DB.install_protocol_interface(None, guid1, interface1).unwrap();
+
+            assert_eq!(
+                Err(EfiError::NotFound),
+                SPIN_LOCKED_PROTOCOL_DB.set_protocol_non_removable(handle1, guid2, true)
+            );
+            assert_eq!(Err(EfiError::NotFound), SPIN_LOCKED_PROTOCOL_DB.is_protocol_non_removable(handle1, guid2));
+
+            let handle2 = (handle1 as usize + 1) as efi::Handle;
+            assert_eq!(
+                Err(EfiError::InvalidParameter),
+                SPIN_LOCKED_PROTOCOL_DB.set_protocol_non_removable(handle2, guid1, true)
+            );
+            assert_eq!(
+                Err(EfiError::InvalidParameter),
+                SPIN_LOCKED_PROTOCOL_DB.is_protocol_non_removable(handle2, guid1)
+            );
+
+            // NOTE: the check is in core_uninstall_protocol_interface; the DB layer does not check the flag
+            assert_eq!(Ok(()), SPIN_LOCKED_PROTOCOL_DB.set_protocol_non_removable(handle1, guid1, true));
+            assert_eq!(Ok(()), SPIN_LOCKED_PROTOCOL_DB.uninstall_protocol_interface(handle1, guid1, interface1));
         });
     }
 

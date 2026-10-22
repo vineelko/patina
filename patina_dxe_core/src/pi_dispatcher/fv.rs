@@ -347,11 +347,10 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         self.fv_metadata.insert(protocol_ptr.addr(), metadata);
 
         // install the protocol and return status
-        core_install_protocol_interface(
-            handle,
-            pi::protocol::firmware_volume_block::PROTOCOL_GUID.into_inner(),
-            protocol_ptr.as_ptr(),
-        )
+        let guid = pi::protocol::firmware_volume_block::PROTOCOL_GUID.into_inner();
+        let handle = core_install_protocol_interface(handle, guid, protocol_ptr.as_ptr())?;
+        PROTOCOL_DB.set_protocol_non_removable(handle, guid, true)?;
+        Ok(handle)
     }
 
     /// A helper function to generate a firmware volume protocol instance and install it on the provided handle.
@@ -371,11 +370,10 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         self.fv_metadata.insert(protocol_ptr.addr(), metadata);
 
         // install the protocol and return status
-        core_install_protocol_interface(
-            handle,
-            pi::protocol::firmware_volume::PROTOCOL_GUID.into_inner(),
-            protocol_ptr.as_ptr(),
-        )
+        let guid = pi::protocol::firmware_volume::PROTOCOL_GUID.into_inner();
+        let handle = core_install_protocol_interface(handle, guid, protocol_ptr.as_ptr())?;
+        PROTOCOL_DB.set_protocol_non_removable(handle, guid, true)?;
+        Ok(handle)
     }
 
     /// Installs both the FVB and FV protocols for a firmware volume at the specified base address.
@@ -437,7 +435,10 @@ impl<P: PlatformInfo> FvProtocolData<P> {
         };
 
         // install the protocol and return status
-        core_install_protocol_interface(handle, efi::protocols::device_path::PROTOCOL_GUID, device_path_ptr)
+        let guid = efi::protocols::device_path::PROTOCOL_GUID;
+        let handle = core_install_protocol_interface(handle, guid, device_path_ptr)?;
+        PROTOCOL_DB.set_protocol_non_removable(handle, guid, true)?;
+        Ok(handle)
     }
 }
 

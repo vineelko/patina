@@ -715,8 +715,11 @@ impl DispatcherContext {
                 let fv_device_path = fv_device_path.unwrap_or_default().cast::<efi::protocols::device_path::Protocol>();
 
                 // SAFETY: this code assumes that the fv_address from FVB protocol yields a pointer to a real FV,
-                // and that the memory backing the FVB is essentially permanent while the dispatcher is running (i.e.
-                // that no one uninstalls the FVB protocol and frees the memory).
+                // and that the memory backing the FVB is essentially permanent while the dispatcher is running.
+                // Once the FV is accepted below, its FVB (and device path, if present) are flagged non-removable,
+                // so UninstallProtocolInterface and ReinstallProtocolInterface on them return ACCESS_DENIED. The
+                // flag cannot stop a driver from freeing the memory without uninstalling first; that remains the
+                // installing driver's responsibility.
                 let fv = match unsafe { VolumeRef::new_from_address(fv_address) } {
                     Ok(fv) => fv,
                     Err(err) => {
@@ -726,6 +729,19 @@ impl DispatcherContext {
                         continue;
                     }
                 };
+
+                // KEY: from here the dispatcher holds pointers into this FV, so its FVB (and device path, if
+                // present) must not be uninstalled. Core-installed FVs are already flagged; setting it again
+                // is harmless. See #1126.
+                PROTOCOL_DB.set_protocol_non_removable(
+                    handle,
+                    firmware_volume_block::PROTOCOL_GUID.into_inner(),
+                    true,
+                )?;
+                if !fv_device_path.is_null() {
+                    PROTOCOL_DB.set_protocol_non_removable(handle, efi::protocols::device_path::PROTOCOL_GUID, true)?;
+                }
+
                 let fv_name = fv.fv_name();
 
                 for file in fv.files() {
@@ -1670,6 +1686,144 @@ mod tests {
             // SAFETY: fv_raw was created from Box::into_raw and is dropped only once here.
             let _dropped_fv = unsafe { Box::from_raw(fv_raw) };
         });
+    }
+
+    #[test]
+    fn core_uninstall_should_refuse_fv_fvb_and_device_path_installed_by_the_core() {
+        set_logger();
+
+        with_locked_state(|| {
+            let mut file = File::open(test_collateral!("DXEFV.Fv")).unwrap();
+            let mut fv: Vec<u8> = Vec::new();
+            file.read_to_end(&mut fv).expect("failed to read test file");
+            let fv = fv.into_boxed_slice();
+            let fv_raw = Box::into_raw(fv);
+
+            static CORE: MockCore = MockCore::new(NullSectionExtractor::new());
+            CORE.override_instance();
+
+            // SAFETY: fv_raw is leaked for the duration of this test scope.
+            let handle =
+                unsafe { CORE.pi_dispatcher.install_firmware_volume(fv_raw.expose_provenance() as u64, None).unwrap() };
+
+            let fvb_guid = firmware_volume_block::PROTOCOL_GUID.into_inner();
+            let fv_guid = pi::protocol::firmware_volume::PROTOCOL_GUID.into_inner();
+            let dp_guid = efi::protocols::device_path::PROTOCOL_GUID;
+
+            let fvb_interface =
+                PROTOCOL_DB.get_interface_for_handle(handle, fvb_guid).expect("Failed to get FVB protocol");
+            let fv_interface =
+                PROTOCOL_DB.get_interface_for_handle(handle, fv_guid).expect("Failed to get FV protocol");
+            let dp_interface =
+                PROTOCOL_DB.get_interface_for_handle(handle, dp_guid).expect("Failed to get device path protocol");
+
+            assert_eq!(Ok(true), PROTOCOL_DB.is_protocol_non_removable(handle, fvb_guid));
+            assert_eq!(Ok(true), PROTOCOL_DB.is_protocol_non_removable(handle, fv_guid));
+            assert_eq!(Ok(true), PROTOCOL_DB.is_protocol_non_removable(handle, dp_guid));
+
+            assert_eq!(
+                Err(EfiError::AccessDenied),
+                crate::protocols::core_uninstall_protocol_interface(handle, fvb_guid, fvb_interface)
+            );
+            assert_eq!(
+                Err(EfiError::AccessDenied),
+                crate::protocols::core_uninstall_protocol_interface(handle, fv_guid, fv_interface)
+            );
+            assert_eq!(
+                Err(EfiError::AccessDenied),
+                crate::protocols::core_uninstall_protocol_interface(handle, dp_guid, dp_interface)
+            );
+
+            assert_eq!(Ok(fvb_interface), PROTOCOL_DB.get_interface_for_handle(handle, fvb_guid));
+            assert_eq!(Ok(fv_interface), PROTOCOL_DB.get_interface_for_handle(handle, fv_guid));
+            assert_eq!(Ok(dp_interface), PROTOCOL_DB.get_interface_for_handle(handle, dp_guid));
+
+            // SAFETY: fv_raw was created from Box::into_raw and is dropped only once here.
+            let _dropped_fv = unsafe { Box::from_raw(fv_raw) };
+        });
+    }
+
+    #[test]
+    fn add_fv_handles_should_flag_fvb_and_device_path_as_non_removable() {
+        set_logger();
+        let mut file = File::open(test_collateral!("DXEFV.Fv")).unwrap();
+        let mut fv: Vec<u8> = Vec::new();
+        file.read_to_end(&mut fv).expect("failed to read test file");
+        let fv = fv.into_boxed_slice();
+        let fv_raw = Box::into_raw(fv);
+
+        with_locked_state(|| {
+            static CORE: MockCore = MockCore::new(NullSectionExtractor::new());
+            CORE.override_instance();
+
+            // SAFETY: fv is leaked to ensure it is not freed and remains valid for the duration of the program.
+            let handle = unsafe {
+                CORE.pi_dispatcher
+                    .fv_data
+                    .lock()
+                    .install_firmware_volume(fv_raw.expose_provenance() as u64, None)
+                    .unwrap()
+            };
+
+            // Simulate an FVB installed by an external driver: clear the flags the core set.
+            let fvb_guid = firmware_volume_block::PROTOCOL_GUID.into_inner();
+            let dp_guid = efi::protocols::device_path::PROTOCOL_GUID;
+            PROTOCOL_DB.set_protocol_non_removable(handle, fvb_guid, false).unwrap();
+            PROTOCOL_DB.set_protocol_non_removable(handle, dp_guid, false).unwrap();
+
+            CORE.pi_dispatcher.add_fv_handles(vec![handle]).expect("Failed to add FV handle");
+
+            assert_eq!(Ok(true), PROTOCOL_DB.is_protocol_non_removable(handle, fvb_guid));
+            assert_eq!(Ok(true), PROTOCOL_DB.is_protocol_non_removable(handle, dp_guid));
+        });
+
+        // SAFETY: fv_raw was created from Box::into_raw and is dropped only once here.
+        let _dropped_fv = unsafe { Box::from_raw(fv_raw) };
+    }
+
+    #[test]
+    fn add_fv_handles_should_not_flag_a_skipped_fvb() {
+        set_logger();
+        let mut file = File::open(test_collateral!("DXEFV.Fv")).unwrap();
+        let mut fv: Vec<u8> = Vec::new();
+        file.read_to_end(&mut fv).expect("failed to read test file");
+        let fv = fv.into_boxed_slice();
+        let fv_raw = Box::into_raw(fv);
+
+        with_locked_state(|| {
+            static CORE: MockCore = MockCore::new(NullSectionExtractor::new());
+            CORE.override_instance();
+
+            // SAFETY: fv is leaked to ensure it is not freed and remains valid for the duration of the program.
+            let handle = unsafe {
+                CORE.pi_dispatcher
+                    .fv_data
+                    .lock()
+                    .install_firmware_volume(fv_raw.expose_provenance() as u64, None)
+                    .unwrap()
+            };
+
+            // Simulate an FVB installed by an external driver: clear the flags the core set.
+            let fvb_guid = firmware_volume_block::PROTOCOL_GUID.into_inner();
+            let dp_guid = efi::protocols::device_path::PROTOCOL_GUID;
+            PROTOCOL_DB.set_protocol_non_removable(handle, fvb_guid, false).unwrap();
+            PROTOCOL_DB.set_protocol_non_removable(handle, dp_guid, false).unwrap();
+
+            // Monkey Patch get_physical_address to one that returns an error, so the FV is skipped.
+            let protocol = PROTOCOL_DB.get_interface_for_handle(handle, fvb_guid).expect("Failed to get FVB protocol");
+            let protocol = protocol.cast::<firmware_volume_block::FirmwareVolumeBlockProtocol>();
+            // SAFETY: protocol was retrieved from PROTOCOL_DB and remains valid for this test scope.
+            unsafe { &mut *protocol }.get_physical_address = get_physical_address1;
+
+            CORE.pi_dispatcher.add_fv_handles(vec![handle]).expect("Failed to add FV handle");
+            assert_eq!(CORE.pi_dispatcher.dispatcher_context.lock().pending_drivers.len(), 0);
+
+            assert_eq!(Ok(false), PROTOCOL_DB.is_protocol_non_removable(handle, fvb_guid));
+            assert_eq!(Ok(false), PROTOCOL_DB.is_protocol_non_removable(handle, dp_guid));
+        });
+
+        // SAFETY: fv_raw was created from Box::into_raw and is dropped only once here.
+        let _dropped_fv = unsafe { Box::from_raw(fv_raw) };
     }
 
     #[test]
