@@ -30,8 +30,8 @@ use crate::{
 /// enforces can be driven directly in a test.
 ///
 /// `Gate` is the policy gate the implementation holds, and `SnapshotError` is whatever its
-/// snapshot reports; the transition only logs that error and maps it to a status, so it does not
-/// constrain the type beyond [`Debug`].
+/// snapshot reports; the transition only formats that error into its panic message, so it does
+/// not constrain the type beyond [`Debug`].
 trait ReadyToLockContext {
     /// The policy gate type this context supplies.
     type Gate;
@@ -107,8 +107,7 @@ fn process_mm_ready_to_lock<C: ReadyToLockContext>(context: &C) -> efi::Status {
 
     // Take a snapshot and mark as locked.
     if let Err(e) = context.take_snapshot(gate) {
-        log::error!("MmReadyToLock: take_snapshot failed: {e:?}");
-        return efi::Status::DEVICE_ERROR;
+        panic!("MmReadyToLock: memory policy snapshot failed: {e:?}");
     }
 
     // And mark the unblock memory tracker as locked as well since unblock memory is no longer allowed after this point.
@@ -144,6 +143,7 @@ fn process_mm_exit_boot_services(state: &InitState) -> efi::Status {
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use core::cell::Cell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use super::*;
     use crate::policy::{PolicyGateError, SecurePolicyDataV1_0};
@@ -220,10 +220,13 @@ mod tests {
     }
 
     #[test]
-    fn ready_to_lock_reports_snapshot_failure_without_locking_unblocked_memory() {
+    fn ready_to_lock_panics_on_snapshot_failure() {
         let context = TestReadyToLockContext::new(Some(TestGate { locked: false }), Err(TestSnapshotError));
 
-        assert_eq!(process_mm_ready_to_lock(&context), efi::Status::DEVICE_ERROR);
+        let panic = catch_unwind(AssertUnwindSafe(|| process_mm_ready_to_lock(&context)))
+            .expect_err("a failed snapshot must panic");
+        let message = panic.downcast_ref::<String>().expect("panic payload must be a formatted message");
+        assert!(message.contains("memory policy snapshot failed"), "unexpected panic message: {message}");
         assert_eq!(context.snapshot_calls.get(), 1);
         assert_eq!(context.lock_unblocked_memory_calls.get(), 0);
     }
@@ -258,9 +261,9 @@ mod tests {
         security_state().set_policy_gate(unlocked_policy_gate());
 
         let mut size = 0;
-        let status = mm_ready_to_lock_handler(core::ptr::null_mut(), &mut size);
+        let result = catch_unwind(AssertUnwindSafe(|| mm_ready_to_lock_handler(core::ptr::null_mut(), &mut size)));
 
-        assert_eq!(status, efi::Status::DEVICE_ERROR);
+        assert!(result.is_err(), "a failed snapshot must panic");
     }
 
     #[test]
