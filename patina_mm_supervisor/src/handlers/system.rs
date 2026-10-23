@@ -97,12 +97,7 @@ pub(crate) fn mm_ready_to_lock_handler(_comm_buffer: *mut u8, _comm_buffer_size:
 
 /// Runs the Ready-to-Lock transition against `context`.
 fn process_mm_ready_to_lock<C: ReadyToLockContext>(context: &C) -> efi::Status {
-    let gate = if let Some(gate) = context.policy_gate() {
-        gate
-    } else {
-        log::error!("MmReadyToLock: POLICY_GATE not initialized");
-        return efi::Status::NOT_READY;
-    };
+    let gate = context.policy_gate().expect("MmReadyToLock: policy gate must be initialized during BSP init");
 
     // If already locked, this is a no-op (idempotent).
     if context.is_locked(gate) {
@@ -208,12 +203,11 @@ mod tests {
     }
 
     #[test]
-    fn ready_to_lock_is_not_ready_without_a_policy_gate() {
+    #[should_panic(expected = "policy gate must be initialized")]
+    fn ready_to_lock_panics_without_a_policy_gate() {
         let context = TestReadyToLockContext::new(None, Ok(()));
 
-        assert_eq!(process_mm_ready_to_lock(&context), efi::Status::NOT_READY);
-        assert_eq!(context.snapshot_calls.get(), 0);
-        assert_eq!(context.lock_unblocked_memory_calls.get(), 0);
+        process_mm_ready_to_lock(&context);
     }
 
     #[test]
@@ -259,13 +253,14 @@ mod tests {
 
     #[test]
     fn ready_to_lock_entry_point_uses_the_global_context() {
+        // The global gate is one-time, so this is a no-op when another test installed it first.
+        // Either way the installed gate has no snapshot buffer configured, so the snapshot fails.
+        security_state().set_policy_gate(unlocked_policy_gate());
+
         let mut size = 0;
         let status = mm_ready_to_lock_handler(core::ptr::null_mut(), &mut size);
 
-        // Other unit tests may have already installed the one-time global policy gate. With no
-        // gate the entry point is not ready; with the test gate installed, its unconfigured
-        // snapshot buffer produces a device error.
-        assert!(status == efi::Status::NOT_READY || status == efi::Status::DEVICE_ERROR);
+        assert_eq!(status, efi::Status::DEVICE_ERROR);
     }
 
     #[test]
