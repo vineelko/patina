@@ -642,19 +642,15 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
     /// Publishes the per-core "MM initialized" slots the MM IPL allocated.
     ///
-    /// A null buffer is not an error. The MM IPL may omit it, and the supervisor then runs
-    /// without per-core initialized tracking.
+    /// The buffer is required: every core marks its slot at the end of its first entry, and later
+    /// entries read it to skip initialization, so a missing buffer would fail the first entry. A
+    /// null buffer is rejected by the MMRAM check below, since MMRAM never covers address 0.
     ///
     /// ## Safety
     ///
     /// `buffer` must name `number_of_cpus` bytes that stay resident for the supervisor's
     /// lifetime.
     unsafe fn store_mm_initialized_slots(&self, buffer: u64, number_of_cpus: usize) -> MmSupervisorResult<()> {
-        if buffer == 0 {
-            log::warn!("MM Initialized buffer is null in PassDown HOB");
-            return Ok(());
-        }
-
         // The slice built below is `number_of_cpus` elements long, so the bound is a
         // memory-safety precondition and is checked here rather than assumed of the caller.
         if number_of_cpus == 0 || number_of_cpus > MAX_CPUS {
@@ -1389,14 +1385,13 @@ mod tests {
     }
 
     #[test]
-    fn test_store_mm_initialized_slots_accepts_a_null_buffer() {
+    fn test_store_mm_initialized_slots_rejects_a_null_buffer() {
         test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
 
-        // The MM IPL may omit the buffer. The supervisor then runs without per-core initialized
-        // tracking rather than refusing to start.
-        // SAFETY: a null buffer returns before anything is read.
-        assert_eq!(unsafe { supervisor.store_mm_initialized_slots(0, 2) }, Ok(()));
+        // SAFETY: a null buffer fails the MMRAM check before anything is read.
+        let result = unsafe { supervisor.store_mm_initialized_slots(0, 2) };
+        assert_eq!(result, Err(CoreInitError::InitializedBufferInvalid.into()));
         assert!(init_state().mm_initialized_buffer().is_none());
     }
 

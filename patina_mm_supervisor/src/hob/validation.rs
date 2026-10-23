@@ -383,8 +383,11 @@ fn validate_mmram_contiguous(regions: &[MmramRegion]) -> MmSupervisorResult<()> 
     Ok(())
 }
 
-/// Validates the `PassDown` HOB revision and that every non-null pointer it
-/// reports references memory inside MMRAM.
+/// Validates the `PassDown` HOB revision and that every pointer it reports references memory
+/// inside MMRAM.
+///
+/// Every pointer is required. A null one needs no separate check: MMRAM never covers address 0,
+/// so the containment check rejects it and names the field.
 fn validate_pass_down_pointers(
     pass_down: &MmSupvPassDownHobData,
     is_inside_mmram: impl Fn(u64, u64) -> bool,
@@ -405,7 +408,7 @@ fn validate_pass_down_pointers(
     ];
 
     for (field, addr, size) in checks {
-        if addr != 0 && !is_inside_mmram(addr, size) {
+        if !is_inside_mmram(addr, size) {
             return Err(PassDownHobError::PointerOutsideMmram { field, addr, size }.into());
         }
     }
@@ -1800,14 +1803,40 @@ mod tests {
     }
 
     #[test]
-    fn test_mm_supervisor_hob_validation_pass_down_all_null_pointers_ok() {
-        // Null pointers are skipped, so an all-null (correct-revision) HOB validates.
-        let mut pd = pass_down();
-        pd.cpl3_stack_base = 0;
-        pd.sm_base_array = 0;
-        pd.mm_initialized_buffer = 0;
-        pd.firmware_policy_buffer = 0;
-        assert_eq!(validate_pass_down_pointers(&pd, |_, _| false), Ok(()));
+    fn test_mm_supervisor_hob_validation_pass_down_rejects_null_pointers() {
+        // Classify against MMRAM the way production does. MMRAM never covers address 0, so a
+        // null pointer fails the containment check like any other address outside MMRAM.
+        let mmram = [(0x1000, 0x10_0000)];
+        let is_inside_mmram =
+            |addr, size| crate::memory::mmram::classify_coverage(addr, size, mmram.into_iter()).is_inside(addr, size);
+        assert_eq!(validate_pass_down_pointers(&pass_down(), is_inside_mmram), Ok(()));
+
+        for field in ["cpl3_stack_base", "sm_base_array", "mm_initialized_buffer", "firmware_policy_buffer"] {
+            let mut pd = pass_down();
+            let size = match field {
+                "cpl3_stack_base" => {
+                    pd.cpl3_stack_base = 0;
+                    pd.cpl3_stack_size
+                }
+                "sm_base_array" => {
+                    pd.sm_base_array = 0;
+                    size_of::<u64>() as u64
+                }
+                "mm_initialized_buffer" => {
+                    pd.mm_initialized_buffer = 0;
+                    1
+                }
+                _ => {
+                    pd.firmware_policy_buffer = 0;
+                    pd.firmware_policy_buffer_size
+                }
+            };
+            assert_eq!(
+                validate_pass_down_pointers(&pd, is_inside_mmram),
+                Err(PassDownHobError::PointerOutsideMmram { field, addr: 0, size }.into()),
+                "a null `{field}` must be rejected"
+            );
+        }
     }
 
     #[test]
