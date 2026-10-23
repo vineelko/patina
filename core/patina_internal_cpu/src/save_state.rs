@@ -96,13 +96,10 @@ impl core::fmt::Display for SaveStateError {
     }
 }
 
-/// Name of the save state layout this build uses, for logs.
-#[cfg(feature = "save_state_amd")]
-pub const VENDOR_NAME: &str = "AMD";
-
-/// Name of the save state layout this build uses, for logs.
-#[cfg(not(feature = "save_state_amd"))]
-pub const VENDOR_NAME: &str = "Intel";
+/// Returns the name of the save state layout this build uses, for logs.
+pub fn vendor_name() -> &'static str {
+    vendor::VENDOR_NAME
+}
 
 /// Returns the field offsets and behaviour flags of the layout this build uses.
 pub fn vendor_constants() -> &'static VendorConstants {
@@ -326,7 +323,7 @@ impl SaveState {
 // deliberately left out of the debug output.
 impl core::fmt::Debug for SaveState {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("SaveState").field(&VENDOR_NAME).finish()
+        f.debug_tuple("SaveState").field(&vendor_name()).finish()
     }
 }
 
@@ -377,10 +374,10 @@ mod tests {
         // the build selected.
         let rax = SaveState::register_info(MmSaveStateRegister::Rax).unwrap();
         if cfg!(feature = "save_state_amd") {
-            assert_eq!((VENDOR_NAME, rax.lo_offset), ("AMD", 0x03F8));
+            assert_eq!((vendor_name(), rax.lo_offset), ("AMD", 0x03F8));
             assert!(vendor_constants().lma_always_64);
         } else {
-            assert_eq!((VENDOR_NAME, rax.lo_offset), ("Intel", 0x035C));
+            assert_eq!((vendor_name(), rax.lo_offset), ("Intel", 0x035C));
             assert!(!vendor_constants().lma_always_64);
         }
     }
@@ -702,6 +699,6 @@ mod tests {
     fn test_save_state_data_debug_hides_the_register_contents() {
         let mut map = new_map();
         write_u64(&mut map, vendor_constants().rax_offset, 0x5EC2_E7DA_7A00_0000);
-        assert_eq!(format!("{:?}", SaveState::new(*map)), format!("SaveState({VENDOR_NAME:?})"));
+        assert_eq!(format!("{:?}", SaveState::new(*map)), format!("SaveState({:?})", vendor_name()));
     }
 }

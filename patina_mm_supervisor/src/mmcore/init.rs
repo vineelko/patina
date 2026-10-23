@@ -28,7 +28,7 @@ use patina::{
 };
 use patina_internal_cpu::{
     interrupts::Interrupts,
-    save_state::{PROCESSOR_INFO_ENTRY_SIZE, VENDOR_NAME},
+    save_state::{PROCESSOR_INFO_ENTRY_SIZE, vendor_name},
 };
 use patina_paging::{MemoryAttributes, PageTable, PagingType, x64::X64PageTable};
 
@@ -466,9 +466,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         log_save_state_map(save_state_info);
         log::info!(
             "Save-state metadata initialized for {} CPU(s) from SMBASE array at 0x{:016x} \
-             using the {VENDOR_NAME} save-state layout",
+             using the {} save-state layout",
             save_state_info.number_of_cpus(),
-            save_state_info.smbase_array()
+            save_state_info.smbase_array(),
+            vendor_name()
         );
     }
 

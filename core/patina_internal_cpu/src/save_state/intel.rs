@@ -26,6 +26,9 @@ const IO_MISC_TYPE_OUT_IMMEDIATE: u32 = 8;
 /// `IOMisc` Type field value: IN instruction (immediate port operand).
 const IO_MISC_TYPE_IN_IMMEDIATE: u32 = 9;
 
+/// Name of this save state layout, for logs.
+pub(super) const VENDOR_NAME: &str = "Intel";
+
 /// Intel-specific offsets and behaviour constants.
 pub(super) const VENDOR_CONSTANTS: VendorConstants = VendorConstants {
     smmrevid_offset: 0x02FC,
@@ -236,6 +239,11 @@ pub(super) fn io_info_supported(smm_rev_id: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_vendor_name() {
+        assert_eq!(VENDOR_NAME, "Intel");
+    }
 
     #[test]
     fn test_gpr_offsets() {
