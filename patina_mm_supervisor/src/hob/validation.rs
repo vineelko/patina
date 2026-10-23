@@ -345,16 +345,19 @@ fn ranges_overlap(a: (u64, u64), b: (u64, u64)) -> bool {
     a_base < b_end && b_base < a_end
 }
 
-/// Validates that the scanned MMRAM regions form a single contiguous,
-/// non-overlapping span. The regions are not required to be sorted.
-fn validate_mmram_contiguous(regions: &[MmramRegion]) -> MmSupervisorResult<()> {
-    if regions.is_empty() {
-        return Err(HobValidationError::NoMmramRegions.into());
-    }
-
+/// Validates that the scanned MMRAM regions form a single contiguous, non-overlapping span and
+/// returns that span as `(base, size)`. The regions are not required to be sorted.
+fn validate_mmram_contiguous(regions: &[MmramRegion]) -> MmSupervisorResult<(u64, u64)> {
+    // (lowest base, highest exclusive end), built only from ranges that passed the checks.
+    let mut bounds: Option<(u64, u64)> = None;
     for region in regions {
-        checked_range_end("MMRAM region", region.base, region.size)?;
+        let end = checked_range_end("MMRAM region", region.base, region.size)?;
+        bounds = Some(match bounds {
+            Some((base, max_end)) => (base.min(region.base), max_end.max(end)),
+            None => (region.base, end),
+        });
     }
+    let (base, end) = bounds.ok_or(HobValidationError::NoMmramRegions)?;
 
     for (i, a) in regions.iter().enumerate() {
         for b in regions.iter().skip(i + 1) {
@@ -370,17 +373,16 @@ fn validate_mmram_contiguous(regions: &[MmramRegion]) -> MmSupervisorResult<()> 
         }
     }
 
-    let min_base = regions.iter().map(|r| r.base).min().unwrap_or(0);
-    let max_end = regions.iter().filter_map(|r| r.base.checked_add(r.size)).max().unwrap_or(0);
+    // `end` is the end of some region, which lies above that region's base and so above `base`.
+    let span = end - base;
+    // The regions are disjoint and all lie inside `[base, end)`, so their sizes sum to at most
+    // `span`. With no overlaps, an equal sum means no gaps.
     let covered: u64 = regions.iter().map(|r| r.size).sum();
-    let span = max_end - min_base;
-
-    // With no overlaps (checked above), equal covered/span implies no gaps.
     if covered != span {
         return Err(HobValidationError::MmramNotContiguous { covered, span }.into());
     }
 
-    Ok(())
+    Ok((base, span))
 }
 
 /// Validates the `PassDown` HOB revision and that every pointer it reports references memory
@@ -414,16 +416,6 @@ fn validate_pass_down_pointers(
     }
 
     Ok(())
-}
-
-/// Returns the single contiguous MMRAM span `(base, size)` covered by `regions`.
-///
-/// Only meaningful once [`validate_mmram_contiguous`] has confirmed the regions
-/// form one gap-free span; the union then equals `[min_base, max_end)`.
-fn mmram_span(regions: &[MmramRegion]) -> (u64, u64) {
-    let base = regions.iter().map(|r| r.base).min().unwrap_or(0);
-    let end = regions.iter().filter_map(|r| r.base.checked_add(r.size)).max().unwrap_or(0);
-    (base, end.saturating_sub(base))
 }
 
 /// Returns whether `[base, base + length)` overlaps the MMRAM span.
@@ -800,7 +792,7 @@ pub(crate) fn validate_incoming_hobs_pre_paging_init(
     dump_regions(regions);
     dump_hobs(handoff);
 
-    validate_mmram_contiguous(regions)?;
+    let mmram = validate_mmram_contiguous(regions)?;
     // The HOB list is itself a buffer at an address the producer chose, so it is checked before
     // anything it describes is trusted. Its length is walked from the headers rather than read
     // from the PHIT, which platforms do not reliably populate for the MM HOB list.
@@ -812,7 +804,7 @@ pub(crate) fn validate_incoming_hobs_pre_paging_init(
     // MMRAM is a single contiguous span (checked above), so allocations can be
     // tested against one range instead of iterating the region list.
     let hob = Hob::Handoff(handoff);
-    validate_memory_allocations(&hob, mmram_span(regions))?;
+    validate_memory_allocations(&hob, mmram)?;
     validate_allocation_modules(&hob, is_inside_mmram)?;
     validate_resource_descriptor_overlaps(&hob)?;
     validate_resource_v2_memory_attributes(&hob)?;
@@ -1300,14 +1292,15 @@ mod tests {
 
     #[test]
     fn test_mm_supervisor_hob_validation_contiguous_single_region() {
-        assert_eq!(validate_mmram_contiguous(&[region(0x1000, 0x2000)]), Ok(()));
+        // A single region maps to itself.
+        assert_eq!(validate_mmram_contiguous(&[region(0x1000, 0x2000)]), Ok((0x1000, 0x2000)));
     }
 
     #[test]
     fn test_mm_supervisor_hob_validation_contiguous_adjacent_unsorted() {
-        // Two adjacent regions provided out of order still validate as contiguous.
+        // Two adjacent regions provided out of order collapse to one [min_base, max_end) span.
         let regions = [region(0x3000, 0x1000), region(0x1000, 0x2000)];
-        assert_eq!(validate_mmram_contiguous(&regions), Ok(()));
+        assert_eq!(validate_mmram_contiguous(&regions), Ok((0x1000, 0x3000)));
     }
 
     #[test]
@@ -1352,15 +1345,6 @@ mod tests {
         assert!(find_overlap(&mut [(0, 0x1000), (0x800, 0x1000)]).is_some());
         // Unsorted input with a contained range is still detected after sorting.
         assert!(find_overlap(&mut [(0x4000, 0x1000), (0, 0x8000), (0x1000, 0x100)]).is_some());
-    }
-
-    #[test]
-    fn test_mm_supervisor_hob_validation_mmram_span() {
-        // Contiguous regions (unsorted) collapse to one [min_base, max_end) span.
-        let regions = [region(0x2000, 0x2000), region(0x1000, 0x1000)];
-        assert_eq!(mmram_span(&regions), (0x1000, 0x3000));
-        // A single region maps to itself.
-        assert_eq!(mmram_span(&[region(0x8000, 0x1000)]), (0x8000, 0x1000));
     }
 
     #[test]
