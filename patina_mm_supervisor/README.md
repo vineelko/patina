@@ -175,6 +175,13 @@ emulator may always present an AMD64-style save state. Enable the feature from t
 patina_mm_supervisor = { version = "*", features = ["save_state_amd"] }
 ```
 
+### V1 Resource Descriptor HOBs
+
+By default the supervisor validates only V2 resource descriptor HOBs and ignores V1 ones, matching `patina_dxe_core`.
+A platform that still depends on V1 resource descriptors can enable the `v1_resource_descriptor_support` Cargo feature
+so V1 descriptors are also checked for overlaps. This feature is temporary and will be removed once platforms produce
+V2 descriptors only.
+
 ### Integration with MM IPL
 
 The MM IPL (from EDK2/MmSupervisorPkg) loads this binary and calls the entry point. The HOB list passed contains:

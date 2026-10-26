@@ -38,3 +38,9 @@ std = []
 doc = []
 # Read the SMRAM save state with the AMD64 layout. The Intel x64 layout is used otherwise.
 save_state_amd = ["patina_internal_cpu/save_state_amd"]
+# Also validate V1 resource descriptor HOBs. Without it only V2 descriptors are validated and V1
+# descriptors are ignored, matching `patina_dxe_core`. Temporary: removed once platforms stop
+# producing V1 descriptors.
+v1_resource_descriptor_support = []
+# All non-std features to test in CI
+ci_features = ["v1_resource_descriptor_support"]

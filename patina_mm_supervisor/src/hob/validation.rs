@@ -15,10 +15,12 @@
 //!    lie inside MMRAM, do not overlap each other, and have entry points inside
 //!    their allocations. The Init allocation is page-aligned, and both the Init
 //!    and Core modules must be present.
-//! 4. Resource descriptor HOBs (v1 and v2) do not overlap within the same
-//!    version and address space (memory vs I/O). Descriptors owned by the
-//!    Memory Type Information GUID are skipped, since the PEI memory bin HOB is
-//!    expected to overlap the system-memory descriptors backing it.
+//! 4. Resource descriptor HOBs do not overlap within the same version and
+//!    address space (memory vs I/O). Only v2 descriptors are checked unless the
+//!    `v1_resource_descriptor_support` feature is enabled, which adds v1.
+//!    Descriptors owned by the Memory Type Information GUID are skipped, since
+//!    the PEI memory bin HOB is expected to overlap the system-memory
+//!    descriptors backing it.
 //! 5. Every v2 resource descriptor carries valid memory attributes (exactly one
 //!    cacheability bit for memory, no `EFI_MEMORY_UCE`, no attributes for I/O).
 //! 6. The pointers reported in the MM Supervisor `PassDown` HOB reference
@@ -613,17 +615,22 @@ fn push_range(
 /// version (v1/v2) and address space (memory/I/O).
 ///
 /// V1 and V2 descriptors are expected to cover the same ranges (V2 is a superset
-/// of V1), so overlaps are only flagged within each of the four categories, not
-/// across them.
+/// of V1), so overlaps are only flagged within each category, not across them.
+///
+/// V1 descriptors are only checked with the `v1_resource_descriptor_support`
+/// feature. Without it they are ignored, as in `patina_dxe_core`.
 fn validate_resource_descriptor_overlaps<'a>(hobs: impl IntoIterator<Item = Hob<'a>>) -> MmSupervisorResult<()> {
-    let mut v1_mem = [(0u64, 0u64); MAX_RESOURCE_HOBS];
-    let mut v1_io = [(0u64, 0u64); MAX_RESOURCE_HOBS];
+    #[cfg(feature = "v1_resource_descriptor_support")]
+    let (mut v1_mem, mut v1_io) = ([(0u64, 0u64); MAX_RESOURCE_HOBS], [(0u64, 0u64); MAX_RESOURCE_HOBS]);
+    #[cfg(feature = "v1_resource_descriptor_support")]
+    let (mut v1_mem_n, mut v1_io_n) = (0usize, 0usize);
     let mut v2_mem = [(0u64, 0u64); MAX_RESOURCE_HOBS];
     let mut v2_io = [(0u64, 0u64); MAX_RESOURCE_HOBS];
-    let (mut v1_mem_n, mut v1_io_n, mut v2_mem_n, mut v2_io_n) = (0usize, 0usize, 0usize, 0usize);
+    let (mut v2_mem_n, mut v2_io_n) = (0usize, 0usize);
 
     for current in hobs {
         match current {
+            #[cfg(feature = "v1_resource_descriptor_support")]
             Hob::ResourceDescriptor(rd) => {
                 // The PEI memory bin (Memory Type Info) HOB is expected to overlap the
                 // system-memory resource descriptors backing it, so skip it.
@@ -656,8 +663,11 @@ fn validate_resource_descriptor_overlaps<'a>(hobs: impl IntoIterator<Item = Hob<
         }
     }
 
-    check_category_overlap(v1_mem.get_mut(..v1_mem_n).unwrap_or(&mut []), "v1 memory")?;
-    check_category_overlap(v1_io.get_mut(..v1_io_n).unwrap_or(&mut []), "v1 I/O")?;
+    #[cfg(feature = "v1_resource_descriptor_support")]
+    {
+        check_category_overlap(v1_mem.get_mut(..v1_mem_n).unwrap_or(&mut []), "v1 memory")?;
+        check_category_overlap(v1_io.get_mut(..v1_io_n).unwrap_or(&mut []), "v1 I/O")?;
+    }
     check_category_overlap(v2_mem.get_mut(..v2_mem_n).unwrap_or(&mut []), "v2 memory")?;
     check_category_overlap(v2_io.get_mut(..v2_io_n).unwrap_or(&mut []), "v2 I/O")?;
 
@@ -1686,6 +1696,80 @@ mod tests {
 
     #[test]
     fn test_mm_supervisor_hob_validation_resource_descriptor_categories() {
+        let memory_a = resource_descriptor_v2(EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, 0x1000, efi::MEMORY_WB);
+        let memory_b = resource_descriptor_v2(EFI_RESOURCE_SYSTEM_MEMORY, 0x1800, 0x1000, efi::MEMORY_WB);
+        assert!(matches!(
+            validate_resource_descriptor_overlaps([
+                Hob::ResourceDescriptorV2(&memory_a),
+                Hob::ResourceDescriptorV2(&memory_b)
+            ]),
+            Err(MmSupervisorError::HobValidation(HobValidationError::ResourceDescriptorsOverlap {
+                kind: "v2 memory",
+                ..
+            }))
+        ));
+
+        let io_a = resource_descriptor_v2(EFI_RESOURCE_IO, 0x1000, 0x1000, 0);
+        let io_b = resource_descriptor_v2(EFI_RESOURCE_IO, 0x1800, 0x1000, 0);
+        assert!(matches!(
+            validate_resource_descriptor_overlaps([Hob::ResourceDescriptorV2(&io_a), Hob::ResourceDescriptorV2(&io_b)]),
+            Err(MmSupervisorError::HobValidation(HobValidationError::ResourceDescriptorsOverlap {
+                kind: "v2 I/O",
+                ..
+            }))
+        ));
+
+        // Memory and I/O are separate address spaces, so the same range in each is not an overlap.
+        assert_eq!(
+            validate_resource_descriptor_overlaps([
+                Hob::ResourceDescriptorV2(&memory_a),
+                Hob::ResourceDescriptorV2(&io_a)
+            ]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_resource_descriptor_exemptions_and_limits() {
+        let normal = resource_descriptor_v2(EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, 0x1000, efi::MEMORY_WB);
+        let memory_type_info = ResourceDescriptorV2::from(resource_descriptor(
+            MEMORY_TYPE_INFO_HOB_GUID,
+            EFI_RESOURCE_SYSTEM_MEMORY,
+            0x1000,
+            0x1000,
+        ));
+        assert_eq!(
+            validate_resource_descriptor_overlaps([
+                Hob::ResourceDescriptorV2(&normal),
+                Hob::ResourceDescriptorV2(&memory_type_info)
+            ]),
+            Ok(())
+        );
+
+        let hobs = (0..=MAX_RESOURCE_HOBS).map(|_| Hob::ResourceDescriptorV2(&normal));
+        assert_eq!(
+            validate_resource_descriptor_overlaps(hobs),
+            Err(HobValidationError::TooManyResourceDescriptors { kind: "v2 memory", limit: MAX_RESOURCE_HOBS }.into())
+        );
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_resource_descriptor_invalid_range() {
+        for (resource_type, kind) in [
+            (EFI_RESOURCE_SYSTEM_MEMORY, "v2 memory resource descriptor HOB"),
+            (EFI_RESOURCE_IO, "v2 I/O resource descriptor HOB"),
+        ] {
+            let invalid = resource_descriptor_v2(resource_type, u64::MAX, 1, 0);
+            assert_eq!(
+                validate_resource_descriptor_overlaps([Hob::ResourceDescriptorV2(&invalid)]),
+                Err(HobValidationError::InvalidAddressRange { kind, base: u64::MAX, length: 1 }.into())
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "v1_resource_descriptor_support")]
+    fn test_mm_supervisor_hob_validation_v1_resource_descriptors_checked_with_feature() {
         let memory_a = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, 0x1000);
         let memory_b = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_SYSTEM_MEMORY, 0x1800, 0x1000);
         assert!(matches!(
@@ -1699,48 +1783,65 @@ mod tests {
             }))
         ));
 
-        let io = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_IO, 0x1000, 0x1000);
+        let io_a = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_IO, 0x1000, 0x1000);
+        let io_b = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_IO, 0x1800, 0x1000);
+        assert!(matches!(
+            validate_resource_descriptor_overlaps([Hob::ResourceDescriptor(&io_a), Hob::ResourceDescriptor(&io_b)]),
+            Err(MmSupervisorError::HobValidation(HobValidationError::ResourceDescriptorsOverlap {
+                kind: "v1 I/O",
+                ..
+            }))
+        ));
+
+        // V2 describes the same ranges as V1, so a V1 and a V2 descriptor for one range do not
+        // overlap, and the memory bin descriptor is skipped as it is for V2.
+        let memory_type_info =
+            resource_descriptor(MEMORY_TYPE_INFO_HOB_GUID, EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, 0x1000);
         let v2 = resource_descriptor_v2(EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, 0x1000, efi::MEMORY_WB);
         assert_eq!(
             validate_resource_descriptor_overlaps([
                 Hob::ResourceDescriptor(&memory_a),
-                Hob::ResourceDescriptor(&io),
+                Hob::ResourceDescriptor(&io_a),
+                Hob::ResourceDescriptor(&memory_type_info),
                 Hob::ResourceDescriptorV2(&v2),
             ]),
             Ok(())
         );
-    }
 
-    #[test]
-    fn test_mm_supervisor_hob_validation_resource_descriptor_exemptions_and_limits() {
-        let normal = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, 0x1000);
-        let memory_type_info =
-            resource_descriptor(MEMORY_TYPE_INFO_HOB_GUID, EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, 0x1000);
-        assert_eq!(
-            validate_resource_descriptor_overlaps([
-                Hob::ResourceDescriptor(&normal),
-                Hob::ResourceDescriptor(&memory_type_info)
-            ]),
-            Ok(())
-        );
-
-        let hobs = (0..=MAX_RESOURCE_HOBS).map(|_| Hob::ResourceDescriptor(&normal));
+        let hobs = (0..=MAX_RESOURCE_HOBS).map(|_| Hob::ResourceDescriptor(&memory_a));
         assert_eq!(
             validate_resource_descriptor_overlaps(hobs),
             Err(HobValidationError::TooManyResourceDescriptors { kind: "v1 memory", limit: MAX_RESOURCE_HOBS }.into())
         );
+
+        for (resource_type, kind) in [
+            (EFI_RESOURCE_SYSTEM_MEMORY, "v1 memory resource descriptor HOB"),
+            (EFI_RESOURCE_IO, "v1 I/O resource descriptor HOB"),
+        ] {
+            let invalid = resource_descriptor(MM_SUPERVISOR_CORE_GUID, resource_type, u64::MAX, 1);
+            assert_eq!(
+                validate_resource_descriptor_overlaps([Hob::ResourceDescriptor(&invalid)]),
+                Err(HobValidationError::InvalidAddressRange { kind, base: u64::MAX, length: 1 }.into())
+            );
+        }
     }
 
     #[test]
-    fn test_mm_supervisor_hob_validation_resource_descriptor_invalid_range() {
+    #[cfg(not(feature = "v1_resource_descriptor_support"))]
+    fn test_mm_supervisor_hob_validation_v1_resource_descriptors_ignored_without_feature() {
+        // Without the feature V1 descriptors are not consumed, so overlapping and invalid ones are
+        // not reported.
+        let memory_a = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_SYSTEM_MEMORY, 0x1000, 0x1000);
+        let memory_b = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_SYSTEM_MEMORY, 0x1800, 0x1000);
         let invalid = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_SYSTEM_MEMORY, u64::MAX, 1);
-        assert!(matches!(
-            validate_resource_descriptor_overlaps([Hob::ResourceDescriptor(&invalid)]),
-            Err(MmSupervisorError::HobValidation(HobValidationError::InvalidAddressRange {
-                kind: "v1 memory resource descriptor HOB",
-                ..
-            }))
-        ));
+        assert_eq!(
+            validate_resource_descriptor_overlaps([
+                Hob::ResourceDescriptor(&memory_a),
+                Hob::ResourceDescriptor(&memory_b),
+                Hob::ResourceDescriptor(&invalid),
+            ]),
+            Ok(())
+        );
     }
 
     #[test]
