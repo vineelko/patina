@@ -20,13 +20,7 @@ use crate::pi::hob::{
     PhaseHandoffInformationTable, RESOURCE_DESCRIPTOR, RESOURCE_DESCRIPTOR2, ResourceDescriptor, ResourceDescriptorV2,
     UEFI_CAPSULE,
 };
-use core::{ffi::c_void, mem, slice};
-
-use crate::{
-    base::{align_down, align_up},
-    writelncrlf,
-};
-use core::fmt;
+use core::{ffi::c_void, fmt, mem, slice};
 
 // Expectation is someone will provide alloc
 use alloc::{boxed::Box, vec::Vec};
@@ -404,103 +398,11 @@ impl<'a> IntoIterator for &'a HobList<'a> {
     }
 }
 
-/// Implements Debug for Hoblist.
-///
-/// Writes Hoblist debug information to stdio
-///
-#[cfg_attr(coverage, coverage(off))]
+/// Writes each HOB in the list using its `Display` implementation.
 impl fmt::Debug for HobList<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for hob in self.0.clone() {
-            match hob {
-                Hob::Handoff(hob) => {
-                    writelncrlf!(f, "PHASE HANDOFF INFORMATION TABLE (PHIT) HOB")?;
-                    writelncrlf!(f, "  HOB Length: 0x{:x}", hob.header.length)?;
-                    writelncrlf!(f, "  Version: 0x{:x}", hob.version)?;
-                    writelncrlf!(f, "  Boot Mode: {}", hob.boot_mode)?;
-                    writelncrlf!(f, "  Memory Bottom: 0x{:x}", align_up(hob.memory_bottom, 0x1000).unwrap_or(0))?;
-                    writelncrlf!(f, "  Memory Top: 0x{:x}", align_down(hob.memory_top, 0x1000).unwrap_or(0))?;
-                    writelncrlf!(
-                        f,
-                        "  Free Memory Bottom: 0x{:x}",
-                        align_up(hob.free_memory_bottom, 0x1000).unwrap_or(0)
-                    )?;
-                    writelncrlf!(f, "  Free Memory Top: 0x{:x}", align_down(hob.free_memory_top, 0x1000).unwrap_or(0))?;
-                    writelncrlf!(f, "  End of HOB List: 0x{:x}", hob.end_of_hob_list)?;
-                }
-                Hob::MemoryAllocation(hob) => {
-                    writelncrlf!(f, "MEMORY ALLOCATION HOB")?;
-                    writelncrlf!(f, "  HOB Length: 0x{:x}", hob.header.length)?;
-                    writelncrlf!(f, "  Memory Base Address: 0x{:x}", hob.alloc_descriptor.memory_base_address)?;
-                    writelncrlf!(f, "  Memory Length: 0x{:x}", hob.alloc_descriptor.memory_length)?;
-                    writelncrlf!(f, "  Memory Type: {:?}", hob.alloc_descriptor.memory_type)?;
-                }
-                Hob::ResourceDescriptor(hob) => {
-                    writelncrlf!(f, "RESOURCE DESCRIPTOR HOB")?;
-                    writelncrlf!(f, "  HOB Length: 0x{:x}", hob.header.length)?;
-                    writelncrlf!(f, "  Resource Type: 0x{:x}", hob.resource_type)?;
-                    writelncrlf!(f, "  Resource Attribute Type: 0x{:x}", hob.resource_attribute)?;
-                    writelncrlf!(f, "  Resource Start Address: 0x{:x}", hob.physical_start)?;
-                    writelncrlf!(f, "  Resource Length: 0x{:x}", hob.resource_length)?;
-                }
-                Hob::GuidHob(hob, _data) => {
-                    let (f0, f1, f2, f3, f4, &[f5, f6, f7, f8, f9, f10]) = hob.name.as_fields();
-                    writelncrlf!(f, "GUID HOB")?;
-                    writelncrlf!(f, "  Type: {:#x}", hob.header.r#type)?;
-                    writelncrlf!(f, "  Length: {:#x}", hob.header.length)?;
-                    writelncrlf!(
-                        f,
-                        "  GUID: {{{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
-                        f0,
-                        f1,
-                        f2,
-                        f3,
-                        f4,
-                        f5,
-                        f6,
-                        f7,
-                        f8,
-                        f9,
-                        f10,
-                    )?;
-                }
-                Hob::FirmwareVolume(hob) => {
-                    writelncrlf!(f, "FIRMWARE VOLUME (FV) HOB")?;
-                    writelncrlf!(f, "  HOB Length: 0x{:x}", hob.header.length)?;
-                    writelncrlf!(f, "  Base Address: 0x{:x}", hob.base_address)?;
-                    writelncrlf!(f, "  Length: 0x{:x}", hob.length)?;
-                }
-                Hob::FirmwareVolume2(hob) => {
-                    writelncrlf!(f, "FIRMWARE VOLUME 2 (FV2) HOB")?;
-                    writelncrlf!(f, "  Base Address: 0x{:x}", hob.base_address)?;
-                    writelncrlf!(f, "  Length: 0x{:x}", hob.length)?;
-                }
-                Hob::FirmwareVolume3(hob) => {
-                    writelncrlf!(f, "FIRMWARE VOLUME 3 (FV3) HOB")?;
-                    writelncrlf!(f, "  Base Address: 0x{:x}", hob.base_address)?;
-                    writelncrlf!(f, "  Length: 0x{:x}", hob.length)?;
-                }
-                Hob::Cpu(hob) => {
-                    writelncrlf!(f, "CPU HOB")?;
-                    writelncrlf!(f, "  Memory Space Size: 0x{:x}", hob.size_of_memory_space)?;
-                    writelncrlf!(f, "  IO Space Size: 0x{:x}", hob.size_of_io_space)?;
-                }
-                Hob::Capsule(hob) => {
-                    writelncrlf!(f, "CAPSULE HOB")?;
-                    writelncrlf!(f, "  Base Address: 0x{:x}", hob.base_address)?;
-                    writelncrlf!(f, "  Length: 0x{:x}", hob.length)?;
-                }
-                Hob::ResourceDescriptorV2(hob) => {
-                    writelncrlf!(f, "RESOURCE DESCRIPTOR 2 HOB")?;
-                    writelncrlf!(f, "  HOB Length: 0x{:x}", hob.v1.header.length)?;
-                    writelncrlf!(f, "  Resource Type: 0x{:x}", hob.v1.resource_type)?;
-                    writelncrlf!(f, "  Resource Attribute Type: 0x{:x}", hob.v1.resource_attribute)?;
-                    writelncrlf!(f, "  Resource Start Address: 0x{:x}", hob.v1.physical_start)?;
-                    writelncrlf!(f, "  Resource Length: 0x{:x}", hob.v1.resource_length)?;
-                    writelncrlf!(f, "  Attributes: 0x{:x}", hob.attributes)?;
-                }
-                _ => (),
-            }
+        for hob in self.iter() {
+            write!(f, "{hob}")?;
         }
         write!(f, "Parsed HOBs")
     }
@@ -572,6 +474,20 @@ mod tests {
         hoblist.push(Hob::ResourceDescriptorV2(&resource_v2));
 
         assert_eq!(hoblist.len(), 3);
+    }
+
+    #[test]
+    fn test_hoblist_debug_uses_hob_display() {
+        let mut hoblist = HobList::new();
+        assert_eq!(format!("{hoblist:?}"), "Parsed HOBs");
+
+        let cpu = gen_cpu();
+        let capsule = gen_capsule();
+        hoblist.push(Hob::Cpu(&cpu));
+        hoblist.push(Hob::Capsule(&capsule));
+
+        let expected = format!("{}{}Parsed HOBs", Hob::Cpu(&cpu), Hob::Capsule(&capsule));
+        assert_eq!(format!("{hoblist:?}"), expected);
     }
 
     #[test]
