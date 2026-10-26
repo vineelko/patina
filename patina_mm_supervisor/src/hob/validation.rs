@@ -537,17 +537,25 @@ fn entry_point_in_range(entry_point: u64, base: u64, length: u64) -> bool {
 }
 
 /// Returns the first pair of overlapping `[base, size)` ranges, if any.
+///
+/// Callers must first check every range with [`checked_range_end`], so each one is non-empty and
+/// its end fits in a `u64`. A range whose end overflows is still reported, paired with itself, so
+/// a caller that skips the check fails closed instead of having the end clamped to `u64::MAX`.
 fn find_overlap(ranges: &mut [(u64, u64)]) -> Option<((u64, u64), (u64, u64))> {
     ranges.sort_unstable_by_key(|&(base, _)| base);
     let mut prev = *ranges.first()?;
-    let mut prev_end = prev.0.saturating_add(prev.1);
+    let Some(mut prev_end) = prev.0.checked_add(prev.1) else {
+        return Some((prev, prev));
+    };
     for &cur in ranges.iter().skip(1) {
         if ranges_overlap(prev, cur) {
             return Some((prev, cur));
         }
         // Keep the interval with the greatest end so a later range is compared
         // against the widest predecessor (catches nested/contained ranges).
-        let cur_end = cur.0.saturating_add(cur.1);
+        let Some(cur_end) = cur.0.checked_add(cur.1) else {
+            return Some((cur, cur));
+        };
         if cur_end > prev_end {
             prev = cur;
             prev_end = cur_end;
@@ -1350,6 +1358,10 @@ mod tests {
         assert!(find_overlap(&mut [(0, 0x1000), (0x800, 0x1000)]).is_some());
         // Unsorted input with a contained range is still detected after sorting.
         assert!(find_overlap(&mut [(0x4000, 0x1000), (0, 0x8000), (0x1000, 0x100)]).is_some());
+        // A range whose end overflows is reported, alone or after a range it does not overlap.
+        let overflowing = (u64::MAX, 1);
+        assert_eq!(find_overlap(&mut [overflowing]), Some((overflowing, overflowing)));
+        assert_eq!(find_overlap(&mut [(0, 0), overflowing]), Some((overflowing, overflowing)));
     }
 
     #[test]
