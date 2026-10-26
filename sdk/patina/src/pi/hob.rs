@@ -922,11 +922,12 @@ pub fn get_pi_hob_list_size_from_phit(phit: &PhaseHandoffInformationTable) -> Op
 /// them. Both must match, because the same image is described by different allocation names
 /// depending on who allocated it.
 ///
-/// The search walks the HOB list that starts at `phit`. `phit` must be the PHIT HOB in place at the
-/// start of a valid HOB list, not a copy of it such as the PHIT held by a relocated `HobList`.
+/// The search walks the HOB list that starts at `phit`. Returns `None` when no HOB matches both.
 ///
-/// Returns `None` when no HOB matches both.
-pub fn find_memory_allocation_module(
+/// # Safety
+///
+/// `phit` must be the in-place PHIT of a valid HOB list terminated by `END_OF_HOB_LIST`, not a copy.
+pub unsafe fn find_memory_allocation_module(
     phit: &PhaseHandoffInformationTable,
     allocation_name: crate::BinaryGuid,
     module_name: crate::BinaryGuid,
@@ -945,11 +946,12 @@ pub fn find_memory_allocation_module(
 
 /// Finds the first GUID HOB matching `target_guid` and returns its data slice.
 ///
-/// The search walks the HOB list that starts at `phit`. `phit` must be the PHIT HOB in place at the
-/// start of a valid HOB list, not a copy of it such as the PHIT held by a relocated `HobList`.
+/// The search walks the HOB list that starts at `phit`. Returns `None` if no matching HOB is found.
 ///
-/// Returns `None` if no matching HOB is found.
-pub fn find_guid_hob_data(phit: &PhaseHandoffInformationTable, target_guid: crate::BinaryGuid) -> Option<&[u8]> {
+/// # Safety
+///
+/// `phit` must be the in-place PHIT of a valid HOB list terminated by `END_OF_HOB_LIST`, not a copy.
+pub unsafe fn find_guid_hob_data(phit: &PhaseHandoffInformationTable, target_guid: crate::BinaryGuid) -> Option<&[u8]> {
     for current_hob in &Hob::Handoff(phit) {
         if let Hob::GuidHob(guid_hob, data) = current_hob
             && guid_hob.name == target_guid
@@ -1588,10 +1590,13 @@ pub(crate) mod tests {
             },
         };
 
-        let found = find_memory_allocation_module(&list.phit, guid_a, guid_a).expect("module should be found");
+        // SAFETY: `list` is a contiguous HOB list starting at `phit` and terminated by an end HOB.
+        let found =
+            unsafe { find_memory_allocation_module(&list.phit, guid_a, guid_a) }.expect("module should be found");
         assert_eq!(found.entry_point, 0x1000);
 
-        assert!(find_memory_allocation_module(&list.phit, guid_b, guid_b).is_none());
+        // SAFETY: As above.
+        assert!(unsafe { find_memory_allocation_module(&list.phit, guid_b, guid_b) }.is_none());
     }
 
     #[test]
@@ -1624,10 +1629,12 @@ pub(crate) mod tests {
         };
 
         let expected = Some(&[1_u8, 2, 3, 4, 5, 6, 7, 8][..]);
-        assert_eq!(find_guid_hob_data(&list.phit, guid), expected);
+        // SAFETY: `list` is a contiguous HOB list starting at `phit` and terminated by an end HOB.
+        assert_eq!(unsafe { find_guid_hob_data(&list.phit, guid) }, expected);
 
         let missing = crate::BinaryGuid::from_fields(0xaa, 0, 0, 0, 0, &[0; 6]);
-        assert_eq!(find_guid_hob_data(&list.phit, missing), None);
+        // SAFETY: As above.
+        assert_eq!(unsafe { find_guid_hob_data(&list.phit, missing) }, None);
     }
 
     #[test]
