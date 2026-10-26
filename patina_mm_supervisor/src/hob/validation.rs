@@ -811,30 +811,18 @@ pub(crate) fn validate_incoming_hobs_post_paging_init(
     handoff: &PhaseHandoffInformationTable,
 ) -> MmSupervisorResult<()> {
     let hob = Hob::Handoff(handoff);
-    verify_module_page_protections(&hob)
+    with_active_page_table(|page_table| verify_module_page_protections(&hob, page_table))
 }
 
 /// Verifies the page protections of the MM Supervisor Core and User modules.
 ///
 /// Iterates the module HOBs, selecting the MM Supervisor's own
 /// `MemoryAllocationModule` HOBs, dispatches on the module GUID to check
-/// supervisor/user page ownership, and confirms each module's entry point lies
-/// on an executable page.
-fn verify_module_page_protections<'a>(hobs: impl IntoIterator<Item = Hob<'a>>) -> MmSupervisorResult<()> {
-    verify_module_page_protections_with(
-        hobs,
-        |base, length, required, forbidden| {
-            with_active_page_table(|page_table| verify_page_attributes(page_table, base, length, required, forbidden))
-        },
-        verify_entry_point_executable,
-    )
-}
-
-/// Verifies module protections using injectable page and entry-point checks.
-fn verify_module_page_protections_with<'a>(
+/// supervisor/user page ownership in `page_table`, and confirms each module's
+/// entry point lies on an executable page.
+fn verify_module_page_protections<'a>(
     hobs: impl IntoIterator<Item = Hob<'a>>,
-    mut verify_pages: impl FnMut(u64, u64, MemoryAttributes, MemoryAttributes) -> MmSupervisorResult<()>,
-    mut verify_entry_point: impl FnMut(u64) -> MmSupervisorResult<()>,
+    page_table: &impl PageTable,
 ) -> MmSupervisorResult<()> {
     for current in hobs {
         let Hob::MemoryAllocationModule(module) = current else {
@@ -852,16 +840,28 @@ fn verify_module_page_protections_with<'a>(
                     "Verifying MM Supervisor Core module page protections: base=0x{base:x}, length=0x{length:x}"
                 );
                 // Supervisor core pages must be supervisor-owned (SP set).
-                verify_pages(base, length, MemoryAttributes::Supervisor, MemoryAttributes::empty())?;
-                verify_entry_point(module.entry_point)?;
+                verify_page_attributes(
+                    page_table,
+                    base,
+                    length,
+                    MemoryAttributes::Supervisor,
+                    MemoryAttributes::empty(),
+                )?;
+                verify_entry_point_executable(page_table, module.entry_point)?;
             }
             name if name == MM_SUPERVISOR_USER_GUID => {
                 log::info!(
                     "Verifying MM Supervisor User module page protections: base=0x{base:x}, length=0x{length:x}"
                 );
                 // User core pages must be user-accessible (SP clear).
-                verify_pages(base, length, MemoryAttributes::empty(), MemoryAttributes::Supervisor)?;
-                verify_entry_point(module.entry_point)?;
+                verify_page_attributes(
+                    page_table,
+                    base,
+                    length,
+                    MemoryAttributes::empty(),
+                    MemoryAttributes::Supervisor,
+                )?;
+                verify_entry_point_executable(page_table, module.entry_point)?;
             }
             _ => {}
         }
@@ -948,9 +948,9 @@ fn verify_page_attributes(
 }
 
 /// Verifies that the page containing `entry_point` is executable (its
-/// `ExecuteProtect` bit is clear) in the active page table, confirming the entry
-/// point lands in the module's code section.
-fn verify_entry_point_executable(entry_point: u64) -> MmSupervisorResult<()> {
+/// `ExecuteProtect` bit is clear) in `page_table`, confirming the entry point
+/// lands in the module's code section.
+fn verify_entry_point_executable(page_table: &impl PageTable, entry_point: u64) -> MmSupervisorResult<()> {
     let page_size = UEFI_PAGE_SIZE as u64;
     if entry_point.checked_add(1).is_none() {
         return Err(HobValidationError::PageAttributeQueryFailed { addr: entry_point }.into());
@@ -958,10 +958,7 @@ fn verify_entry_point_executable(entry_point: u64) -> MmSupervisorResult<()> {
     let (page_base, _) = align_range(entry_point, 1, page_size)
         .map_err(|_| HobValidationError::PageAttributeQueryFailed { addr: entry_point })?;
 
-    let page_table = security_state().lock_page_table();
-    let pt = page_table.as_ref().ok_or(HobValidationError::PageTableUnavailable)?;
-
-    let attrs = pt
+    let attrs = page_table
         .query_memory_region(page_base, page_size)
         .map_err(|_| HobValidationError::PageAttributeQueryFailed { addr: page_base })?;
     validate_entry_point_attributes(entry_point, attrs)
@@ -984,7 +981,6 @@ mod tests {
     use crate::hob::pass_down::{MM_SUPV_PASS_DOWN_HOB_GUID, MM_SUPV_PASS_DOWN_HOB_REVISION};
     use core::mem::size_of;
     use patina_paging::{MockPageTable, PtError};
-    use std::cell::RefCell;
 
     use patina::pi::BootMode;
     use patina::pi::hob::{
@@ -1992,7 +1988,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mm_supervisor_hob_validation_module_page_protection_dispatch() {
+    fn test_mm_supervisor_hob_validation_module_page_protections() {
         let core = allocation_module(
             MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
             MM_SUPERVISOR_CORE_GUID,
@@ -2007,36 +2003,74 @@ mod tests {
             0x2000,
             0x2100,
         );
+        // Not one of the supervisor's own module HOBs, so its pages are never queried. The mock
+        // has no expectation for 0x4000, so a query there would fail the test.
         let unrelated = allocation_module(MM_SUPERVISOR_CORE_GUID, MM_SUPERVISOR_CORE_GUID, 0x4000, 0x1000, 0x4100);
-        let page_checks = RefCell::new(Vec::new());
-        let entry_checks = RefCell::new(Vec::new());
+        let hobs = [
+            Hob::MemoryAllocationModule(&core),
+            Hob::MemoryAllocationModule(&user),
+            Hob::MemoryAllocationModule(&unrelated),
+        ];
+
+        // Each module's first page is queried twice: once for the page walk, once for the entry
+        // point that lies in it.
+        let page_table = |core_page: MemoryAttributes, user_page: MemoryAttributes| {
+            let mut page_table = MockPageTable::new();
+            page_table
+                .expect_query_memory_region()
+                .withf(|&addr, _| addr == 0x1000)
+                .returning(move |_, _| Ok(core_page));
+            page_table
+                .expect_query_memory_region()
+                .withf(|&addr, _| addr == 0x2000 || addr == 0x3000)
+                .returning(move |_, _| Ok(user_page));
+            page_table
+        };
 
         assert_eq!(
-            verify_module_page_protections_with(
-                [
-                    Hob::MemoryAllocationModule(&core),
-                    Hob::MemoryAllocationModule(&user),
-                    Hob::MemoryAllocationModule(&unrelated),
-                ],
-                |base, length, required, forbidden| {
-                    page_checks.borrow_mut().push((base, length, required, forbidden));
-                    Ok(())
-                },
-                |entry_point| {
-                    entry_checks.borrow_mut().push(entry_point);
-                    Ok(())
-                }
+            verify_module_page_protections(
+                hobs.clone(),
+                &page_table(MemoryAttributes::Supervisor, MemoryAttributes::empty())
             ),
             Ok(())
         );
+
+        // Core pages must be supervisor pages.
         assert_eq!(
-            page_checks.into_inner(),
-            [
-                (0x1000, 0x1000, MemoryAttributes::Supervisor, MemoryAttributes::empty()),
-                (0x2000, 0x2000, MemoryAttributes::empty(), MemoryAttributes::Supervisor),
-            ]
+            verify_module_page_protections(
+                hobs.clone(),
+                &page_table(MemoryAttributes::empty(), MemoryAttributes::empty())
+            ),
+            Err(HobValidationError::PageMissingAttribute {
+                addr: 0x1000,
+                desired: MemoryAttributes::Supervisor.bits(),
+                found: 0,
+            }
+            .into())
         );
-        assert_eq!(entry_checks.into_inner(), [0x1100, 0x2100]);
+
+        // User pages must not be supervisor pages.
+        assert_eq!(
+            verify_module_page_protections(
+                hobs.clone(),
+                &page_table(MemoryAttributes::Supervisor, MemoryAttributes::Supervisor)
+            ),
+            Err(HobValidationError::PageHasForbiddenAttribute {
+                addr: 0x2000,
+                forbidden: MemoryAttributes::Supervisor.bits(),
+                found: MemoryAttributes::Supervisor.bits(),
+            }
+            .into())
+        );
+
+        // The entry point must be on an executable page.
+        assert_eq!(
+            verify_module_page_protections(
+                hobs,
+                &page_table(MemoryAttributes::Supervisor | MemoryAttributes::ExecuteProtect, MemoryAttributes::empty())
+            ),
+            Err(HobValidationError::EntryPointNotExecutable { entry_point: 0x1100 }.into())
+        );
     }
 
     #[test]
@@ -2112,10 +2146,52 @@ mod tests {
     }
 
     #[test]
-    fn test_mm_supervisor_hob_validation_verify_entry_point_executable_page_table_unavailable() {
-        // The page table is uninitialized in unit tests, so the query reports it
-        // as unavailable rather than panicking.
-        assert_eq!(verify_entry_point_executable(0x1000), Err(HobValidationError::PageTableUnavailable.into()));
+    fn test_mm_supervisor_hob_validation_post_paging_page_table_unavailable() {
+        // The page table is uninitialized in unit tests, so the check reports it as unavailable
+        // before it reads any HOB.
+        let handoff = PhaseHandoffInformationTable {
+            header: HobHeader {
+                r#type: HANDOFF,
+                length: size_of::<PhaseHandoffInformationTable>() as u16,
+                reserved: 0,
+            },
+            version: 1,
+            boot_mode: BootMode::BootWithFullConfiguration,
+            memory_top: 0x9000,
+            memory_bottom: 0x1000,
+            free_memory_top: 0x8000,
+            free_memory_bottom: 0x2000,
+            end_of_hob_list: 0,
+        };
+        assert_eq!(
+            validate_incoming_hobs_post_paging_init(&handoff),
+            Err(HobValidationError::PageTableUnavailable.into())
+        );
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_entry_point_executable() {
+        // The page that holds the entry point is the one queried.
+        let mut page_table = MockPageTable::new();
+        page_table
+            .expect_query_memory_region()
+            .withf(|&addr, &size| addr == 0x1000 && size == 0x1000)
+            .times(1)
+            .returning(|_, _| Ok(MemoryAttributes::empty()));
+        assert_eq!(verify_entry_point_executable(&page_table, 0x1234), Ok(()));
+
+        let mut page_table = MockPageTable::new();
+        page_table.expect_query_memory_region().returning(|_, _| Err(PtError::NoMapping));
+        assert_eq!(
+            verify_entry_point_executable(&page_table, 0x1234),
+            Err(HobValidationError::PageAttributeQueryFailed { addr: 0x1000 }.into())
+        );
+
+        // An entry point at the top of the address space is rejected without a query.
+        assert_eq!(
+            verify_entry_point_executable(&MockPageTable::new(), u64::MAX),
+            Err(HobValidationError::PageAttributeQueryFailed { addr: u64::MAX }.into())
+        );
     }
 
     #[test]
@@ -2124,10 +2200,6 @@ mod tests {
         assert_eq!(
             validate_entry_point_attributes(0x1234, MemoryAttributes::ExecuteProtect),
             Err(HobValidationError::EntryPointNotExecutable { entry_point: 0x1234 }.into())
-        );
-        assert_eq!(
-            verify_entry_point_executable(u64::MAX),
-            Err(HobValidationError::PageAttributeQueryFailed { addr: u64::MAX }.into())
         );
     }
 
