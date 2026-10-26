@@ -66,6 +66,7 @@ use crate::hob::pass_down::{
     MM_SUPV_PASS_DOWN_HOB_GUID, MM_SUPV_PASS_DOWN_HOB_REVISION, MmSupvPassDownHobData, PassDownHobError,
 };
 use crate::memory::mmram::{MmramRegion, classify_mmram_in_regions};
+use crate::state::security::SupervisorPageTable;
 use crate::state::security_state;
 
 /// Maximum number of `MemoryAllocationModule` HOBs accepted while checking for
@@ -820,7 +821,13 @@ pub(crate) fn validate_incoming_hobs_post_paging_init(
 /// supervisor/user page ownership, and confirms each module's entry point lies
 /// on an executable page.
 fn verify_module_page_protections<'a>(hobs: impl IntoIterator<Item = Hob<'a>>) -> MmSupervisorResult<()> {
-    verify_module_page_protections_with(hobs, verify_page_attributes, verify_entry_point_executable)
+    verify_module_page_protections_with(
+        hobs,
+        |base, length, required, forbidden| {
+            with_active_page_table(|page_table| verify_page_attributes(page_table, base, length, required, forbidden))
+        },
+        verify_entry_point_executable,
+    )
 }
 
 /// Verifies module protections using injectable page and entry-point checks.
@@ -863,6 +870,15 @@ fn verify_module_page_protections_with<'a>(
     Ok(())
 }
 
+/// Runs `check` against the active page table, or reports it as unavailable when it has not been
+/// initialized yet.
+fn with_active_page_table<R>(
+    check: impl FnOnce(&SupervisorPageTable) -> MmSupervisorResult<R>,
+) -> MmSupervisorResult<R> {
+    let page_table = security_state().lock_page_table();
+    check(page_table.as_ref().ok_or(HobValidationError::PageTableUnavailable)?)
+}
+
 /// Verifies that every page of the Ring 3 stack region is usable by a demoted
 /// routine: user-accessible (SP clear), writable, and non-executable.
 ///
@@ -870,57 +886,45 @@ fn verify_module_page_protections_with<'a>(
 /// itself, so it runs after the stacks have been mapped rather than as part of
 /// the incoming HOB validation rounds.
 pub(crate) fn verify_cpl3_stacks_user_accessible(base: u64, length: u64) -> MmSupervisorResult<()> {
-    verify_page_attributes(
-        base,
-        length,
-        MemoryAttributes::ExecuteProtect,
-        MemoryAttributes::Supervisor | MemoryAttributes::ReadOnly,
-    )
+    with_active_page_table(|page_table| {
+        verify_page_attributes(
+            page_table,
+            base,
+            length,
+            MemoryAttributes::ExecuteProtect,
+            MemoryAttributes::Supervisor | MemoryAttributes::ReadOnly,
+        )
+    })
 }
 
 /// Verifies that every page in `[base, base + length)` has all of the `required`
-/// attributes set and none of the `forbidden` attributes set in the active page
-/// table.
+/// attributes set and none of the `forbidden` attributes set in `page_table`.
 ///
 /// The range is page-aligned (base rounded down, length rounded up) and each
 /// page is queried individually, so attributes that differ across the range are
 /// detected per page rather than merged into a single range query.
 fn verify_page_attributes(
+    page_table: &impl PageTable,
     base: u64,
     length: u64,
     required: MemoryAttributes,
     forbidden: MemoryAttributes,
 ) -> MmSupervisorResult<()> {
+    let page_size = UEFI_PAGE_SIZE as u64;
     if length == 0 || base.checked_add(length).is_none() {
         return Err(HobValidationError::PageAttributeQueryFailed { addr: base }.into());
     }
-    let (aligned_base, aligned_len) = align_range(base, length, UEFI_PAGE_SIZE as u64)
+    let (aligned_base, aligned_len) = align_range(base, length, page_size)
         .map_err(|_| HobValidationError::PageAttributeQueryFailed { addr: base })?;
-
-    let page_table = security_state().lock_page_table();
-    let pt = page_table.as_ref().ok_or(HobValidationError::PageTableUnavailable)?;
-
-    verify_aligned_page_attributes(aligned_base, aligned_len, required, forbidden, |addr, page_size| {
-        pt.query_memory_region(addr, page_size).ok()
-    })
-}
-
-/// Verifies attributes over an already page-aligned range using the supplied query.
-fn verify_aligned_page_attributes(
-    aligned_base: u64,
-    aligned_len: u64,
-    required: MemoryAttributes,
-    forbidden: MemoryAttributes,
-    mut query: impl FnMut(u64, u64) -> Option<MemoryAttributes>,
-) -> MmSupervisorResult<()> {
-    let page_size = UEFI_PAGE_SIZE as u64;
     let end = aligned_base
         .checked_add(aligned_len)
-        .filter(|_| aligned_len != 0)
         .ok_or(HobValidationError::PageAttributeQueryFailed { addr: aligned_base })?;
+
     let mut addr = aligned_base;
     while addr < end {
-        let attrs = query(addr, page_size).ok_or(HobValidationError::PageAttributeQueryFailed { addr })?;
+        let attrs = page_table
+            .query_memory_region(addr, page_size)
+            .map_err(|_| HobValidationError::PageAttributeQueryFailed { addr })?;
         if !attrs.contains(required) {
             return Err(HobValidationError::PageMissingAttribute {
                 addr,
@@ -979,6 +983,7 @@ mod tests {
     use crate::error::MmSupervisorError;
     use crate::hob::pass_down::{MM_SUPV_PASS_DOWN_HOB_GUID, MM_SUPV_PASS_DOWN_HOB_REVISION};
     use core::mem::size_of;
+    use patina_paging::{MockPageTable, PtError};
     use std::cell::RefCell;
 
     use patina::pi::BootMode;
@@ -2035,56 +2040,55 @@ mod tests {
     }
 
     #[test]
-    fn test_mm_supervisor_hob_validation_aligned_page_attributes() {
-        let queried = RefCell::new(Vec::new());
+    fn test_mm_supervisor_hob_validation_page_attributes_checks_each_page() {
+        // An unaligned range is widened to whole pages, and each page is queried on its own.
+        let mut page_table = MockPageTable::new();
+        for page in [0x1000u64, 0x2000] {
+            page_table
+                .expect_query_memory_region()
+                .withf(move |&addr, &size| addr == page && size == 0x1000)
+                .times(1)
+                .returning(|_, _| Ok(MemoryAttributes::Supervisor));
+        }
         assert_eq!(
-            verify_aligned_page_attributes(
+            verify_page_attributes(
+                &page_table,
+                0x1800,
                 0x1000,
-                0x2000,
                 MemoryAttributes::Supervisor,
-                MemoryAttributes::ReadOnly,
-                |addr, size| {
-                    queried.borrow_mut().push((addr, size));
-                    Some(MemoryAttributes::Supervisor)
-                }
+                MemoryAttributes::ReadOnly
             ),
             Ok(())
         );
-        assert_eq!(queried.into_inner(), [(0x1000, 0x1000), (0x2000, 0x1000)]);
+    }
 
+    #[test]
+    fn test_mm_supervisor_hob_validation_page_attributes_reports_the_failing_page() {
+        let required = MemoryAttributes::Supervisor;
+
+        // A page that cannot be queried is reported by its address.
+        let mut page_table = MockPageTable::new();
+        page_table.expect_query_memory_region().withf(|&addr, _| addr == 0x1000).returning(move |_, _| Ok(required));
+        page_table
+            .expect_query_memory_region()
+            .withf(|&addr, _| addr == 0x2000)
+            .returning(|_, _| Err(PtError::NoMapping));
         assert_eq!(
-            verify_aligned_page_attributes(
-                0x1000,
-                0x2000,
-                MemoryAttributes::Supervisor,
-                MemoryAttributes::empty(),
-                |addr, _| (addr == 0x1000).then_some(MemoryAttributes::Supervisor)
-            ),
+            verify_page_attributes(&page_table, 0x1000, 0x2000, required, MemoryAttributes::empty()),
             Err(HobValidationError::PageAttributeQueryFailed { addr: 0x2000 }.into())
         );
+
+        let mut page_table = MockPageTable::new();
+        page_table.expect_query_memory_region().returning(|_, _| Ok(MemoryAttributes::empty()));
         assert_eq!(
-            verify_aligned_page_attributes(
-                0x1000,
-                0x1000,
-                MemoryAttributes::Supervisor,
-                MemoryAttributes::empty(),
-                |_, _| Some(MemoryAttributes::empty())
-            ),
-            Err(HobValidationError::PageMissingAttribute {
-                addr: 0x1000,
-                desired: MemoryAttributes::Supervisor.bits(),
-                found: 0,
-            }
-            .into())
+            verify_page_attributes(&page_table, 0x1000, 0x1000, required, MemoryAttributes::empty()),
+            Err(HobValidationError::PageMissingAttribute { addr: 0x1000, desired: required.bits(), found: 0 }.into())
         );
+
+        let mut page_table = MockPageTable::new();
+        page_table.expect_query_memory_region().returning(|_, _| Ok(MemoryAttributes::ReadOnly));
         assert_eq!(
-            verify_aligned_page_attributes(
-                0x1000,
-                0x1000,
-                MemoryAttributes::empty(),
-                MemoryAttributes::ReadOnly,
-                |_, _| Some(MemoryAttributes::ReadOnly)
-            ),
+            verify_page_attributes(&page_table, 0x1000, 0x1000, MemoryAttributes::empty(), MemoryAttributes::ReadOnly),
             Err(HobValidationError::PageHasForbiddenAttribute {
                 addr: 0x1000,
                 forbidden: MemoryAttributes::ReadOnly.bits(),
@@ -2092,37 +2096,19 @@ mod tests {
             }
             .into())
         );
-        assert_eq!(
-            verify_aligned_page_attributes(
-                u64::MAX,
-                1,
-                MemoryAttributes::empty(),
-                MemoryAttributes::empty(),
-                |_, _| Some(MemoryAttributes::empty())
-            ),
-            Err(HobValidationError::PageAttributeQueryFailed { addr: u64::MAX }.into())
-        );
     }
 
     #[test]
-    fn test_mm_supervisor_hob_validation_verify_page_attributes_page_table_unavailable() {
-        // The page table is uninitialized in unit tests, so the query reports it
-        // as unavailable rather than panicking.
-        let result = verify_page_attributes(0x1000, 0x1000, MemoryAttributes::Supervisor, MemoryAttributes::empty());
-        assert_eq!(result, Err(HobValidationError::PageTableUnavailable.into()));
-    }
-
-    #[test]
-    fn test_mm_supervisor_hob_validation_verify_page_attributes_rejects_invalid_range() {
+    fn test_mm_supervisor_hob_validation_page_attributes_rejects_invalid_range() {
+        // The mock has no expectations, so any query would fail the test.
+        let page_table = MockPageTable::new();
         let required = MemoryAttributes::Supervisor;
-        assert_eq!(
-            verify_page_attributes(0x1000, 0, required, MemoryAttributes::empty()),
-            Err(HobValidationError::PageAttributeQueryFailed { addr: 0x1000 }.into())
-        );
-        assert_eq!(
-            verify_page_attributes(u64::MAX, 1, required, MemoryAttributes::empty()),
-            Err(HobValidationError::PageAttributeQueryFailed { addr: u64::MAX }.into())
-        );
+        for (base, length) in [(0x1000, 0), (u64::MAX, 1), (u64::MAX - 0xfff, 0xfff)] {
+            assert_eq!(
+                verify_page_attributes(&page_table, base, length, required, MemoryAttributes::empty()),
+                Err(HobValidationError::PageAttributeQueryFailed { addr: base }.into())
+            );
+        }
     }
 
     #[test]

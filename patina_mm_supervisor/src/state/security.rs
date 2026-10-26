@@ -29,7 +29,7 @@ use crate::{
 use crate::privilege_mgmt::save_state::{SaveStateAccessHolder, SaveStateInfo};
 
 /// Type alias for the global page table guarded by the [`SecurityState`].
-type SupervisorPageTable = X64PageTable<SharedPagingAllocator>;
+pub(crate) type SupervisorPageTable = X64PageTable<SharedPagingAllocator>;
 
 /// Security-relevant global state for the MM Supervisor Core.
 pub(crate) struct SecurityState {
