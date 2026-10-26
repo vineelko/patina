@@ -34,9 +34,9 @@
 //! 7. Every page of the MM Supervisor Core module is supervisor-owned (the U/S
 //!    "SP" bit is set) and every page of the MM Supervisor User module is
 //!    user-accessible (the SP bit is clear).
-//! 8. Each module's entry point lies on an executable page (its
-//!    `ExecuteProtect` bit is clear), i.e. it sits in the module's code
-//!    section.
+//! 8. Each module's entry point lies on a code page: present (`ReadProtect`
+//!    clear), read-only (`ReadOnly` set) and executable (`ExecuteProtect`
+//!    clear), i.e. it sits in the module's code section.
 //!
 //! ## License
 //!
@@ -238,10 +238,12 @@ pub enum HobValidationError {
         /// The attribute bits that were actually set on the page.
         found: u64,
     },
-    /// A module's entry point does not lie on an executable page.
-    EntryPointNotExecutable {
-        /// The module entry point that is not executable.
+    /// A module's entry point does not lie on a present, read-only, executable page.
+    EntryPointNotOnCodePage {
+        /// The module entry point.
         entry_point: u64,
+        /// The attribute bits of the page that holds the entry point.
+        attributes: u64,
     },
 }
 
@@ -315,9 +317,11 @@ impl fmt::Display for HobValidationError {
                 f,
                 "page at 0x{addr:x} has forbidden attributes set (forbidden 0x{forbidden:x}, found 0x{found:x})"
             ),
-            Self::EntryPointNotExecutable { entry_point } => {
-                write!(f, "module entry point 0x{entry_point:x} does not lie on an executable page")
-            }
+            Self::EntryPointNotOnCodePage { entry_point, attributes } => write!(
+                f,
+                "module entry point 0x{entry_point:x} is not on a present, read-only, executable page \
+                 (attributes 0x{attributes:x})"
+            ),
         }
     }
 }
@@ -819,7 +823,7 @@ pub(crate) fn validate_incoming_hobs_post_paging_init(
 /// Iterates the module HOBs, selecting the MM Supervisor's own
 /// `MemoryAllocationModule` HOBs, dispatches on the module GUID to check
 /// supervisor/user page ownership in `page_table`, and confirms each module's
-/// entry point lies on an executable page.
+/// entry point lies on a code page.
 fn verify_module_page_protections<'a>(
     hobs: impl IntoIterator<Item = Hob<'a>>,
     page_table: &impl PageTable,
@@ -847,7 +851,7 @@ fn verify_module_page_protections<'a>(
                     MemoryAttributes::Supervisor,
                     MemoryAttributes::empty(),
                 )?;
-                verify_entry_point_executable(page_table, module.entry_point)?;
+                verify_entry_point_on_code_page(page_table, module.entry_point)?;
             }
             name if name == MM_SUPERVISOR_USER_GUID => {
                 log::info!(
@@ -861,7 +865,7 @@ fn verify_module_page_protections<'a>(
                     MemoryAttributes::empty(),
                     MemoryAttributes::Supervisor,
                 )?;
-                verify_entry_point_executable(page_table, module.entry_point)?;
+                verify_entry_point_on_code_page(page_table, module.entry_point)?;
             }
             _ => {}
         }
@@ -947,10 +951,9 @@ fn verify_page_attributes(
     Ok(())
 }
 
-/// Verifies that the page containing `entry_point` is executable (its
-/// `ExecuteProtect` bit is clear) in `page_table`, confirming the entry point
-/// lands in the module's code section.
-fn verify_entry_point_executable(page_table: &impl PageTable, entry_point: u64) -> MmSupervisorResult<()> {
+/// Verifies that the page containing `entry_point` is a code page in
+/// `page_table`, confirming the entry point lands in the module's code section.
+fn verify_entry_point_on_code_page(page_table: &impl PageTable, entry_point: u64) -> MmSupervisorResult<()> {
     let page_size = UEFI_PAGE_SIZE as u64;
     if entry_point.checked_add(1).is_none() {
         return Err(HobValidationError::PageAttributeQueryFailed { addr: entry_point }.into());
@@ -965,9 +968,14 @@ fn verify_entry_point_executable(page_table: &impl PageTable, entry_point: u64) 
 }
 
 /// Validates the queried page attributes for a module entry point.
+///
+/// The loader maps module code present, read-only and executable, the same protection
+/// `validate_init_code_page` requires of the MM Init image. A page missing any of the three is
+/// not code the loader placed there.
 fn validate_entry_point_attributes(entry_point: u64, attributes: MemoryAttributes) -> MmSupervisorResult<()> {
-    if attributes.contains(MemoryAttributes::ExecuteProtect) {
-        Err(HobValidationError::EntryPointNotExecutable { entry_point }.into())
+    let forbidden = MemoryAttributes::ExecuteProtect | MemoryAttributes::ReadProtect;
+    if !attributes.contains(MemoryAttributes::ReadOnly) || attributes.intersects(forbidden) {
+        Err(HobValidationError::EntryPointNotOnCodePage { entry_point, attributes: attributes.bits() }.into())
     } else {
         Ok(())
     }
@@ -2029,49 +2037,52 @@ mod tests {
             page_table
         };
 
-        assert_eq!(
-            verify_module_page_protections(
-                hobs.clone(),
-                &page_table(MemoryAttributes::Supervisor, MemoryAttributes::empty())
-            ),
-            Ok(())
-        );
+        // Code pages are read-only: supervisor-owned for the core, user-accessible for the user
+        // module.
+        let core_code = MemoryAttributes::Supervisor | MemoryAttributes::ReadOnly;
+        let user_code = MemoryAttributes::ReadOnly;
+        assert_eq!(verify_module_page_protections(hobs.clone(), &page_table(core_code, user_code)), Ok(()));
 
         // Core pages must be supervisor pages.
         assert_eq!(
-            verify_module_page_protections(
-                hobs.clone(),
-                &page_table(MemoryAttributes::empty(), MemoryAttributes::empty())
-            ),
+            verify_module_page_protections(hobs.clone(), &page_table(MemoryAttributes::ReadOnly, user_code)),
             Err(HobValidationError::PageMissingAttribute {
                 addr: 0x1000,
                 desired: MemoryAttributes::Supervisor.bits(),
-                found: 0,
+                found: MemoryAttributes::ReadOnly.bits(),
             }
             .into())
         );
 
         // User pages must not be supervisor pages.
+        let supervisor_code = MemoryAttributes::Supervisor | MemoryAttributes::ReadOnly;
         assert_eq!(
-            verify_module_page_protections(
-                hobs.clone(),
-                &page_table(MemoryAttributes::Supervisor, MemoryAttributes::Supervisor)
-            ),
+            verify_module_page_protections(hobs.clone(), &page_table(core_code, supervisor_code)),
             Err(HobValidationError::PageHasForbiddenAttribute {
                 addr: 0x2000,
                 forbidden: MemoryAttributes::Supervisor.bits(),
-                found: MemoryAttributes::Supervisor.bits(),
+                found: supervisor_code.bits(),
             }
             .into())
         );
 
-        // The entry point must be on an executable page.
+        // The entry point must be on a present, read-only, executable page.
+        for core_page in [
+            MemoryAttributes::Supervisor,
+            core_code | MemoryAttributes::ExecuteProtect,
+            core_code | MemoryAttributes::ReadProtect,
+        ] {
+            assert_eq!(
+                verify_module_page_protections(hobs.clone(), &page_table(core_page, user_code)),
+                Err(HobValidationError::EntryPointNotOnCodePage { entry_point: 0x1100, attributes: core_page.bits() }
+                    .into())
+            );
+        }
+        let user_data = MemoryAttributes::ExecuteProtect;
         assert_eq!(
-            verify_module_page_protections(
-                hobs,
-                &page_table(MemoryAttributes::Supervisor | MemoryAttributes::ExecuteProtect, MemoryAttributes::empty())
-            ),
-            Err(HobValidationError::EntryPointNotExecutable { entry_point: 0x1100 }.into())
+            verify_module_page_protections(hobs, &page_table(core_code, user_data)),
+            Err(HobValidationError::EntryPointNotOnCodePage { entry_point: 0x2100, attributes: user_data.bits() }
+                .into())
         );
     }
 
@@ -2172,37 +2183,51 @@ mod tests {
     }
 
     #[test]
-    fn test_mm_supervisor_hob_validation_entry_point_executable() {
+    fn test_mm_supervisor_hob_validation_entry_point_on_code_page() {
         // The page that holds the entry point is the one queried.
         let mut page_table = MockPageTable::new();
         page_table
             .expect_query_memory_region()
             .withf(|&addr, &size| addr == 0x1000 && size == 0x1000)
             .times(1)
-            .returning(|_, _| Ok(MemoryAttributes::empty()));
-        assert_eq!(verify_entry_point_executable(&page_table, 0x1234), Ok(()));
+            .returning(|_, _| Ok(MemoryAttributes::ReadOnly));
+        assert_eq!(verify_entry_point_on_code_page(&page_table, 0x1234), Ok(()));
 
         let mut page_table = MockPageTable::new();
         page_table.expect_query_memory_region().returning(|_, _| Err(PtError::NoMapping));
         assert_eq!(
-            verify_entry_point_executable(&page_table, 0x1234),
+            verify_entry_point_on_code_page(&page_table, 0x1234),
             Err(HobValidationError::PageAttributeQueryFailed { addr: 0x1000 }.into())
         );
 
         // An entry point at the top of the address space is rejected without a query.
         assert_eq!(
-            verify_entry_point_executable(&MockPageTable::new(), u64::MAX),
+            verify_entry_point_on_code_page(&MockPageTable::new(), u64::MAX),
             Err(HobValidationError::PageAttributeQueryFailed { addr: u64::MAX }.into())
         );
     }
 
     #[test]
     fn test_mm_supervisor_hob_validation_entry_point_attributes() {
-        assert_eq!(validate_entry_point_attributes(0x1234, MemoryAttributes::empty()), Ok(()));
+        // Present, read-only and executable, with or without the supervisor bit.
+        assert_eq!(validate_entry_point_attributes(0x1234, MemoryAttributes::ReadOnly), Ok(()));
         assert_eq!(
-            validate_entry_point_attributes(0x1234, MemoryAttributes::ExecuteProtect),
-            Err(HobValidationError::EntryPointNotExecutable { entry_point: 0x1234 }.into())
+            validate_entry_point_attributes(0x1234, MemoryAttributes::ReadOnly | MemoryAttributes::Supervisor),
+            Ok(())
         );
+
+        // Writable, not executable, or not present.
+        for attributes in [
+            MemoryAttributes::empty(),
+            MemoryAttributes::ReadOnly | MemoryAttributes::ExecuteProtect,
+            MemoryAttributes::ReadOnly | MemoryAttributes::ReadProtect,
+        ] {
+            assert_eq!(
+                validate_entry_point_attributes(0x1234, attributes),
+                Err(HobValidationError::EntryPointNotOnCodePage { entry_point: 0x1234, attributes: attributes.bits() }
+                    .into())
+            );
+        }
     }
 
     #[test]
@@ -2300,7 +2325,7 @@ mod tests {
             HobValidationError::PageAttributeQueryFailed { addr: 0x1000 },
             HobValidationError::PageMissingAttribute { addr: 0x1000, desired: 0x1, found: 0 },
             HobValidationError::PageHasForbiddenAttribute { addr: 0x1000, forbidden: 0x1, found: 0x1 },
-            HobValidationError::EntryPointNotExecutable { entry_point: 0x5000 },
+            HobValidationError::EntryPointNotOnCodePage { entry_point: 0x5000, attributes: 0x1 },
         ];
         for err in errors {
             assert!(!format!("{err}").is_empty());
