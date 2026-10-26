@@ -880,7 +880,7 @@ fn with_active_page_table<R>(
 }
 
 /// Verifies that every page of the Ring 3 stack region is usable by a demoted
-/// routine: user-accessible (SP clear), writable, and non-executable.
+/// routine: user-accessible (SP clear), present, writable, and non-executable.
 ///
 /// Unlike the checks above, this validates state the supervisor establishes
 /// itself, so it runs after the stacks have been mapped rather than as part of
@@ -892,7 +892,7 @@ pub(crate) fn verify_cpl3_stacks_user_accessible(base: u64, length: u64) -> MmSu
             base,
             length,
             MemoryAttributes::ExecuteProtect,
-            MemoryAttributes::Supervisor | MemoryAttributes::ReadOnly,
+            MemoryAttributes::Supervisor | MemoryAttributes::ReadOnly | MemoryAttributes::ReadProtect,
         )
     })
 }
@@ -981,6 +981,8 @@ mod tests {
     use crate::hob::pass_down::{MM_SUPV_PASS_DOWN_HOB_GUID, MM_SUPV_PASS_DOWN_HOB_REVISION};
     use core::mem::size_of;
     use patina_paging::{MockPageTable, PtError};
+
+    use crate::test_support::{PageAlignedMemory, init_global_state_over};
 
     use patina::pi::BootMode;
     use patina::pi::hob::{
@@ -2211,6 +2213,54 @@ mod tests {
             verify_cpl3_stacks_user_accessible(0x1000, 0x2000),
             Err(HobValidationError::PageTableUnavailable.into())
         );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_mm_supervisor_hob_validation_cpl3_stack_pages() {
+        let pool = PageAlignedMemory::new(crate::memory::DEFAULT_PAGING_POOL_PAGES + 32);
+        init_global_state_over(&pool);
+        let stack = PageAlignedMemory::new(2);
+        let map_stack = |attributes: MemoryAttributes| {
+            let mut page_table = security_state().lock_page_table();
+            let page_table = page_table.as_mut().expect("a page table is installed");
+            page_table.map_memory_region(stack.base(), stack.size(), attributes).expect("map the stack");
+        };
+        let forbidden = MemoryAttributes::Supervisor | MemoryAttributes::ReadOnly | MemoryAttributes::ReadProtect;
+
+        // A present, writable, non-executable user page is a usable stack page.
+        map_stack(MemoryAttributes::ExecuteProtect);
+        assert_eq!(verify_cpl3_stacks_user_accessible(stack.base(), stack.size()), Ok(()));
+
+        // A supervisor or read-only page cannot serve as a Ring 3 stack.
+        for attribute in [MemoryAttributes::Supervisor, MemoryAttributes::ReadOnly] {
+            map_stack(MemoryAttributes::ExecuteProtect | attribute);
+            let found = security_state()
+                .lock_page_table()
+                .as_ref()
+                .expect("a page table is installed")
+                .query_memory_region(stack.base(), UEFI_PAGE_SIZE as u64)
+                .expect("query the stack page");
+            assert_eq!(
+                verify_cpl3_stacks_user_accessible(stack.base(), stack.size()),
+                Err(HobValidationError::PageHasForbiddenAttribute {
+                    addr: stack.base(),
+                    forbidden: forbidden.bits(),
+                    found: found.bits(),
+                }
+                .into())
+            );
+        }
+
+        // Nor can a page that is not present. The x64 page table reports such a page as unmapped
+        // rather than returning ReadProtect, so the query itself fails.
+        map_stack(MemoryAttributes::ExecuteProtect | MemoryAttributes::ReadProtect);
+        assert_eq!(
+            verify_cpl3_stacks_user_accessible(stack.base(), stack.size()),
+            Err(HobValidationError::PageAttributeQueryFailed { addr: stack.base() }.into())
+        );
+
+        *security_state().lock_page_table() = None;
     }
 
     #[test]
