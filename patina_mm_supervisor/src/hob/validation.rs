@@ -711,60 +711,14 @@ fn validate_resource_v2_memory_attributes<'a>(hobs: impl IntoIterator<Item = Hob
     Ok(())
 }
 
-/// Logs every discovered HOB, grouped by type, to aid debugging.
+/// Logs every HOB in the list, one line each, to aid debugging.
 fn dump_hobs(handoff: &PhaseHandoffInformationTable) {
     log::debug!("---- Incoming HOB dump ----");
     let hob = Hob::Handoff(handoff);
     for current in &hob {
-        dump_hob(current);
+        log::debug!("HOB {current}");
     }
     log::debug!("---- End HOB dump ----");
-}
-
-/// Logs one discovered HOB.
-fn dump_hob(hob: Hob<'_>) {
-    match hob {
-        Hob::Handoff(h) => log::debug!(
-            "HOB Handoff: boot_mode={:?}, memory_top=0x{:x}, memory_bottom=0x{:x}",
-            h.boot_mode,
-            h.memory_top,
-            h.memory_bottom
-        ),
-        Hob::MemoryAllocation(a) => log::debug!(
-            "HOB MemoryAllocation: base=0x{:x}, len=0x{:x}, name={}",
-            a.alloc_descriptor.memory_base_address,
-            a.alloc_descriptor.memory_length,
-            a.alloc_descriptor.name.as_guid()
-        ),
-        Hob::MemoryAllocationModule(m) => log::debug!(
-            "HOB MemoryAllocationModule: base=0x{:x}, len=0x{:x}, module={}, entry=0x{:x}",
-            m.alloc_descriptor.memory_base_address,
-            m.alloc_descriptor.memory_length,
-            m.module_name.as_guid(),
-            m.entry_point
-        ),
-        Hob::ResourceDescriptor(rd) => log::debug!(
-            "HOB ResourceDescriptor(v1): base=0x{:x}, len=0x{:x}, type=0x{:x}, attr=0x{:x}",
-            rd.physical_start,
-            rd.resource_length,
-            rd.resource_type,
-            rd.resource_attribute
-        ),
-        Hob::ResourceDescriptorV2(rd) => log::debug!(
-            "HOB ResourceDescriptor(v2): base=0x{:x}, len=0x{:x}, type=0x{:x}, attributes=0x{:x}",
-            rd.v1.physical_start,
-            rd.v1.resource_length,
-            rd.v1.resource_type,
-            rd.attributes
-        ),
-        Hob::GuidHob(g, data) => log::debug!("HOB Guid: {}, data_len=0x{:x}", g.name.as_guid(), data.len()),
-        Hob::FirmwareVolume(_) | Hob::FirmwareVolume2(_) | Hob::FirmwareVolume3(_) => {
-            log::debug!("HOB FirmwareVolume");
-        }
-        Hob::Cpu(_) => log::debug!("HOB Cpu"),
-        Hob::Capsule(_) => log::debug!("HOB Capsule"),
-        Hob::Misc(t) => log::debug!("HOB Misc: type=0x{t:x}"),
-    }
 }
 
 /// Logs every scanned MMRAM region to aid debugging.
@@ -1019,9 +973,8 @@ mod tests {
 
     use patina::pi::BootMode;
     use patina::pi::hob::{
-        CPU, Capsule, EFI_RESOURCE_SYSTEM_MEMORY, END_OF_HOB_LIST, FV, FV2, FV3, FirmwareVolume, FirmwareVolume2,
-        FirmwareVolume3, GUID_EXTENSION, GuidHob, HANDOFF, HobHeader, MEMORY_ALLOCATION, MemoryAllocation,
-        MemoryAllocationHeader, MemoryAllocationModule, RESOURCE_DESCRIPTOR, ResourceDescriptorV2, UEFI_CAPSULE,
+        EFI_RESOURCE_SYSTEM_MEMORY, END_OF_HOB_LIST, GUID_EXTENSION, GuidHob, HANDOFF, HobHeader, MEMORY_ALLOCATION,
+        MemoryAllocation, MemoryAllocationHeader, MemoryAllocationModule, RESOURCE_DESCRIPTOR, ResourceDescriptorV2,
     };
 
     fn region(base: u64, size: u64) -> MmramRegion {
@@ -1129,86 +1082,41 @@ mod tests {
     }
 
     #[test]
-    fn test_mm_supervisor_hob_validation_dump_each_hob_type() {
-        // Two of the dump arms read a GUID out of the descriptor to print it. Those reads only
-        // happen with a logger installed, so the silent test logger is used here.
+    fn test_mm_supervisor_hob_validation_dump_hobs() {
+        /// A HOB list with a GUID HOB whose payload must not reach the log.
+        #[repr(C, align(8))]
+        struct DumpHobList {
+            handoff: PhaseHandoffInformationTable,
+            guid: GuidHob,
+            data: [u8; 8],
+            end: HobHeader,
+        }
+
+        // log::debug! only formats its arguments when a logger is installed, so the silent test
+        // logger makes the dump walk the list and format each HOB.
         crate::test_support::init_test_logger();
 
-        let handoff = PhaseHandoffInformationTable {
-            header: HobHeader {
-                r#type: HANDOFF,
-                length: size_of::<PhaseHandoffInformationTable>() as u16,
-                reserved: 0,
+        let list = DumpHobList {
+            handoff: PhaseHandoffInformationTable {
+                header: HobHeader {
+                    r#type: HANDOFF,
+                    length: size_of::<PhaseHandoffInformationTable>() as u16,
+                    reserved: 0,
+                },
+                version: 1,
+                boot_mode: BootMode::BootWithFullConfiguration,
+                memory_top: 0x9000,
+                memory_bottom: 0x1000,
+                free_memory_top: 0x8000,
+                free_memory_bottom: 0x2000,
+                end_of_hob_list: 0,
             },
-            version: 1,
-            boot_mode: BootMode::BootWithFullConfiguration,
-            memory_top: 0x9000,
-            memory_bottom: 0x1000,
-            free_memory_top: 0x8000,
-            free_memory_bottom: 0x2000,
-            end_of_hob_list: 0,
-        };
-        let allocation = memory_allocation(0x1000, 0x1000);
-        let module = allocation_module(
-            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
-            MM_SUPERVISOR_CORE_GUID,
-            0x2000,
-            0x1000,
-            0x2100,
-        );
-        let resource = resource_descriptor(MM_SUPERVISOR_CORE_GUID, EFI_RESOURCE_SYSTEM_MEMORY, 0x3000, 0x1000);
-        let resource_v2 = resource_descriptor_v2(EFI_RESOURCE_SYSTEM_MEMORY, 0x4000, 0x1000, efi::MEMORY_WB);
-        let guid_data = [1, 2, 3, 4];
-        let guid = guid_hob(MM_SUPERVISOR_CORE_GUID, guid_data.len());
-        let firmware_volume = FirmwareVolume {
-            header: HobHeader { r#type: FV, length: size_of::<FirmwareVolume>() as u16, reserved: 0 },
-            base_address: 0x5000,
-            length: 0x1000,
-        };
-        let firmware_volume2 = FirmwareVolume2 {
-            header: HobHeader { r#type: FV2, length: size_of::<FirmwareVolume2>() as u16, reserved: 0 },
-            base_address: 0x6000,
-            length: 0x1000,
-            fv_name: MM_SUPERVISOR_CORE_GUID,
-            file_name: MM_SUPERVISOR_USER_GUID,
-        };
-        let firmware_volume3 = FirmwareVolume3 {
-            header: HobHeader { r#type: FV3, length: size_of::<FirmwareVolume3>() as u16, reserved: 0 },
-            base_address: 0x7000,
-            length: 0x1000,
-            authentication_status: 0,
-            extracted_fv: false.into(),
-            fv_name: MM_SUPERVISOR_CORE_GUID,
-            file_name: MM_SUPERVISOR_USER_GUID,
-        };
-        let cpu = patina::pi::hob::Cpu {
-            header: HobHeader { r#type: CPU, length: size_of::<patina::pi::hob::Cpu>() as u16, reserved: 0 },
-            size_of_memory_space: 48,
-            size_of_io_space: 16,
-            reserved: [0; 6],
-        };
-        let capsule = Capsule {
-            header: HobHeader { r#type: UEFI_CAPSULE, length: size_of::<Capsule>() as u16, reserved: 0 },
-            base_address: 0x8000,
-            length: 0x1000,
+            guid: guid_hob(MM_SUPERVISOR_CORE_GUID, 8),
+            data: [0xa5; 8],
+            end: HobHeader { r#type: END_OF_HOB_LIST, length: size_of::<HobHeader>() as u16, reserved: 0 },
         };
 
-        for hob in [
-            Hob::Handoff(&handoff),
-            Hob::MemoryAllocation(&allocation),
-            Hob::MemoryAllocationModule(&module),
-            Hob::ResourceDescriptor(&resource),
-            Hob::ResourceDescriptorV2(&resource_v2),
-            Hob::GuidHob(&guid, &guid_data),
-            Hob::FirmwareVolume(&firmware_volume),
-            Hob::FirmwareVolume2(&firmware_volume2),
-            Hob::FirmwareVolume3(&firmware_volume3),
-            Hob::Cpu(&cpu),
-            Hob::Capsule(&capsule),
-            Hob::Misc(0x1234),
-        ] {
-            dump_hob(hob);
-        }
+        dump_hobs(&list.handoff);
     }
 
     #[test]
