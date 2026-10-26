@@ -488,6 +488,11 @@ fn validate_allocation_modules<'a>(
             let base = module.alloc_descriptor.memory_base_address;
             let length = module.alloc_descriptor.memory_length;
             checked_range_end("allocation module HOB", base, length)?;
+            if base == 0 {
+                return Err(
+                    HobValidationError::InvalidAddressRange { kind: "allocation module HOB", base, length }.into()
+                );
+            }
             if is_init && (!base.is_multiple_of(UEFI_PAGE_SIZE as u64) || !length.is_multiple_of(UEFI_PAGE_SIZE as u64))
             {
                 return Err(HobValidationError::InitModuleNotPageAligned { base, length }.into());
@@ -1550,7 +1555,11 @@ mod tests {
             ),
             (0x4001, 0x2000, HobValidationError::InitModuleNotPageAligned { base: 0x4001, length: 0x2000 }),
             (0x4000, 0x2001, HobValidationError::InitModuleNotPageAligned { base: 0x4000, length: 0x2001 }),
-            (0, 0x2000, HobValidationError::AllocationModuleOutsideMmram { base: 0, length: 0x2000 }),
+            (
+                0,
+                0x2000,
+                HobValidationError::InvalidAddressRange { kind: "allocation module HOB", base: 0, length: 0x2000 },
+            ),
             (
                 u64::MAX - 0xfff,
                 0x1000,
@@ -1596,7 +1605,7 @@ mod tests {
                 Err(MmSupervisorError::HobValidation(HobValidationError::AllocationModulesOverlap { .. }))
             ));
         }
-        for (base, length) in [(0x1000, 0), (u64::MAX - 0xfff, 0x1000)] {
+        for (base, length) in [(0x1000, 0), (u64::MAX - 0xfff, 0x1000), (0, 0x1000)] {
             let core = allocation_module(
                 MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
                 MM_SUPERVISOR_CORE_GUID,
