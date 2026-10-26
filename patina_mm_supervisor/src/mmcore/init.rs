@@ -41,7 +41,7 @@ use crate::{
     memory::{
         self, AllocationType, PageAllocator, SharedPagingAllocator,
         mmram::MmramRegion,
-        mmram::{classify_mmram_in_regions, is_buffer_inside_mmram},
+        mmram::is_buffer_inside_mmram,
         page_ownership::{PageOwnership, query_address_ownership},
     },
     policy::{self, MemDescriptorV1_0, dump_policy, gate::PolicyGate, walk_page_table},
@@ -123,9 +123,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         let smrr_range = establish_mmram_bound(scanned_regions, supervisor_image_anchor(), coalesced_smrr_range)?;
 
-        validation::validate_incoming_hobs_pre_paging_init(hob_hand_off_table, scanned_regions, |base, size| {
-            classify_mmram_in_regions(scanned_regions, base, size).is_inside(base, size)
-        })?;
+        validation::validate_incoming_hobs_pre_paging_init(hob_hand_off_table, scanned_regions)?;
 
         // Program the range before the allocator makes the first write into MMRAM. Enabling it is
         // left to `smrr_enable` on the next SMI entry: finalizing it here makes the range enforcing

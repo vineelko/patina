@@ -65,7 +65,7 @@ use crate::error::MmSupervisorResult;
 use crate::hob::pass_down::{
     MM_SUPV_PASS_DOWN_HOB_GUID, MM_SUPV_PASS_DOWN_HOB_REVISION, MmSupvPassDownHobData, PassDownHobError,
 };
-use crate::memory::mmram::MmramRegion;
+use crate::memory::mmram::{MmramRegion, classify_mmram_in_regions};
 use crate::state::security_state;
 
 /// Maximum number of `MemoryAllocationModule` HOBs accepted while checking for
@@ -387,15 +387,26 @@ fn validate_mmram_contiguous(regions: &[MmramRegion]) -> MmSupervisorResult<(u64
     Ok((base, span))
 }
 
+/// Returns whether `[base, base + size)` lies entirely inside the scanned MMRAM `regions`.
+///
+/// Resolves containment against the scanned descriptors rather than the page allocator, so the
+/// pre-paging checks can run before the allocator has committed to them.
+///
+/// # Panics
+///
+/// Panics when the range is only partly inside MMRAM, as [`MmramPlacement::is_inside`] does.
+///
+/// [`MmramPlacement::is_inside`]: crate::memory::mmram::MmramPlacement::is_inside
+fn is_inside_mmram(regions: &[MmramRegion], base: u64, size: u64) -> bool {
+    classify_mmram_in_regions(regions, base, size).is_inside(base, size)
+}
+
 /// Validates the `PassDown` HOB revision and that every pointer it reports references memory
 /// inside MMRAM.
 ///
 /// Every pointer is required. A null one needs no separate check: MMRAM never covers address 0,
 /// so the containment check rejects it and names the field.
-fn validate_pass_down_pointers(
-    pass_down: &MmSupvPassDownHobData,
-    is_inside_mmram: impl Fn(u64, u64) -> bool,
-) -> MmSupervisorResult<()> {
+fn validate_pass_down_pointers(pass_down: &MmSupvPassDownHobData, regions: &[MmramRegion]) -> MmSupervisorResult<()> {
     if pass_down.revision != MM_SUPV_PASS_DOWN_HOB_REVISION {
         return Err(PassDownHobError::InvalidRevision {
             found: pass_down.revision,
@@ -412,7 +423,7 @@ fn validate_pass_down_pointers(
     ];
 
     for (field, addr, size) in checks {
-        if !is_inside_mmram(addr, size) {
+        if !is_inside_mmram(regions, addr, size) {
             return Err(PassDownHobError::PointerOutsideMmram { field, addr, size }.into());
         }
     }
@@ -434,11 +445,11 @@ fn buffer_overlaps_mmram(mmram: (u64, u64), base: u64, length: u64) -> bool {
 fn validate_hob_list_inside_mmram(
     handoff: &PhaseHandoffInformationTable,
     length: u64,
-    is_inside_mmram: impl Fn(u64, u64) -> bool,
+    regions: &[MmramRegion],
 ) -> MmSupervisorResult<()> {
     let base = core::ptr::from_ref(handoff) as u64;
 
-    if length == 0 || !is_inside_mmram(base, length) {
+    if length == 0 || !is_inside_mmram(regions, base, length) {
         return Err(HobValidationError::HobListOutsideMmram { base, size: length }.into());
     }
 
@@ -470,7 +481,7 @@ fn validate_memory_allocations<'a>(
 /// Validates supervisor module allocations, including the standard PI Init allocation.
 fn validate_allocation_modules<'a>(
     hobs: impl IntoIterator<Item = Hob<'a>>,
-    is_inside_mmram: impl Fn(u64, u64) -> bool,
+    regions: &[MmramRegion],
 ) -> MmSupervisorResult<()> {
     let mut modules: [(u64, u64); MAX_ALLOC_MODULES] = [(0, 0); MAX_ALLOC_MODULES];
     let mut count = 0usize;
@@ -499,7 +510,7 @@ fn validate_allocation_modules<'a>(
             {
                 return Err(HobValidationError::InitModuleNotPageAligned { base, length }.into());
             }
-            if !is_inside_mmram(base, length) {
+            if !is_inside_mmram(regions, base, length) {
                 return Err(HobValidationError::AllocationModuleOutsideMmram { base, length }.into());
             }
             let entry_point = module.entry_point;
@@ -738,10 +749,7 @@ fn dump_regions(regions: &[MmramRegion]) {
 }
 
 /// Validates the `PassDown` HOB present in the HOB list.
-fn validate_pass_down<'a>(
-    hobs: impl IntoIterator<Item = Hob<'a>>,
-    is_inside_mmram: impl Fn(u64, u64) -> bool,
-) -> MmSupervisorResult<()> {
+fn validate_pass_down<'a>(hobs: impl IntoIterator<Item = Hob<'a>>, regions: &[MmramRegion]) -> MmSupervisorResult<()> {
     let data = hobs
         .into_iter()
         .find_map(|hob| match hob {
@@ -750,19 +758,17 @@ fn validate_pass_down<'a>(
         })
         .ok_or(PassDownHobError::Missing)?;
     let (pass_down, _) = MmSupvPassDownHobData::read_from_prefix(data).map_err(|_| PassDownHobError::TooSmall)?;
-    validate_pass_down_pointers(&pass_down, is_inside_mmram)
+    validate_pass_down_pointers(&pass_down, regions)
 }
 
 /// Validates the critical incoming HOBs before their contents are consumed.
 ///
-/// `regions` are the MMRAM regions scanned from the HOB list, and `is_inside_mmram` resolves
-/// containment against that same scanned set. Both are supplied by the caller rather than read
-/// back from the page allocator so this can run before the allocator has committed to the
+/// `regions` are the MMRAM regions scanned from the HOB list. Containment is resolved against
+/// them rather than the page allocator, so this can run before the allocator has committed to the
 /// producer's descriptors.
 pub(crate) fn validate_incoming_hobs_pre_paging_init(
     handoff: &PhaseHandoffInformationTable,
     regions: &[MmramRegion],
-    is_inside_mmram: impl Fn(u64, u64) -> bool + Copy,
 ) -> MmSupervisorResult<()> {
     // The regions were already copied out of the HOB list into a fixed array, so printing them
     // reads nothing beyond that array.
@@ -776,7 +782,7 @@ pub(crate) fn validate_incoming_hobs_pre_paging_init(
     // SAFETY: `handoff` is the MM IPL's HOB list, which the caller guarantees is a valid,
     // END_OF_HOB_LIST-terminated list for the duration of initialization.
     let hob_list_len = unsafe { get_pi_hob_list_size(core::ptr::from_ref(handoff).cast()) } as u64;
-    validate_hob_list_inside_mmram(handoff, hob_list_len, is_inside_mmram)?;
+    validate_hob_list_inside_mmram(handoff, hob_list_len, regions)?;
     // The dump walks the same headers as the size calculation above, so it only runs once that
     // walk is known to stay inside MMRAM. Before this point, header lengths chosen by the producer
     // could make the dump print fields read from memory outside the list. It runs before the
@@ -786,10 +792,10 @@ pub(crate) fn validate_incoming_hobs_pre_paging_init(
     // tested against one range instead of iterating the region list.
     let hob = Hob::Handoff(handoff);
     validate_memory_allocations(&hob, mmram)?;
-    validate_allocation_modules(&hob, is_inside_mmram)?;
+    validate_allocation_modules(&hob, regions)?;
     validate_resource_descriptor_overlaps(&hob)?;
     validate_resource_v2_memory_attributes(&hob)?;
-    validate_pass_down(&hob, is_inside_mmram)?;
+    validate_pass_down(&hob, regions)?;
 
     Ok(())
 }
@@ -985,6 +991,11 @@ mod tests {
         MmramRegion::new(base, size, false)
     }
 
+    /// MMRAM covering `[0x1000, 0x10_1000)`, which holds every address the HOB fixtures name.
+    fn mmram() -> [MmramRegion; 1] {
+        [region(0x1000, 0x10_0000)]
+    }
+
     fn pass_down() -> MmSupvPassDownHobData {
         MmSupvPassDownHobData {
             revision: MM_SUPV_PASS_DOWN_HOB_REVISION,
@@ -1163,21 +1174,24 @@ mod tests {
             pass_down: pass_down(),
             end: HobHeader { r#type: END_OF_HOB_LIST, length: size_of::<HobHeader>() as u16, reserved: 0 },
         };
-        let regions = [region(0x1000, 0x8000)];
+        let list_end = (&raw const list).addr() as u64 + size_of::<PassDownHobList>() as u64;
+        // One region from the lowest address the producer named up to the end of the list on the
+        // stack, so the modules, the PassDown pointers and the list itself are all inside it.
+        let regions = [region(0x1000, list_end - 0x1000)];
 
         // Everything the producer named resolves inside the scanned regions, so the whole
         // pre-paging sequence runs to completion.
-        assert_eq!(validate_incoming_hobs_pre_paging_init(&list.handoff, &regions, |_, _| true), Ok(()));
+        assert_eq!(validate_incoming_hobs_pre_paging_init(&list.handoff, &regions), Ok(()));
         list.init.alloc_descriptor.memory_base_address = 0x1000;
         assert!(matches!(
-            validate_incoming_hobs_pre_paging_init(&list.handoff, &regions, |_, _| true),
+            validate_incoming_hobs_pre_paging_init(&list.handoff, &regions),
             Err(MmSupervisorError::HobValidation(HobValidationError::AllocationModulesOverlap { .. }))
         ));
 
         // The HOB list itself is a buffer at an address the producer chose, so it is rejected
         // when it falls outside the regions it described.
         assert!(matches!(
-            validate_incoming_hobs_pre_paging_init(&list.handoff, &regions, |_, _| false),
+            validate_incoming_hobs_pre_paging_init(&list.handoff, &[region(0x1000, 0x8000)]),
             Err(MmSupervisorError::HobValidation(HobValidationError::HobListOutsideMmram { .. }))
         ));
     }
@@ -1342,7 +1356,7 @@ mod tests {
                     Hob::MemoryAllocationModule(&second),
                     Hob::MemoryAllocationModule(&init)
                 ],
-                |base, length| base >= 0x1000 && base.checked_add(length).is_some_and(|end| end <= 0x4000)
+                &[region(0x1000, 0x3000)]
             ),
             Ok(())
         );
@@ -1355,7 +1369,7 @@ mod tests {
             0x4000,
         );
         assert_eq!(
-            validate_allocation_modules([Hob::MemoryAllocationModule(&outside)], |_, _| false),
+            validate_allocation_modules([Hob::MemoryAllocationModule(&outside)], &[region(0x1000, 0x3000)]),
             Err(HobValidationError::AllocationModuleOutsideMmram { base: 0x4000, length: 0x1000 }.into())
         );
 
@@ -1367,7 +1381,7 @@ mod tests {
             0x2000,
         );
         assert_eq!(
-            validate_allocation_modules([Hob::MemoryAllocationModule(&bad_entry)], |_, _| true),
+            validate_allocation_modules([Hob::MemoryAllocationModule(&bad_entry)], &mmram()),
             Err(HobValidationError::AllocationModuleEntryPointOutOfRange {
                 entry_point: 0x2000,
                 base: 0x1000,
@@ -1401,7 +1415,7 @@ mod tests {
                     Hob::MemoryAllocationModule(&second),
                     Hob::MemoryAllocationModule(&init)
                 ],
-                |_, _| true
+                &mmram()
             ),
             Err(MmSupervisorError::HobValidation(HobValidationError::AllocationModulesOverlap { .. }))
         ));
@@ -1415,7 +1429,7 @@ mod tests {
         );
         let hobs = (0..=MAX_ALLOC_MODULES).map(|_| Hob::MemoryAllocationModule(&module));
         assert_eq!(
-            validate_allocation_modules(hobs, |_, _| true),
+            validate_allocation_modules(hobs, &mmram()),
             Err(HobValidationError::TooManyAllocationModules { limit: MAX_ALLOC_MODULES }.into())
         );
     }
@@ -1438,7 +1452,7 @@ mod tests {
                     Hob::MemoryAllocationModule(&core),
                     Hob::MemoryAllocationModule(&init)
                 ],
-                |_, _| true,
+                &mmram(),
             ),
             Ok(())
         );
@@ -1466,7 +1480,7 @@ mod tests {
             (vec![Hob::MemoryAllocationModule(&core), Hob::MemoryAllocationModule(&wrong_allocation)], true),
         ] {
             assert_eq!(
-                validate_allocation_modules(hobs, |_, _| true),
+                validate_allocation_modules(hobs, &mmram()),
                 Err(HobValidationError::MissingModule { has_init: false, has_supv_core }.into())
             );
         }
@@ -1508,7 +1522,7 @@ mod tests {
             assert_eq!(
                 validate_allocation_modules(
                     [Hob::MemoryAllocationModule(&init), Hob::MemoryAllocationModule(&core)],
-                    |base, size| base >= 0x1000 && base.checked_add(size).is_some_and(|end| end <= 0x9000),
+                    &[region(0x1000, 0x8000)],
                 ),
                 Err(expected.into())
             );
@@ -1519,7 +1533,7 @@ mod tests {
     fn test_mm_supervisor_hob_validation_init_requires_core_and_rejects_overlap() {
         let init = allocation_module(HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID, 0x4000, 0x2000, 0x4100);
         assert_eq!(
-            validate_allocation_modules([Hob::MemoryAllocationModule(&init)], |_, _| true),
+            validate_allocation_modules([Hob::MemoryAllocationModule(&init)], &mmram()),
             Err(HobValidationError::MissingModule { has_init: true, has_supv_core: false }.into())
         );
         for (base, length) in [(0x4000, 0x2000), (0x3000, 0x2000), (0x5000, 0x2000), (0x4000, 0x1000), (0x3000, 0x4000)]
@@ -1534,7 +1548,7 @@ mod tests {
             assert!(matches!(
                 validate_allocation_modules(
                     [Hob::MemoryAllocationModule(&core), Hob::MemoryAllocationModule(&init)],
-                    |_, _| true,
+                    &mmram(),
                 ),
                 Err(MmSupervisorError::HobValidation(HobValidationError::AllocationModulesOverlap { .. }))
             ));
@@ -1550,7 +1564,7 @@ mod tests {
             assert!(matches!(
                 validate_allocation_modules(
                     [Hob::MemoryAllocationModule(&core), Hob::MemoryAllocationModule(&init)],
-                    |_, _| true,
+                    &mmram(),
                 ),
                 Err(MmSupervisorError::HobValidation(HobValidationError::InvalidAddressRange { .. }))
             ));
@@ -1822,12 +1836,9 @@ mod tests {
 
     #[test]
     fn test_mm_supervisor_hob_validation_pass_down_rejects_null_pointers() {
-        // Classify against MMRAM the way production does. MMRAM never covers address 0, so a
-        // null pointer fails the containment check like any other address outside MMRAM.
-        let mmram = [(0x1000, 0x10_0000)];
-        let is_inside_mmram =
-            |addr, size| crate::memory::mmram::classify_coverage(addr, size, mmram.into_iter()).is_inside(addr, size);
-        assert_eq!(validate_pass_down_pointers(&pass_down(), is_inside_mmram), Ok(()));
+        // MMRAM never covers address 0, so a null pointer fails the containment check like any
+        // other address outside MMRAM.
+        assert_eq!(validate_pass_down_pointers(&pass_down(), &mmram()), Ok(()));
 
         for field in ["cpl3_stack_base", "sm_base_array", "mm_initialized_buffer", "firmware_policy_buffer"] {
             let mut pd = pass_down();
@@ -1850,7 +1861,7 @@ mod tests {
                 }
             };
             assert_eq!(
-                validate_pass_down_pointers(&pd, is_inside_mmram),
+                validate_pass_down_pointers(&pd, &mmram()),
                 Err(PassDownHobError::PointerOutsideMmram { field, addr: 0, size }.into()),
                 "a null `{field}` must be rejected"
             );
@@ -1876,25 +1887,26 @@ mod tests {
             end_of_hob_list: 0,
         };
         let base = &raw const handoff as u64;
+        let around_list = [region(base, 0x40)];
 
-        assert_eq!(validate_hob_list_inside_mmram(&handoff, 0x40, |_, _| true), Ok(()));
+        assert_eq!(validate_hob_list_inside_mmram(&handoff, 0x40, &around_list), Ok(()));
 
         // A list the producer placed outside MMRAM would be mapped readable to Ring 3 later.
         assert_eq!(
-            validate_hob_list_inside_mmram(&handoff, 0x40, |_, _| false),
+            validate_hob_list_inside_mmram(&handoff, 0x40, &mmram()),
             Err(HobValidationError::HobListOutsideMmram { base, size: 0x40 }.into())
         );
 
         // A zero-length walk means the list has no HOBs at all, which is not a list.
         assert_eq!(
-            validate_hob_list_inside_mmram(&handoff, 0, |_, _| true),
+            validate_hob_list_inside_mmram(&handoff, 0, &around_list),
             Err(HobValidationError::HobListOutsideMmram { base, size: 0 }.into())
         );
     }
 
     #[test]
     fn test_mm_supervisor_hob_validation_pass_down_pointer_outside_mmram() {
-        let result = validate_pass_down_pointers(&pass_down(), |_, _| false);
+        let result = validate_pass_down_pointers(&pass_down(), &[region(0x10_0000, 0x1000)]);
         assert_eq!(
             result,
             Err(PassDownHobError::PointerOutsideMmram { field: "cpl3_stack_base", addr: 0x1000, size: 0x1000 }.into())
@@ -1906,44 +1918,53 @@ mod tests {
         let mut pd = pass_down();
         pd.revision = MM_SUPV_PASS_DOWN_HOB_REVISION + 1;
         assert!(matches!(
-            validate_pass_down_pointers(&pd, |_, _| true),
+            validate_pass_down_pointers(&pd, &mmram()),
             Err(MmSupervisorError::PassDownHob(PassDownHobError::InvalidRevision { .. }))
         ));
     }
 
     #[test]
     fn test_mm_supervisor_hob_validation_pass_down_pointer_sizes() {
+        // Each pointer sits so that the last byte it covers is the last byte of MMRAM. A zero
+        // buffer size is checked as one byte and the SMBASE array as one u64, so all of them fit.
+        let mmram = mmram();
+        let mmram_end = 0x10_1000;
         let mut pd = pass_down();
+        pd.cpl3_stack_base = mmram_end - 1;
         pd.cpl3_stack_size = 0;
+        pd.sm_base_array = mmram_end - size_of::<u64>() as u64;
+        pd.mm_initialized_buffer = mmram_end - 1;
+        pd.firmware_policy_buffer = mmram_end - 1;
         pd.firmware_policy_buffer_size = 0;
-        let checks = RefCell::new(Vec::new());
+        assert_eq!(validate_pass_down_pointers(&pd, &mmram), Ok(()));
+    }
 
-        assert_eq!(
-            validate_pass_down_pointers(&pd, |addr, size| {
-                checks.borrow_mut().push((addr, size));
-                true
-            }),
-            Ok(())
-        );
-        assert_eq!(checks.into_inner(), [(0x1000, 1), (0x2000, size_of::<u64>() as u64), (0x3000, 1), (0x4000, 1)]);
+    #[test]
+    #[should_panic(expected = "crosses an MMRAM boundary")]
+    fn test_mm_supervisor_hob_validation_pass_down_pointer_crossing_mmram_end_panics() {
+        // The SMBASE array is checked as one u64, so starting it 4 bytes before the end of MMRAM
+        // makes it cross the boundary, which is fatal rather than an ordinary rejection.
+        let mut pd = pass_down();
+        pd.sm_base_array = 0x10_1000 - 4;
+        let _ = validate_pass_down_pointers(&pd, &mmram());
     }
 
     #[test]
     fn test_mm_supervisor_hob_validation_pass_down_hob_errors_and_success() {
         let data = pass_down_bytes(&pass_down());
         let matching = guid_hob(MM_SUPV_PASS_DOWN_HOB_GUID, data.len());
-        assert_eq!(validate_pass_down([Hob::GuidHob(&matching, &data)], |_, _| true), Ok(()));
+        assert_eq!(validate_pass_down([Hob::GuidHob(&matching, &data)], &mmram()), Ok(()));
 
         let unrelated = guid_hob(MM_SUPERVISOR_CORE_GUID, data.len());
         assert_eq!(
-            validate_pass_down([Hob::GuidHob(&unrelated, &data)], |_, _| true),
+            validate_pass_down([Hob::GuidHob(&unrelated, &data)], &mmram()),
             Err(PassDownHobError::Missing.into())
         );
 
         let short_data = [0u8; 4];
         let short = guid_hob(MM_SUPV_PASS_DOWN_HOB_GUID, short_data.len());
         assert_eq!(
-            validate_pass_down([Hob::GuidHob(&short, &short_data)], |_, _| true),
+            validate_pass_down([Hob::GuidHob(&short, &short_data)], &mmram()),
             Err(PassDownHobError::TooSmall.into())
         );
     }
