@@ -764,10 +764,9 @@ pub(crate) fn validate_incoming_hobs_pre_paging_init(
     regions: &[MmramRegion],
     is_inside_mmram: impl Fn(u64, u64) -> bool + Copy,
 ) -> MmSupervisorResult<()> {
-    // Dump both inputs before validating either, so the full picture is visible
-    // even when a later check fails.
+    // The regions were already copied out of the HOB list into a fixed array, so printing them
+    // reads nothing beyond that array.
     dump_regions(regions);
-    dump_hobs(handoff);
 
     let mmram = validate_mmram_contiguous(regions)?;
     // The HOB list is itself a buffer at an address the producer chose, so it is checked before
@@ -778,6 +777,11 @@ pub(crate) fn validate_incoming_hobs_pre_paging_init(
     // END_OF_HOB_LIST-terminated list for the duration of initialization.
     let hob_list_len = unsafe { get_pi_hob_list_size(core::ptr::from_ref(handoff).cast()) } as u64;
     validate_hob_list_inside_mmram(handoff, hob_list_len, is_inside_mmram)?;
+    // The dump walks the same headers as the size calculation above, so it only runs once that
+    // walk is known to stay inside MMRAM. Before this point, header lengths chosen by the producer
+    // could make the dump print fields read from memory outside the list. It runs before the
+    // remaining checks so the whole list is still visible when one of them fails.
+    dump_hobs(handoff);
     // MMRAM is a single contiguous span (checked above), so allocations can be
     // tested against one range instead of iterating the region list.
     let hob = Hob::Handoff(handoff);
