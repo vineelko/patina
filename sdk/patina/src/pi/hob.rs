@@ -64,9 +64,14 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
-use crate::pi::BootMode;
+use crate::{
+    base::{align_down, align_up},
+    pi::BootMode,
+    writelncrlf,
+};
 use core::{
     ffi::c_void,
+    fmt,
     marker::PhantomData,
     mem::{self, size_of},
     slice,
@@ -892,6 +897,72 @@ pub unsafe fn get_pi_hob_list_size(hob_list: *const c_void) -> usize {
     hob_list_len
 }
 
+/// Calculates the total size of a HOB list in bytes from its Phase Handoff Information Table (PHIT) HOB.
+///
+/// Unlike [`get_pi_hob_list_size`], this does not walk the HOB list. The size is derived from the
+/// `end_of_hob_list` field, which holds the address of the end-of-list HOB. The end-of-list HOB is a bare
+/// [`HobHeader`] per the PI Specification, so the size is `end_of_hob_list - &phit + size_of::<HobHeader>()`.
+///
+/// `phit` must reference the PHIT HOB in place at the start of the HOB list, not a copy of it. Otherwise
+/// the returned size does not describe the HOB list. No memory beyond `phit` is accessed.
+pub fn get_pi_hob_list_size_from_phit(phit: &PhaseHandoffInformationTable) -> Option<usize> {
+    if phit.header.r#type != HANDOFF {
+        return None;
+    }
+
+    let start = core::ptr::from_ref(phit).addr() as u64;
+    let size = phit.end_of_hob_list.checked_sub(start)?.checked_add(size_of::<HobHeader>() as u64)?;
+    usize::try_from(size).ok()
+}
+
+/// Finds the first memory allocation module HOB matching both names.
+///
+/// A module is identified by two GUIDs: `allocation_name` is the allocation descriptor's name,
+/// which says which producer reserved the pages, and `module_name` identifies the image occupying
+/// them. Both must match, because the same image is described by different allocation names
+/// depending on who allocated it.
+///
+/// The search walks the HOB list that starts at `phit`. Returns `None` when no HOB matches both.
+///
+/// # Safety
+///
+/// `phit` must be the in-place PHIT of a valid HOB list terminated by `END_OF_HOB_LIST`, not a copy.
+pub unsafe fn find_memory_allocation_module(
+    phit: &PhaseHandoffInformationTable,
+    allocation_name: crate::BinaryGuid,
+    module_name: crate::BinaryGuid,
+) -> Option<&MemoryAllocationModule> {
+    for current_hob in &Hob::Handoff(phit) {
+        if let Hob::MemoryAllocationModule(module) = current_hob
+            && module.alloc_descriptor.name == allocation_name
+            && module.module_name == module_name
+        {
+            return Some(module);
+        }
+    }
+
+    None
+}
+
+/// Finds the first GUID HOB matching `target_guid` and returns its data slice.
+///
+/// The search walks the HOB list that starts at `phit`. Returns `None` if no matching HOB is found.
+///
+/// # Safety
+///
+/// `phit` must be the in-place PHIT of a valid HOB list terminated by `END_OF_HOB_LIST`, not a copy.
+pub unsafe fn find_guid_hob_data(phit: &PhaseHandoffInformationTable, target_guid: crate::BinaryGuid) -> Option<&[u8]> {
+    for current_hob in &Hob::Handoff(phit) {
+        if let Hob::GuidHob(guid_hob, data) = current_hob
+            && guid_hob.name == target_guid
+        {
+            return Some(data);
+        }
+    }
+
+    None
+}
+
 impl Hob<'_> {
     /// Returns the HOB header for this Hand-Off Block
     pub fn header(&self) -> HobHeader {
@@ -909,6 +980,96 @@ impl Hob<'_> {
             Hob::ResourceDescriptorV2(hob) => hob.v1.header,
             Hob::Misc(hob_type) => {
                 HobHeader { r#type: *hob_type, length: mem::size_of::<HobHeader>() as u16, reserved: 0 }
+            }
+        }
+    }
+}
+
+/// Formats a human-readable, multi-line description of the HOB.
+///
+/// Each line is terminated with `\r\n`.
+impl fmt::Display for Hob<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Hob::Handoff(hob) => {
+                writelncrlf!(f, "PHASE HANDOFF INFORMATION TABLE (PHIT) HOB")?;
+                writelncrlf!(f, "  HOB Length: 0x{:x}", hob.header.length)?;
+                writelncrlf!(f, "  Version: 0x{:x}", hob.version)?;
+                writelncrlf!(f, "  Boot Mode: {}", hob.boot_mode)?;
+                writelncrlf!(f, "  Memory Bottom: 0x{:x}", align_up(hob.memory_bottom, 0x1000).unwrap_or(0))?;
+                writelncrlf!(f, "  Memory Top: 0x{:x}", align_down(hob.memory_top, 0x1000).unwrap_or(0))?;
+                writelncrlf!(f, "  Free Memory Bottom: 0x{:x}", align_up(hob.free_memory_bottom, 0x1000).unwrap_or(0))?;
+                writelncrlf!(f, "  Free Memory Top: 0x{:x}", align_down(hob.free_memory_top, 0x1000).unwrap_or(0))?;
+                writelncrlf!(f, "  End of HOB List: 0x{:x}", hob.end_of_hob_list)
+            }
+            Hob::MemoryAllocation(hob) => {
+                writelncrlf!(f, "MEMORY ALLOCATION HOB")?;
+                writelncrlf!(f, "  HOB Length: 0x{:x}", hob.header.length)?;
+                writelncrlf!(f, "  Memory Base Address: 0x{:x}", hob.alloc_descriptor.memory_base_address)?;
+                writelncrlf!(f, "  Memory Length: 0x{:x}", hob.alloc_descriptor.memory_length)?;
+                writelncrlf!(f, "  Memory Type: {:?}", hob.alloc_descriptor.memory_type)
+            }
+            Hob::MemoryAllocationModule(hob) => {
+                writelncrlf!(f, "MEMORY ALLOCATION MODULE HOB")?;
+                writelncrlf!(f, "  HOB Length: 0x{:x}", hob.header.length)?;
+                writelncrlf!(f, "  Memory Base Address: 0x{:x}", hob.alloc_descriptor.memory_base_address)?;
+                writelncrlf!(f, "  Memory Length: 0x{:x}", hob.alloc_descriptor.memory_length)?;
+                writelncrlf!(f, "  Memory Type: {:?}", hob.alloc_descriptor.memory_type)?;
+                writelncrlf!(f, "  Module Name: {}", hob.module_name)?;
+                writelncrlf!(f, "  Entry Point: 0x{:x}", hob.entry_point)
+            }
+            Hob::ResourceDescriptor(hob) => {
+                writelncrlf!(f, "RESOURCE DESCRIPTOR HOB")?;
+                writelncrlf!(f, "  HOB Length: 0x{:x}", hob.header.length)?;
+                writelncrlf!(f, "  Resource Type: 0x{:x}", hob.resource_type)?;
+                writelncrlf!(f, "  Resource Attribute Type: 0x{:x}", hob.resource_attribute)?;
+                writelncrlf!(f, "  Resource Start Address: 0x{:x}", hob.physical_start)?;
+                writelncrlf!(f, "  Resource Length: 0x{:x}", hob.resource_length)
+            }
+            Hob::GuidHob(hob, _data) => {
+                writelncrlf!(f, "GUID HOB")?;
+                writelncrlf!(f, "  Type: {:#x}", hob.header.r#type)?;
+                writelncrlf!(f, "  Length: {:#x}", hob.header.length)?;
+                writelncrlf!(f, "  GUID: {}", hob.name)
+            }
+            Hob::FirmwareVolume(hob) => {
+                writelncrlf!(f, "FIRMWARE VOLUME (FV) HOB")?;
+                writelncrlf!(f, "  HOB Length: 0x{:x}", hob.header.length)?;
+                writelncrlf!(f, "  Base Address: 0x{:x}", hob.base_address)?;
+                writelncrlf!(f, "  Length: 0x{:x}", hob.length)
+            }
+            Hob::FirmwareVolume2(hob) => {
+                writelncrlf!(f, "FIRMWARE VOLUME 2 (FV2) HOB")?;
+                writelncrlf!(f, "  Base Address: 0x{:x}", hob.base_address)?;
+                writelncrlf!(f, "  Length: 0x{:x}", hob.length)
+            }
+            Hob::FirmwareVolume3(hob) => {
+                writelncrlf!(f, "FIRMWARE VOLUME 3 (FV3) HOB")?;
+                writelncrlf!(f, "  Base Address: 0x{:x}", hob.base_address)?;
+                writelncrlf!(f, "  Length: 0x{:x}", hob.length)
+            }
+            Hob::Cpu(hob) => {
+                writelncrlf!(f, "CPU HOB")?;
+                writelncrlf!(f, "  Memory Space Size: 0x{:x}", hob.size_of_memory_space)?;
+                writelncrlf!(f, "  IO Space Size: 0x{:x}", hob.size_of_io_space)
+            }
+            Hob::Capsule(hob) => {
+                writelncrlf!(f, "CAPSULE HOB")?;
+                writelncrlf!(f, "  Base Address: 0x{:x}", hob.base_address)?;
+                writelncrlf!(f, "  Length: 0x{:x}", hob.length)
+            }
+            Hob::ResourceDescriptorV2(hob) => {
+                writelncrlf!(f, "RESOURCE DESCRIPTOR 2 HOB")?;
+                writelncrlf!(f, "  HOB Length: 0x{:x}", hob.v1.header.length)?;
+                writelncrlf!(f, "  Resource Type: 0x{:x}", hob.v1.resource_type)?;
+                writelncrlf!(f, "  Resource Attribute Type: 0x{:x}", hob.v1.resource_attribute)?;
+                writelncrlf!(f, "  Resource Start Address: 0x{:x}", hob.v1.physical_start)?;
+                writelncrlf!(f, "  Resource Length: 0x{:x}", hob.v1.resource_length)?;
+                writelncrlf!(f, "  Attributes: 0x{:x}", hob.attributes)
+            }
+            Hob::Misc(hob_type) => {
+                writelncrlf!(f, "MISC HOB")?;
+                writelncrlf!(f, "  Type: {:#x}", hob_type)
             }
         }
     }
@@ -1011,7 +1172,7 @@ pub(crate) mod tests {
         BootMode, hob,
         hob::{
             Capsule, Cpu, FirmwareVolume, MemoryAllocation, PhaseHandoffInformationTable, ResourceDescriptor,
-            get_pi_hob_list_size,
+            find_guid_hob_data, find_memory_allocation_module, get_pi_hob_list_size, get_pi_hob_list_size_from_phit,
         },
     };
 
@@ -1227,6 +1388,253 @@ pub(crate) mod tests {
         let header = hob::HobHeader { r#type: hob::CPU, length: size_of::<hob::Cpu>() as u16, reserved: 0 };
 
         hob::Cpu { header, size_of_memory_space: 0, size_of_io_space: 0, reserved: [0; 6] }
+    }
+
+    #[test]
+    fn test_hob_display_handoff() {
+        let phit = gen_phase_handoff_information_table();
+        let expected = format!(
+            "PHASE HANDOFF INFORMATION TABLE (PHIT) HOB\r\n  HOB Length: 0x{:x}\r\n  Version: 0x10000\r\n  \
+             Boot Mode: {}\r\n  Memory Bottom: 0xdeadd000\r\n  Memory Top: 0xdeadb000\r\n  \
+             Free Memory Bottom: 0x1000\r\n  Free Memory Top: 0x0\r\n  End of HOB List: 0xdeaddeadc0dec0de\r\n",
+            size_of::<PhaseHandoffInformationTable>(),
+            BootMode::BootWithFullConfiguration,
+        );
+        assert_eq!(format!("{}", hob::Hob::Handoff(&phit)), expected);
+    }
+
+    #[test]
+    fn test_hob_display_memory_allocation() {
+        let alloc = gen_memory_allocation();
+        let expected = format!(
+            "MEMORY ALLOCATION HOB\r\n  HOB Length: 0x{:x}\r\n  Memory Base Address: 0x0\r\n  \
+             Memory Length: 0x123456789abcdef\r\n  Memory Type: 0\r\n",
+            size_of::<MemoryAllocation>(),
+        );
+        assert_eq!(format!("{}", hob::Hob::MemoryAllocation(&alloc)), expected);
+    }
+
+    #[test]
+    fn test_hob_display_memory_allocation_module() {
+        let module = gen_memory_allocation_module();
+        let expected = format!(
+            "MEMORY ALLOCATION MODULE HOB\r\n  HOB Length: 0x{:x}\r\n  Memory Base Address: 0x0\r\n  \
+             Memory Length: 0x123456789abcdef\r\n  Memory Type: 0\r\n  \
+             Module Name: 00000001-0002-0003-0405-060708090A0B\r\n  Entry Point: 0x0\r\n",
+            size_of::<hob::MemoryAllocationModule>(),
+        );
+        assert_eq!(format!("{}", hob::Hob::MemoryAllocationModule(&module)), expected);
+    }
+
+    #[test]
+    fn test_hob_display_resource_descriptors() {
+        let v1 = gen_resource_descriptor();
+        let expected_v1 = format!(
+            "RESOURCE DESCRIPTOR HOB\r\n  HOB Length: 0x{:x}\r\n  Resource Type: 0x0\r\n  \
+             Resource Attribute Type: 0x1\r\n  Resource Start Address: 0x0\r\n  \
+             Resource Length: 0x123456789abcdef\r\n",
+            size_of::<ResourceDescriptor>(),
+        );
+        assert_eq!(format!("{}", hob::Hob::ResourceDescriptor(&v1)), expected_v1);
+
+        let v2 = gen_resource_descriptor_v2();
+        let expected_v2 = format!(
+            "RESOURCE DESCRIPTOR 2 HOB\r\n  HOB Length: 0x{:x}\r\n  Resource Type: 0x0\r\n  \
+             Resource Attribute Type: 0x1\r\n  Resource Start Address: 0x0\r\n  \
+             Resource Length: 0x123456789abcdef\r\n  Attributes: 0x8\r\n",
+            size_of::<hob::ResourceDescriptorV2>(),
+        );
+        assert_eq!(format!("{}", hob::Hob::ResourceDescriptorV2(&v2)), expected_v2);
+    }
+
+    #[test]
+    fn test_hob_display_guid_hob() {
+        let buf = gen_guid_hob();
+        let (guid_hob, data) = guid_hob_refs(&buf);
+        let expected = format!(
+            "GUID HOB\r\n  Type: 0x4\r\n  Length: {:#x}\r\n  GUID: 00000001-0002-0003-0405-060708090A0B\r\n",
+            size_of::<hob::GuidHob>() + data.len(),
+        );
+        assert_eq!(format!("{}", hob::Hob::GuidHob(guid_hob, data)), expected);
+    }
+
+    #[test]
+    fn test_hob_display_firmware_volumes() {
+        let fv = gen_firmware_volume();
+        let expected_fv = format!(
+            "FIRMWARE VOLUME (FV) HOB\r\n  HOB Length: 0x{:x}\r\n  Base Address: 0x0\r\n  \
+             Length: 0x123456789abcdef\r\n",
+            size_of::<FirmwareVolume>(),
+        );
+        assert_eq!(format!("{}", hob::Hob::FirmwareVolume(&fv)), expected_fv);
+
+        let fv2 = gen_firmware_volume2();
+        assert_eq!(
+            format!("{}", hob::Hob::FirmwareVolume2(&fv2)),
+            "FIRMWARE VOLUME 2 (FV2) HOB\r\n  Base Address: 0x0\r\n  Length: 0x123456789abcdef\r\n"
+        );
+
+        let fv3 = gen_firmware_volume3();
+        assert_eq!(
+            format!("{}", hob::Hob::FirmwareVolume3(&fv3)),
+            "FIRMWARE VOLUME 3 (FV3) HOB\r\n  Base Address: 0x0\r\n  Length: 0x123456789abcdef\r\n"
+        );
+    }
+
+    #[test]
+    fn test_hob_display_cpu_capsule_misc() {
+        let cpu = gen_cpu();
+        assert_eq!(
+            format!("{}", hob::Hob::Cpu(&cpu)),
+            "CPU HOB\r\n  Memory Space Size: 0x0\r\n  IO Space Size: 0x0\r\n"
+        );
+
+        let capsule = gen_capsule();
+        assert_eq!(
+            format!("{}", hob::Hob::Capsule(&capsule)),
+            "CAPSULE HOB\r\n  Base Address: 0x0\r\n  Length: 0x12\r\n"
+        );
+
+        assert_eq!(format!("{}", hob::Hob::Misc(0x1234)), "MISC HOB\r\n  Type: 0x1234\r\n");
+    }
+
+    #[test]
+    fn test_get_pi_hob_list_size_from_phit() {
+        use core::ffi::c_void;
+
+        #[repr(C)]
+        struct TestHobList {
+            phit: PhaseHandoffInformationTable,
+            capsule: Capsule,
+            end: hob::HobHeader,
+        }
+
+        let mut list = TestHobList {
+            phit: gen_phase_handoff_information_table(),
+            capsule: gen_capsule(),
+            end: hob::HobHeader {
+                r#type: hob::END_OF_HOB_LIST,
+                length: size_of::<hob::HobHeader>() as u16,
+                reserved: 0,
+            },
+        };
+        list.phit.end_of_hob_list = (&raw const list.end).addr() as u64;
+
+        let size = get_pi_hob_list_size_from_phit(&list.phit);
+        assert_eq!(size, Some(size_of::<TestHobList>()));
+
+        // SAFETY: `list` is a contiguous HOB list in this test that ends with an end-of-list HOB.
+        let walked_size = unsafe { get_pi_hob_list_size((&raw const list).cast::<c_void>()) };
+        assert_eq!(size, Some(walked_size));
+    }
+
+    #[test]
+    fn test_get_pi_hob_list_size_from_phit_invalid() {
+        let mut phit = gen_phase_handoff_information_table();
+        phit.end_of_hob_list = 0;
+        assert_eq!(get_pi_hob_list_size_from_phit(&phit), None);
+
+        let mut not_handoff = gen_phase_handoff_information_table();
+        not_handoff.header.r#type = hob::END_OF_HOB_LIST;
+        not_handoff.end_of_hob_list = (&raw const not_handoff).addr() as u64;
+        assert_eq!(get_pi_hob_list_size_from_phit(&not_handoff), None);
+    }
+
+    #[test]
+    fn test_find_memory_allocation_module() {
+        let guid_a = crate::BinaryGuid::from_fields(1, 2, 3, 4, 5, &[6, 7, 8, 9, 10, 11]);
+        let guid_b = crate::BinaryGuid::from_fields(0xaa, 0, 0, 0, 0, &[0; 6]);
+
+        let other_alloc = {
+            let mut m = gen_memory_allocation_module();
+            m.alloc_descriptor.name = guid_b;
+            m
+        };
+        let other_module = {
+            let mut m = gen_memory_allocation_module();
+            m.module_name = guid_b;
+            m
+        };
+        let target = {
+            let mut m = gen_memory_allocation_module();
+            m.entry_point = 0x1000;
+            m
+        };
+        let duplicate = {
+            let mut m = gen_memory_allocation_module();
+            m.entry_point = 0x2000;
+            m
+        };
+        #[repr(C)]
+        struct TestHobList {
+            phit: PhaseHandoffInformationTable,
+            capsule: Capsule,
+            other_alloc: hob::MemoryAllocationModule,
+            other_module: hob::MemoryAllocationModule,
+            target: hob::MemoryAllocationModule,
+            duplicate: hob::MemoryAllocationModule,
+            end: hob::HobHeader,
+        }
+
+        let list = TestHobList {
+            phit: gen_phase_handoff_information_table(),
+            capsule: gen_capsule(),
+            other_alloc,
+            other_module,
+            target,
+            duplicate,
+            end: hob::HobHeader {
+                r#type: hob::END_OF_HOB_LIST,
+                length: size_of::<hob::HobHeader>() as u16,
+                reserved: 0,
+            },
+        };
+
+        // SAFETY: `list` is a contiguous HOB list starting at `phit` and terminated by an end HOB.
+        let found =
+            unsafe { find_memory_allocation_module(&list.phit, guid_a, guid_a) }.expect("module should be found");
+        assert_eq!(found.entry_point, 0x1000);
+
+        // SAFETY: As above.
+        assert!(unsafe { find_memory_allocation_module(&list.phit, guid_b, guid_b) }.is_none());
+    }
+
+    #[test]
+    fn test_find_guid_hob_data() {
+        #[repr(C)]
+        struct TestHobList {
+            phit: PhaseHandoffInformationTable,
+            guid_hob: hob::GuidHob,
+            data: [u8; 8],
+            end: hob::HobHeader,
+        }
+
+        let guid = crate::BinaryGuid::from_fields(1, 2, 3, 4, 5, &[6, 7, 8, 9, 10, 11]);
+        let list = TestHobList {
+            phit: gen_phase_handoff_information_table(),
+            guid_hob: hob::GuidHob {
+                header: hob::HobHeader {
+                    r#type: hob::GUID_EXTENSION,
+                    length: (size_of::<hob::GuidHob>() + 8) as u16,
+                    reserved: 0,
+                },
+                name: guid,
+            },
+            data: [1, 2, 3, 4, 5, 6, 7, 8],
+            end: hob::HobHeader {
+                r#type: hob::END_OF_HOB_LIST,
+                length: size_of::<hob::HobHeader>() as u16,
+                reserved: 0,
+            },
+        };
+
+        let expected = Some(&[1_u8, 2, 3, 4, 5, 6, 7, 8][..]);
+        // SAFETY: `list` is a contiguous HOB list starting at `phit` and terminated by an end HOB.
+        assert_eq!(unsafe { find_guid_hob_data(&list.phit, guid) }, expected);
+
+        let missing = crate::BinaryGuid::from_fields(0xaa, 0, 0, 0, 0, &[0; 6]);
+        // SAFETY: As above.
+        assert_eq!(unsafe { find_guid_hob_data(&list.phit, missing) }, None);
     }
 
     #[test]
