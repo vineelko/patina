@@ -69,7 +69,7 @@ use crate::error::MmSupervisorResult;
 use crate::hob::pass_down::{
     MM_SUPV_PASS_DOWN_HOB_GUID, MM_SUPV_PASS_DOWN_HOB_REVISION, MmSupvPassDownHobData, PassDownHobError,
 };
-use crate::memory::mmram::{MmramRegion, classify_mmram_in_regions};
+use crate::memory::mmram::{MmramRegion, classify_coverage, classify_mmram_in_regions};
 use crate::state::security::SupervisorPageTable;
 use crate::state::security_state;
 
@@ -543,14 +543,24 @@ pub(crate) unsafe fn validate_hob_list_structure(handoff: &PhaseHandoffInformati
 /// list is itself a buffer at an address the producer chose, and the supervisor
 /// later maps it readable to Ring 3, so it has to be inside MMRAM for the same
 /// reason its contents do.
+///
+/// `mmram` is the `(base, size)` span returned by [`validate_mmram_contiguous`].
+///
+/// # Panics
+///
+/// Panics when the list crosses the MMRAM boundary, as [`MmramPlacement::is_inside`] does.
+///
+/// [`MmramPlacement::is_inside`]: crate::memory::mmram::MmramPlacement::is_inside
 fn validate_hob_list_inside_mmram(
     handoff: &PhaseHandoffInformationTable,
     length: u64,
-    regions: &[MmramRegion],
+    mmram: (u64, u64),
 ) -> MmSupervisorResult<()> {
     let base = core::ptr::from_ref(handoff) as u64;
+    let (mmram_base, mmram_size) = mmram;
+    let mmram_span = core::iter::once((mmram_base, mmram_base.saturating_add(mmram_size)));
 
-    if length == 0 || !is_inside_mmram(regions, base, length) {
+    if length == 0 || !classify_coverage(base, length, mmram_span).is_inside(base, length) {
         return Err(HobValidationError::HobListOutsideMmram { base, size: length }.into());
     }
 
@@ -881,7 +891,7 @@ pub(crate) fn validate_incoming_hobs_pre_paging_init(
     // The HOB list is itself a buffer at an address the producer chose, so it is checked before
     // anything it describes is trusted. Its length is walked from the headers rather than read
     // from the PHIT, which platforms do not reliably populate for the MM HOB list.
-    validate_hob_list_inside_mmram(handoff, hob_list_len, regions)?;
+    validate_hob_list_inside_mmram(handoff, hob_list_len, mmram)?;
     // Runs before the remaining checks so the whole list is still visible when one of them fails.
     dump_hobs(handoff);
     // MMRAM is a single contiguous span (checked above), so allocations can be
@@ -1994,21 +2004,44 @@ mod tests {
             end_of_hob_list: 0,
         };
         let base = &raw const handoff as u64;
-        let around_list = [region(base, 0x40)];
+        let around_list = (base, 0x40);
 
-        assert_eq!(validate_hob_list_inside_mmram(&handoff, 0x40, &around_list), Ok(()));
+        assert_eq!(validate_hob_list_inside_mmram(&handoff, 0x40, around_list), Ok(()));
 
         // A list the producer placed outside MMRAM would be mapped readable to Ring 3 later.
         assert_eq!(
-            validate_hob_list_inside_mmram(&handoff, 0x40, &mmram()),
+            validate_hob_list_inside_mmram(&handoff, 0x40, (0x1000, 0x10_0000)),
             Err(HobValidationError::HobListOutsideMmram { base, size: 0x40 }.into())
         );
 
         // A zero-length walk means the list has no HOBs at all, which is not a list.
         assert_eq!(
-            validate_hob_list_inside_mmram(&handoff, 0, &around_list),
+            validate_hob_list_inside_mmram(&handoff, 0, around_list),
             Err(HobValidationError::HobListOutsideMmram { base, size: 0 }.into())
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "crosses an MMRAM boundary")]
+    fn test_mm_supervisor_hob_validation_hob_list_crossing_mmram_end_panics() {
+        let handoff = PhaseHandoffInformationTable {
+            header: HobHeader {
+                r#type: HANDOFF,
+                length: size_of::<PhaseHandoffInformationTable>() as u16,
+                reserved: 0,
+            },
+            version: 1,
+            boot_mode: BootMode::BootWithFullConfiguration,
+            memory_top: 0,
+            memory_bottom: 0,
+            free_memory_top: 0,
+            free_memory_bottom: 0,
+            end_of_hob_list: 0,
+        };
+        let base = &raw const handoff as u64;
+
+        // The span covers the start of the list but ends before the list does.
+        let _ = validate_hob_list_inside_mmram(&handoff, 0x40, (base, 0x20));
     }
 
     /// Lays out HOB headers back to back in an 8-byte aligned buffer, with zeroed payloads.
