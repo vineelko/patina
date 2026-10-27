@@ -112,10 +112,15 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         Interrupts::new().initialize().map_err(CoreInitError::InterruptManagerInit)?;
 
+        // Check the HOB headers before anything walks the list, so no walk below can loop forever
+        // or read past the end of the list.
+        // SAFETY: `hob_hand_off_table` is the MM IPL's HOB list (the caller asserts it is
+        // non-null). The walk reads only the headers it reaches and stops at the first bad one.
+        let hob_list_len = unsafe { validation::validate_hob_list_structure(hob_hand_off_table)? };
+
         // Parse the producer's SMRAM descriptors into stack metadata. Nothing in MMRAM is written
         // until they have been anchored and validated below.
-        // SAFETY: `hob_list` is provided by the MM IPL and is guaranteed to be a
-        // valid HOB list (the caller asserts it is non-null before dispatching).
+        // SAFETY: the HOB list passed `validate_hob_list_structure` above.
         let (scanned_regions, region_count) =
             unsafe { PageAllocator::scan_hob_list_for_smram_regions(hob_hand_off_table)? };
 
@@ -123,7 +128,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         let smrr_range = establish_mmram_bound(scanned_regions, supervisor_image_anchor(), coalesced_smrr_range)?;
 
-        validation::validate_incoming_hobs_pre_paging_init(hob_hand_off_table, scanned_regions)?;
+        validation::validate_incoming_hobs_pre_paging_init(hob_hand_off_table, hob_list_len, scanned_regions)?;
 
         // Program the range before the allocator makes the first write into MMRAM. Enabling it is
         // left to `smrr_enable` on the next SMI entry: finalizing it here makes the range enforcing

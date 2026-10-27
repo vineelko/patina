@@ -6,7 +6,9 @@
 //! ## Pre-paging checks
 //!
 //! Run before any HOB content is consumed and before the page table is
-//! initialized:
+//! initialized. Before the SMRAM scan, [`validate_hob_list_structure`] checks
+//! that the HOB headers form a list that ends within a fixed size. The rest
+//! run once the MMRAM regions are scanned:
 //!
 //! 1. The scanned MMRAM regions form a single contiguous, non-overlapping span.
 //! 2. No `EFI_HOB_TYPE_MEMORY_ALLOCATION` HOB overlaps MMRAM (these describe
@@ -53,8 +55,10 @@ use patina::management_mode::supervisor::{
 };
 use patina::pi::guid::HOB_MEMORY_ALLOC_MODULE_GUID;
 use patina::pi::hob::{
-    EFI_RESOURCE_IO, EFI_RESOURCE_IO_RESERVED, Hob, MEMORY_TYPE_INFO_HOB_GUID, PhaseHandoffInformationTable,
-    ResourceDescriptor, get_pi_hob_list_size,
+    CPU, Capsule, Cpu, EFI_RESOURCE_IO, EFI_RESOURCE_IO_RESERVED, END_OF_HOB_LIST, FV, FV2, FV3, FirmwareVolume,
+    FirmwareVolume2, FirmwareVolume3, GUID_EXTENSION, GuidHob, HANDOFF, Hob, HobHeader, MEMORY_ALLOCATION,
+    MEMORY_TYPE_INFO_HOB_GUID, MemoryAllocation, PhaseHandoffInformationTable, RESOURCE_DESCRIPTOR,
+    RESOURCE_DESCRIPTOR2, ResourceDescriptor, ResourceDescriptorV2, UEFI_CAPSULE,
 };
 use patina::standard::efi;
 use patina::{UEFI_PAGE_SIZE, align_range};
@@ -76,6 +80,12 @@ const MAX_ALLOC_MODULES: usize = 64;
 /// Maximum number of resource descriptor HOBs accepted per category while
 /// checking for overlaps. This bounds the stack storage used for the comparison.
 const MAX_RESOURCE_HOBS: usize = 128;
+
+/// Largest HOB list, in bytes, that [`validate_hob_list_structure`] accepts.
+///
+/// The list is walked before the MMRAM bound is known, so this limits how far header lengths
+/// chosen by the producer can move the walk.
+const MAX_HOB_LIST_SIZE: usize = 0x10_0000;
 
 /// Errors produced while validating the critical incoming HOBs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,6 +216,21 @@ pub enum HobValidationError {
         /// The reported attributes.
         attributes: u64,
     },
+    /// A HOB header is malformed: the list does not start with the PHIT, or a length is not a
+    /// multiple of eight bytes or is too small for the HOB type.
+    MalformedHob {
+        /// Byte offset of the HOB from the start of the list.
+        offset: usize,
+        /// The HOB type from its header.
+        hob_type: u16,
+        /// The HOB length from its header.
+        length: u16,
+    },
+    /// The HOB list does not reach `END_OF_HOB_LIST` within the accepted size.
+    HobListTooLarge {
+        /// Maximum HOB list size accepted, in bytes.
+        limit: usize,
+    },
     /// The HOB list itself does not lie inside MMRAM.
     HobListOutsideMmram {
         /// Address the HOB list starts at.
@@ -301,6 +326,12 @@ impl fmt::Display for HobValidationError {
             ),
             Self::V2IoAttributesNotZero { base, attributes } => {
                 write!(f, "V2 I/O resource descriptor at 0x{base:x} has non-zero attributes (0x{attributes:x})")
+            }
+            Self::MalformedHob { offset, hob_type, length } => {
+                write!(f, "HOB at offset 0x{offset:x} (type 0x{hob_type:x}, length 0x{length:x}) is malformed")
+            }
+            Self::HobListTooLarge { limit } => {
+                write!(f, "HOB list does not end within 0x{limit:x} bytes")
             }
             Self::HobListOutsideMmram { base, size } => {
                 write!(f, "HOB list at 0x{base:x} (size 0x{size:x}) is not inside MMRAM")
@@ -439,6 +470,71 @@ fn validate_pass_down_pointers(pass_down: &MmSupvPassDownHobData, regions: &[Mmr
 /// Returns whether `[base, base + length)` overlaps the MMRAM span.
 fn buffer_overlaps_mmram(mmram: (u64, u64), base: u64, length: u64) -> bool {
     ranges_overlap((base, length), mmram)
+}
+
+/// Returns the smallest length a HOB of `hob_type` can have.
+///
+/// This is the size of the structure [`Hob`] iteration reads for the type, so a list that passes
+/// [`validate_hob_list_structure`] is never read past a HOB's own length.
+fn min_hob_length(hob_type: u16) -> usize {
+    match hob_type {
+        HANDOFF => size_of::<PhaseHandoffInformationTable>(),
+        MEMORY_ALLOCATION => size_of::<MemoryAllocation>(),
+        RESOURCE_DESCRIPTOR => size_of::<ResourceDescriptor>(),
+        GUID_EXTENSION => size_of::<GuidHob>(),
+        FV => size_of::<FirmwareVolume>(),
+        FV2 => size_of::<FirmwareVolume2>(),
+        FV3 => size_of::<FirmwareVolume3>(),
+        CPU => size_of::<Cpu>(),
+        UEFI_CAPSULE => size_of::<Capsule>(),
+        RESOURCE_DESCRIPTOR2 => size_of::<ResourceDescriptorV2>(),
+        _ => size_of::<HobHeader>(),
+    }
+}
+
+/// Checks the HOB headers and returns the byte length of the HOB list, including the
+/// `END_OF_HOB_LIST` header.
+///
+/// This must run before anything else walks the list. The first HOB must be the PHIT, and every
+/// length must be a multiple of eight bytes and at least the size of its HOB type. The list must
+/// reach `END_OF_HOB_LIST` within [`MAX_HOB_LIST_SIZE`] bytes. A list that passes can be walked
+/// with [`Hob`] iteration without looping forever or reading past its end.
+///
+/// ## Safety
+///
+/// Each header the walk reaches must be readable. At most [`MAX_HOB_LIST_SIZE`] bytes from
+/// `handoff` are read.
+pub(crate) unsafe fn validate_hob_list_structure(handoff: &PhaseHandoffInformationTable) -> MmSupervisorResult<u64> {
+    let base = core::ptr::from_ref(handoff).cast::<HobHeader>();
+    let limit = MAX_HOB_LIST_SIZE;
+    checked_range_end("HOB list", base.addr() as u64, limit as u64)?;
+
+    let mut offset = 0usize;
+    loop {
+        if limit - offset < size_of::<HobHeader>() {
+            return Err(HobValidationError::HobListTooLarge { limit }.into());
+        }
+        // SAFETY: the header lies within `limit` bytes of `handoff`, which the caller guarantees
+        // is readable. `handoff` is 8-byte aligned and every earlier length was a multiple of
+        // eight, so the header is aligned.
+        let header = unsafe { base.byte_add(offset).read() };
+        let length = usize::from(header.length);
+        if (offset == 0 && header.r#type != HANDOFF)
+            || !length.is_multiple_of(size_of::<u64>())
+            || length < min_hob_length(header.r#type)
+        {
+            return Err(
+                HobValidationError::MalformedHob { offset, hob_type: header.r#type, length: header.length }.into()
+            );
+        }
+        if limit - offset < length {
+            return Err(HobValidationError::HobListTooLarge { limit }.into());
+        }
+        offset += length;
+        if header.r#type == END_OF_HOB_LIST {
+            return Ok(offset as u64);
+        }
+    }
 }
 
 /// Validates that the HOB list itself lies inside MMRAM.
@@ -768,11 +864,13 @@ fn validate_pass_down<'a>(hobs: impl IntoIterator<Item = Hob<'a>>, regions: &[Mm
 
 /// Validates the critical incoming HOBs before their contents are consumed.
 ///
-/// `regions` are the MMRAM regions scanned from the HOB list. Containment is resolved against
-/// them rather than the page allocator, so this can run before the allocator has committed to the
-/// producer's descriptors.
+/// `hob_list_len` is the length returned by [`validate_hob_list_structure`], which must already
+/// have accepted the list. `regions` are the MMRAM regions scanned from the HOB list. Containment
+/// is resolved against them rather than the page allocator, so this can run before the allocator
+/// has committed to the producer's descriptors.
 pub(crate) fn validate_incoming_hobs_pre_paging_init(
     handoff: &PhaseHandoffInformationTable,
+    hob_list_len: u64,
     regions: &[MmramRegion],
 ) -> MmSupervisorResult<()> {
     // The regions were already copied out of the HOB list into a fixed array, so printing them
@@ -783,15 +881,8 @@ pub(crate) fn validate_incoming_hobs_pre_paging_init(
     // The HOB list is itself a buffer at an address the producer chose, so it is checked before
     // anything it describes is trusted. Its length is walked from the headers rather than read
     // from the PHIT, which platforms do not reliably populate for the MM HOB list.
-    //
-    // SAFETY: `handoff` is the MM IPL's HOB list, which the caller guarantees is a valid,
-    // END_OF_HOB_LIST-terminated list for the duration of initialization.
-    let hob_list_len = unsafe { get_pi_hob_list_size(core::ptr::from_ref(handoff).cast()) } as u64;
     validate_hob_list_inside_mmram(handoff, hob_list_len, regions)?;
-    // The dump walks the same headers as the size calculation above, so it only runs once that
-    // walk is known to stay inside MMRAM. Before this point, header lengths chosen by the producer
-    // could make the dump print fields read from memory outside the list. It runs before the
-    // remaining checks so the whole list is still visible when one of them fails.
+    // Runs before the remaining checks so the whole list is still visible when one of them fails.
     dump_hobs(handoff);
     // MMRAM is a single contiguous span (checked above), so allocations can be
     // tested against one range instead of iterating the region list.
@@ -995,7 +1086,8 @@ mod tests {
     use patina::pi::BootMode;
     use patina::pi::hob::{
         EFI_RESOURCE_SYSTEM_MEMORY, END_OF_HOB_LIST, GUID_EXTENSION, GuidHob, HANDOFF, HobHeader, MEMORY_ALLOCATION,
-        MemoryAllocation, MemoryAllocationHeader, MemoryAllocationModule, RESOURCE_DESCRIPTOR, ResourceDescriptorV2,
+        MEMORY_POOL, MemoryAllocation, MemoryAllocationHeader, MemoryAllocationModule, RESOURCE_DESCRIPTOR,
+        ResourceDescriptorV2, UNUSED,
     };
 
     fn region(base: u64, size: u64) -> MmramRegion {
@@ -1192,17 +1284,21 @@ mod tests {
 
         // Everything the producer named resolves inside the scanned regions, so the whole
         // pre-paging sequence runs to completion.
-        assert_eq!(validate_incoming_hobs_pre_paging_init(&list.handoff, &regions), Ok(()));
+        // SAFETY: `list` is a contiguous, END_OF_HOB_LIST-terminated HOB list on the stack.
+        let hob_list_len = unsafe { validate_hob_list_structure(&list.handoff) };
+        assert_eq!(hob_list_len, Ok(size_of::<PassDownHobList>() as u64));
+        let hob_list_len = hob_list_len.expect("the list is well formed");
+        assert_eq!(validate_incoming_hobs_pre_paging_init(&list.handoff, hob_list_len, &regions), Ok(()));
         list.init.alloc_descriptor.memory_base_address = 0x1000;
         assert!(matches!(
-            validate_incoming_hobs_pre_paging_init(&list.handoff, &regions),
+            validate_incoming_hobs_pre_paging_init(&list.handoff, hob_list_len, &regions),
             Err(MmSupervisorError::HobValidation(HobValidationError::AllocationModulesOverlap { .. }))
         ));
 
         // The HOB list itself is a buffer at an address the producer chose, so it is rejected
         // when it falls outside the regions it described.
         assert!(matches!(
-            validate_incoming_hobs_pre_paging_init(&list.handoff, &[region(0x1000, 0x8000)]),
+            validate_incoming_hobs_pre_paging_init(&list.handoff, hob_list_len, &[region(0x1000, 0x8000)]),
             Err(MmSupervisorError::HobValidation(HobValidationError::HobListOutsideMmram { .. }))
         ));
     }
@@ -1915,6 +2011,125 @@ mod tests {
         );
     }
 
+    /// Lays out HOB headers back to back in an 8-byte aligned buffer, with zeroed payloads.
+    ///
+    /// Each header starts where the previous length ends, so a malformed length only moves the
+    /// headers after it, and the walk stops at the malformed one first. The buffer is at least
+    /// one PHIT long, so it can be borrowed as a PHIT even when the first header is not one.
+    fn header_list(headers: &[(u16, u16)]) -> Vec<u64> {
+        let total: usize = headers.iter().map(|&(_, length)| usize::from(length).max(size_of::<HobHeader>())).sum();
+        let total = total.max(size_of::<PhaseHandoffInformationTable>());
+        let mut buffer = vec![0u64; total.div_ceil(size_of::<u64>())];
+        let mut offset = 0usize;
+        for &(hob_type, length) in headers {
+            // SAFETY: `total` reserved room for every header, and each one is written at the
+            // sum of the lengths before it.
+            unsafe {
+                buffer.as_mut_ptr().cast::<u8>().add(offset).cast::<HobHeader>().write_unaligned(HobHeader {
+                    r#type: hob_type,
+                    length,
+                    reserved: 0,
+                });
+            }
+            offset += usize::from(length).max(size_of::<HobHeader>());
+        }
+        buffer
+    }
+
+    /// Runs [`validate_hob_list_structure`] over `buffer`.
+    fn walk(buffer: &[u64]) -> MmSupervisorResult<u64> {
+        // SAFETY: `buffer` is 8-byte aligned and at least one PHIT long.
+        let handoff = unsafe { &*buffer.as_ptr().cast::<PhaseHandoffInformationTable>() };
+        // SAFETY: the walk reads only headers inside `buffer`, because every test list either
+        // ends or is rejected before its last byte.
+        unsafe { validate_hob_list_structure(handoff) }
+    }
+
+    const PHIT_LENGTH: u16 = size_of::<PhaseHandoffInformationTable>() as u16;
+    const HEADER_LENGTH: u16 = size_of::<HobHeader>() as u16;
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_structure_accepts_a_well_formed_list() {
+        let buffer = header_list(&[(HANDOFF, PHIT_LENGTH), (GUID_EXTENSION, 32), (END_OF_HOB_LIST, HEADER_LENGTH)]);
+
+        // The returned length includes the END_OF_HOB_LIST header, like get_pi_hob_list_size.
+        assert_eq!(walk(&buffer), Ok(u64::from(PHIT_LENGTH + 32 + HEADER_LENGTH)));
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_structure_rejects_malformed_headers() {
+        let malformed = |offset: usize, hob_type: u16, length: u16| -> MmSupervisorResult<u64> {
+            Err(HobValidationError::MalformedHob { offset, hob_type, length }.into())
+        };
+        let after_phit = usize::from(PHIT_LENGTH);
+
+        // The list must start with the PHIT.
+        let buffer = header_list(&[(GUID_EXTENSION, 24), (END_OF_HOB_LIST, HEADER_LENGTH)]);
+        assert_eq!(walk(&buffer), malformed(0, GUID_EXTENSION, 24));
+
+        // A zero length would keep the walk on the same HOB forever.
+        let buffer = header_list(&[(HANDOFF, PHIT_LENGTH), (GUID_EXTENSION, 0)]);
+        assert_eq!(walk(&buffer), malformed(after_phit, GUID_EXTENSION, 0));
+
+        // A length that is not a multiple of eight would leave the next header unaligned.
+        let buffer = header_list(&[(HANDOFF, PHIT_LENGTH), (UNUSED, 12)]);
+        assert_eq!(walk(&buffer), malformed(after_phit, UNUSED, 12));
+
+        // A length smaller than the structure for its type would let iteration read past the HOB.
+        let buffer = header_list(&[(HANDOFF, PHIT_LENGTH), (RESOURCE_DESCRIPTOR, 16)]);
+        assert_eq!(walk(&buffer), malformed(after_phit, RESOURCE_DESCRIPTOR, 16));
+        let buffer = header_list(&[(HANDOFF, 16)]);
+        assert_eq!(walk(&buffer), malformed(0, HANDOFF, 16));
+
+        // The end of the list is a header too, so it cannot be empty.
+        let buffer = header_list(&[(HANDOFF, PHIT_LENGTH), (END_OF_HOB_LIST, 0)]);
+        assert_eq!(walk(&buffer), malformed(after_phit, END_OF_HOB_LIST, 0));
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_structure_stops_at_the_size_limit() {
+        const FILLER_LENGTH: u16 = 0xfff8;
+        let too_large: MmSupervisorResult<u64> =
+            Err(HobValidationError::HobListTooLarge { limit: MAX_HOB_LIST_SIZE }.into());
+
+        // A PHIT and 16 maximal filler HOBs leave 72 bytes below the limit.
+        let mut headers = vec![(HANDOFF, PHIT_LENGTH)];
+        headers.extend(core::iter::repeat_n((UNUSED, FILLER_LENGTH), 16));
+        let left = MAX_HOB_LIST_SIZE - usize::from(PHIT_LENGTH) - 16 * usize::from(FILLER_LENGTH);
+        assert_eq!(left, 72);
+
+        // A list whose END_OF_HOB_LIST header ends exactly at the limit is accepted.
+        let mut fits = headers.clone();
+        fits.extend([(UNUSED, 64), (END_OF_HOB_LIST, HEADER_LENGTH)]);
+        assert_eq!(walk(&header_list(&fits)), Ok(MAX_HOB_LIST_SIZE as u64));
+
+        // Without END_OF_HOB_LIST, no header fits after the last HOB.
+        let mut no_end = headers.clone();
+        no_end.extend([(UNUSED, 64), (UNUSED, HEADER_LENGTH)]);
+        assert_eq!(walk(&header_list(&no_end)), too_large);
+
+        // A HOB whose length runs past the limit is rejected before the walk moves past it.
+        let mut runs_past = headers;
+        runs_past.extend([(UNUSED, FILLER_LENGTH), (END_OF_HOB_LIST, HEADER_LENGTH)]);
+        assert_eq!(walk(&header_list(&runs_past)), too_large);
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_min_hob_length_covers_each_type() {
+        assert_eq!(min_hob_length(HANDOFF), size_of::<PhaseHandoffInformationTable>());
+        assert_eq!(min_hob_length(MEMORY_ALLOCATION), size_of::<MemoryAllocation>());
+        assert_eq!(min_hob_length(RESOURCE_DESCRIPTOR), size_of::<ResourceDescriptor>());
+        assert_eq!(min_hob_length(GUID_EXTENSION), size_of::<GuidHob>());
+        assert_eq!(min_hob_length(FV), size_of::<FirmwareVolume>());
+        assert_eq!(min_hob_length(FV2), size_of::<FirmwareVolume2>());
+        assert_eq!(min_hob_length(FV3), size_of::<FirmwareVolume3>());
+        assert_eq!(min_hob_length(CPU), size_of::<Cpu>());
+        assert_eq!(min_hob_length(UEFI_CAPSULE), size_of::<Capsule>());
+        assert_eq!(min_hob_length(RESOURCE_DESCRIPTOR2), size_of::<ResourceDescriptorV2>());
+        assert_eq!(min_hob_length(MEMORY_POOL), size_of::<HobHeader>());
+        assert_eq!(min_hob_length(END_OF_HOB_LIST), size_of::<HobHeader>());
+    }
+
     #[test]
     fn test_mm_supervisor_hob_validation_pass_down_pointer_outside_mmram() {
         let result = validate_pass_down_pointers(&pass_down(), &[region(0x10_0000, 0x1000)]);
@@ -2320,6 +2535,8 @@ mod tests {
             HobValidationError::V2ContainsUceAttribute { base: 0x1000, attributes: 0x1 },
             HobValidationError::V2InvalidCacheability { base: 0x1000, attributes: 0 },
             HobValidationError::V2IoAttributesNotZero { base: 0x1000, attributes: 0x4 },
+            HobValidationError::MalformedHob { offset: 0x38, hob_type: GUID_EXTENSION, length: 0 },
+            HobValidationError::HobListTooLarge { limit: MAX_HOB_LIST_SIZE },
             HobValidationError::HobListOutsideMmram { base: 0x1000, size: 0x40 },
             HobValidationError::PageTableUnavailable,
             HobValidationError::PageAttributeQueryFailed { addr: 0x1000 },

@@ -223,16 +223,15 @@ impl PageAllocator {
         LockedState { state, region_count, total_pages, guard }
     }
 
-    /// Collects every SMRAM region the HOB list describes into a stack array.
+    /// Collects the regions from every SMRAM and MMRAM reserve HOB into a stack array.
     ///
-    /// Nothing in MMRAM is written and no allocator state is published, so the descriptors can
-    /// be validated against a trusted bound before [`init_from_regions`](Self::init_from_regions)
-    /// commits to them. Splitting the two is what keeps a forged descriptor from steering a write
-    /// before it has been rejected.
+    /// Only reads the HOB list. The regions are validated before
+    /// [`init_from_regions`](Self::init_from_regions) writes to them.
     ///
     /// ## Safety
     ///
-    /// The caller must ensure that `hob_list` points to a valid HOB list.
+    /// `handoff` must start a HOB list that passed
+    /// [`validate_hob_list_structure`](crate::hob::validation::validate_hob_list_structure).
     pub(crate) unsafe fn scan_hob_list_for_smram_regions(
         handoff: &PhaseHandoffInformationTable,
     ) -> MmSupervisorResult<([MmramRegion; MAX_TEMP_REGIONS], usize)> {
