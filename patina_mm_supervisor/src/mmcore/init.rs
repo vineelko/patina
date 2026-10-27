@@ -23,7 +23,7 @@ use patina::{
     },
     pi::{
         guid::HOB_MEMORY_ALLOC_MODULE_GUID,
-        hob::{self, Hob, PhaseHandoffInformationTable},
+        hob::{self, PhaseHandoffInformationTable, find_guid_hob_data, find_memory_allocation_module},
     },
 };
 use patina_internal_cpu::{
@@ -53,7 +53,6 @@ use super::CoreInitError;
 use super::mseg::{MSEG_SMRAM_HOB_GUID, parse_mseg_smram_hob};
 use super::smi_idt_patch::patch_smi_handler_idt;
 use super::smrr::{coalesced_smrr_range, configure_smm_code_access, smrr_initialize};
-use crate::hob::lookup::{find_guid_hob, find_module};
 use crate::hob::pass_down::{MM_SUPV_PASS_DOWN_HOB_GUID, MmSupvPassDownHobData, PassDownHobError};
 use crate::memory::mmram::{establish_mmram_bound, supervisor_image_anchor};
 use crate::privilege_mgmt::save_state::{SaveStateInfo, log_save_state_map, validate_save_state_regions};
@@ -227,11 +226,15 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         hob_hand_off_table: &PhaseHandoffInformationTable,
         state: &crate::state::InitState,
     ) -> MmSupervisorResult<()> {
-        let module = find_module(
-            &Hob::Handoff(hob_hand_off_table),
-            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
-            MM_SUPERVISOR_USER_GUID,
-        );
+        // SAFETY: `hob_hand_off_table` is the in-place PHIT of the validated HOB list handed to
+        // `bsp_init`, which is terminated by `END_OF_HOB_LIST`.
+        let module = unsafe {
+            find_memory_allocation_module(
+                hob_hand_off_table,
+                MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+                MM_SUPERVISOR_USER_GUID,
+            )
+        };
 
         if let Some(module) = module {
             let entry = module.entry_point;
@@ -250,9 +253,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         hob_hand_off_table: &PhaseHandoffInformationTable,
         state: &crate::state::InitState,
     ) -> MmSupervisorResult<()> {
-        let Some(module) =
-            find_module(&Hob::Handoff(hob_hand_off_table), HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID)
-        else {
+        // SAFETY: `hob_hand_off_table` is the in-place PHIT of the validated HOB list handed to
+        // `bsp_init`, which is terminated by `END_OF_HOB_LIST`.
+        let Some(module) = (unsafe {
+            find_memory_allocation_module(hob_hand_off_table, HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID)
+        }) else {
             return Err(CoreInitError::InitModuleRegionMissing.into());
         };
 
@@ -476,7 +481,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// Each core programs the base into `IA32_SMM_MONITOR_CTL` during per-core init. Platforms
     /// without STM or SEA integration do not publish the HOB, so its absence is not an error.
     fn discover_mseg_base(&self, hob_hand_off_table: &PhaseHandoffInformationTable) {
-        match find_guid_hob(hob_hand_off_table, MSEG_SMRAM_HOB_GUID).and_then(parse_mseg_smram_hob) {
+        // SAFETY: `hob_hand_off_table` is the in-place PHIT of the validated HOB list handed to
+        // `bsp_init`, which is terminated by `END_OF_HOB_LIST`.
+        match unsafe { find_guid_hob_data(hob_hand_off_table, MSEG_SMRAM_HOB_GUID) }.and_then(parse_mseg_smram_hob) {
             Some(mseg_base) => {
                 init_state().set_mseg_base(mseg_base);
                 log::info!("MSEG base 0x{mseg_base:x} discovered from MSEG SMRAM HOB");
@@ -489,7 +496,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     fn init_comm_buffers(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
         // Only one MM_COMM_REGION_HOB is published, the supervisor one; the user channel flows
         // through MM_COMM_BUFFER_HOB_GUID below.
-        let supv_region_data = find_guid_hob(hob_hand_off_table, MM_COMMON_REGION_HOB_GUID)
+        // SAFETY: `hob_hand_off_table` is the in-place PHIT of the validated HOB list handed to
+        // `bsp_init`, which is terminated by `END_OF_HOB_LIST`.
+        let supv_region_data = unsafe { find_guid_hob_data(hob_hand_off_table, MM_COMMON_REGION_HOB_GUID) }
             .ok_or(CommBufferError::CommRegionHobMissing)?;
         let supv = CommChannel::from_supv_hob(supv_region_data)
             .inspect_err(|e| log::error!("Failed to initialize supervisor communication buffer: {e}"))?;
@@ -501,7 +510,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // rewrites the same bytes. Taking the address is the only way to hand over write access:
         // the HOB list is walked through shared references, and `&[u8]` cannot become `&mut [u8]`.
         let (user_buffer_data, user_buffer_data_len) = {
-            let data = find_guid_hob(hob_hand_off_table, MM_COMM_BUFFER_HOB_GUID)
+            // SAFETY: `hob_hand_off_table` is the in-place PHIT of the validated HOB list handed to
+            // `bsp_init`, which is terminated by `END_OF_HOB_LIST`.
+            let data = unsafe { find_guid_hob_data(hob_hand_off_table, MM_COMM_BUFFER_HOB_GUID) }
                 .ok_or(CommBufferError::CommunicationBufferHobMissing)?;
             (data.as_ptr().cast_mut(), data.len())
         };
@@ -554,12 +565,15 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     fn init_policy_from_hob_list(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
         // The CPU count sizes the Ring 3 stack array the PassDown HOB describes, so it is read
         // before anything that depends on it.
-        let mp_information =
-            find_guid_hob(hob_hand_off_table, MP_INFORMATION_HOB_GUID).ok_or(CoreInitError::MpInformationHobMissing)?;
+        // SAFETY: `hob_hand_off_table` is the in-place PHIT of the validated HOB list handed to
+        // `bsp_init`, which is terminated by `END_OF_HOB_LIST`.
+        let mp_information = unsafe { find_guid_hob_data(hob_hand_off_table, MP_INFORMATION_HOB_GUID) }
+            .ok_or(CoreInitError::MpInformationHobMissing)?;
         let number_of_cpus = self.parse_mp_information_hob(mp_information)?;
 
-        let pass_down_data =
-            find_guid_hob(hob_hand_off_table, MM_SUPV_PASS_DOWN_HOB_GUID).ok_or(PassDownHobError::Missing)?;
+        // SAFETY: as above, `hob_hand_off_table` is the in-place PHIT of the validated HOB list.
+        let pass_down_data = unsafe { find_guid_hob_data(hob_hand_off_table, MM_SUPV_PASS_DOWN_HOB_GUID) }
+            .ok_or(PassDownHobError::Missing)?;
         // SAFETY: `pass_down_data` is a slice into the validated HOB list, so the buffer pointers
         // it carries reference live memory as `init_from_pass_down_hob` requires.
         let (save_state_info, mmi_entry_size) =
