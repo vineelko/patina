@@ -299,7 +299,8 @@ pub(crate) fn scan_regions(hob_list: &RawHobList) -> Vec<MmramRegion> {
     // Information Table that stays live for the borrow.
     let handoff = unsafe { &*hob_list.as_ptr().cast::<PhaseHandoffInformationTable>() };
     // SAFETY: `handoff` heads a valid contiguous HOB list.
-    let (regions, count) = unsafe { PageAllocator::scan_hob_list(handoff) }.expect("scan SMRAM regions");
+    let (regions, count) =
+        unsafe { PageAllocator::scan_hob_list_for_smram_regions(handoff) }.expect("scan SMRAM regions");
     regions[..count].to_vec()
 }
 pub(crate) fn padded_hob_list(extra: usize) -> RawHobList {

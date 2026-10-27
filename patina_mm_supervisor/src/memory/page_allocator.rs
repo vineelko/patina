@@ -142,25 +142,6 @@ impl PageAllocator {
         Ok((bookkeeping_base, bookkeeping_pages))
     }
 
-    /// Scans the entire HOB list and collects every SMRAM/MMRAM region reported
-    /// under the supported GUIDs into `regions`, updating `count`.
-    fn scan_smram_regions(
-        handoff: &PhaseHandoffInformationTable,
-        regions: &mut [MmramRegion; MAX_TEMP_REGIONS],
-        region_count: &mut usize,
-    ) -> MmSupervisorResult<()> {
-        let hob = Hob::Handoff(handoff);
-        for current_hob in &hob {
-            if let Hob::GuidHob(guid_hob, data) = current_hob
-                && (guid_hob.name == SMM_SMRAM_MEMORY_GUID || guid_hob.name == MM_PEI_MMRAM_MEMORY_RESERVE_GUID)
-            {
-                log::info!("Found SMRAM memory HOB with GUID {}", guid_hob.name.as_guid());
-                Self::collect_smram_regions(data, regions, region_count)?;
-            }
-        }
-        Ok(())
-    }
-
     /// Parses the `SmramReserveHobData` header and trailing `SmramDescriptor`
     /// array from a single matching GUID HOB payload, appending each region to
     /// `regions` and updating `region_count`.
@@ -252,12 +233,19 @@ impl PageAllocator {
     /// ## Safety
     ///
     /// The caller must ensure that `hob_list` points to a valid HOB list.
-    pub(crate) unsafe fn scan_hob_list(
+    pub(crate) unsafe fn scan_hob_list_for_smram_regions(
         handoff: &PhaseHandoffInformationTable,
     ) -> MmSupervisorResult<([MmramRegion; MAX_TEMP_REGIONS], usize)> {
         let mut regions = [MmramRegion::default(); MAX_TEMP_REGIONS];
         let mut count = 0usize;
-        Self::scan_smram_regions(handoff, &mut regions, &mut count)?;
+        for current_hob in &Hob::Handoff(handoff) {
+            if let Hob::GuidHob(guid_hob, data) = current_hob
+                && (guid_hob.name == SMM_SMRAM_MEMORY_GUID || guid_hob.name == MM_PEI_MMRAM_MEMORY_RESERVE_GUID)
+            {
+                log::info!("Found SMRAM memory HOB with GUID {}", guid_hob.name.as_guid());
+                Self::collect_smram_regions(data, &mut regions, &mut count)?;
+            }
+        }
 
         if count == 0 {
             log::error!("No SMRAM regions found in HOB list");
@@ -670,7 +658,7 @@ mod tests {
         let hob_list = test_support::RawHobList::new().finish();
 
         // SAFETY: `hob_list` is a valid contiguous HOB list that outlives the call.
-        let scanned = unsafe { PageAllocator::scan_hob_list(hob_list.handoff()) };
+        let scanned = unsafe { PageAllocator::scan_hob_list_for_smram_regions(hob_list.handoff()) };
 
         assert_eq!(scanned.map(|(_, count)| count), Err(AllocError::NotInitialized.into()));
     }

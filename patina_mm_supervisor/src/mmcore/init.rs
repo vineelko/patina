@@ -116,7 +116,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // until they have been anchored and validated below.
         // SAFETY: `hob_list` is provided by the MM IPL and is guaranteed to be a
         // valid HOB list (the caller asserts it is non-null before dispatching).
-        let (scanned_regions, region_count) = unsafe { PageAllocator::scan_hob_list(hob_hand_off_table)? };
+        let (scanned_regions, region_count) =
+            unsafe { PageAllocator::scan_hob_list_for_smram_regions(hob_hand_off_table)? };
 
         let scanned_regions = scanned_regions.get(..region_count).unwrap_or(&scanned_regions);
 
