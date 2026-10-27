@@ -160,16 +160,6 @@ pub(crate) fn classify_coverage(
     }
 }
 
-/// Classifies `[addr, addr + size)` against SMRAM descriptors that have been scanned but not yet
-/// committed to the allocator's bookkeeping.
-pub(crate) fn classify_mmram_in_regions(regions: &[MmramRegion], addr: u64, size: u64) -> MmramPlacement {
-    classify_coverage(
-        addr,
-        size,
-        regions.iter().filter_map(|region| Some((region.base, region.base.checked_add(region.size)?))),
-    )
-}
-
 /// Returns whether any region in `regions` contains `address`.
 pub(crate) fn regions_contain(regions: &[MmramRegion], address: u64) -> bool {
     regions.iter().any(|region| {
@@ -299,19 +289,20 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_mmram_in_regions() {
-        let regions = regions_from(&[(0x1000, 0x1000, false), (0x2000, 0x1000, true)]);
+    fn test_classify_coverage() {
+        let regions = [(0x1000, 0x2000), (0x2000, 0x3000)];
+        let classify = |addr, size| classify_coverage(addr, size, regions.iter().copied());
 
-        assert_eq!(classify_mmram_in_regions(&regions, 0x1000, 0x1000), MmramPlacement::Inside);
+        assert_eq!(classify(0x1000, 0x1000), MmramPlacement::Inside);
         // Adjacent regions cover the range jointly, so this is wholly inside.
-        assert_eq!(classify_mmram_in_regions(&regions, 0x1000, 0x2000), MmramPlacement::Inside);
-        assert_eq!(classify_mmram_in_regions(&regions, 0x4000, 0x1000), MmramPlacement::Outside);
-        assert_eq!(classify_mmram_in_regions(&regions, 0x2800, 0x1000), MmramPlacement::PartlyInside);
-        assert_eq!(classify_mmram_in_regions(&regions, 0x0800, 0x1000), MmramPlacement::PartlyInside);
-        assert_eq!(classify_mmram_in_regions(&regions, 0x1000, 0), MmramPlacement::Outside);
+        assert_eq!(classify(0x1000, 0x2000), MmramPlacement::Inside);
+        assert_eq!(classify(0x4000, 0x1000), MmramPlacement::Outside);
+        assert_eq!(classify(0x2800, 0x1000), MmramPlacement::PartlyInside);
+        assert_eq!(classify(0x0800, 0x1000), MmramPlacement::PartlyInside);
+        assert_eq!(classify(0x1000, 0), MmramPlacement::Outside);
         // A range whose end overflows fails closed.
-        assert_eq!(classify_mmram_in_regions(&regions, u64::MAX, 0x1000), MmramPlacement::PartlyInside);
-        assert_eq!(classify_mmram_in_regions(&[], 0x1000, 0x1000), MmramPlacement::Outside);
+        assert_eq!(classify(u64::MAX, 0x1000), MmramPlacement::PartlyInside);
+        assert_eq!(classify_coverage(0x1000, 0x1000, core::iter::empty()), MmramPlacement::Outside);
     }
 
     #[test]

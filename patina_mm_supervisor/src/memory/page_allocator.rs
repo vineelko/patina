@@ -618,7 +618,7 @@ impl PageAllocator {
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
-    use crate::{memory::mmram::classify_mmram_in_regions, test_support};
+    use crate::{memory::mmram::classify_coverage, test_support};
 
     const TEST_REGION_PAGES: usize = 16;
     const TEST_REGION_BYTES: usize = TEST_REGION_PAGES * UEFI_PAGE_SIZE;
@@ -660,11 +660,6 @@ mod tests {
         let scanned = unsafe { PageAllocator::scan_hob_list_for_smram_regions(hob_list.handoff()) };
 
         assert_eq!(scanned.map(|(_, count)| count), Err(AllocError::NotInitialized.into()));
-    }
-
-    /// Builds a `MmramRegion` list from `(base, size, pre_allocated)` tuples.
-    fn regions_from(entries: &[(u64, u64, bool)]) -> Vec<MmramRegion> {
-        entries.iter().map(|&(base, size, pre_allocated)| MmramRegion::new(base, size, pre_allocated)).collect()
     }
 
     fn smram_hob_payload(declared_count: u32, descriptors: &[SmramDescriptor]) -> Vec<u8> {
@@ -1137,12 +1132,12 @@ mod tests {
     }
 
     #[test]
-    fn test_page_allocator_classify_mmram_in_regions_matches_the_committed_classifier() {
-        // The pre-commit and post-commit classifiers decide the same security questions, so a
-        // range must not be judged differently depending on which one a caller reaches for.
+    fn test_page_allocator_span_classification_matches_the_committed_classifier() {
+        // The pre-paging HOB checks classify against the contiguous MMRAM span before the
+        // allocator commits, and later code uses the allocator. Both decide the same security
+        // questions, so a range must not be judged differently depending on which one is used.
         let fixture = AllocatorFixture::new();
         let base = fixture.base;
-        let regions = regions_from(&[(base, TEST_REGION_BYTES as u64, false)]);
         let page = UEFI_PAGE_SIZE as u64;
         let span = TEST_REGION_BYTES as u64;
 
@@ -1158,7 +1153,7 @@ mod tests {
             (u64::MAX, page),
         ] {
             assert_eq!(
-                classify_mmram_in_regions(&regions, addr, size),
+                classify_coverage(addr, size, core::iter::once((base, base + span))),
                 fixture.allocator.classify_mmram(addr, size).expect("fixture allocator is initialized"),
                 "classification diverged for 0x{addr:016x} size 0x{size:x}"
             );
