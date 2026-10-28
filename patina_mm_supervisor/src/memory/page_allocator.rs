@@ -17,7 +17,7 @@ use core::{
 };
 
 use patina::{
-    UEFI_PAGE_SIZE,
+    MemoryRange, UEFI_PAGE_SIZE,
     pi::hob::{Hob, PhaseHandoffInformationTable},
     pi::mmram::{
         EFI_ALLOCATED, MM_PEI_MMRAM_MEMORY_RESERVE_GUID, SMM_SMRAM_MEMORY_GUID, SmramDescriptor, SmramReserveHobData,
@@ -63,6 +63,46 @@ pub struct RegionInfo {
 /// HOB list. The authoritative region metadata is stored in SMRAM afterwards.
 pub(crate) const MAX_TEMP_REGIONS: usize = 256;
 
+/// The SMRAM regions collected from the HOB list, held in a fixed array on the stack.
+///
+/// Only the collected regions are visible, through [`as_slice`](Self::as_slice). The rest of the
+/// array holds a placeholder that is never read.
+pub(crate) struct ScannedRegions {
+    regions: [MmramRegion; MAX_TEMP_REGIONS],
+    count: usize,
+}
+
+impl ScannedRegions {
+    /// Fills the slots that hold no collected region.
+    const UNUSED: MmramRegion = match MemoryRange::new(0, 1) {
+        Ok(range) => MmramRegion::new(range, false),
+        Err(_) => panic!("a one-byte range at address 0 is valid"),
+    };
+
+    /// Creates an empty collection.
+    const fn new() -> Self {
+        Self { regions: [Self::UNUSED; MAX_TEMP_REGIONS], count: 0 }
+    }
+
+    /// Appends `region`, or fails when all [`MAX_TEMP_REGIONS`] slots are in use.
+    fn push(&mut self, region: MmramRegion) -> MmSupervisorResult<()> {
+        let slot = self.regions.get_mut(self.count).ok_or_else(|| {
+            log::error!(
+                "Too many SMRAM regions for temp storage (MAX_TEMP_REGIONS = {MAX_TEMP_REGIONS}), increase MAX_TEMP_REGIONS"
+            );
+            AllocError::OutOfMemory
+        })?;
+        *slot = region;
+        self.count += 1;
+        Ok(())
+    }
+
+    /// Returns the collected regions.
+    pub(crate) fn as_slice(&self) -> &[MmramRegion] {
+        self.regions.get(..self.count).unwrap_or_default()
+    }
+}
+
 /// Page-granularity allocator for SMRAM memory.
 pub struct PageAllocator {
     /// Allocator state pointer (into SMRAM), guarded by the lock.
@@ -87,12 +127,12 @@ impl PageAllocator {
     /// to hold it. Returns `(bookkeeping_base, bookkeeping_pages)`.
     fn calculate_bookkeeping(regions: &[MmramRegion]) -> MmSupervisorResult<(u64, usize)> {
         let total_pages = regions.iter().try_fold(0usize, |total, region| {
-            let pages = page_count(region.size).ok_or_else(|| {
-                log::error!("Bookkeeping sizing failed: region size 0x{:x} does not fit a page count", region.size);
+            let pages = page_count(region.range.size()).ok_or_else(|| {
+                log::error!("Bookkeeping sizing failed: region {} does not fit a page count", region.range);
                 AllocError::OutOfMemory
             })?;
             total.checked_add(pages).ok_or_else(|| {
-                log::error!("Bookkeeping sizing failed: total page count overflows at 0x{:016x}", region.base);
+                log::error!("Bookkeeping sizing failed: total page count overflows at {}", region.range);
                 AllocError::OutOfMemory
             })
         })?;
@@ -122,19 +162,19 @@ impl PageAllocator {
         );
 
         // Reserve bookkeeping space in the first free (non-pre-allocated) region.
-        let first_free = regions.iter().find(|region| !region.pre_allocated);
-        let bookkeeping_base = first_free.map(|region| region.base).ok_or_else(|| {
-            log::error!("No free SMRAM region available for bookkeeping");
-            AllocError::OutOfMemory
-        })?;
-        let first_free_size = first_free.map_or(0, |region| region.size);
+        let first_free =
+            regions.iter().find(|region| !region.pre_allocated).map(|region| region.range).ok_or_else(|| {
+                log::error!("No free SMRAM region available for bookkeeping");
+                AllocError::OutOfMemory
+            })?;
+        let bookkeeping_base = first_free.base();
         if bookkeeping_base == 0 || !bookkeeping_base.is_multiple_of(UEFI_PAGE_SIZE as u64) {
             log::error!("Bookkeeping region base is null or not page-aligned");
             return Err(AllocError::InvalidAlignment.into());
         }
 
         let bookkeeping_size = bookkeeping_pages.checked_mul(UEFI_PAGE_SIZE).ok_or(AllocError::OutOfMemory)?;
-        if u64::try_from(bookkeeping_size).map_or(true, |size| size > first_free_size) {
+        if u64::try_from(bookkeeping_size).map_or(true, |size| size > first_free.size()) {
             log::error!("First free region too small for bookkeeping");
             return Err(AllocError::OutOfMemory.into());
         }
@@ -144,12 +184,11 @@ impl PageAllocator {
 
     /// Parses the `SmramReserveHobData` header and trailing `SmramDescriptor`
     /// array from a single matching GUID HOB payload, appending each region to
-    /// `regions` and updating `region_count`.
-    fn collect_smram_regions(
-        data: &[u8],
-        regions: &mut [MmramRegion; MAX_TEMP_REGIONS],
-        region_count: &mut usize,
-    ) -> MmSupervisorResult<()> {
+    /// `scanned`.
+    ///
+    /// A descriptor with a size of zero, or one that runs past the end of the address space, is
+    /// rejected here, so every collected region is a valid [`MemoryRange`].
+    fn collect_smram_regions(data: &[u8], scanned: &mut ScannedRegions) -> MmSupervisorResult<()> {
         let header_size = size_of::<SmramReserveHobData>();
         if data.len() < header_size {
             return Ok(());
@@ -173,34 +212,27 @@ impl PageAllocator {
         for descriptor_bytes in descriptor_chunks.iter().take(count) {
             let (descriptor, _) =
                 SmramDescriptor::read_from_prefix(descriptor_bytes).map_err(|_| AllocError::InvalidAddress)?;
-            if *region_count >= MAX_TEMP_REGIONS {
-                log::error!(
-                    "Too many SMRAM regions for temp storage (MAX_TEMP_REGIONS = {MAX_TEMP_REGIONS}), increase MAX_TEMP_REGIONS"
-                );
-                return Err(AllocError::OutOfMemory.into());
-            }
 
             let pre_allocated = (descriptor.region_state & EFI_ALLOCATED) != 0;
-            let pages = page_count(descriptor.physical_size).ok_or(AllocError::OutOfMemory)?;
+            let range = MemoryRange::new(descriptor.physical_start, descriptor.physical_size).map_err(|err| {
+                log::error!(
+                    "SMRAM descriptor [0x{:016x}, +0x{:x}) is not a valid range: {err}",
+                    descriptor.physical_start,
+                    descriptor.physical_size
+                );
+                AllocError::InvalidAddress
+            })?;
+            let pages = page_count(range.size()).ok_or(AllocError::OutOfMemory)?;
 
             log::info!(
-                "SMRAM Region {}: base=0x{:016x}, size=0x{:x}, pages={}, state=0x{:x}, allocated={}",
-                *region_count,
-                descriptor.physical_start,
-                descriptor.physical_size,
+                "SMRAM Region {}: {range}, pages={}, state=0x{:x}, allocated={}",
+                scanned.as_slice().len(),
                 pages,
                 descriptor.region_state,
                 pre_allocated
             );
 
-            let Some(slot) = regions.get_mut(*region_count) else {
-                log::error!(
-                    "Too many SMRAM regions for temp storage (MAX_TEMP_REGIONS = {MAX_TEMP_REGIONS}), increase MAX_TEMP_REGIONS"
-                );
-                return Err(AllocError::OutOfMemory.into());
-            };
-            *slot = MmramRegion::new(descriptor.physical_start, descriptor.physical_size, pre_allocated);
-            *region_count += 1;
+            scanned.push(MmramRegion::new(range, pre_allocated))?;
         }
 
         Ok(())
@@ -234,24 +266,23 @@ impl PageAllocator {
     /// [`validate_hob_list_structure`](crate::hob::validation::validate_hob_list_structure).
     pub(crate) unsafe fn scan_hob_list_for_smram_regions(
         handoff: &PhaseHandoffInformationTable,
-    ) -> MmSupervisorResult<([MmramRegion; MAX_TEMP_REGIONS], usize)> {
-        let mut regions = [MmramRegion::default(); MAX_TEMP_REGIONS];
-        let mut count = 0usize;
+    ) -> MmSupervisorResult<ScannedRegions> {
+        let mut scanned = ScannedRegions::new();
         for current_hob in &Hob::Handoff(handoff) {
             if let Hob::GuidHob(guid_hob, data) = current_hob
                 && (guid_hob.name == SMM_SMRAM_MEMORY_GUID || guid_hob.name == MM_PEI_MMRAM_MEMORY_RESERVE_GUID)
             {
                 log::info!("Found SMRAM memory HOB with GUID {}", guid_hob.name.as_guid());
-                Self::collect_smram_regions(data, &mut regions, &mut count)?;
+                Self::collect_smram_regions(data, &mut scanned)?;
             }
         }
 
-        if count == 0 {
+        if scanned.as_slice().is_empty() {
             log::error!("No SMRAM regions found in HOB list");
             return Err(AllocError::NotInitialized.into());
         }
 
-        Ok((regions, count))
+        Ok(scanned)
     }
 
     /// Initializes allocator bookkeeping from already parsed SMRAM regions.
@@ -271,37 +302,14 @@ impl PageAllocator {
         }
 
         for (index, region) in scanned.iter().enumerate() {
-            let is_page_aligned =
-                region.base.is_multiple_of(UEFI_PAGE_SIZE as u64) && region.size.is_multiple_of(UEFI_PAGE_SIZE as u64);
-            if !is_page_aligned {
-                log::error!("SMRAM region {index} [0x{:016x}, +0x{:x}) is not page aligned", region.base, region.size);
+            if !matches!(region.range.is_aligned(UEFI_PAGE_SIZE as u64), Ok(true)) {
+                log::error!("SMRAM region {index} {} is not page aligned", region.range);
                 return Err(AllocError::InvalidAlignment.into());
             }
-            let Some(region_end) = region.base.checked_add(region.size).filter(|_| region.size != 0) else {
-                log::error!(
-                    "SMRAM region {index} [0x{:016x}, +0x{:x}) is empty or overflows",
-                    region.base,
-                    region.size
-                );
-                return Err(AllocError::InvalidAddress.into());
-            };
-            let Some(previous_regions) = scanned.get(..index) else {
-                log::error!("SMRAM region {index} is out of range while checking for overlap");
-                return Err(AllocError::InvalidAddress.into());
-            };
-            let overlaps_earlier_region = previous_regions.iter().any(|previous| {
-                previous
-                    .base
-                    .checked_add(previous.size)
-                    .is_some_and(|previous_end| region.base < previous_end && previous.base < region_end)
-            });
-            if overlaps_earlier_region {
-                log::error!(
-                    "SMRAM region {index} [0x{:016x}, 0x{region_end:016x}) overlaps an earlier region",
-                    region.base
-                );
-                return Err(AllocError::InvalidAddress.into());
-            }
+        }
+        if let Some((first, second)) = MemoryRange::find_overlap(scanned.iter().map(|region| region.range)) {
+            log::error!("SMRAM regions {first} and {second} overlap");
+            return Err(AllocError::InvalidAddress.into());
         }
 
         let guard = self.state.lock();
@@ -311,12 +319,12 @@ impl PageAllocator {
         }
 
         let total_pages = scanned.iter().try_fold(0usize, |total, region| {
-            let pages = page_count(region.size).ok_or_else(|| {
-                log::error!("SMRAM region size 0x{:x} does not fit a page count", region.size);
+            let pages = page_count(region.range.size()).ok_or_else(|| {
+                log::error!("SMRAM region {} does not fit a page count", region.range);
                 AllocError::OutOfMemory
             })?;
             total.checked_add(pages).ok_or_else(|| {
-                log::error!("Total SMRAM page count overflows at region base 0x{:016x}", region.base);
+                log::error!("Total SMRAM page count overflows at region {}", region.range);
                 AllocError::OutOfMemory
             })
         })?;
@@ -637,7 +645,7 @@ mod tests {
             let mut memory = Box::new(AlignedRegion([0xA5; TEST_REGION_BYTES]));
             let base = memory.0.as_mut_ptr() as u64;
             let allocator = PageAllocator::new();
-            let regions = [MmramRegion::new(base, TEST_REGION_BYTES as u64, false)];
+            let regions = [MmramRegion::from_parts(base, TEST_REGION_BYTES as u64, false)];
 
             // SAFETY: `memory` is page-aligned, exclusively owned by the fixture,
             // remains live with the allocator, and covers the declared region.
@@ -659,7 +667,7 @@ mod tests {
         // SAFETY: `hob_list` is a valid contiguous HOB list that outlives the call.
         let scanned = unsafe { PageAllocator::scan_hob_list_for_smram_regions(hob_list.handoff()) };
 
-        assert_eq!(scanned.map(|(_, count)| count), Err(AllocError::NotInitialized.into()));
+        assert_eq!(scanned.map(|scanned| scanned.as_slice().len()), Err(AllocError::NotInitialized.into()));
     }
 
     fn smram_hob_payload(declared_count: u32, descriptors: &[SmramDescriptor]) -> Vec<u8> {
@@ -722,7 +730,7 @@ mod tests {
     #[test]
     fn test_page_allocator_rejects_double_initialization() {
         let fixture = AllocatorFixture::new();
-        let regions = [MmramRegion::new(fixture.base, TEST_REGION_BYTES as u64, false)];
+        let regions = [MmramRegion::from_parts(fixture.base, TEST_REGION_BYTES as u64, false)];
 
         // SAFETY: the fixture owns the page-aligned region for its full declared size.
         unsafe {
@@ -735,12 +743,11 @@ mod tests {
     fn test_page_allocator_validates_regions_before_writing_bookkeeping() {
         let allocator = PageAllocator::new();
         let empty: [MmramRegion; 0] = [];
-        let unaligned = [MmramRegion::new(0x1001, UEFI_PAGE_SIZE as u64, false)];
-        let partial_page = [MmramRegion::new(0x1000, UEFI_PAGE_SIZE as u64 - 1, false)];
-        let overflowing = [MmramRegion::new(u64::MAX - UEFI_PAGE_SIZE as u64 + 1, UEFI_PAGE_SIZE as u64, false)];
+        let unaligned = [MmramRegion::from_parts(0x1001, UEFI_PAGE_SIZE as u64, false)];
+        let partial_page = [MmramRegion::from_parts(0x1000, UEFI_PAGE_SIZE as u64 - 1, false)];
         let overlapping = [
-            MmramRegion::new(0x1000, 2 * UEFI_PAGE_SIZE as u64, false),
-            MmramRegion::new(0x2000, UEFI_PAGE_SIZE as u64, false),
+            MmramRegion::from_parts(0x1000, 2 * UEFI_PAGE_SIZE as u64, false),
+            MmramRegion::from_parts(0x2000, UEFI_PAGE_SIZE as u64, false),
         ];
 
         // SAFETY: these invalid descriptors are rejected before any address is dereferenced.
@@ -748,7 +755,6 @@ mod tests {
             assert_eq!(allocator.init_from_regions(&empty), Err(AllocError::NotInitialized.into()));
             assert_eq!(allocator.init_from_regions(&unaligned), Err(AllocError::InvalidAlignment.into()));
             assert_eq!(allocator.init_from_regions(&partial_page), Err(AllocError::InvalidAlignment.into()));
-            assert_eq!(allocator.init_from_regions(&overflowing), Err(AllocError::InvalidAddress.into()));
             assert_eq!(allocator.init_from_regions(&overlapping), Err(AllocError::InvalidAddress.into()));
         }
         assert!(!allocator.is_initialized());
@@ -942,7 +948,7 @@ mod tests {
         let half = (TEST_REGION_BYTES / 2) as u64;
         let allocator = PageAllocator::new();
         // The second half is handed over pre-allocated, so none of it is available.
-        let regions = [MmramRegion::new(base, half, false), MmramRegion::new(base + half, half, true)];
+        let regions = [MmramRegion::from_parts(base, half, false), MmramRegion::from_parts(base + half, half, true)];
 
         // SAFETY: `memory` is page-aligned, owned by this test, and covers both regions.
         unsafe { allocator.init_from_regions(&regions).unwrap() };
@@ -1050,14 +1056,35 @@ mod tests {
         let payload = smram_hob_payload(descriptors.len() as u32, &descriptors);
         let mut unaligned = vec![0xFF];
         unaligned.extend_from_slice(&payload);
-        let mut regions = [MmramRegion::default(); MAX_TEMP_REGIONS];
-        let mut count = 0;
+        let mut scanned = ScannedRegions::new();
 
-        PageAllocator::collect_smram_regions(&unaligned[1..], &mut regions, &mut count).unwrap();
+        PageAllocator::collect_smram_regions(&unaligned[1..], &mut scanned).unwrap();
 
-        assert_eq!(count, 2);
-        assert_eq!(regions[0], MmramRegion::new(descriptors[0].physical_start, descriptors[0].physical_size, false));
-        assert_eq!(regions[1], MmramRegion::new(descriptors[1].physical_start, descriptors[1].physical_size, true));
+        assert_eq!(
+            scanned.as_slice(),
+            [
+                MmramRegion::from_parts(descriptors[0].physical_start, descriptors[0].physical_size, false),
+                MmramRegion::from_parts(descriptors[1].physical_start, descriptors[1].physical_size, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_page_allocator_collect_rejects_descriptors_that_are_not_valid_ranges() {
+        // An empty descriptor, or one that runs past the end of the address space, never becomes a
+        // region, so nothing later has to check for either case.
+        for (physical_start, physical_size) in [(0x8000_0000, 0), (u64::MAX - 0xfff, 2 * UEFI_PAGE_SIZE as u64)] {
+            let descriptor =
+                SmramDescriptor { physical_start, cpu_start: physical_start, physical_size, region_state: 0 };
+            let payload = smram_hob_payload(1, &[descriptor]);
+            let mut scanned = ScannedRegions::new();
+
+            assert_eq!(
+                PageAllocator::collect_smram_regions(&payload, &mut scanned),
+                Err(AllocError::InvalidAddress.into())
+            );
+            assert!(scanned.as_slice().is_empty());
+        }
     }
 
     #[test]
@@ -1069,13 +1096,12 @@ mod tests {
             region_state: 0,
         };
         let payload = smram_hob_payload(2, &[descriptor]);
-        let mut regions = [MmramRegion::default(); MAX_TEMP_REGIONS];
-        let mut count = 0;
+        let mut scanned = ScannedRegions::new();
 
-        PageAllocator::collect_smram_regions(&payload, &mut regions, &mut count).unwrap();
+        PageAllocator::collect_smram_regions(&payload, &mut scanned).unwrap();
 
-        assert_eq!(count, 1);
-        assert_eq!(regions[0].base, descriptor.physical_start);
+        assert_eq!(scanned.as_slice().len(), 1);
+        assert_eq!(scanned.as_slice()[0].range.base(), descriptor.physical_start);
     }
 
     #[test]
@@ -1087,32 +1113,23 @@ mod tests {
             region_state: 0,
         };
         let payload = smram_hob_payload(1, &[descriptor]);
-        let mut regions = [MmramRegion::default(); MAX_TEMP_REGIONS];
-        let mut count = 0;
+        let mut scanned = ScannedRegions::new();
 
-        PageAllocator::collect_smram_regions(
-            &payload[..size_of::<SmramReserveHobData>() - 1],
-            &mut regions,
-            &mut count,
-        )
-        .unwrap();
-        assert_eq!(count, 0);
+        PageAllocator::collect_smram_regions(&payload[..size_of::<SmramReserveHobData>() - 1], &mut scanned).unwrap();
+        assert!(scanned.as_slice().is_empty());
 
-        count = MAX_TEMP_REGIONS;
-        assert_eq!(
-            PageAllocator::collect_smram_regions(&payload, &mut regions, &mut count),
-            Err(AllocError::OutOfMemory.into())
-        );
+        scanned.count = MAX_TEMP_REGIONS;
+        assert_eq!(PageAllocator::collect_smram_regions(&payload, &mut scanned), Err(AllocError::OutOfMemory.into()));
     }
 
     #[test]
     fn test_page_allocator_calculates_bookkeeping_requirements() {
-        let valid = [MmramRegion::new(0x8000_0000, TEST_REGION_BYTES as u64, false)];
-        let allocated = [MmramRegion::new(0x8000_0000, TEST_REGION_BYTES as u64, true)];
-        let too_small = [MmramRegion::new(0x8000_0000, 1, false)];
-        let unaligned = [MmramRegion::new(0x8000_0001, TEST_REGION_BYTES as u64, false)];
+        let valid = [MmramRegion::from_parts(0x8000_0000, TEST_REGION_BYTES as u64, false)];
+        let allocated = [MmramRegion::from_parts(0x8000_0000, TEST_REGION_BYTES as u64, true)];
+        let too_small = [MmramRegion::from_parts(0x8000_0000, 1, false)];
+        let unaligned = [MmramRegion::from_parts(0x8000_0001, TEST_REGION_BYTES as u64, false)];
 
-        assert_eq!(PageAllocator::calculate_bookkeeping(&valid), Ok((valid[0].base, 1)));
+        assert_eq!(PageAllocator::calculate_bookkeeping(&valid), Ok((valid[0].range.base(), 1)));
         assert_eq!(PageAllocator::calculate_bookkeeping(&allocated), Err(AllocError::OutOfMemory.into()));
         assert_eq!(PageAllocator::calculate_bookkeeping(&too_small), Err(AllocError::OutOfMemory.into()));
         assert_eq!(PageAllocator::calculate_bookkeeping(&unaligned), Err(AllocError::InvalidAlignment.into()));
@@ -1126,7 +1143,7 @@ mod tests {
         // report that rather than allocating a bookkeeping area too small for the bitmaps.
         let pages_per_region = u64::MAX as usize / UEFI_PAGE_SIZE;
         let regions_needed = usize::MAX / pages_per_region + 1;
-        let regions = vec![MmramRegion::new(0x8000_0000, u64::MAX, false); regions_needed];
+        let regions = vec![MmramRegion::from_parts(0, u64::MAX, false); regions_needed];
 
         assert_eq!(PageAllocator::calculate_bookkeeping(&regions), Err(AllocError::OutOfMemory.into()));
     }

@@ -419,31 +419,23 @@ impl LockedState<'_> {
         // Fill in per-region metadata and assign each region its bitmap range.
         let mut bitmap_start_bit = 0usize;
         for (region, scanned_region) in self.regions_mut().iter_mut().zip(scanned.iter()) {
-            let pages = page_count(scanned_region.size).ok_or_else(|| {
-                log::error!(
-                    "Allocator init failed: region 0x{:016x} size 0x{:x} does not fit a page count",
-                    scanned_region.base,
-                    scanned_region.size
-                );
+            let pages = page_count(scanned_region.range.size()).ok_or_else(|| {
+                log::error!("Allocator init failed: region {} does not fit a page count", scanned_region.range);
                 AllocError::OutOfMemory
             })?;
-            region.base = scanned_region.base;
+            region.base = scanned_region.range.base();
             region.total_pages = pages;
             region.bitmap_start_bit = bitmap_start_bit;
             bitmap_start_bit = bitmap_start_bit.checked_add(pages).ok_or_else(|| {
-                log::error!("Allocator init failed: bitmap start bit overflows at 0x{:016x}", scanned_region.base);
+                log::error!("Allocator init failed: bitmap start bit overflows at {}", scanned_region.range);
                 AllocError::OutOfMemory
             })?;
         }
 
         // Mark pre-allocated regions and the bookkeeping pages as allocated (supervisor).
         for (i, scanned_region) in scanned.iter().enumerate() {
-            let pages = page_count(scanned_region.size).ok_or_else(|| {
-                log::error!(
-                    "Allocator init failed: region 0x{:016x} size 0x{:x} does not fit a page count",
-                    scanned_region.base,
-                    scanned_region.size
-                );
+            let pages = page_count(scanned_region.range.size()).ok_or_else(|| {
+                log::error!("Allocator init failed: region {} does not fit a page count", scanned_region.range);
                 AllocError::OutOfMemory
             })?;
             let Some(start_bit) = self.regions().get(i).map(|region| region.bitmap_start_bit) else {
@@ -455,7 +447,7 @@ impl LockedState<'_> {
                 for p in 0..pages {
                     self.set_bit_allocated(start_bit + p, AllocationType::Supervisor);
                 }
-            } else if scanned_region.base == bookkeeping_base {
+            } else if scanned_region.range.base() == bookkeeping_base {
                 // Mark just the bookkeeping pages at the start of this region.
                 for p in 0..bookkeeping_pages {
                     self.set_bit_allocated(start_bit + p, AllocationType::Supervisor);
