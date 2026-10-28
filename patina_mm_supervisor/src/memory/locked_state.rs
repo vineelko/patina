@@ -214,10 +214,9 @@ impl LockedState<'_> {
     /// Finds which region contains `addr`, returning `(region_index, page_in_region)`.
     pub(crate) fn find_region_for_address(&self, addr: u64) -> Option<(usize, usize)> {
         for (i, region) in self.regions().iter().enumerate() {
-            let region_size = u64::try_from(region.total_pages.checked_mul(UEFI_PAGE_SIZE)?).ok()?;
-            let region_end = region.base.checked_add(region_size)?;
-            if addr >= region.base && addr < region_end {
-                let page_in_region = usize::try_from((addr - region.base) / UEFI_PAGE_SIZE as u64).ok()?;
+            let range = region.range()?;
+            if range.contains(addr) {
+                let page_in_region = usize::try_from((addr - range.base()) / UEFI_PAGE_SIZE as u64).ok()?;
                 return Some((i, page_in_region));
             }
         }
