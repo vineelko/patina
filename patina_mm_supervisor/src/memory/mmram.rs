@@ -171,37 +171,50 @@ pub(crate) fn regions_contain(regions: &[MmramRegion], address: u64) -> bool {
     regions.iter().any(|region| region.range.contains(address))
 }
 
-/// Classifies `[base, base + size)` against the committed MMRAM regions, or `None` if the regions
-/// are not known yet. A buffer that is not a valid range is placed by
-/// [`MmramPlacement::of_invalid_range`].
-fn classify_buffer(base: u64, size: u64) -> Option<MmramPlacement> {
-    let allocator = security_state().page_allocator();
-    match MemoryRange::new(base, size) {
-        Ok(range) => allocator.classify_mmram(&range),
-        Err(err) => allocator.is_initialized().then_some(MmramPlacement::of_invalid_range(err)),
-    }
+/// Classifies `range` against the committed MMRAM regions, or `None` if the regions are not known
+/// yet.
+fn classify_buffer(range: &MemoryRange) -> Option<MmramPlacement> {
+    security_state().page_allocator().classify_mmram(range)
 }
 
-/// Returns whether `[base, base + size)` lies entirely inside MMRAM.
+/// Returns whether `range` lies entirely inside MMRAM.
 ///
 /// Reports `false` before the regions are known, since nothing can be shown to be inside MMRAM
 /// until then.
-pub(crate) fn is_buffer_inside_mmram(base: u64, size: u64) -> bool {
-    classify_buffer(base, size).is_some_and(|p| p.is_inside(base, size))
+///
+/// # Panics
+///
+/// Panics when `range` is only partly inside MMRAM, as [`MmramPlacement::is_inside`] does.
+pub(crate) fn is_range_inside_mmram(range: &MemoryRange) -> bool {
+    classify_buffer(range).is_some_and(|p| p.is_inside(range.base(), range.size()))
 }
 
-/// Returns whether `[base, base + size)` touches MMRAM at all, including a range that only
-/// crosses a boundary.
+/// Returns whether `range` touches MMRAM at all, including a range that only crosses a boundary.
 ///
 /// Reports an overlap when the regions are not known yet, since nothing can be shown to lie
 /// outside MMRAM before then.
-pub(crate) fn buffer_overlaps_mmram(base: u64, size: u64) -> bool {
-    !matches!(classify_buffer(base, size), Some(MmramPlacement::Outside))
+pub(crate) fn range_overlaps_mmram(range: &MemoryRange) -> bool {
+    !matches!(classify_buffer(range), Some(MmramPlacement::Outside))
 }
 
-/// Returns whether `range` touches MMRAM at all, as [`buffer_overlaps_mmram`] does.
-pub(crate) fn range_overlaps_mmram(range: &MemoryRange) -> bool {
-    !matches!(security_state().page_allocator().classify_mmram(range), Some(MmramPlacement::Outside))
+/// Returns whether `[base, base + size)` lies entirely inside MMRAM, as [`is_range_inside_mmram`]
+/// does.
+///
+/// A buffer that is empty, or whose end runs past the end of the address space, is never inside
+/// MMRAM.
+pub(crate) fn is_buffer_inside_mmram(base: u64, size: u64) -> bool {
+    MemoryRange::new(base, size).is_ok_and(|range| is_range_inside_mmram(&range))
+}
+
+/// Returns whether `[base, base + size)` touches MMRAM at all, as [`range_overlaps_mmram`] does.
+///
+/// An empty buffer touches no memory, so it never overlaps MMRAM. A buffer whose end runs past
+/// the end of the address space always does, so it fails closed.
+pub(crate) fn buffer_overlaps_mmram(base: u64, size: u64) -> bool {
+    match MemoryRange::new(base, size) {
+        Ok(range) => range_overlaps_mmram(&range),
+        Err(err) => err != MemoryRangeError::Empty,
+    }
 }
 
 #[cfg(test)]
@@ -349,6 +362,14 @@ mod tests {
         assert!(buffer_overlaps_mmram(0x1000, 0x1000));
         assert!(buffer_overlaps_mmram(u64::MAX, 1));
         assert!(range_overlaps_mmram(&MemoryRange::new(0x1000, 0x1000).unwrap()));
+        // An empty buffer touches no memory, so even an unknown layout cannot make it overlap.
+        assert!(!buffer_overlaps_mmram(0x1000, 0));
+    }
+
+    #[test]
+    fn test_is_range_inside_mmram_fails_closed_before_allocator_initialization() {
+        assert!(!is_range_inside_mmram(&MemoryRange::new(0x1000, 0x1000).unwrap()));
+        assert!(!is_buffer_inside_mmram(0x1000, 0));
     }
 
     #[test]
