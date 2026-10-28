@@ -285,8 +285,8 @@ unsafe fn validate_save_state_policy(policy_base: *const u8, root: &PolicyRootV1
 ///
 /// This is used to generate memory policy from page table entries.
 pub struct MemoryPolicyBuilder {
-    /// Current descriptor being built
-    current: Option<MemDescriptorV1_0>,
+    /// Region of the descriptor being built, and its attributes
+    current: Option<(MemoryRange, u32)>,
     /// Maximum number of descriptors we can store
     max_count: usize,
     /// Buffer for descriptors
@@ -308,38 +308,33 @@ impl MemoryPolicyBuilder {
 
     /// Adds a memory region to the policy.
     ///
-    /// Adjacent regions with the same attributes will be coalesced. Returns
-    /// `Err(())` if the descriptor buffer is full.
-    pub fn add_region(&mut self, base: u64, size: u64, attributes: u32) -> Result<(), ()> {
-        let new_desc = MemDescriptorV1_0 { base_address: base, size, mem_attributes: attributes, reserved: 0 };
-
-        if let Some(ref mut current) = self.current {
-            // Check if we can coalesce with current
-            let current_end = current.base_address.saturating_add(current.size);
-            if base == current_end && attributes == current.mem_attributes {
-                // Coalesce
-                current.size = current.size.saturating_add(size);
-                return Ok(());
-            }
-            // Flush current and start new
-            self.flush_current()?;
+    /// A region that starts where the current one ends, with the same attributes, is coalesced
+    /// into it. Returns `Err(())` if the descriptor buffer is full.
+    pub fn add_region(&mut self, range: MemoryRange, attributes: u32) -> Result<(), ()> {
+        if let Some((current, current_attributes)) = &mut self.current
+            && *current_attributes == attributes
+            && current.end() == range.base()
+            && let Ok(merged) = current.union(&range)
+        {
+            *current = merged;
+            return Ok(());
         }
 
-        self.current = Some(new_desc);
+        self.flush_current()?;
+        self.current = Some((range, attributes));
         Ok(())
     }
 
     /// Flushes the current descriptor to the buffer.
     fn flush_current(&mut self) -> Result<(), ()> {
-        if let Some(desc) = self.current.take() {
+        if let Some((range, mem_attributes)) = self.current.take() {
             if self.count >= self.max_count {
-                log::error!(
-                    "Memory policy buffer is full at {} descriptor(s); cannot record 0x{:016x}",
-                    self.max_count,
-                    desc.base_address
-                );
+                log::error!("Memory policy buffer is full at {} descriptor(s); cannot record {range}", self.max_count);
                 return Err(());
             }
+
+            let desc =
+                MemDescriptorV1_0 { base_address: range.base(), size: range.size(), mem_attributes, reserved: 0 };
 
             // SAFETY: We checked bounds
             unsafe {
@@ -385,6 +380,14 @@ pub enum PageTableWalkError {
     BufferFull,
     /// The CR3 value is invalid (null).
     InvalidCr3,
+    /// The page table reported a mapped region that is empty or runs past the end of the address
+    /// space.
+    InvalidRegion {
+        /// Base address of the region.
+        base: u64,
+        /// Size of the region in bytes.
+        size: u64,
+    },
 }
 
 impl core::error::Error for PageTableWalkError {}
@@ -394,6 +397,9 @@ impl core::fmt::Display for PageTableWalkError {
         match self {
             Self::BufferFull => write!(f, "the descriptor buffer is full, the walk cannot continue"),
             Self::InvalidCr3 => write!(f, "the CR3 value is null, so no page table can be walked"),
+            Self::InvalidRegion { base, size } => {
+                write!(f, "the page table maps an invalid region at 0x{base:x} (size 0x{size:x})")
+            }
         }
     }
 }
@@ -444,14 +450,16 @@ pub unsafe fn walk_page_table(
     let mut builder = unsafe { MemoryPolicyBuilder::new(buffer, max_count) };
 
     for region in page_table.iter_mapped_regions(None) {
-        // Skip regions that lie fully inside MMRAM. A region that is not a valid range is never
-        // inside MMRAM, so it is kept.
-        if MemoryRange::new(region.pa, region.size).is_ok_and(|range| is_inside_mmram(&range)) {
+        let range = MemoryRange::new(region.pa, region.size)
+            .map_err(|_| PageTableWalkError::InvalidRegion { base: region.pa, size: region.size })?;
+
+        // Skip regions that lie fully inside MMRAM.
+        if is_inside_mmram(&range) {
             continue;
         }
 
         let attrs = mem_attrs_to_policy_attrs(region.attributes);
-        builder.add_region(region.pa, region.size, attrs).map_err(|()| PageTableWalkError::BufferFull)?;
+        builder.add_region(range, attrs).map_err(|()| PageTableWalkError::BufferFull)?;
     }
 
     builder.finish().map_err(|()| PageTableWalkError::BufferFull.into())
@@ -514,11 +522,16 @@ mod tests {
 
     #[test]
     fn test_page_table_walk_errors_render_each_variant_distinctly() {
-        // Both variants abort a snapshot, and the caller logs the message to say which one it
-        // was: a buffer the platform sized too small, or a CR3 that was never loaded.
+        // Each variant aborts a snapshot, and the caller logs the message to say which one it
+        // was: a buffer the platform sized too small, a CR3 that was never loaded, or a page
+        // table that maps an invalid region.
         let cases = [
             (PageTableWalkError::BufferFull, "the descriptor buffer is full, the walk cannot continue"),
             (PageTableWalkError::InvalidCr3, "the CR3 value is null, so no page table can be walked"),
+            (
+                PageTableWalkError::InvalidRegion { base: 0x1000, size: 0 },
+                "the page table maps an invalid region at 0x1000 (size 0x0)",
+            ),
         ];
 
         for (error, expected) in cases {
@@ -708,13 +721,13 @@ mod tests {
         // SAFETY: `buffer` holds 4 descriptors and outlives the builder.
         let mut builder = unsafe { MemoryPolicyBuilder::new(buffer.as_mut_ptr(), buffer.len()) };
 
-        assert_eq!(builder.add_region(0x1000, 0x1000, RESOURCE_ATTR_READ), Ok(()));
+        assert_eq!(builder.add_region(MemoryRange::new(0x1000, 0x1000).unwrap(), RESOURCE_ATTR_READ), Ok(()));
         // Adjacent with identical attributes: merged into the pending descriptor.
-        assert_eq!(builder.add_region(0x2000, 0x1000, RESOURCE_ATTR_READ), Ok(()));
+        assert_eq!(builder.add_region(MemoryRange::new(0x2000, 0x1000).unwrap(), RESOURCE_ATTR_READ), Ok(()));
         // Adjacent but different attributes: starts a new descriptor.
-        assert_eq!(builder.add_region(0x3000, 0x1000, RESOURCE_ATTR_WRITE), Ok(()));
+        assert_eq!(builder.add_region(MemoryRange::new(0x3000, 0x1000).unwrap(), RESOURCE_ATTR_WRITE), Ok(()));
         // Same attributes but a gap: also starts a new descriptor.
-        assert_eq!(builder.add_region(0x9000, 0x1000, RESOURCE_ATTR_WRITE), Ok(()));
+        assert_eq!(builder.add_region(MemoryRange::new(0x9000, 0x1000).unwrap(), RESOURCE_ATTR_WRITE), Ok(()));
 
         assert_eq!(builder.finish(), Ok(3));
         assert_eq!(buffer[0], mem(0x1000, 0x2000, RESOURCE_ATTR_READ));
@@ -728,10 +741,10 @@ mod tests {
         // SAFETY: `buffer` holds 1 descriptor and outlives the builder.
         let mut builder = unsafe { MemoryPolicyBuilder::new(buffer.as_mut_ptr(), buffer.len()) };
 
-        assert_eq!(builder.add_region(0x1000, 0x1000, RESOURCE_ATTR_READ), Ok(()));
+        assert_eq!(builder.add_region(MemoryRange::new(0x1000, 0x1000).unwrap(), RESOURCE_ATTR_READ), Ok(()));
         // Flushing the first descriptor succeeds; the second has nowhere to go.
-        assert_eq!(builder.add_region(0x5000, 0x1000, RESOURCE_ATTR_READ), Ok(()));
-        assert_eq!(builder.add_region(0x9000, 0x1000, RESOURCE_ATTR_READ), Err(()));
+        assert_eq!(builder.add_region(MemoryRange::new(0x5000, 0x1000).unwrap(), RESOURCE_ATTR_READ), Ok(()));
+        assert_eq!(builder.add_region(MemoryRange::new(0x9000, 0x1000).unwrap(), RESOURCE_ATTR_READ), Err(()));
     }
 
     #[test]
