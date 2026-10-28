@@ -13,8 +13,8 @@
 
 use core::fmt;
 
-use patina::UEFI_PAGE_SIZE;
 use patina::management_mode::{MmCommBufferStatus, comm_buffer_hob::MmCommonBufferHobData};
+use patina::{MemoryRange, UEFI_PAGE_SIZE};
 use patina_paging::x64::{disable_write_protection, enable_write_protection};
 use zerocopy::FromBytes;
 use zerocopy_derive::Immutable;
@@ -23,7 +23,7 @@ use crate::{
     error::MmSupervisorResult,
     memory::{
         AllocationType,
-        mmram::buffer_overlaps_mmram,
+        mmram::range_overlaps_mmram,
         page_ownership::{PageOwnership, query_address_ownership},
     },
     state::security_state,
@@ -288,27 +288,32 @@ impl CommChannel {
 /// containment, since a partly-inside buffer carries the same primitive in its tail. Ring 3 works
 /// on the internal copy, so direct access here would let a demoted driver rewrite a request, or
 /// its status mailbox, while it is being serviced.
+///
+/// An address and size that do not form a valid range are refused the same way.
 fn require_external_comm_buffer(address: u64, size: u64, description: &str) {
-    require_external_comm_buffer_with(address, size, description, buffer_overlaps_mmram, query_address_ownership);
+    let range = MemoryRange::new(address, size)
+        .unwrap_or_else(|err| panic!("{description} at 0x{address:016x} (+0x{size:x}) is not a valid range: {err}"));
+    require_external_comm_buffer_with(range, description, range_overlaps_mmram, |range| {
+        query_address_ownership(range.base(), range.size())
+    });
 }
 
 /// Applies the [`require_external_comm_buffer`] rules to the results of `overlaps_mmram` and
 /// `query`.
 fn require_external_comm_buffer_with(
-    address: u64,
-    size: u64,
+    range: MemoryRange,
     description: &str,
-    overlaps_mmram: impl FnOnce(u64, u64) -> bool,
-    query: impl FnOnce(u64, u64) -> Option<PageOwnership>,
+    overlaps_mmram: impl FnOnce(&MemoryRange) -> bool,
+    query: impl FnOnce(&MemoryRange) -> Option<PageOwnership>,
 ) {
-    let end = address.saturating_add(size);
+    let (address, end) = (range.base(), range.end());
 
     assert!(
-        !overlaps_mmram(address, size),
+        !overlaps_mmram(&range),
         "{description} at 0x{address:016x}-0x{end:016x} overlaps MMRAM; it must lie entirely outside"
     );
 
-    match query(address, size) {
+    match query(&range) {
         Some(PageOwnership::Supervisor) => {}
         Some(PageOwnership::User) => panic!(
             "{description} at 0x{address:016x}-0x{end:016x} is mapped user-accessible; it must be supervisor-only"
@@ -361,10 +366,21 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Test buffer at 0x0000000000001000 (+0x0) is not a valid range")]
+    fn test_require_external_comm_buffer_rejects_an_empty_buffer() {
+        require_external_comm_buffer(0x1000, 0, "Test buffer");
+    }
+
+    #[test]
+    #[should_panic(expected = "is not a valid range")]
+    fn test_require_external_comm_buffer_rejects_a_buffer_past_the_end_of_the_address_space() {
+        require_external_comm_buffer(u64::MAX, 0x1000, "Test buffer");
+    }
+
+    #[test]
     fn test_require_external_comm_buffer_accepts_a_supervisor_mapped_buffer_outside_mmram() {
         require_external_comm_buffer_with(
-            0x1000,
-            0x1000,
+            MemoryRange::new(0x1000, 0x1000).unwrap(),
             "Test buffer",
             overlaps(false),
             owned_as(Some(PageOwnership::Supervisor)),
@@ -377,8 +393,7 @@ mod tests {
         // The copy-back would otherwise turn a payload chosen outside MM into an MMRAM write.
         // Ownership is supervisor-only here, so the MMRAM rule is what has to reject it.
         require_external_comm_buffer_with(
-            0x1000,
-            0x1000,
+            MemoryRange::new(0x1000, 0x1000).unwrap(),
             "Test buffer",
             overlaps(true),
             owned_as(Some(PageOwnership::Supervisor)),
@@ -392,10 +407,15 @@ mod tests {
         let queried = core::cell::Cell::new(false);
 
         let result = catch_unwind(AssertUnwindSafe(|| {
-            require_external_comm_buffer_with(0x1000, 0x1000, "Test buffer", overlaps(true), |_, _| {
-                queried.set(true);
-                Some(PageOwnership::Supervisor)
-            });
+            require_external_comm_buffer_with(
+                MemoryRange::new(0x1000, 0x1000).unwrap(),
+                "Test buffer",
+                overlaps(true),
+                |_| {
+                    queried.set(true);
+                    Some(PageOwnership::Supervisor)
+                },
+            );
         }));
 
         assert!(result.is_err());
@@ -406,8 +426,7 @@ mod tests {
     #[should_panic(expected = "Test buffer at 0x0000000000001000-0x0000000000002000 is mapped user-accessible")]
     fn test_require_external_comm_buffer_rejects_a_user_mapped_buffer() {
         require_external_comm_buffer_with(
-            0x1000,
-            0x1000,
+            MemoryRange::new(0x1000, 0x1000).unwrap(),
             "Test buffer",
             overlaps(false),
             owned_as(Some(PageOwnership::User)),
@@ -417,7 +436,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "Test buffer at 0x0000000000001000-0x0000000000002000 is unmapped")]
     fn test_require_external_comm_buffer_rejects_an_unmapped_buffer() {
-        require_external_comm_buffer_with(0x1000, 0x1000, "Test buffer", overlaps(false), owned_as(None));
+        require_external_comm_buffer_with(
+            MemoryRange::new(0x1000, 0x1000).unwrap(),
+            "Test buffer",
+            overlaps(false),
+            owned_as(None),
+        );
     }
 
     #[test]
@@ -426,15 +450,14 @@ mod tests {
         let owner_range = core::cell::Cell::new(None);
 
         require_external_comm_buffer_with(
-            0x2000,
-            0x3000,
+            MemoryRange::new(0x2000, 0x3000).unwrap(),
             "Test buffer",
-            |address, size| {
-                mmram_range.set(Some((address, size)));
+            |range| {
+                mmram_range.set(Some((range.base(), range.size())));
                 false
             },
-            |address, size| {
-                owner_range.set(Some((address, size)));
+            |range| {
+                owner_range.set(Some((range.base(), range.size())));
                 Some(PageOwnership::Supervisor)
             },
         );

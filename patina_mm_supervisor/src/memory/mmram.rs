@@ -197,26 +197,6 @@ pub(crate) fn range_overlaps_mmram(range: &MemoryRange) -> bool {
     !matches!(classify_buffer(range), Some(MmramPlacement::Outside))
 }
 
-/// Returns whether `[base, base + size)` lies entirely inside MMRAM, as [`is_range_inside_mmram`]
-/// does.
-///
-/// A buffer that is empty, or whose end runs past the end of the address space, is never inside
-/// MMRAM.
-pub(crate) fn is_buffer_inside_mmram(base: u64, size: u64) -> bool {
-    MemoryRange::new(base, size).is_ok_and(|range| is_range_inside_mmram(&range))
-}
-
-/// Returns whether `[base, base + size)` touches MMRAM at all, as [`range_overlaps_mmram`] does.
-///
-/// An empty buffer touches no memory, so it never overlaps MMRAM. A buffer whose end runs past
-/// the end of the address space always does, so it fails closed.
-pub(crate) fn buffer_overlaps_mmram(base: u64, size: u64) -> bool {
-    match MemoryRange::new(base, size) {
-        Ok(range) => range_overlaps_mmram(&range),
-        Err(err) => err != MemoryRangeError::Empty,
-    }
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
@@ -351,25 +331,15 @@ mod tests {
     }
 
     #[test]
-    fn test_is_buffer_inside_mmram_fails_closed_before_allocator_initialization() {
-        assert!(!is_buffer_inside_mmram(0x1000, 0x1000));
-        assert!(!is_buffer_inside_mmram(u64::MAX, 1));
-    }
-    #[test]
-    fn test_buffer_overlaps_mmram_fails_closed_before_allocator_initialization() {
-        // Nothing can be shown to lie outside MMRAM before the regions are known, so a buffer the
-        // supervisor is asked to treat as non-MM memory is reported as overlapping instead.
-        assert!(buffer_overlaps_mmram(0x1000, 0x1000));
-        assert!(buffer_overlaps_mmram(u64::MAX, 1));
-        assert!(range_overlaps_mmram(&MemoryRange::new(0x1000, 0x1000).unwrap()));
-        // An empty buffer touches no memory, so even an unknown layout cannot make it overlap.
-        assert!(!buffer_overlaps_mmram(0x1000, 0));
+    fn test_is_range_inside_mmram_fails_closed_before_allocator_initialization() {
+        assert!(!is_range_inside_mmram(&MemoryRange::new(0x1000, 0x1000).unwrap()));
     }
 
     #[test]
-    fn test_is_range_inside_mmram_fails_closed_before_allocator_initialization() {
-        assert!(!is_range_inside_mmram(&MemoryRange::new(0x1000, 0x1000).unwrap()));
-        assert!(!is_buffer_inside_mmram(0x1000, 0));
+    fn test_range_overlaps_mmram_fails_closed_before_allocator_initialization() {
+        // Nothing can be shown to lie outside MMRAM before the regions are known, so a range the
+        // supervisor is asked to treat as non-MM memory is reported as overlapping instead.
+        assert!(range_overlaps_mmram(&MemoryRange::new(0x1000, 0x1000).unwrap()));
     }
 
     #[test]
