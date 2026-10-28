@@ -137,12 +137,6 @@ impl From<Coverage> for MmramPlacement {
     }
 }
 
-/// Classifies `range` against the committed MMRAM regions, or `None` if the regions are not known
-/// yet.
-fn classify_buffer(range: &MemoryRange) -> Option<MmramPlacement> {
-    security_state().page_allocator().classify_mmram(range)
-}
-
 /// Returns whether `range` lies entirely inside MMRAM.
 ///
 /// Reports `false` before the regions are known, since nothing can be shown to be inside MMRAM
@@ -152,7 +146,7 @@ fn classify_buffer(range: &MemoryRange) -> Option<MmramPlacement> {
 ///
 /// Panics when `range` is only partly inside MMRAM, as [`MmramPlacement::is_inside`] does.
 pub(crate) fn is_range_inside_mmram(range: &MemoryRange) -> bool {
-    classify_buffer(range).is_some_and(|p| p.is_inside(range))
+    security_state().page_allocator().classify_mmram(range).is_some_and(|p| p.is_inside(range))
 }
 
 /// Returns whether `range` touches MMRAM at all, including a range that only crosses a boundary.
@@ -160,7 +154,7 @@ pub(crate) fn is_range_inside_mmram(range: &MemoryRange) -> bool {
 /// Reports an overlap when the regions are not known yet, since nothing can be shown to lie
 /// outside MMRAM before then.
 pub(crate) fn range_overlaps_mmram(range: &MemoryRange) -> bool {
-    !matches!(classify_buffer(range), Some(MmramPlacement::Outside))
+    !matches!(security_state().page_allocator().classify_mmram(range), Some(MmramPlacement::Outside))
 }
 
 #[cfg(test)]
