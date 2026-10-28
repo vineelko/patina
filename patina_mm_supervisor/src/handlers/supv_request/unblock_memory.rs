@@ -15,7 +15,7 @@ use spin::Mutex;
 
 use patina::standard::efi;
 
-use patina::{BinaryGuid, UEFI_PAGE_SIZE};
+use patina::{BinaryGuid, MemoryRange, MemoryRangeError, UEFI_PAGE_SIZE};
 use patina_paging::{MemoryAttributes, PageTable, PtError};
 
 use patina::management_mode::protocol::mm_supervisor_request::{
@@ -99,35 +99,30 @@ impl UnblockedMemoryEntry {
         patina::uefi_pages_to_size!(self.num_pages as usize) as u64
     }
 
-    /// Returns the end address (exclusive) of this region.
-    pub fn end_address(&self) -> u64 {
-        self.base_address.saturating_add(self.size())
+    /// Returns the region this entry covers, or `None` for an empty entry or one whose page-rounded
+    /// end runs past the end of the address space.
+    pub fn range(&self) -> Option<MemoryRange> {
+        MemoryRange::new(self.base_address, self.size()).ok()
     }
 
-    /// Checks if the given range [base, base + size) is fully contained within this entry.
-    pub fn contains(&self, base: u64, size: u64) -> bool {
-        if self.num_pages == 0 || size == 0 {
-            return false;
-        }
-        let Some(query_end) = base.checked_add(size) else {
-            return false;
-        };
-        base >= self.base_address && query_end <= self.end_address()
+    /// Checks if `range` is fully contained within this entry.
+    pub fn contains(&self, range: &MemoryRange) -> bool {
+        self.range().is_some_and(|entry| entry.contains_range(range))
     }
 
-    /// Checks if the given range [base, base + size) overlaps with this entry.
-    pub fn overlaps(&self, base: u64, size: u64) -> bool {
-        if self.num_pages == 0 || size == 0 {
-            return false;
-        }
-        let Some(query_end) = base.checked_add(size) else {
-            return false;
-        };
-        let entry_end = self.end_address();
-
-        // Two ranges overlap if: start1 < end2 && start2 < end1
-        base < entry_end && self.base_address < query_end
+    /// Checks if `range` overlaps with this entry.
+    pub fn overlaps(&self, range: &MemoryRange) -> bool {
+        self.range().is_some_and(|entry| entry.overlaps(range))
     }
+}
+
+/// Builds the range for a request, reporting a zero size as an invalid parameter and an end past
+/// the end of the address space as an overflow.
+fn request_range(base: u64, size: u64) -> Result<MemoryRange, UnblockError> {
+    MemoryRange::new(base, size).map_err(|err| match err {
+        MemoryRangeError::Empty => UnblockError::InvalidParameter,
+        _ => UnblockError::AddressOverflow,
+    })
 }
 
 /// Internal state for the unblocked memory tracker.
@@ -163,13 +158,21 @@ impl UnblockedMemoryState {
     }
 
     /// Adds a new entry if there's space.
-    fn add_entry(&mut self, base: u64, size: u64, attributes: u32) -> MmSupervisorResult<()> {
+    ///
+    /// The entry is rounded to whole pages, and is refused when the rounded region runs past the
+    /// end of the address space, so every tracked entry has a valid [`range`](UnblockedMemoryEntry::range).
+    fn add_entry(&mut self, range: MemoryRange, attributes: u32) -> MmSupervisorResult<()> {
+        let entry = UnblockedMemoryEntry::new(range.base(), range.size(), attributes);
+        if entry.range().is_none() {
+            log::debug!("Cannot track unblocked region {range}: its page-rounded end overflows");
+            return Err(UnblockError::AddressOverflow.into());
+        }
         let capacity = self.entries.len();
         let slot = self.entries.get_mut(self.count).ok_or_else(|| {
-            log::debug!("Cannot track unblocked region 0x{base:016x} (+0x{size:x}): all {capacity} slots are in use");
+            log::debug!("Cannot track unblocked region {range}: all {capacity} slots are in use");
             UnblockError::TooManyRegions
         })?;
-        *slot = UnblockedMemoryEntry::new(base, size, attributes);
+        *slot = entry;
         self.count += 1;
         Ok(())
     }
@@ -226,24 +229,20 @@ impl UnblockedMemoryTracker {
 
         // Add each descriptor as an unblocked region
         for desc in descriptors {
-            if desc.size == 0 {
+            let range = request_range(desc.base_address, desc.size).inspect_err(|err| {
                 log::error!(
-                    "UnblockedMemoryTracker init rejected: zero-size descriptor at 0x{:016x}",
-                    desc.base_address
-                );
-                return Err(UnblockError::InvalidParameter.into());
-            }
-
-            if (self.overlaps_mmram)(desc.base_address, desc.size) {
-                log::error!(
-                    "UnblockedMemoryTracker init rejected: descriptor 0x{:016x} - 0x{:016x} overlaps MMRAM",
+                    "UnblockedMemoryTracker init rejected: descriptor 0x{:016x} (+0x{:x}): {err}",
                     desc.base_address,
-                    desc.base_address.saturating_add(desc.size)
+                    desc.size
                 );
+            })?;
+
+            if (self.overlaps_mmram)(range.base(), range.size()) {
+                log::error!("UnblockedMemoryTracker init rejected: descriptor {range} overlaps MMRAM");
                 return Err(UnblockError::OverlapsWithMmram.into());
             }
 
-            state.add_entry(desc.base_address, desc.size, desc.mem_attributes)?;
+            state.add_entry(range, desc.mem_attributes)?;
         }
 
         log::debug!("UnblockedMemoryTracker initialized with {} regions", state.count);
@@ -304,24 +303,13 @@ impl UnblockedMemoryTracker {
     /// [`TrackOutcome::Existing`] rather than failing, so a repeated unblock is harmless. The
     /// same base and size with different attributes is a conflict, not a repeat.
     fn track_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> MmSupervisorResult<TrackOutcome> {
-        // Validate parameters. The caller logs the range and the returned variant, so the
-        // two rejections below stay quiet.
-        if size == 0 {
-            return Err(UnblockError::InvalidParameter.into());
-        }
-
-        // Check for address overflow
-        if base.checked_add(size).is_none() {
-            return Err(UnblockError::AddressOverflow.into());
-        }
+        // Validate parameters. The caller logs the range and the returned variant, so a zero
+        // size or an overflowing end is rejected quietly.
+        let range = request_range(base, size)?;
 
         // Check if the region overlaps with MMRAM
         if (self.overlaps_mmram)(base, size) {
-            log::error!(
-                "unblock_memory: Region 0x{:016x} - 0x{:016x} overlaps with MMRAM",
-                base,
-                base.saturating_add(size)
-            );
+            log::error!("unblock_memory: Region {range} overlaps with MMRAM");
             return Err(UnblockError::OverlapsWithMmram.into());
         }
 
@@ -332,18 +320,12 @@ impl UnblockedMemoryTracker {
         if let Some(existing) = state.find_exact_match(base, size) {
             if existing.attributes == attributes {
                 // Identical request - this is allowed (idempotent)
-                log::debug!(
-                    "unblock_memory: Region 0x{:016x} - 0x{:016x} already unblocked with same attributes",
-                    base,
-                    base.saturating_add(size)
-                );
+                log::debug!("unblock_memory: Region {range} already unblocked with same attributes");
                 return Ok(TrackOutcome::Existing);
             }
             // Same base/size but different attributes - conflict
             log::error!(
-                "unblock_memory: Region 0x{:016x} - 0x{:016x} already unblocked with different attributes (existing: 0x{:x}, requested: 0x{:x})",
-                base,
-                base.saturating_add(size),
+                "unblock_memory: Region {range} already unblocked with different attributes (existing: 0x{:x}, requested: 0x{:x})",
                 existing.attributes,
                 attributes
             );
@@ -354,13 +336,11 @@ impl UnblockedMemoryTracker {
         // We iterate directly without collecting to avoid heap allocation
         let mut has_overlap = false;
         for entry in state.entries.iter().take(state.count) {
-            if entry.overlaps(base, size) {
+            if entry.overlaps(&range) {
                 log::error!(
-                    "unblock_memory: Region 0x{:016x} - 0x{:016x} overlaps with existing region 0x{:016x} - 0x{:016x}",
-                    base,
-                    base.saturating_add(size),
+                    "unblock_memory: Region {range} overlaps with existing region 0x{:016x} (+0x{:x})",
                     entry.base_address,
-                    entry.end_address()
+                    entry.size()
                 );
                 has_overlap = true;
                 // Continue to log all overlaps for debugging
@@ -372,14 +352,9 @@ impl UnblockedMemoryTracker {
         }
 
         // No conflicts - add the new entry
-        state.add_entry(base, size, attributes)?;
+        state.add_entry(range, attributes)?;
 
-        log::debug!(
-            "unblock_memory: Unblocked region 0x{:016x} - 0x{:016x} with attributes 0x{:x}",
-            base,
-            base.saturating_add(size),
-            attributes
-        );
+        log::debug!("unblock_memory: Unblocked region {range} with attributes 0x{attributes:x}");
 
         Ok(TrackOutcome::Added)
     }
@@ -433,39 +408,30 @@ impl UnblockedMemoryTracker {
             return false;
         }
 
-        // Zero-size queries are invalid
-        if size == 0 {
-            log::warn!("is_memory_blocked: Zero-size query for address 0x{base:016x}");
-            return true; // Invalid query = blocked
-        }
-
-        // Check for address overflow
-        if base.checked_add(size).is_none() {
-            log::warn!("is_memory_blocked: Address overflow for 0x{base:016x} + 0x{size:x}");
-            return true; // Invalid query = blocked
-        }
+        // A zero-size query, or one whose end overflows, is invalid, and an invalid query is blocked
+        let range = match MemoryRange::new(base, size) {
+            Ok(range) => range,
+            Err(err) => {
+                log::warn!("is_memory_blocked: Invalid query 0x{base:016x} (+0x{size:x}): {err}");
+                return true;
+            }
+        };
 
         let state = self.state.lock();
 
         // Check if the queried region is fully contained within any unblocked entry
         for entry in state.entries.iter().take(state.count) {
-            if entry.contains(base, size) {
+            if entry.contains(&range) {
                 log::trace!(
-                    "is_memory_blocked: Region 0x{:016x} - 0x{:016x} is within unblocked region 0x{:016x} - 0x{:016x}",
-                    base,
-                    base.saturating_add(size),
+                    "is_memory_blocked: Region {range} is within unblocked region 0x{:016x} (+0x{:x})",
                     entry.base_address,
-                    entry.end_address()
+                    entry.size()
                 );
                 return false; // Found within unblocked region
             }
         }
 
-        log::trace!(
-            "is_memory_blocked: Region 0x{:016x} - 0x{:016x} is NOT within any unblocked region",
-            base,
-            base.saturating_add(size)
-        );
+        log::trace!("is_memory_blocked: Region {range} is NOT within any unblocked region");
 
         true // Not found in any unblocked region = blocked
     }
@@ -492,7 +458,7 @@ impl UnblockedMemoryTracker {
             let r = if (entry.attributes & RESOURCE_ATTR_READ) != 0 { "R" } else { "." };
             let w = if (entry.attributes & RESOURCE_ATTR_WRITE) != 0 { "W" } else { "." };
             let x = if (entry.attributes & RESOURCE_ATTR_EXECUTE) != 0 { "X" } else { "." };
-            log::info!("  [{}] 0x{:016x} - 0x{:016x} {}{}{}", i, entry.base_address, entry.end_address(), r, w, x);
+            log::info!("  [{i}] 0x{:016x} (+0x{:x}) {r}{w}{x}", entry.base_address, entry.size());
         }
     }
 }
@@ -1288,7 +1254,8 @@ mod tests {
         let entry = UnblockedMemoryEntry::new(0x2000, 4 * UEFI_PAGE_SIZE as u64, RESOURCE_ATTR_READ);
         assert_eq!(entry.num_pages, 4);
         assert_eq!(entry.size(), 4 * UEFI_PAGE_SIZE as u64);
-        assert_eq!(entry.end_address(), 0x2000 + 4 * UEFI_PAGE_SIZE as u64);
+        assert_eq!(entry.range(), MemoryRange::new(0x2000, 4 * UEFI_PAGE_SIZE as u64).ok());
+        assert_eq!(UnblockedMemoryEntry::empty().range(), None);
 
         // A sub-page size rounds up to a whole page (matching the page-granular mapping).
         let partial = UnblockedMemoryEntry::new(0x1000, 1, RESOURCE_ATTR_READ);
@@ -1300,37 +1267,45 @@ mod tests {
     fn test_entry_contains() {
         let entry = UnblockedMemoryEntry::new(0x1000, 0x1000, RESOURCE_ATTR_READ);
 
+        let range = |base, size| MemoryRange::new(base, size).unwrap();
+
         // Fully contained
-        assert!(entry.contains(0x1000, 0x1000));
-        assert!(entry.contains(0x1000, 0x800));
-        assert!(entry.contains(0x1800, 0x800));
+        assert!(entry.contains(&range(0x1000, 0x1000)));
+        assert!(entry.contains(&range(0x1000, 0x800)));
+        assert!(entry.contains(&range(0x1800, 0x800)));
 
         // Partially outside
-        assert!(!entry.contains(0x0800, 0x1000)); // Starts before
-        assert!(!entry.contains(0x1800, 0x1000)); // Ends after
+        assert!(!entry.contains(&range(0x0800, 0x1000))); // Starts before
+        assert!(!entry.contains(&range(0x1800, 0x1000))); // Ends after
 
         // Completely outside
-        assert!(!entry.contains(0x3000, 0x1000));
-        assert!(!entry.contains(u64::MAX, 1));
-        assert!(!entry.contains(0x1000, 0));
+        assert!(!entry.contains(&range(0x3000, 0x1000)));
+        assert!(!entry.contains(&range(u64::MAX - 1, 1)));
+
+        // An empty entry contains nothing.
+        assert!(!UnblockedMemoryEntry::empty().contains(&range(0, 1)));
     }
 
     #[test]
     fn test_entry_overlaps() {
         let entry = UnblockedMemoryEntry::new(0x1000, 0x1000, RESOURCE_ATTR_READ);
 
+        let range = |base, size| MemoryRange::new(base, size).unwrap();
+
         // Overlapping cases
-        assert!(entry.overlaps(0x1000, 0x1000)); // Exact match
-        assert!(entry.overlaps(0x0800, 0x1000)); // Starts before, ends inside
-        assert!(entry.overlaps(0x1800, 0x1000)); // Starts inside, ends after
-        assert!(entry.overlaps(0x0800, 0x2000)); // Completely contains entry
+        assert!(entry.overlaps(&range(0x1000, 0x1000))); // Exact match
+        assert!(entry.overlaps(&range(0x0800, 0x1000))); // Starts before, ends inside
+        assert!(entry.overlaps(&range(0x1800, 0x1000))); // Starts inside, ends after
+        assert!(entry.overlaps(&range(0x0800, 0x2000))); // Completely contains entry
 
         // Non-overlapping
-        assert!(!entry.overlaps(0x2000, 0x1000)); // Immediately after
-        assert!(!entry.overlaps(0x0000, 0x1000)); // Immediately before
-        assert!(!entry.overlaps(0x3000, 0x1000)); // Far after
-        assert!(!entry.overlaps(u64::MAX, 1));
-        assert!(!entry.overlaps(0x1000, 0));
+        assert!(!entry.overlaps(&range(0x2000, 0x1000))); // Immediately after
+        assert!(!entry.overlaps(&range(0x0000, 0x1000))); // Immediately before
+        assert!(!entry.overlaps(&range(0x3000, 0x1000))); // Far after
+        assert!(!entry.overlaps(&range(u64::MAX - 1, 1)));
+
+        // An empty entry overlaps nothing.
+        assert!(!UnblockedMemoryEntry::empty().overlaps(&range(0, 1)));
     }
 
     #[test]
@@ -1417,6 +1392,14 @@ mod tests {
             tracker.unblock_memory(u64::MAX, 0x1000, RESOURCE_ATTR_READ),
             Err(UnblockError::AddressOverflow.into())
         );
+
+        // The request itself fits, but rounding it up to a whole page would run past the end of
+        // the address space, so it is not tracked.
+        assert_eq!(
+            tracker.unblock_memory(u64::MAX - 0x10, 0x10, RESOURCE_ATTR_READ),
+            Err(UnblockError::AddressOverflow.into())
+        );
+        assert_eq!(tracker.region_count(), 0);
     }
 
     #[test]

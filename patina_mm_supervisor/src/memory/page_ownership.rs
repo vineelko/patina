@@ -11,7 +11,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
-use patina::{UEFI_PAGE_SIZE, align_range};
+use patina::{MemoryRange, UEFI_PAGE_SIZE};
 use patina_paging::{MemoryAttributes, PageTable};
 
 use crate::state::security_state;
@@ -52,16 +52,9 @@ fn query_address_ownership_with(
     size: u64,
     query: impl FnOnce(u64, u64) -> Option<MemoryAttributes>,
 ) -> Option<PageOwnership> {
-    if size == 0 || address.checked_add(size).is_none() {
-        return None;
-    }
-
-    let (aligned_addr, aligned_size) = align_range(address, size, UEFI_PAGE_SIZE as u64).ok()?;
-    let aligned_end = aligned_addr.checked_add(aligned_size)?;
-    let attrs = query(aligned_addr, aligned_size)?;
-    log::trace!(
-        "Queried page ownership for address range 0x{aligned_addr:016x}-0x{aligned_end:016x}: attributes={attrs:?}"
-    );
+    let pages = MemoryRange::new(address, size).and_then(|range| range.align_outward(UEFI_PAGE_SIZE as u64)).ok()?;
+    let attrs = query(pages.base(), pages.size())?;
+    log::trace!("Queried page ownership for address range {pages}: attributes={attrs:?}");
     if attrs.contains(MemoryAttributes::Supervisor) {
         Some(PageOwnership::Supervisor)
     } else {

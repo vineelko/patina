@@ -16,7 +16,7 @@
 use core::{ffi::c_void, sync::atomic::AtomicU8};
 
 use patina::{
-    MemoryRange, UEFI_PAGE_SIZE, align_range,
+    MemoryRange, UEFI_PAGE_SIZE,
     management_mode::{
         comm_buffer_hob::MM_COMM_BUFFER_HOB_GUID,
         supervisor::{MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID, MM_SUPERVISOR_USER_GUID},
@@ -421,9 +421,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         }
 
         let total_size = per_core_size.checked_mul(num_cpus as u64).ok_or_else(invalid_region)?;
-        let (aligned_base, aligned_size) =
-            align_range(base, total_size, UEFI_PAGE_SIZE as u64).map_err(|_| invalid_region())?;
-        let aligned_end = aligned_base + aligned_size;
+        let stacks = MemoryRange::new(base, total_size)
+            .and_then(|range| range.align_outward(UEFI_PAGE_SIZE as u64))
+            .map_err(|_| invalid_region())?;
+        let (aligned_base, aligned_size) = (stacks.base(), stacks.size());
 
         // The region is described by the untrusted producer, so nothing outside MMRAM may be
         // handed to Ring 3.
@@ -448,7 +449,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             CoreInitError::Cpl3StacksNotMapped { base: aligned_base, size: aligned_size }
         })?;
 
-        log::info!("Mapped CPL3 stacks 0x{aligned_base:016x}-0x{aligned_end:016x} as user read/write, NX");
+        log::info!("Mapped CPL3 stacks {stacks} as user read/write, NX");
         Ok(())
     }
 
