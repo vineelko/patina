@@ -656,7 +656,7 @@ mod tests {
             let mut memory = Box::new(AlignedRegion([0xA5; TEST_REGION_BYTES]));
             let base = memory.0.as_mut_ptr() as u64;
             let allocator = PageAllocator::new();
-            let regions = [MmramRegion::from_parts(base, TEST_REGION_BYTES as u64, false)];
+            let regions = [MmramRegion::new(range(base, TEST_REGION_BYTES as u64), false)];
 
             // SAFETY: `memory` is page-aligned, exclusively owned by the fixture,
             // remains live with the allocator, and covers the declared region.
@@ -741,7 +741,7 @@ mod tests {
     #[test]
     fn test_page_allocator_rejects_double_initialization() {
         let fixture = AllocatorFixture::new();
-        let regions = [MmramRegion::from_parts(fixture.base, TEST_REGION_BYTES as u64, false)];
+        let regions = [MmramRegion::new(range(fixture.base, TEST_REGION_BYTES as u64), false)];
 
         // SAFETY: the fixture owns the page-aligned region for its full declared size.
         unsafe {
@@ -754,11 +754,11 @@ mod tests {
     fn test_page_allocator_validates_regions_before_writing_bookkeeping() {
         let allocator = PageAllocator::new();
         let empty: [MmramRegion; 0] = [];
-        let unaligned = [MmramRegion::from_parts(0x1001, UEFI_PAGE_SIZE as u64, false)];
-        let partial_page = [MmramRegion::from_parts(0x1000, UEFI_PAGE_SIZE as u64 - 1, false)];
+        let unaligned = [MmramRegion::new(range(0x1001, UEFI_PAGE_SIZE as u64), false)];
+        let partial_page = [MmramRegion::new(range(0x1000, UEFI_PAGE_SIZE as u64 - 1), false)];
         let overlapping = [
-            MmramRegion::from_parts(0x1000, 2 * UEFI_PAGE_SIZE as u64, false),
-            MmramRegion::from_parts(0x2000, UEFI_PAGE_SIZE as u64, false),
+            MmramRegion::new(range(0x1000, 2 * UEFI_PAGE_SIZE as u64), false),
+            MmramRegion::new(range(0x2000, UEFI_PAGE_SIZE as u64), false),
         ];
 
         // SAFETY: these invalid descriptors are rejected before any address is dereferenced.
@@ -958,7 +958,7 @@ mod tests {
         let half = (TEST_REGION_BYTES / 2) as u64;
         let allocator = PageAllocator::new();
         // The second half is handed over pre-allocated, so none of it is available.
-        let regions = [MmramRegion::from_parts(base, half, false), MmramRegion::from_parts(base + half, half, true)];
+        let regions = [MmramRegion::new(range(base, half), false), MmramRegion::new(range(base + half, half), true)];
 
         // SAFETY: `memory` is page-aligned, owned by this test, and covers both regions.
         unsafe { allocator.init_from_regions(&regions).unwrap() };
@@ -1073,8 +1073,8 @@ mod tests {
         assert_eq!(
             scanned.as_slice(),
             [
-                MmramRegion::from_parts(descriptors[0].physical_start, descriptors[0].physical_size, false),
-                MmramRegion::from_parts(descriptors[1].physical_start, descriptors[1].physical_size, true),
+                MmramRegion::new(range(descriptors[0].physical_start, descriptors[0].physical_size), false),
+                MmramRegion::new(range(descriptors[1].physical_start, descriptors[1].physical_size), true),
             ]
         );
     }
@@ -1134,10 +1134,10 @@ mod tests {
 
     #[test]
     fn test_page_allocator_calculates_bookkeeping_requirements() {
-        let valid = [MmramRegion::from_parts(0x8000_0000, TEST_REGION_BYTES as u64, false)];
-        let allocated = [MmramRegion::from_parts(0x8000_0000, TEST_REGION_BYTES as u64, true)];
-        let too_small = [MmramRegion::from_parts(0x8000_0000, 1, false)];
-        let unaligned = [MmramRegion::from_parts(0x8000_0001, TEST_REGION_BYTES as u64, false)];
+        let valid = [MmramRegion::new(range(0x8000_0000, TEST_REGION_BYTES as u64), false)];
+        let allocated = [MmramRegion::new(range(0x8000_0000, TEST_REGION_BYTES as u64), true)];
+        let too_small = [MmramRegion::new(range(0x8000_0000, 1), false)];
+        let unaligned = [MmramRegion::new(range(0x8000_0001, TEST_REGION_BYTES as u64), false)];
 
         assert_eq!(PageAllocator::calculate_bookkeeping(&valid), Ok((valid[0].range.base(), 1)));
         assert_eq!(PageAllocator::calculate_bookkeeping(&allocated), Err(AllocError::OutOfMemory.into()));
@@ -1153,7 +1153,7 @@ mod tests {
         // report that rather than allocating a bookkeeping area too small for the bitmaps.
         let pages_per_region = u64::MAX as usize / UEFI_PAGE_SIZE;
         let regions_needed = usize::MAX / pages_per_region + 1;
-        let regions = vec![MmramRegion::from_parts(0, u64::MAX, false); regions_needed];
+        let regions = vec![MmramRegion::new(range(0, u64::MAX), false); regions_needed];
 
         assert_eq!(PageAllocator::calculate_bookkeeping(&regions), Err(AllocError::OutOfMemory.into()));
     }

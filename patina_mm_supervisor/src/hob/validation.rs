@@ -1009,7 +1009,7 @@ mod tests {
     };
 
     fn region(base: u64, size: u64) -> MmramRegion {
-        MmramRegion::from_parts(base, size, false)
+        MmramRegion::new(MemoryRange::new(base, size).unwrap(), false)
     }
 
     /// Returns `[base, base + size)` as a range.
@@ -1233,8 +1233,11 @@ mod tests {
         crate::test_support::init_test_logger();
 
         dump_regions(&[]);
-        dump_regions(&[MmramRegion::from_parts(0x1000, 0x1000, false), MmramRegion::from_parts(0x2000, 0x2000, true)]);
-        dump_regions(&[MmramRegion::from_parts(u64::MAX - 0x1000, 0x1000, false)]);
+        dump_regions(&[
+            MmramRegion::new(MemoryRange::new(0x1000, 0x1000).unwrap(), false),
+            MmramRegion::new(MemoryRange::new(0x2000, 0x2000).unwrap(), true),
+        ]);
+        dump_regions(&[MmramRegion::new(MemoryRange::new(u64::MAX - 0x1000, 0x1000).unwrap(), false)]);
     }
 
     #[test]

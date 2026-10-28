@@ -32,12 +32,6 @@ impl MmramRegion {
     pub(crate) const fn new(range: MemoryRange, pre_allocated: bool) -> Self {
         Self { range, pre_allocated }
     }
-
-    /// Creates a region from a base and size that tests know to be valid.
-    #[cfg(test)]
-    pub(crate) fn from_parts(base: u64, size: u64, pre_allocated: bool) -> Self {
-        Self::new(MemoryRange::new(base, size).expect("test region is a valid range"), pre_allocated)
-    }
 }
 
 /// Errors produced while establishing an MMRAM bound from the incoming SMRAM descriptors.
@@ -197,8 +191,8 @@ mod tests {
 
     #[test]
     fn test_establish_mmram_bound_returns_the_derived_range() {
-        let regions = [MmramRegion::from_parts(0x1000, 0x2000, false)];
         let range = MemoryRange::new(0x1000, 0x2000).unwrap();
+        let regions = [MmramRegion::new(range, false)];
 
         assert_eq!(establish_mmram_bound(&regions, 0x1500, |_| Some(range)), Ok(range));
     }
@@ -207,7 +201,7 @@ mod tests {
     fn test_establish_mmram_bound_rejects_descriptors_that_do_not_cover_the_anchor() {
         // A HOB list describing MMRAM somewhere other than where the supervisor is executing is
         // refused outright, and before a range is selected from it.
-        let regions = [MmramRegion::from_parts(0x1000, 0x2000, false)];
+        let regions = [MmramRegion::new(MemoryRange::new(0x1000, 0x2000).unwrap(), false)];
         let selected = core::cell::Cell::new(false);
 
         let result = establish_mmram_bound(&regions, 0x4000, |_| {
@@ -221,8 +215,8 @@ mod tests {
 
     #[test]
     fn test_establish_mmram_bound_covers_a_region_end_to_end() {
-        let regions = [MmramRegion::from_parts(0x1000, 0x2000, false)];
         let range = MemoryRange::new(0x1000, 0x2000).unwrap();
+        let regions = [MmramRegion::new(range, false)];
 
         assert!(establish_mmram_bound(&regions, 0x1000, |_| Some(range)).is_ok());
         assert!(establish_mmram_bound(&regions, 0x2fff, |_| Some(range)).is_ok());
@@ -234,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_establish_mmram_bound_rejects_regions_without_an_smrr_range() {
-        let regions = [MmramRegion::from_parts(0x1000, 0x2000, false)];
+        let regions = [MmramRegion::new(MemoryRange::new(0x1000, 0x2000).unwrap(), false)];
 
         assert_eq!(establish_mmram_bound(&regions, 0x1000, |_| None), Err(MmramBoundError::NoSmrrRange.into()));
     }
@@ -248,7 +242,7 @@ mod tests {
 
     /// Builds SMRAM descriptors from `(base, size, pre_allocated)` triples.
     fn regions_from(specs: &[(u64, u64, bool)]) -> Vec<MmramRegion> {
-        specs.iter().map(|&(base, size, pre)| MmramRegion::from_parts(base, size, pre)).collect()
+        specs.iter().map(|&(base, size, pre)| MmramRegion::new(MemoryRange::new(base, size).unwrap(), pre)).collect()
     }
 
     #[test]

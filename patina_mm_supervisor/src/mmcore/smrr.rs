@@ -569,7 +569,10 @@ mod tests {
 
     /// Builds SMRAM descriptors from `(base, size, pre_allocated)` triples.
     fn regions_from(entries: &[(u64, u64, bool)]) -> Vec<MmramRegion> {
-        entries.iter().map(|&(base, size, pre_allocated)| MmramRegion::from_parts(base, size, pre_allocated)).collect()
+        entries
+            .iter()
+            .map(|&(base, size, pre_allocated)| MmramRegion::new(MemoryRange::new(base, size).unwrap(), pre_allocated))
+            .collect()
     }
 
     /// Smallest region size `coalesced_smrr_range` will accept (256 KiB - 4 KiB).
