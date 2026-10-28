@@ -12,6 +12,7 @@ use core::fmt;
 use patina::{MemoryRange, memory_range::Coverage};
 
 use crate::error::MmSupervisorResult;
+use crate::mmcore::smrr::coalesced_smrr_range;
 use crate::state::security_state;
 
 /// Anchor object placed in the supervisor's own image.
@@ -89,21 +90,13 @@ pub(crate) fn supervisor_image_anchor() -> u64 {
 /// contiguity requirement it confines a forged HOB list to extending the span the supervisor is
 /// genuinely running in.
 ///
-/// `coalesce_mmram_regions` folds the scanned regions into the single range the SMRRs will
-/// cover, and reports `None` when no candidate meets the SMRR base and size requirements. It is
-/// taken as a parameter so the anchor check can be driven in a test without the real selection
-/// rules; production passes
-/// [`coalesced_smrr_range`](crate::mmcore::smrr::coalesced_smrr_range).
-pub(crate) fn establish_mmram_bound(
-    scanned: &[MmramRegion],
-    anchor: u64,
-    coalesce_mmram_regions: impl FnOnce(&[MmramRegion]) -> Option<MemoryRange>,
-) -> MmSupervisorResult<MemoryRange> {
+/// The range is the single range the SMRRs will cover, as selected by [`coalesced_smrr_range`].
+pub(crate) fn establish_mmram_bound(scanned: &[MmramRegion], anchor: u64) -> MmSupervisorResult<MemoryRange> {
     if !scanned.contains_address(anchor) {
         return Err(MmramBoundError::AnchorOutsideRegions { anchor }.into());
     }
 
-    let range = coalesce_mmram_regions(scanned).ok_or(MmramBoundError::NoSmrrRange)?;
+    let range = coalesced_smrr_range(scanned).ok_or(MmramBoundError::NoSmrrRange)?;
     log::info!("Discovered MMRAM range: {range}");
     Ok(range)
 }
@@ -196,48 +189,50 @@ mod tests {
         );
     }
 
+    /// An 8 MiB region at 8 MiB, which meets the SMRR base and size requirements.
+    const SMRR_REGION: MemoryRange = match MemoryRange::new(0x80_0000, 0x80_0000) {
+        Ok(range) => range,
+        Err(_) => panic!("the test region is a valid range"),
+    };
+
     #[test]
     fn test_establish_mmram_bound_returns_the_derived_range() {
-        let range = MemoryRange::new(0x1000, 0x2000).unwrap();
-        let regions = [MmramRegion::new(range, false)];
+        let regions = [MmramRegion::new(SMRR_REGION, false)];
 
-        assert_eq!(establish_mmram_bound(&regions, 0x1500, |_| Some(range)), Ok(range));
+        assert_eq!(establish_mmram_bound(&regions, 0x80_1000), Ok(SMRR_REGION));
     }
 
     #[test]
     fn test_establish_mmram_bound_rejects_descriptors_that_do_not_cover_the_anchor() {
         // A HOB list describing MMRAM somewhere other than where the supervisor is executing is
-        // refused outright, and before a range is selected from it.
+        // refused outright, and before a range is selected from it. This region has no SMRR
+        // range, so reporting the anchor shows that the anchor is checked first.
         let regions = [MmramRegion::new(MemoryRange::new(0x1000, 0x2000).unwrap(), false)];
-        let selected = core::cell::Cell::new(false);
 
-        let result = establish_mmram_bound(&regions, 0x4000, |_| {
-            selected.set(true);
-            MemoryRange::new(0x1000, 0x2000).ok()
-        });
-
-        assert_eq!(result, Err(MmramBoundError::AnchorOutsideRegions { anchor: 0x4000 }.into()));
-        assert!(!selected.get(), "a range was selected from descriptors that had already failed");
+        assert_eq!(
+            establish_mmram_bound(&regions, 0x4000),
+            Err(MmramBoundError::AnchorOutsideRegions { anchor: 0x4000 }.into())
+        );
     }
 
     #[test]
     fn test_establish_mmram_bound_covers_a_region_end_to_end() {
-        let range = MemoryRange::new(0x1000, 0x2000).unwrap();
-        let regions = [MmramRegion::new(range, false)];
+        let regions = [MmramRegion::new(SMRR_REGION, false)];
 
-        assert!(establish_mmram_bound(&regions, 0x1000, |_| Some(range)).is_ok());
-        assert!(establish_mmram_bound(&regions, 0x2fff, |_| Some(range)).is_ok());
+        assert_eq!(establish_mmram_bound(&regions, SMRR_REGION.base()), Ok(SMRR_REGION));
+        assert_eq!(establish_mmram_bound(&regions, SMRR_REGION.last()), Ok(SMRR_REGION));
         assert_eq!(
-            establish_mmram_bound(&regions, 0x3000, |_| Some(range)),
-            Err(MmramBoundError::AnchorOutsideRegions { anchor: 0x3000 }.into())
+            establish_mmram_bound(&regions, SMRR_REGION.end()),
+            Err(MmramBoundError::AnchorOutsideRegions { anchor: SMRR_REGION.end() }.into())
         );
     }
 
     #[test]
     fn test_establish_mmram_bound_rejects_regions_without_an_smrr_range() {
-        let regions = [MmramRegion::new(MemoryRange::new(0x1000, 0x2000).unwrap(), false)];
+        // The region covers the anchor, but its size is not a power of two.
+        let regions = [MmramRegion::new(MemoryRange::new(0x80_0000, 0x60_0000).unwrap(), false)];
 
-        assert_eq!(establish_mmram_bound(&regions, 0x1000, |_| None), Err(MmramBoundError::NoSmrrRange.into()));
+        assert_eq!(establish_mmram_bound(&regions, 0x80_0000), Err(MmramBoundError::NoSmrrRange.into()));
     }
 
     #[test]

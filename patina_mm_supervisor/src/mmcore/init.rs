@@ -52,7 +52,7 @@ use crate::{
 use super::CoreInitError;
 use super::mseg::{MSEG_SMRAM_HOB_GUID, parse_mseg_smram_hob};
 use super::smi_idt_patch::patch_smi_handler_idt;
-use super::smrr::{coalesced_smrr_range, configure_smm_code_access, smrr_initialize};
+use super::smrr::{configure_smm_code_access, smrr_initialize};
 use crate::hob::pass_down::{MM_SUPV_PASS_DOWN_HOB_GUID, MmSupvPassDownHobData, PassDownHobError};
 use crate::memory::mmram::{establish_mmram_bound, supervisor_image_anchor};
 use crate::privilege_mgmt::save_state::{SaveStateInfo, log_save_state_map, validate_save_state_regions};
@@ -124,7 +124,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let scanned = unsafe { PageAllocator::scan_hob_list_for_smram_regions(hob_hand_off_table)? };
         let scanned_regions = scanned.as_slice();
 
-        let smrr_range = establish_mmram_bound(scanned_regions, supervisor_image_anchor(), coalesced_smrr_range)?;
+        let smrr_range = establish_mmram_bound(scanned_regions, supervisor_image_anchor())?;
 
         validation::validate_incoming_hobs_pre_paging_init(hob_hand_off_table, hob_list_len, scanned_regions)?;
 
