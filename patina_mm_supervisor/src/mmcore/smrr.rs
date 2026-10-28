@@ -138,31 +138,17 @@ pub(crate) fn configure_smm_code_access() {
     }
 }
 
-/// Returns the largest power of two less than or equal to `value`, or `0` if
-/// `value` is `0`.
-const fn get_power_of_two32(value: u32) -> u32 {
-    if value == 0 { 0 } else { 1u32 << value.ilog2() }
-}
-
 /// Returns `true` if bit 10 is set in a raw SMRR mask register value.
 const fn mask_reg_bit10_set(raw: u64) -> bool {
     (raw & MASK_BIT_10) != 0
 }
 
-/// Validates that the SMRR base and size satisfy the hardware alignment and
-/// size constraints.
+/// Validates that `range` satisfies the SMRR alignment and size constraints.
 ///
-/// A valid region must be at least 4 KiB, have a size that is a power of two,
-/// and have a base address that is naturally aligned to its size.
-pub(crate) const fn verify_smrr_base_size(smrr_base: u32, smrr_size: u32) -> bool {
-    if smrr_size < SIZE_4KB
-        || smrr_size != get_power_of_two32(smrr_size)
-        || (smrr_base & !(smrr_size.wrapping_sub(1))) != smrr_base
-    {
-        return false;
-    }
-
-    true
+/// A valid region must be at least 4 KiB and naturally aligned: its size is a power of two and
+/// its base is a multiple of its size.
+pub(crate) fn verify_smrr_base_size(range: &MemoryRange) -> bool {
+    range.size() >= u64::from(SIZE_4KB) && range.is_naturally_aligned()
 }
 
 /// Returns `true` if a raw CPUID leaf 1 `edx` value reports MTRR support.
@@ -239,7 +225,7 @@ pub(crate) fn smrr_initialize(range: MemoryRange) -> MmSupervisorResult<()> {
         return Err(SmrrError::RangeNotAddressable { base, size }.into());
     };
 
-    if !verify_smrr_base_size(smrr_base, smrr_size) {
+    if !verify_smrr_base_size(&range) {
         return Err(SmrrError::RangeNotAligned { base: smrr_base, size: smrr_size }.into());
     }
 
@@ -341,7 +327,7 @@ pub(crate) fn coalesced_smrr_range(regions: &[MmramRegion]) -> Option<MemoryRang
     let smrr_base = u32::try_from(smrr.base()).ok()?;
     let smrr_size = u32::try_from(smrr.size()).ok()?;
 
-    if !verify_smrr_base_size(smrr_base, smrr_size) {
+    if !verify_smrr_base_size(&smrr) {
         log::warn!(
             "Coalesced SMRR range base=0x{smrr_base:x} size=0x{smrr_size:x} does not meet SMRR alignment/size requirements"
         );
@@ -382,59 +368,37 @@ mod tests {
     #[test]
     fn test_smrr_verify_accepts_minimum_size() {
         // A 4 KiB region at base 0 is the smallest valid configuration.
-        assert!(verify_smrr_base_size(0, SIZE_4KB));
+        assert!(verify_smrr_base_size(&MemoryRange::new(0, u64::from(SIZE_4KB)).unwrap()));
     }
 
     #[test]
     fn test_smrr_verify_accepts_naturally_aligned_regions() {
         // Base is naturally aligned to the (power-of-two) size.
-        assert!(verify_smrr_base_size(0x0080_0000, 0x0080_0000));
-        assert!(verify_smrr_base_size(0x1000_0000, 0x1000_0000));
-        assert!(verify_smrr_base_size(0x0000_8000, SIZE_4KB));
+        for (base, size) in [(0x0080_0000, 0x0080_0000), (0x1000_0000, 0x1000_0000), (0x0000_8000, 0x1000)] {
+            assert!(verify_smrr_base_size(&MemoryRange::new(base, size).unwrap()), "0x{base:x} +0x{size:x}");
+        }
     }
 
     #[test]
     fn test_smrr_verify_rejects_size_below_4kb() {
-        assert!(!verify_smrr_base_size(0, 0));
-        assert!(!verify_smrr_base_size(0, SIZE_4KB - 1));
-        assert!(!verify_smrr_base_size(0, 0x800));
+        for size in [1, 0x800, 0xFFF] {
+            assert!(!verify_smrr_base_size(&MemoryRange::new(0, size).unwrap()), "size 0x{size:x}");
+        }
     }
 
     #[test]
     fn test_smrr_verify_rejects_non_power_of_two_size() {
-        assert!(!verify_smrr_base_size(0, 0x3000));
-        assert!(!verify_smrr_base_size(0, 0x5000));
-        assert!(!verify_smrr_base_size(0, SIZE_4KB + 1));
+        for size in [0x3000, 0x5000, 0x1001] {
+            assert!(!verify_smrr_base_size(&MemoryRange::new(0, size).unwrap()), "size 0x{size:x}");
+        }
     }
 
     #[test]
     fn test_smrr_verify_rejects_misaligned_base() {
         // Base must be aligned to the size; these are off by 4 KiB or unaligned.
-        assert!(!verify_smrr_base_size(SIZE_4KB, 0x0080_0000));
-        assert!(!verify_smrr_base_size(0x0080_1000, 0x0080_0000));
-        assert!(!verify_smrr_base_size(0x0000_1000, 0x0000_2000));
-    }
-
-    #[test]
-    fn test_smrr_get_power_of_two32_returns_zero_for_zero() {
-        assert_eq!(get_power_of_two32(0), 0);
-    }
-
-    #[test]
-    fn test_smrr_get_power_of_two32_exact_powers_are_unchanged() {
-        assert_eq!(get_power_of_two32(1), 1);
-        assert_eq!(get_power_of_two32(2), 2);
-        assert_eq!(get_power_of_two32(SIZE_4KB), SIZE_4KB);
-        assert_eq!(get_power_of_two32(0x0080_0000), 0x0080_0000);
-        assert_eq!(get_power_of_two32(0x8000_0000), 0x8000_0000);
-    }
-
-    #[test]
-    fn test_smrr_get_power_of_two32_rounds_down_to_previous_power() {
-        assert_eq!(get_power_of_two32(3), 2);
-        assert_eq!(get_power_of_two32(0x0080_0001), 0x0080_0000);
-        assert_eq!(get_power_of_two32(0x00FF_FFFF), 0x0080_0000);
-        assert_eq!(get_power_of_two32(u32::MAX), 0x8000_0000);
+        for (base, size) in [(0x1000, 0x0080_0000), (0x0080_1000, 0x0080_0000), (0x1000, 0x2000)] {
+            assert!(!verify_smrr_base_size(&MemoryRange::new(base, size).unwrap()), "0x{base:x} +0x{size:x}");
+        }
     }
 
     #[test]
