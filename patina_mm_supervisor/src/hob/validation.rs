@@ -70,7 +70,7 @@ use crate::hob::pass_down::{
     MM_SUPV_PASS_DOWN_HOB_GUID, MM_SUPV_PASS_DOWN_HOB_REVISION, MmSupvPassDownHobData, PassDownHobError,
 };
 use crate::memory::PAGE_STEP;
-use crate::memory::mmram::{MmramPlacement, MmramRegion};
+use crate::memory::mmram::MmramRegion;
 use crate::state::security::SupervisorPageTable;
 use crate::state::security_state;
 
@@ -389,19 +389,6 @@ fn validate_mmram_contiguous(regions: &[MmramRegion]) -> MmSupervisorResult<Memo
     Ok(span)
 }
 
-/// Returns whether `[base, base + size)` lies entirely inside the MMRAM span.
-///
-/// `mmram` is the span returned by [`validate_mmram_contiguous`]. Containment is resolved against
-/// it rather than the page allocator, so the pre-paging checks can run before the allocator has
-/// committed to the scanned descriptors.
-///
-/// # Panics
-///
-/// Panics when the range is only partly inside MMRAM, as [`MmramPlacement::is_inside`] does.
-fn is_inside_mmram(mmram: MemoryRange, range: &MemoryRange) -> bool {
-    MmramPlacement::from(range.coverage([mmram])).is_inside(range)
-}
-
 /// Validates the `PassDown` HOB revision and that every pointer it reports references memory
 /// inside the MMRAM span.
 ///
@@ -429,7 +416,7 @@ fn validate_pass_down_pointers(pass_down: &MmSupvPassDownHobData, mmram: MemoryR
     ];
 
     for (field, range) in checks {
-        if !is_inside_mmram(mmram, &range) {
+        if !mmram.contains_range(&range) {
             return Err(PassDownHobError::PointerOutsideMmram { field, range }.into());
         }
     }
@@ -510,10 +497,6 @@ pub(crate) unsafe fn validate_hob_list_structure(handoff: &PhaseHandoffInformati
 /// reason its contents do.
 ///
 /// `mmram` is the span returned by [`validate_mmram_contiguous`].
-///
-/// # Panics
-///
-/// Panics when the list crosses the MMRAM boundary, as [`is_inside_mmram`] does.
 fn validate_hob_list_inside_mmram(
     handoff: &PhaseHandoffInformationTable,
     length: u64,
@@ -521,7 +504,7 @@ fn validate_hob_list_inside_mmram(
 ) -> MmSupervisorResult<()> {
     let base = core::ptr::from_ref(handoff) as u64;
 
-    if !MemoryRange::new(base, length).is_ok_and(|range| is_inside_mmram(mmram, &range)) {
+    if !MemoryRange::new(base, length).is_ok_and(|range| mmram.contains_range(&range)) {
         return Err(HobValidationError::HobListOutsideMmram { base, size: length }.into());
     }
 
@@ -582,7 +565,7 @@ fn validate_allocation_modules<'a>(
             if is_init && !matches!(range.is_aligned(UEFI_PAGE_SIZE as u64), Ok(true)) {
                 return Err(HobValidationError::InitModuleNotPageAligned { base, length }.into());
             }
-            if !is_inside_mmram(mmram, &range) {
+            if !mmram.contains_range(&range) {
                 return Err(HobValidationError::AllocationModuleOutsideMmram { base, length }.into());
             }
             let entry_point = module.entry_point;
@@ -1890,8 +1873,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "crosses an MMRAM boundary")]
-    fn test_mm_supervisor_hob_validation_hob_list_crossing_mmram_end_panics() {
+    fn test_mm_supervisor_hob_validation_hob_list_crossing_mmram_end_is_rejected() {
         let handoff = PhaseHandoffInformationTable {
             header: HobHeader {
                 r#type: HANDOFF,
@@ -1909,7 +1891,10 @@ mod tests {
         let base = &raw const handoff as u64;
 
         // The span covers the start of the list but ends before the list does.
-        let _ = validate_hob_list_inside_mmram(&handoff, 0x40, span(base, 0x20));
+        assert_eq!(
+            validate_hob_list_inside_mmram(&handoff, 0x40, span(base, 0x20)),
+            Err(HobValidationError::HobListOutsideMmram { base, size: 0x40 }.into())
+        );
     }
 
     /// Lays out HOB headers back to back in an 8-byte aligned buffer, with zeroed payloads.
@@ -2087,13 +2072,19 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "crosses an MMRAM boundary")]
-    fn test_mm_supervisor_hob_validation_pass_down_pointer_crossing_mmram_end_panics() {
+    fn test_mm_supervisor_hob_validation_pass_down_pointer_crossing_mmram_end_is_rejected() {
         // The SMBASE array is checked as one u64, so starting it 4 bytes before the end of MMRAM
-        // makes it cross the boundary, which is fatal rather than an ordinary rejection.
+        // makes it cross the boundary.
         let mut pd = pass_down();
         pd.sm_base_array = 0x10_1000 - 4;
-        let _ = validate_pass_down_pointers(&pd, mmram());
+        assert_eq!(
+            validate_pass_down_pointers(&pd, mmram()),
+            Err(PassDownHobError::PointerOutsideMmram {
+                field: "sm_base_array",
+                range: MemoryRange::new(0x10_1000 - 4, size_of::<u64>() as u64).unwrap()
+            }
+            .into())
+        );
     }
 
     #[test]
