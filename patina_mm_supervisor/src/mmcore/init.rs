@@ -41,7 +41,7 @@ use crate::{
     memory::{
         self, AllocationType, PAGE_STEP, PageAllocator, SharedPagingAllocator,
         mmram::MmramRegion,
-        mmram::is_buffer_inside_mmram,
+        mmram::{is_buffer_inside_mmram, is_range_inside_mmram},
         page_ownership::{PageOwnership, query_address_ownership},
     },
     policy::{self, MemDescriptorV1_0, dump_policy, gate::PolicyGate, walk_page_table},
@@ -286,7 +286,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             log::warn!("MM Init module region was not discovered during initialization");
             return;
         };
-        assert!(is_buffer_inside_mmram(init_module.base(), init_module.size()), "MM Init module is outside MMRAM");
+        assert!(is_range_inside_mmram(&init_module), "MM Init module is outside MMRAM");
 
         // Wrap in a block to drop the lock automatically
         {
@@ -428,7 +428,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // The region is described by the untrusted producer, so nothing outside MMRAM may be
         // handed to Ring 3.
-        if !is_buffer_inside_mmram(aligned_base, aligned_size) {
+        if !is_range_inside_mmram(&stacks) {
             return Err(CoreInitError::Cpl3StackRegionOutsideMmram { base: aligned_base, size: aligned_size }.into());
         }
 
