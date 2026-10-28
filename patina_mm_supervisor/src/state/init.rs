@@ -37,7 +37,7 @@ pub(crate) struct InitState {
     /// User module entry point discovered from the HOB list.
     user_entry_point: Once<u64>,
     /// Validated Init image base and length, copied before the producer's HOBs are reclaimed.
-    init_module_region: Once<(u64, u64)>,
+    init_module_region: Once<MemoryRange>,
     /// Set after the init image has been freed.
     init_module_freed: AtomicBool,
     /// MSEG base address discovered from the MSEG SMRAM HOB, if the platform
@@ -134,12 +134,12 @@ impl InitState {
     }
 
     /// Records the validated Init image allocation once.
-    pub(crate) fn set_init_module_region(&self, base: u64, size: u64) {
-        self.init_module_region.call_once(|| (base, size));
+    pub(crate) fn set_init_module_region(&self, range: MemoryRange) {
+        self.init_module_region.call_once(|| range);
     }
 
-    /// Returns the saved Init image base and length without accessing the HOB list.
-    pub(crate) fn init_module_region(&self) -> Option<(u64, u64)> {
+    /// Returns the saved Init image range without accessing the HOB list.
+    pub(crate) fn init_module_region(&self) -> Option<MemoryRange> {
         self.init_module_region.get().copied()
     }
 
@@ -247,9 +247,10 @@ mod tests {
     #[test]
     fn test_init_module_region_is_recorded_once() {
         let state = InitState::new();
-        state.set_init_module_region(0x1000, 0x3000);
-        state.set_init_module_region(0x8000, 0x9000);
-        assert_eq!(state.init_module_region(), Some((0x1000, 0x3000)));
+        let first = MemoryRange::new(0x1000, 0x3000).unwrap();
+        state.set_init_module_region(first);
+        state.set_init_module_region(MemoryRange::new(0x8000, 0x9000).unwrap());
+        assert_eq!(state.init_module_region(), Some(first));
         assert!(!state.is_init_module_freed());
     }
 

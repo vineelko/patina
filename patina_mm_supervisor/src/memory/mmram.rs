@@ -9,7 +9,9 @@
 
 use core::fmt;
 
-use patina::MemoryRange;
+use core::borrow::Borrow;
+
+use patina::{MemoryRange, MemoryRangeError, memory_range::Coverage};
 
 use crate::error::MmSupervisorResult;
 use crate::state::security_state;
@@ -127,39 +129,32 @@ impl MmramPlacement {
     }
 }
 
-/// Classifies `[addr, addr + size)` against regions given as `(base, exclusive end)` pairs.
+impl From<Coverage> for MmramPlacement {
+    fn from(coverage: Coverage) -> Self {
+        match coverage {
+            Coverage::Full => Self::Inside,
+            Coverage::Partial => Self::PartlyInside,
+            Coverage::Disjoint => Self::Outside,
+        }
+    }
+}
+
+/// Classifies `[addr, addr + size)` against `regions`.
 ///
 /// Coverage is measured over the union of the regions, so a range spanning two adjacent regions
 /// is [`MmramPlacement::Inside`] rather than partly inside. An empty range is
 /// [`MmramPlacement::Outside`]; a range whose end overflows is reported as partly inside so a
 /// malformed descriptor fails closed.
-pub(crate) fn classify_coverage(
-    addr: u64,
-    size: u64,
-    mut regions: impl Iterator<Item = (u64, u64)> + Clone,
-) -> MmramPlacement {
-    if size == 0 {
-        return MmramPlacement::Outside;
-    }
-    let Some(end) = addr.checked_add(size) else {
-        return MmramPlacement::PartlyInside;
-    };
-
-    // Extend the covered prefix one region at a time until a gap appears.
-    let mut cursor = addr;
-    while let Some(region_end) =
-        regions.clone().find_map(|(base, region_end)| (cursor >= base && cursor < region_end).then_some(region_end))
-    {
-        cursor = region_end;
-        if cursor >= end {
-            return MmramPlacement::Inside;
-        }
-    }
-
-    if cursor > addr || regions.any(|(base, region_end)| cursor < region_end && base < end) {
-        MmramPlacement::PartlyInside
-    } else {
-        MmramPlacement::Outside
+pub(crate) fn classify_coverage<I>(addr: u64, size: u64, regions: I) -> MmramPlacement
+where
+    I: IntoIterator,
+    I::IntoIter: Clone,
+    I::Item: Borrow<MemoryRange>,
+{
+    match MemoryRange::new(addr, size) {
+        Ok(range) => range.coverage(regions).into(),
+        Err(MemoryRangeError::Empty) => MmramPlacement::Outside,
+        Err(_) => MmramPlacement::PartlyInside,
     }
 }
 
@@ -283,8 +278,8 @@ mod tests {
 
     #[test]
     fn test_classify_coverage() {
-        let regions = [(0x1000, 0x2000), (0x2000, 0x3000)];
-        let classify = |addr, size| classify_coverage(addr, size, regions.iter().copied());
+        let regions = [MemoryRange::new(0x1000, 0x1000).unwrap(), MemoryRange::new(0x2000, 0x1000).unwrap()];
+        let classify = |addr, size| classify_coverage(addr, size, regions);
 
         assert_eq!(classify(0x1000, 0x1000), MmramPlacement::Inside);
         // Adjacent regions cover the range jointly, so this is wholly inside.
@@ -295,7 +290,7 @@ mod tests {
         assert_eq!(classify(0x1000, 0), MmramPlacement::Outside);
         // A range whose end overflows fails closed.
         assert_eq!(classify(u64::MAX, 0x1000), MmramPlacement::PartlyInside);
-        assert_eq!(classify_coverage(0x1000, 0x1000, core::iter::empty()), MmramPlacement::Outside);
+        assert_eq!(classify_coverage(0x1000, 0x1000, core::iter::empty::<MemoryRange>()), MmramPlacement::Outside);
     }
 
     #[test]
