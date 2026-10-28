@@ -12,6 +12,7 @@
 
 use core::fmt;
 
+use patina::MemoryRange;
 use zerocopy::FromBytes;
 use zerocopy_derive::Immutable;
 
@@ -47,10 +48,8 @@ pub enum PassDownHobError {
     PointerOutsideMmram {
         /// Name of the offending `PassDown` field.
         field: &'static str,
-        /// The reported address.
-        addr: u64,
-        /// The size that was checked for containment.
-        size: u64,
+        /// The range that was checked for containment.
+        range: MemoryRange,
     },
     /// The firmware policy buffer pointer or its size is zero.
     NullFirmwarePolicyBuffer,
@@ -78,8 +77,8 @@ impl fmt::Display for PassDownHobError {
             Self::InvalidRevision { found, expected } => {
                 write!(f, "PassDown HOB revision {found} does not match expected {expected}")
             }
-            Self::PointerOutsideMmram { field, addr, size } => {
-                write!(f, "PassDown pointer `{field}` = 0x{addr:x} (size 0x{size:x}) is outside MMRAM")
+            Self::PointerOutsideMmram { field, range } => {
+                write!(f, "PassDown pointer `{field}` at {range} is outside MMRAM")
             }
             Self::NullFirmwarePolicyBuffer => write!(f, "the firmware policy buffer is null or empty"),
             Self::FirmwarePolicyBufferSizeUnsupported { size } => {
@@ -234,7 +233,10 @@ mod tests {
             PassDownHobError::Missing,
             PassDownHobError::TooSmall,
             PassDownHobError::InvalidRevision { found: 3, expected: 2 },
-            PassDownHobError::PointerOutsideMmram { field: "sm_base_array", addr: 0x1000, size: 8 },
+            PassDownHobError::PointerOutsideMmram {
+                field: "sm_base_array",
+                range: MemoryRange::new(0x1000, 8).unwrap(),
+            },
             PassDownHobError::NullFirmwarePolicyBuffer,
             PassDownHobError::FirmwarePolicyBufferSizeUnsupported { size: u64::MAX },
             PassDownHobError::FirmwarePolicyBufferOverflows { base: u64::MAX - 0xFFF, size: 0x1000 },

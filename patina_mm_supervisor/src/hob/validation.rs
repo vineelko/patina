@@ -416,16 +416,21 @@ fn validate_pass_down_pointers(pass_down: &MmSupvPassDownHobData, mmram: MemoryR
         .into());
     }
 
-    let checks: [(&'static str, u64, u64); 4] = [
-        ("cpl3_stack_base", pass_down.cpl3_stack_base, pass_down.cpl3_stack_size.max(1)),
-        ("sm_base_array", pass_down.sm_base_array, core::mem::size_of::<u64>() as u64),
-        ("mm_initialized_buffer", pass_down.mm_initialized_buffer, 1),
-        ("firmware_policy_buffer", pass_down.firmware_policy_buffer, pass_down.firmware_policy_buffer_size.max(1)),
+    let pointer = |name: &'static str, base: u64, size: u64| checked_range(name, base, size).map(|range| (name, range));
+    let checks: [(&'static str, MemoryRange); 4] = [
+        pointer("cpl3_stack_base", pass_down.cpl3_stack_base, pass_down.cpl3_stack_size.max(1))?,
+        pointer("sm_base_array", pass_down.sm_base_array, core::mem::size_of::<u64>() as u64)?,
+        pointer("mm_initialized_buffer", pass_down.mm_initialized_buffer, 1)?,
+        pointer(
+            "firmware_policy_buffer",
+            pass_down.firmware_policy_buffer,
+            pass_down.firmware_policy_buffer_size.max(1),
+        )?,
     ];
 
-    for (field, addr, size) in checks {
-        if !MemoryRange::new(addr, size).is_ok_and(|range| is_inside_mmram(mmram, &range)) {
-            return Err(PassDownHobError::PointerOutsideMmram { field, addr, size }.into());
+    for (field, range) in checks {
+        if !is_inside_mmram(mmram, &range) {
+            return Err(PassDownHobError::PointerOutsideMmram { field, range }.into());
         }
     }
 
@@ -1842,7 +1847,7 @@ mod tests {
             };
             assert_eq!(
                 validate_pass_down_pointers(&pd, mmram()),
-                Err(PassDownHobError::PointerOutsideMmram { field, addr: 0, size }.into()),
+                Err(PassDownHobError::PointerOutsideMmram { field, range: MemoryRange::new(0, size).unwrap() }.into()),
                 "a null `{field}` must be rejected"
             );
         }
@@ -2031,7 +2036,27 @@ mod tests {
         let result = validate_pass_down_pointers(&pass_down(), span(0x10_0000, 0x1000));
         assert_eq!(
             result,
-            Err(PassDownHobError::PointerOutsideMmram { field: "cpl3_stack_base", addr: 0x1000, size: 0x1000 }.into())
+            Err(PassDownHobError::PointerOutsideMmram {
+                field: "cpl3_stack_base",
+                range: MemoryRange::new(0x1000, 0x1000).unwrap()
+            }
+            .into())
+        );
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_pass_down_pointer_past_the_end_of_the_address_space() {
+        // A pointer whose buffer would end past u64::MAX is not a valid range.
+        let mut pd = pass_down();
+        pd.sm_base_array = u64::MAX - 3;
+        assert_eq!(
+            validate_pass_down_pointers(&pd, mmram()),
+            Err(HobValidationError::InvalidAddressRange {
+                kind: "sm_base_array",
+                base: u64::MAX - 3,
+                length: size_of::<u64>() as u64
+            }
+            .into())
         );
     }
 
