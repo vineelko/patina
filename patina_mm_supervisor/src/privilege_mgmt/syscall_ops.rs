@@ -20,6 +20,8 @@
 //!
 use core::arch::asm;
 
+use patina::MemoryRange;
+
 use crate::{
     comm_buffer::CommBufferConfig,
     error::{MmSupervisorError, MmSupervisorResult},
@@ -131,8 +133,8 @@ pub trait SyscallOps {
     /// Runs phase 2 of the two-phase save-state read.
     fn save_state_read_phase2(&self, protocol: u64, width: u64, buffer: u64) -> SyscallResult;
 
-    /// Returns whether `size` bytes at `addr` fall inside a region unblocked for MM access.
-    fn is_within_unblocked_region(&self, addr: u64, size: u64) -> bool;
+    /// Returns whether `range` falls inside a region unblocked for MM access.
+    fn is_within_unblocked_region(&self, range: &MemoryRange) -> bool;
 
     /// Returns the communication buffer configuration, if it has been published.
     fn comm_buffer_config(&self) -> Option<CommBufferConfig>;
@@ -280,8 +282,8 @@ impl SyscallOps for FirmwareOps {
         save_state::save_state_read_phase2(protocol, width, buffer)
     }
 
-    fn is_within_unblocked_region(&self, addr: u64, size: u64) -> bool {
-        security_state().unblocked_tracker().is_within_unblocked_region(addr, size)
+    fn is_within_unblocked_region(&self, range: &MemoryRange) -> bool {
+        security_state().unblocked_tracker().is_within_unblocked_region(range)
     }
 
     fn comm_buffer_config(&self) -> Option<CommBufferConfig> {
@@ -329,7 +331,7 @@ mod tests {
         // Nothing has been unblocked and no communication buffer has been published. Note the
         // tracker is deliberately permissive until core initialization completes (see
         // `UnblockedMemoryTracker::is_memory_blocked`), so this reports the bootstrap answer.
-        assert!(ops.is_within_unblocked_region(0x1000, 0x1000));
+        assert!(ops.is_within_unblocked_region(&MemoryRange::new(0x1000, 0x1000).unwrap()));
         assert!(ops.comm_buffer_config().is_none());
 
         // Save-state metadata is published during initialization, so phase 1 is not ready.

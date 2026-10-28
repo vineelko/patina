@@ -36,7 +36,7 @@
 //!
 use patina::standard::efi::{ALLOCATE_ANY_PAGES, AllocateType, MemoryType, RUNTIME_SERVICES_DATA, Status};
 
-use patina::{UEFI_PAGE_SIZE, management_mode::supervisor::SyscallIndex};
+use patina::{MemoryRange, UEFI_PAGE_SIZE, management_mode::supervisor::SyscallIndex};
 
 use crate::{
     memory::page_ownership::PageOwnership,
@@ -561,8 +561,14 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         let size = ctx.arg2;
         log::trace!("MM_MEMORY_UNBLOCKED: addr=0x{addr:x}, size=0x{size:x}");
 
+        // An empty buffer, or one that runs past the end of the address space, is never valid.
+        let Ok(range) = MemoryRange::new(addr, size) else {
+            log::trace!("MM_MEMORY_UNBLOCKED: addr=0x{addr:x} size=0x{size:x} is not a valid range");
+            return Ok(0); // FALSE
+        };
+
         // Check if the buffer is within an unblocked memory region
-        let is_valid = self.ops.is_within_unblocked_region(addr, size);
+        let is_valid = self.ops.is_within_unblocked_region(&range);
 
         if !is_valid {
             log::trace!("MM_MEMORY_UNBLOCKED: addr=0x{addr:x} size=0x{size:x} not in unblocked region");
@@ -796,7 +802,7 @@ mod tests {
             self.phase2_result
         }
 
-        fn is_within_unblocked_region(&self, _addr: u64, _size: u64) -> bool {
+        fn is_within_unblocked_region(&self, _range: &MemoryRange) -> bool {
             self.unblocked
         }
 
@@ -1422,6 +1428,11 @@ mod tests {
         // Unblocked but unmapped.
         let d = dispatcher(MockOps::default());
         assert_eq!(d.handle_mm_memory_unblocked(&ctx(0, 0x5000, 0x100, 0)), Ok(0));
+
+        // An empty buffer, or one that runs past the end of the address space, is not a range.
+        let d = dispatcher(MockOps { mapped: vec![(0x5000, PageOwnership::User)], ..Default::default() });
+        assert_eq!(d.handle_mm_memory_unblocked(&ctx(0, 0x5000, 0, 0)), Ok(0));
+        assert_eq!(d.handle_mm_memory_unblocked(&ctx(0, u64::MAX, 0x100, 0)), Ok(0));
     }
 
     #[test]

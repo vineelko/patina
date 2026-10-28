@@ -89,9 +89,13 @@ impl UnblockedMemoryEntry {
         Self { base_address: 0, num_pages: 0, attributes: 0 }
     }
 
-    /// Creates a new entry from a base address, byte size, and attributes.
-    pub const fn new(base_address: u64, size: u64, attributes: u32) -> Self {
-        Self { base_address, num_pages: patina::uefi_size_to_pages!(size as usize) as u32, attributes }
+    /// Creates a new entry covering `range`, rounded up to whole pages, with `attributes`.
+    pub const fn new(range: MemoryRange, attributes: u32) -> Self {
+        Self {
+            base_address: range.base(),
+            num_pages: patina::uefi_size_to_pages!(range.size() as usize) as u32,
+            attributes,
+        }
     }
 
     /// Returns the size of this region in bytes.
@@ -125,6 +129,11 @@ fn request_range(base: u64, size: u64) -> Result<MemoryRange, UnblockError> {
     })
 }
 
+/// Returns whether `range` touches MMRAM at all, including a range that only crosses a boundary.
+fn range_overlaps_mmram(range: &MemoryRange) -> bool {
+    buffer_overlaps_mmram(range.base(), range.size())
+}
+
 /// Internal state for the unblocked memory tracker.
 struct UnblockedMemoryState {
     /// Array of unblocked memory entries.
@@ -152,9 +161,9 @@ impl UnblockedMemoryState {
         Self { entries: [UnblockedMemoryEntry::empty(); MAX_UNBLOCKED_REGIONS], count: 0 }
     }
 
-    /// Finds an entry that exactly matches the given base and size.
-    fn find_exact_match(&self, base: u64, size: u64) -> Option<&UnblockedMemoryEntry> {
-        self.entries.iter().take(self.count).find(|e| e.base_address == base && e.size() == size)
+    /// Finds an entry that covers exactly `range`.
+    fn find_exact_match(&self, range: &MemoryRange) -> Option<&UnblockedMemoryEntry> {
+        self.entries.iter().take(self.count).find(|e| e.range() == Some(*range))
     }
 
     /// Adds a new entry if there's space.
@@ -162,7 +171,7 @@ impl UnblockedMemoryState {
     /// The entry is rounded to whole pages, and is refused when the rounded region runs past the
     /// end of the address space, so every tracked entry has a valid [`range`](UnblockedMemoryEntry::range).
     fn add_entry(&mut self, range: MemoryRange, attributes: u32) -> MmSupervisorResult<()> {
-        let entry = UnblockedMemoryEntry::new(range.base(), range.size(), attributes);
+        let entry = UnblockedMemoryEntry::new(range, attributes);
         if entry.range().is_none() {
             log::debug!("Cannot track unblocked region {range}: its page-rounded end overflows");
             return Err(UnblockError::AddressOverflow.into());
@@ -189,7 +198,7 @@ pub struct UnblockedMemoryTracker {
     /// Flag indicating if core initialization is complete (after which we enforce checks).
     core_init_complete: AtomicBool,
     /// Returns whether a range touches MMRAM at all, including one that only crosses a boundary.
-    overlaps_mmram: fn(base: u64, size: u64) -> bool,
+    overlaps_mmram: fn(&MemoryRange) -> bool,
     /// Internal state protected by a mutex.
     state: Mutex<UnblockedMemoryState>,
 }
@@ -197,11 +206,11 @@ pub struct UnblockedMemoryTracker {
 impl UnblockedMemoryTracker {
     /// Creates a new unblocked memory tracker that checks ranges against the supervisor's MMRAM.
     pub const fn new() -> Self {
-        Self::with_mmram_check(buffer_overlaps_mmram)
+        Self::with_mmram_check(range_overlaps_mmram)
     }
 
     /// Creates a tracker that uses `overlaps_mmram` to decide whether a range touches MMRAM.
-    const fn with_mmram_check(overlaps_mmram: fn(base: u64, size: u64) -> bool) -> Self {
+    const fn with_mmram_check(overlaps_mmram: fn(&MemoryRange) -> bool) -> Self {
         Self {
             initialized: AtomicBool::new(false),
             core_init_complete: AtomicBool::new(false),
@@ -237,7 +246,7 @@ impl UnblockedMemoryTracker {
                 );
             })?;
 
-            if (self.overlaps_mmram)(range.base(), range.size()) {
+            if (self.overlaps_mmram)(&range) {
                 log::error!("UnblockedMemoryTracker init rejected: descriptor {range} overlaps MMRAM");
                 return Err(UnblockError::OverlapsWithMmram.into());
             }
@@ -294,7 +303,7 @@ impl UnblockedMemoryTracker {
     /// - Identical unblock requests are allowed (idempotent)
     #[cfg(test)]
     pub fn unblock_memory(&self, base: u64, size: u64, attributes: u32) -> MmSupervisorResult<()> {
-        self.track_unblocked_memory(base, size, attributes).map(|_| ())
+        self.track_unblocked_memory(request_range(base, size)?, attributes).map(|_| ())
     }
 
     /// Records a region as unblocked, reporting whether it was newly added.
@@ -302,13 +311,9 @@ impl UnblockedMemoryTracker {
     /// An identical request for a region already recorded reports
     /// [`TrackOutcome::Existing`] rather than failing, so a repeated unblock is harmless. The
     /// same base and size with different attributes is a conflict, not a repeat.
-    fn track_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> MmSupervisorResult<TrackOutcome> {
-        // Validate parameters. The caller logs the range and the returned variant, so a zero
-        // size or an overflowing end is rejected quietly.
-        let range = request_range(base, size)?;
-
+    fn track_unblocked_memory(&self, range: MemoryRange, attributes: u32) -> MmSupervisorResult<TrackOutcome> {
         // Check if the region overlaps with MMRAM
-        if (self.overlaps_mmram)(base, size) {
+        if (self.overlaps_mmram)(&range) {
             log::error!("unblock_memory: Region {range} overlaps with MMRAM");
             return Err(UnblockError::OverlapsWithMmram.into());
         }
@@ -317,7 +322,7 @@ impl UnblockedMemoryTracker {
 
         // Check for existing entries that might conflict
         // First, check for exact match (idempotent unblock)
-        if let Some(existing) = state.find_exact_match(base, size) {
+        if let Some(existing) = state.find_exact_match(&range) {
             if existing.attributes == attributes {
                 // Identical request - this is allowed (idempotent)
                 log::debug!("unblock_memory: Region {range} already unblocked with same attributes");
@@ -365,13 +370,13 @@ impl UnblockedMemoryTracker {
     /// should have followed it failed, so all three values must match to avoid dropping an
     /// adjacent entry. The last entry is moved into the freed slot, so the recorded order is
     /// not preserved.
-    fn remove_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> bool {
+    fn remove_unblocked_memory(&self, range: &MemoryRange, attributes: u32) -> bool {
         let mut state = self.state.lock();
         let Some(index) = state
             .entries
             .iter()
             .take(state.count)
-            .position(|entry| entry.base_address == base && entry.size() == size && entry.attributes == attributes)
+            .position(|entry| entry.range() == Some(*range) && entry.attributes == attributes)
         else {
             return false;
         };
@@ -402,26 +407,17 @@ impl UnblockedMemoryTracker {
     ///
     /// Before core initialization is complete, this always returns `false`
     /// (everything is accessible during bootstrap).
-    pub fn is_memory_blocked(&self, base: u64, size: u64) -> bool {
+    pub fn is_memory_blocked(&self, range: &MemoryRange) -> bool {
         // During initialization, everything is accessible
         if !self.core_init_complete.load(Ordering::Acquire) {
             return false;
         }
 
-        // A zero-size query, or one whose end overflows, is invalid, and an invalid query is blocked
-        let range = match MemoryRange::new(base, size) {
-            Ok(range) => range,
-            Err(err) => {
-                log::warn!("is_memory_blocked: Invalid query 0x{base:016x} (+0x{size:x}): {err}");
-                return true;
-            }
-        };
-
         let state = self.state.lock();
 
         // Check if the queried region is fully contained within any unblocked entry
         for entry in state.entries.iter().take(state.count) {
-            if entry.contains(&range) {
+            if entry.contains(range) {
                 log::trace!(
                     "is_memory_blocked: Region {range} is within unblocked region 0x{:016x} (+0x{:x})",
                     entry.base_address,
@@ -439,8 +435,8 @@ impl UnblockedMemoryTracker {
     /// Checks if a memory region is within unblocked regions (the inverse of `is_memory_blocked`).
     ///
     /// This is a convenience method that returns `true` if the region is accessible.
-    pub fn is_within_unblocked_region(&self, base: u64, size: u64) -> bool {
-        !self.is_memory_blocked(base, size)
+    pub fn is_within_unblocked_region(&self, range: &MemoryRange) -> bool {
+        !self.is_memory_blocked(range)
     }
 
     /// Gets the current count of unblocked regions.
@@ -469,10 +465,8 @@ impl UnblockedMemoryTracker {
 /// table work from checked values rather than re-reading the Ring 3 request.
 #[derive(Clone, Copy, Debug)]
 struct ValidatedUnblockRequest {
-    /// Base address of the region, non-zero, page aligned and outside MMRAM.
-    physical_start: u64,
-    /// Region length in bytes, known not to overflow.
-    region_size: u64,
+    /// The region, with a non-zero, page-aligned base, outside MMRAM.
+    range: MemoryRange,
     /// Whether the region is to be mapped supervisor-only rather than user accessible.
     is_supervisor_page: bool,
     /// Attributes recorded with the tracked entry, used to match a later removal.
@@ -519,11 +513,11 @@ trait UnblockMemoryContext {
     /// Returns whether unblocking has been closed off by the Ready-to-Lock transition.
     fn is_locked(&self) -> bool;
     /// Returns whether the region touches MMRAM at all, which no request may unblock.
-    fn overlaps_mmram(&self, base: u64, size: u64) -> bool;
+    fn overlaps_mmram(&self, range: &MemoryRange) -> bool;
     /// Records the region, reporting whether it was newly added or already present.
-    fn track_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> MmSupervisorResult<TrackOutcome>;
+    fn track_unblocked_memory(&self, range: MemoryRange, attributes: u32) -> MmSupervisorResult<TrackOutcome>;
     /// Removes a recorded region, used to undo a tracked entry when the mapping fails.
-    fn remove_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> bool;
+    fn remove_unblocked_memory(&self, range: &MemoryRange, attributes: u32) -> bool;
     /// Maps the region with the attributes the request asked for.
     fn update_page_table(&self, request: &ValidatedUnblockRequest) -> MmSupervisorResult<()>;
 }
@@ -539,16 +533,16 @@ impl UnblockMemoryContext for SupervisorUnblockMemoryContext<'_> {
         self.unblocked_tracker.is_core_init_complete()
     }
 
-    fn overlaps_mmram(&self, base: u64, size: u64) -> bool {
-        (self.unblocked_tracker.overlaps_mmram)(base, size)
+    fn overlaps_mmram(&self, range: &MemoryRange) -> bool {
+        (self.unblocked_tracker.overlaps_mmram)(range)
     }
 
-    fn track_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> MmSupervisorResult<TrackOutcome> {
-        self.unblocked_tracker.track_unblocked_memory(base, size, attributes)
+    fn track_unblocked_memory(&self, range: MemoryRange, attributes: u32) -> MmSupervisorResult<TrackOutcome> {
+        self.unblocked_tracker.track_unblocked_memory(range, attributes)
     }
 
-    fn remove_unblocked_memory(&self, base: u64, size: u64, attributes: u32) -> bool {
-        self.unblocked_tracker.remove_unblocked_memory(base, size, attributes)
+    fn remove_unblocked_memory(&self, range: &MemoryRange, attributes: u32) -> bool {
+        self.unblocked_tracker.remove_unblocked_memory(range, attributes)
     }
 
     fn update_page_table(&self, request: &ValidatedUnblockRequest) -> MmSupervisorResult<()> {
@@ -571,22 +565,18 @@ fn update_unblocked_page_table<P: PageTable>(
     page_table: &mut P,
     request: &ValidatedUnblockRequest,
 ) -> MmSupervisorResult<()> {
-    match page_table.query_memory_region(request.physical_start, request.region_size) {
+    let range = request.range;
+    match page_table.query_memory_region(range.base(), range.size()) {
         Ok(current_attrs) => {
             log::error!(
-                "UNBLOCK_MEM: pages at 0x{:016x} are already present (attrs: {current_attrs:?}). \
-                 Only not-present pages may be unblocked.",
-                request.physical_start
+                "UNBLOCK_MEM: pages at {range} are already present (attrs: {current_attrs:?}). \
+                 Only not-present pages may be unblocked."
             );
             return Err(PageUpdateError::AlreadyMapped.into());
         }
         Err(PtError::NoMapping) => {}
         Err(e) => {
-            log::error!(
-                "UNBLOCK_MEM: failed to query page attributes for 0x{:016x}-0x{:016x}: {e:?}",
-                request.physical_start,
-                request.physical_start + request.region_size,
-            );
+            log::error!("UNBLOCK_MEM: failed to query page attributes for {range}: {e:?}");
             return Err(PageUpdateError::QueryFailed.into());
         }
     }
@@ -596,12 +586,8 @@ fn update_unblocked_page_table<P: PageTable>(
         new_attrs |= MemoryAttributes::Supervisor;
     }
 
-    page_table.map_memory_region(request.physical_start, request.region_size, new_attrs).map_err(|e| {
-        log::error!(
-            "UNBLOCK_MEM: failed to update page table for 0x{:016x}-0x{:016x}: {e:?}",
-            request.physical_start,
-            request.physical_start + request.region_size,
-        );
+    page_table.map_memory_region(range.base(), range.size(), new_attrs).map_err(|e| {
+        log::error!("UNBLOCK_MEM: failed to update page table for {range}: {e:?}");
         PageUpdateError::MapFailed.into()
     })
 }
@@ -669,52 +655,32 @@ fn process_unblock_mem<C: UnblockMemoryContext>(comm_buffer: &[u8], context: &C)
         Err(status) => return status,
     };
 
-    if context.overlaps_mmram(request.physical_start, request.region_size) {
-        log::error!(
-            "UNBLOCK_MEM: region 0x{:016x}-0x{:016x} overlaps with MMRAM",
-            request.physical_start,
-            request.physical_start + request.region_size,
-        );
+    let range = request.range;
+    if context.overlaps_mmram(&range) {
+        log::error!("UNBLOCK_MEM: region {range} overlaps with MMRAM");
         return efi::Status::SECURITY_VIOLATION;
     }
 
-    let track_outcome =
-        match context.track_unblocked_memory(request.physical_start, request.region_size, request.track_attributes) {
-            Ok(outcome) => outcome,
-            Err(MmSupervisorError::Unblock(UnblockError::ConflictingAttributes)) => {
-                log::error!(
-                    "UNBLOCK_MEM: region 0x{:016x}-0x{:016x} conflicts with existing entry",
-                    request.physical_start,
-                    request.physical_start + request.region_size,
-                );
-                return efi::Status::SECURITY_VIOLATION;
-            }
-            Err(e) => {
-                log::error!(
-                    "UNBLOCK_MEM: tracker rejected request for 0x{:016x}-0x{:016x}: {e:?}",
-                    request.physical_start,
-                    request.physical_start + request.region_size,
-                );
-                return efi::Status::INVALID_PARAMETER;
-            }
-        };
+    let track_outcome = match context.track_unblocked_memory(range, request.track_attributes) {
+        Ok(outcome) => outcome,
+        Err(MmSupervisorError::Unblock(UnblockError::ConflictingAttributes)) => {
+            log::error!("UNBLOCK_MEM: region {range} conflicts with existing entry");
+            return efi::Status::SECURITY_VIOLATION;
+        }
+        Err(e) => {
+            log::error!("UNBLOCK_MEM: tracker rejected request for {range}: {e:?}");
+            return efi::Status::INVALID_PARAMETER;
+        }
+    };
 
     if track_outcome == TrackOutcome::Existing {
-        log::debug!(
-            "UNBLOCK_MEM: region 0x{:016x}-0x{:016x} already unblocked (idempotent)",
-            request.physical_start,
-            request.physical_start + request.region_size,
-        );
+        log::debug!("UNBLOCK_MEM: region {range} already unblocked (idempotent)");
         return efi::Status::SUCCESS;
     }
 
     if let Err(error) = context.update_page_table(&request) {
-        if !context.remove_unblocked_memory(request.physical_start, request.region_size, request.track_attributes) {
-            log::error!(
-                "UNBLOCK_MEM: failed to roll back tracker entry for 0x{:016x}-0x{:016x}",
-                request.physical_start,
-                request.physical_start + request.region_size,
-            );
+        if !context.remove_unblocked_memory(&range, request.track_attributes) {
+            log::error!("UNBLOCK_MEM: failed to roll back tracker entry for {range}");
         }
 
         return match error {
@@ -725,10 +691,8 @@ fn process_unblock_mem<C: UnblockMemoryContext>(comm_buffer: &[u8], context: &C)
     }
 
     log::debug!(
-        "UNBLOCK_MEM: SUCCESS - unblocked 0x{:016x}-0x{:016x} ({} pages, {})",
-        request.physical_start,
-        request.physical_start + request.region_size,
-        patina::uefi_size_to_pages!(request.region_size as usize),
+        "UNBLOCK_MEM: SUCCESS - unblocked {range} ({} pages, {})",
+        patina::uefi_size_to_pages!(range.size() as usize),
         if request.is_supervisor_page { "supervisor-only" } else { "user-accessible" },
     );
 
@@ -781,10 +745,10 @@ fn validate_unblock_request(params: &MmSupervisorUnblockMemoryParams) -> Result<
         return Err(efi::Status::INVALID_PARAMETER);
     };
 
-    if physical_start.checked_add(region_size).is_none() {
+    let Ok(range) = MemoryRange::new(physical_start, region_size) else {
         log::error!("UNBLOCK_MEM: address range 0x{physical_start:016x} + 0x{region_size:x} overflows");
         return Err(efi::Status::INVALID_PARAMETER);
-    }
+    };
 
     let is_supervisor_page = (params.memory_descriptor.attribute & efi::MEMORY_SP) != 0;
     let mut track_attributes = policy::RESOURCE_ATTR_READ | policy::RESOURCE_ATTR_WRITE;
@@ -792,7 +756,7 @@ fn validate_unblock_request(params: &MmSupervisorUnblockMemoryParams) -> Result<
         track_attributes |= SUPERVISOR_TRACKING_ATTRIBUTE;
     }
 
-    Ok(ValidatedUnblockRequest { physical_start, region_size, is_supervisor_page, track_attributes })
+    Ok(ValidatedUnblockRequest { range, is_supervisor_page, track_attributes })
 }
 
 #[cfg(test)]
@@ -848,17 +812,17 @@ mod tests {
             self.locked
         }
 
-        fn overlaps_mmram(&self, _base: u64, _size: u64) -> bool {
+        fn overlaps_mmram(&self, _range: &MemoryRange) -> bool {
             self.mmram_checks.set(self.mmram_checks.get() + 1);
             self.overlaps_mmram
         }
 
-        fn track_unblocked_memory(&self, _base: u64, _size: u64, _attributes: u32) -> MmSupervisorResult<TrackOutcome> {
+        fn track_unblocked_memory(&self, _range: MemoryRange, _attributes: u32) -> MmSupervisorResult<TrackOutcome> {
             self.track_calls.set(self.track_calls.get() + 1);
             self.track_result
         }
 
-        fn remove_unblocked_memory(&self, _base: u64, _size: u64, _attributes: u32) -> bool {
+        fn remove_unblocked_memory(&self, _range: &MemoryRange, _attributes: u32) -> bool {
             self.rollback_calls.set(self.rollback_calls.get() + 1);
             self.rollback_result
         }
@@ -874,7 +838,12 @@ mod tests {
     /// tested without the global page allocator.
     fn create_test_tracker() -> UnblockedMemoryTracker {
         test_support::init_test_logger();
-        UnblockedMemoryTracker::with_mmram_check(|_, _| false)
+        UnblockedMemoryTracker::with_mmram_check(|_| false)
+    }
+
+    /// Returns `[base, base + size)` as a range.
+    fn range(base: u64, size: u64) -> MemoryRange {
+        MemoryRange::new(base, size).unwrap()
     }
 
     fn write_u64(buffer: &mut [u8], offset: usize, value: u64) {
@@ -907,8 +876,7 @@ mod tests {
     fn validated_request(is_supervisor_page: bool) -> ValidatedUnblockRequest {
         test_support::init_test_logger();
         ValidatedUnblockRequest {
-            physical_start: 0x2000,
-            region_size: 2 * UEFI_PAGE_SIZE as u64,
+            range: range(0x2000, 2 * UEFI_PAGE_SIZE as u64),
             is_supervisor_page,
             track_attributes: RESOURCE_ATTR_READ | RESOURCE_ATTR_WRITE,
         }
@@ -1066,8 +1034,7 @@ mod tests {
 
         assert_eq!(process_unblock_mem(&buffer, &context), efi::Status::SUCCESS);
         let request = context.last_request.get().expect("page-table update must receive the validated request");
-        assert_eq!(request.physical_start, 0x2000);
-        assert_eq!(request.region_size, 3 * UEFI_PAGE_SIZE as u64);
+        assert_eq!(request.range, range(0x2000, 3 * UEFI_PAGE_SIZE as u64));
         assert!(!request.is_supervisor_page);
         assert_eq!(request.track_attributes, RESOURCE_ATTR_READ | RESOURCE_ATTR_WRITE);
         assert_eq!(context.rollback_calls.get(), 0);
@@ -1099,10 +1066,13 @@ mod tests {
         let context = SupervisorUnblockMemoryContext { unblocked_tracker: &tracker };
 
         assert!(!context.is_locked());
-        assert!(!context.overlaps_mmram(0x1000, 0x1000));
-        assert_eq!(context.track_unblocked_memory(0x1000, 0x1000, RESOURCE_ATTR_READ), Ok(TrackOutcome::Added));
-        assert_eq!(context.track_unblocked_memory(0x1000, 0x1000, RESOURCE_ATTR_READ), Ok(TrackOutcome::Existing));
-        assert!(context.remove_unblocked_memory(0x1000, 0x1000, RESOURCE_ATTR_READ));
+        assert!(!context.overlaps_mmram(&range(0x1000, 0x1000)));
+        assert_eq!(context.track_unblocked_memory(range(0x1000, 0x1000), RESOURCE_ATTR_READ), Ok(TrackOutcome::Added));
+        assert_eq!(
+            context.track_unblocked_memory(range(0x1000, 0x1000), RESOURCE_ATTR_READ),
+            Ok(TrackOutcome::Existing)
+        );
+        assert!(context.remove_unblocked_memory(&range(0x1000, 0x1000), RESOURCE_ATTR_READ));
         assert_eq!(tracker.region_count(), 0);
     }
 
@@ -1138,8 +1108,8 @@ mod tests {
         page_table
             .expect_map_memory_region()
             .withf(move |base, size, attributes| {
-                *base == request.physical_start
-                    && *size == request.region_size
+                *base == request.range.base()
+                    && *size == request.range.size()
                     && *attributes == MemoryAttributes::ExecuteProtect
             })
             .times(1)
@@ -1156,8 +1126,8 @@ mod tests {
         page_table
             .expect_map_memory_region()
             .withf(move |base, size, attributes| {
-                *base == request.physical_start
-                    && *size == request.region_size
+                *base == request.range.base()
+                    && *size == request.range.size()
                     && *attributes == MemoryAttributes::ExecuteProtect | MemoryAttributes::Supervisor
             })
             .times(1)
@@ -1251,23 +1221,21 @@ mod tests {
 
     #[test]
     fn test_entry_size_round_trips_pages() {
-        let entry = UnblockedMemoryEntry::new(0x2000, 4 * UEFI_PAGE_SIZE as u64, RESOURCE_ATTR_READ);
+        let entry = UnblockedMemoryEntry::new(range(0x2000, 4 * UEFI_PAGE_SIZE as u64), RESOURCE_ATTR_READ);
         assert_eq!(entry.num_pages, 4);
         assert_eq!(entry.size(), 4 * UEFI_PAGE_SIZE as u64);
         assert_eq!(entry.range(), MemoryRange::new(0x2000, 4 * UEFI_PAGE_SIZE as u64).ok());
         assert_eq!(UnblockedMemoryEntry::empty().range(), None);
 
         // A sub-page size rounds up to a whole page (matching the page-granular mapping).
-        let partial = UnblockedMemoryEntry::new(0x1000, 1, RESOURCE_ATTR_READ);
+        let partial = UnblockedMemoryEntry::new(range(0x1000, 1), RESOURCE_ATTR_READ);
         assert_eq!(partial.num_pages, 1);
         assert_eq!(partial.size(), UEFI_PAGE_SIZE as u64);
     }
 
     #[test]
     fn test_entry_contains() {
-        let entry = UnblockedMemoryEntry::new(0x1000, 0x1000, RESOURCE_ATTR_READ);
-
-        let range = |base, size| MemoryRange::new(base, size).unwrap();
+        let entry = UnblockedMemoryEntry::new(range(0x1000, 0x1000), RESOURCE_ATTR_READ);
 
         // Fully contained
         assert!(entry.contains(&range(0x1000, 0x1000)));
@@ -1288,9 +1256,7 @@ mod tests {
 
     #[test]
     fn test_entry_overlaps() {
-        let entry = UnblockedMemoryEntry::new(0x1000, 0x1000, RESOURCE_ATTR_READ);
-
-        let range = |base, size| MemoryRange::new(base, size).unwrap();
+        let entry = UnblockedMemoryEntry::new(range(0x1000, 0x1000), RESOURCE_ATTR_READ);
 
         // Overlapping cases
         assert!(entry.overlaps(&range(0x1000, 0x1000))); // Exact match
@@ -1313,8 +1279,8 @@ mod tests {
         let tracker = create_test_tracker();
 
         // Before core init complete, nothing is blocked
-        assert!(!tracker.is_memory_blocked(0x1000, 0x1000));
-        assert!(!tracker.is_memory_blocked(0x0, 0x100000));
+        assert!(!tracker.is_memory_blocked(&range(0x1000, 0x1000)));
+        assert!(!tracker.is_memory_blocked(&range(0x0, 0x100000)));
         assert!(!tracker.is_core_init_complete());
     }
 
@@ -1325,10 +1291,8 @@ mod tests {
         assert!(tracker.is_core_init_complete());
 
         // After init complete with no regions, everything is blocked
-        assert!(tracker.is_memory_blocked(0x1000, 0x1000));
-        assert!(tracker.is_memory_blocked(0x1000, 0));
-        assert!(tracker.is_memory_blocked(u64::MAX, 1));
-        assert!(!tracker.is_within_unblocked_region(0x1000, 0x1000));
+        assert!(tracker.is_memory_blocked(&range(0x1000, 0x1000)));
+        assert!(!tracker.is_within_unblocked_region(&range(0x1000, 0x1000)));
     }
 
     #[test]
@@ -1341,11 +1305,11 @@ mod tests {
         tracker.set_core_init_complete();
 
         // Region should be accessible
-        assert!(!tracker.is_memory_blocked(0x1000, 0x1000));
-        assert!(!tracker.is_memory_blocked(0x1000, 0x800));
+        assert!(!tracker.is_memory_blocked(&range(0x1000, 0x1000)));
+        assert!(!tracker.is_memory_blocked(&range(0x1000, 0x800)));
 
         // Outside region should be blocked
-        assert!(tracker.is_memory_blocked(0x3000, 0x1000));
+        assert!(tracker.is_memory_blocked(&range(0x3000, 0x1000)));
     }
 
     #[test]
@@ -1421,11 +1385,14 @@ mod tests {
 
         for index in 0..MAX_UNBLOCKED_REGIONS {
             let base = (index as u64 + 1) * 0x2000;
-            assert_eq!(tracker.track_unblocked_memory(base, 0x1000, RESOURCE_ATTR_READ), Ok(TrackOutcome::Added));
+            assert_eq!(
+                tracker.track_unblocked_memory(range(base, 0x1000), RESOURCE_ATTR_READ),
+                Ok(TrackOutcome::Added)
+            );
         }
 
         assert_eq!(
-            tracker.track_unblocked_memory(0x10_0000, 0x1000, RESOURCE_ATTR_READ),
+            tracker.track_unblocked_memory(range(0x10_0000, 0x1000), RESOURCE_ATTR_READ),
             Err(UnblockError::TooManyRegions.into())
         );
     }
@@ -1433,16 +1400,16 @@ mod tests {
     #[test]
     fn test_tracker_removes_only_the_matching_entry() {
         let tracker = create_test_tracker();
-        assert_eq!(tracker.track_unblocked_memory(0x1000, 0x1000, RESOURCE_ATTR_READ), Ok(TrackOutcome::Added));
-        assert_eq!(tracker.track_unblocked_memory(0x3000, 0x1000, RESOURCE_ATTR_WRITE), Ok(TrackOutcome::Added));
+        assert_eq!(tracker.track_unblocked_memory(range(0x1000, 0x1000), RESOURCE_ATTR_READ), Ok(TrackOutcome::Added));
+        assert_eq!(tracker.track_unblocked_memory(range(0x3000, 0x1000), RESOURCE_ATTR_WRITE), Ok(TrackOutcome::Added));
 
-        assert!(!tracker.remove_unblocked_memory(0x1000, 0x1000, RESOURCE_ATTR_WRITE));
-        assert!(tracker.remove_unblocked_memory(0x1000, 0x1000, RESOURCE_ATTR_READ));
+        assert!(!tracker.remove_unblocked_memory(&range(0x1000, 0x1000), RESOURCE_ATTR_WRITE));
+        assert!(tracker.remove_unblocked_memory(&range(0x1000, 0x1000), RESOURCE_ATTR_READ));
         assert_eq!(tracker.region_count(), 1);
 
         tracker.set_core_init_complete();
-        assert!(tracker.is_memory_blocked(0x1000, 0x1000));
-        assert!(!tracker.is_memory_blocked(0x3000, 0x1000));
+        assert!(tracker.is_memory_blocked(&range(0x1000, 0x1000)));
+        assert!(!tracker.is_memory_blocked(&range(0x3000, 0x1000)));
     }
 
     #[test]
@@ -1473,10 +1440,10 @@ mod tests {
     #[test]
     fn test_tracker_rejects_a_region_that_overlaps_mmram() {
         test_support::init_test_logger();
-        let tracker = UnblockedMemoryTracker::with_mmram_check(|_, _| true);
+        let tracker = UnblockedMemoryTracker::with_mmram_check(|_| true);
 
         assert_eq!(
-            tracker.track_unblocked_memory(0x1000, 0x2000, RESOURCE_ATTR_READ),
+            tracker.track_unblocked_memory(range(0x1000, 0x2000), RESOURCE_ATTR_READ),
             Err(UnblockError::OverlapsWithMmram.into())
         );
         assert_eq!(tracker.region_count(), 0);
