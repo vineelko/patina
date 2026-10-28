@@ -892,7 +892,7 @@ mod tests {
 
         let scanned = scan_regions(&hob_list);
 
-        assert_eq!(scanned, [MmramRegion::from_parts(memory.base(), memory.size(), false)]);
+        assert_eq!(scanned, [MmramRegion::new(MemoryRange::new(memory.base(), memory.size()).unwrap(), false)]);
         // SAFETY: the same live allocation, read through a shared view while nothing else
         // references it.
         let after_scan = unsafe { core::slice::from_raw_parts(memory.base() as *const u8, size) };
@@ -922,7 +922,7 @@ mod tests {
         let page_allocator = PageAllocator::new();
         let paging_allocator = PagingPoolAllocator::new();
 
-        assert_eq!(scanned, [MmramRegion::from_parts(memory.base(), memory.size(), false)]);
+        assert_eq!(scanned, [MmramRegion::new(MemoryRange::new(memory.base(), memory.size()).unwrap(), false)]);
 
         // SAFETY: the scanned descriptor references the live, exclusively owned page-aligned
         // `memory` allocation.
