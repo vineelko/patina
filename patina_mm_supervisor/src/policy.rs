@@ -30,6 +30,8 @@ pub(crate) use validation::walk_page_table;
 
 use core::slice;
 
+use patina::{MemoryRange, MemoryRangeError};
+
 /// Memory policy descriptor type.
 pub const TYPE_MEM: u32 = 1;
 /// I/O policy descriptor type.
@@ -176,6 +178,19 @@ pub struct MemDescriptorV1_0 {
     pub mem_attributes: u32,
     /// Reserved, must be 0.
     pub reserved: u32,
+}
+
+impl TryFrom<&MemDescriptorV1_0> for MemoryRange {
+    type Error = MemoryRangeError;
+
+    /// Returns the region `desc` describes.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`MemoryRange::new`] does when the size is zero or the end is past `u64::MAX`.
+    fn try_from(desc: &MemDescriptorV1_0) -> Result<Self, Self::Error> {
+        MemoryRange::new(desc.base_address, desc.size)
+    }
 }
 
 /// I/O policy descriptor (V1.0).
@@ -710,6 +725,15 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::{Descriptors, PolicyBuilder, instruction, io, mem, msr, save_state};
     use super::*;
+
+    #[test]
+    fn test_memory_range_from_mem_descriptor() {
+        let desc = |base_address, size| MemDescriptorV1_0 { base_address, size, mem_attributes: 0, reserved: 0 };
+
+        assert_eq!(MemoryRange::try_from(&desc(0x1000, 0x2000)), MemoryRange::new(0x1000, 0x2000));
+        assert_eq!(MemoryRange::try_from(&desc(0x1000, 0)), Err(MemoryRangeError::Empty));
+        assert_eq!(MemoryRange::try_from(&desc(u64::MAX, 1)), Err(MemoryRangeError::Overflow));
+    }
 
     #[test]
     fn test_policy_enum_conversions() {
