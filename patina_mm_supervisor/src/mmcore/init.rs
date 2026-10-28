@@ -121,10 +121,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // Parse the producer's SMRAM descriptors into stack metadata. Nothing in MMRAM is written
         // until they have been anchored and validated below.
         // SAFETY: the HOB list passed `validate_hob_list_structure` above.
-        let (scanned_regions, region_count) =
-            unsafe { PageAllocator::scan_hob_list_for_smram_regions(hob_hand_off_table)? };
-
-        let scanned_regions = scanned_regions.get(..region_count).unwrap_or(&scanned_regions);
+        let scanned = unsafe { PageAllocator::scan_hob_list_for_smram_regions(hob_hand_off_table)? };
+        let scanned_regions = scanned.as_slice();
 
         let smrr_range = establish_mmram_bound(scanned_regions, supervisor_image_anchor(), coalesced_smrr_range)?;
 
@@ -885,7 +883,7 @@ mod tests {
 
         let scanned = scan_regions(&hob_list);
 
-        assert_eq!(scanned, [MmramRegion::new(memory.base(), memory.size(), false)]);
+        assert_eq!(scanned, [MmramRegion::from_parts(memory.base(), memory.size(), false)]);
         // SAFETY: the same live allocation, read through a shared view while nothing else
         // references it.
         let after_scan = unsafe { core::slice::from_raw_parts(memory.base() as *const u8, size) };
@@ -915,7 +913,7 @@ mod tests {
         let page_allocator = PageAllocator::new();
         let paging_allocator = PagingPoolAllocator::new();
 
-        assert_eq!(scanned, [MmramRegion::new(memory.base(), memory.size(), false)]);
+        assert_eq!(scanned, [MmramRegion::from_parts(memory.base(), memory.size(), false)]);
 
         // SAFETY: the scanned descriptor references the live, exclusively owned page-aligned
         // `memory` allocation.

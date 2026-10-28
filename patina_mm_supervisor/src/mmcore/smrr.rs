@@ -16,7 +16,7 @@ use crate::intrinsics::read_msr;
 use crate::intrinsics::write_msr;
 use crate::memory::mmram::MmramRegion;
 use core::arch::x86_64::__cpuid;
-use patina::{SIZE_256KB, UEFI_PAGE_SIZE};
+use patina::{MemoryRange, SIZE_256KB, UEFI_PAGE_SIZE};
 
 const SIZE_4KB: u32 = 0x0000_1000;
 
@@ -241,7 +241,7 @@ const fn smrr_base_value(raw: u64, smrr_base: u32) -> u64 {
 /// for the BSP, which configures its own SMRR during one-time initialization and reaches
 /// per-core initialization with the range already locked.
 #[cfg_attr(coverage, coverage(off))]
-pub(crate) fn smrr_initialize(range: MmramRegion) -> MmSupervisorResult<()> {
+pub(crate) fn smrr_initialize(range: MemoryRange) -> MmSupervisorResult<()> {
     if !is_mtrr_supported() {
         return Err(SmrrError::MtrrUnsupported.into());
     }
@@ -263,8 +263,8 @@ pub(crate) fn smrr_initialize(range: MmramRegion) -> MmSupervisorResult<()> {
     // SMRR_BASE and SMRR_MASK only describe addresses below 4 GiB. Truncating here would
     // validate and program a completely different region than the one handed in, leaving the
     // real MMRAM unprotected, so a region that does not fit is fatal rather than narrowed.
-    let (Ok(smrr_base), Ok(smrr_size)) = (u32::try_from(range.base), u32::try_from(range.size)) else {
-        return Err(SmrrError::RangeNotAddressable { base: range.base, size: range.size }.into());
+    let (Ok(smrr_base), Ok(smrr_size)) = (u32::try_from(range.base()), u32::try_from(range.size())) else {
+        return Err(SmrrError::RangeNotAddressable { base: range.base(), size: range.size() }.into());
     };
 
     if !verify_smrr_base_size(smrr_base, smrr_size) {
@@ -326,34 +326,24 @@ pub(crate) fn smrr_enable() {
 /// region that is physically contiguous with it (regardless of allocation
 /// state), scanning repeatedly until no further adjacent region is found.
 ///
-/// Returns the coalesced [`MmramRegion`] on success (with `pre_allocated` set to
-/// `false`, as it describes the SMRR programming range rather than a discovered
-/// region), or `None` if no scanned region meets the SMRR base/size
-/// requirements.
-pub(crate) fn coalesced_smrr_range(regions: &[MmramRegion]) -> Option<MmramRegion> {
+/// Returns the coalesced range on success, or `None` if no scanned region meets
+/// the SMRR base/size requirements.
+pub(crate) fn coalesced_smrr_range(regions: &[MmramRegion]) -> Option<MemoryRange> {
     /// Lowest CPU start address a candidate SMRR range may have.
     const BASE_1MB: u64 = 0x0010_0000;
     /// Highest address the primary SMRR can cover (4 GiB).
     const SMRR_MAX_ADDRESS: u64 = 0x1_0000_0000;
+    /// Smallest region that can be selected (256 KiB - 4 KiB).
+    const MIN_SIZE: u64 = SIZE_256KB as u64 - UEFI_PAGE_SIZE as u64;
 
     // Find the largest usable (non-pre-allocated) range in [1 MiB, 4 GiB] that is at least
-    // 256 KiB - 4 KiB.
-    let mut max_size = SIZE_256KB as u64 - UEFI_PAGE_SIZE as u64;
-    let mut current: Option<(u64, u64)> = None;
-    for region in regions {
-        if region.pre_allocated {
-            continue;
-        }
-        let Some(region_end) = region.base.checked_add(region.size) else {
-            continue;
-        };
-        if region.base >= BASE_1MB && region_end <= SMRR_MAX_ADDRESS && region.size >= max_size {
-            max_size = region.size;
-            current = Some((region.base, region.size));
-        }
-    }
-
-    let (mut smrr_base, mut smrr_size) = current?;
+    // 256 KiB - 4 KiB. Of two equally large ranges, the later one is selected.
+    let mut smrr = regions
+        .iter()
+        .filter(|region| !region.pre_allocated)
+        .map(|region| region.range)
+        .filter(|range| range.base() >= BASE_1MB && range.end() <= SMRR_MAX_ADDRESS && range.size() >= MIN_SIZE)
+        .reduce(|largest, range| if range.size() >= largest.size() { range } else { largest })?;
 
     // Coalesce any physically adjacent ranges into the selected range. This
     // scans the (unsorted) region array repeatedly until no further
@@ -363,18 +353,8 @@ pub(crate) fn coalesced_smrr_range(regions: &[MmramRegion]) -> Option<MmramRegio
     loop {
         let mut found = false;
         for region in regions {
-            let region_base = region.base;
-            let region_size = region.size;
-            let region_end = region_base.checked_add(region_size);
-            let smrr_end = smrr_base.checked_add(smrr_size)?;
-            if region_base < smrr_base && Some(smrr_base) == region_end {
-                // Region sits immediately before the current range: extend downward.
-                smrr_base = region_base;
-                smrr_size = smrr_size.checked_add(region_size)?;
-                found = true;
-            } else if smrr_end == region_base && region_size > 0 {
-                // Region sits immediately after the current range: extend upward.
-                smrr_size = smrr_size.checked_add(region_size)?;
+            if region.range.is_adjacent(&smrr) {
+                smrr = smrr.union(&region.range).ok()?;
                 found = true;
             }
         }
@@ -383,8 +363,8 @@ pub(crate) fn coalesced_smrr_range(regions: &[MmramRegion]) -> Option<MmramRegio
         }
     }
 
-    let smrr_base = u32::try_from(smrr_base).ok()?;
-    let smrr_size = u32::try_from(smrr_size).ok()?;
+    let smrr_base = u32::try_from(smrr.base()).ok()?;
+    let smrr_size = u32::try_from(smrr.size()).ok()?;
 
     if !verify_smrr_base_size(smrr_base, smrr_size) {
         log::warn!(
@@ -394,7 +374,7 @@ pub(crate) fn coalesced_smrr_range(regions: &[MmramRegion]) -> Option<MmramRegio
     }
 
     log::info!("SMRR Base: 0x{smrr_base:x}, SMRR Size: 0x{smrr_size:x}");
-    Some(MmramRegion::new(u64::from(smrr_base), u64::from(smrr_size), false))
+    Some(smrr)
 }
 
 #[cfg(test)]
@@ -589,7 +569,7 @@ mod tests {
 
     /// Builds SMRAM descriptors from `(base, size, pre_allocated)` triples.
     fn regions_from(entries: &[(u64, u64, bool)]) -> Vec<MmramRegion> {
-        entries.iter().map(|&(base, size, pre_allocated)| MmramRegion::new(base, size, pre_allocated)).collect()
+        entries.iter().map(|&(base, size, pre_allocated)| MmramRegion::from_parts(base, size, pre_allocated)).collect()
     }
 
     /// Smallest region size `coalesced_smrr_range` will accept (256 KiB - 4 KiB).
@@ -621,17 +601,11 @@ mod tests {
     }
 
     #[test]
-    fn test_coalesced_smrr_range_overflow_returns_none() {
-        let regions = regions_from(&[(u64::MAX - MIN_SMRR_SIZE + 1, MIN_SMRR_SIZE, false)]);
-        assert_eq!(coalesced_smrr_range(&regions), None);
-    }
-
-    #[test]
     fn test_coalesced_smrr_range_single_valid_region() {
         let base = 0x8000_0000u64;
         let size = SIZE_256KB as u64;
         let regions = regions_from(&[(base, size, false)]);
-        assert_eq!(coalesced_smrr_range(&regions), Some(MmramRegion::new(base, size, false)));
+        assert_eq!(coalesced_smrr_range(&regions), MemoryRange::new(base, size).ok());
     }
 
     #[test]
@@ -648,7 +622,7 @@ mod tests {
         let small = (0x8000_0000u64, SIZE_256KB as u64, false);
         let large = (0x9000_0000u64, SIZE_256KB as u64 * 4, false);
         let regions = regions_from(&[small, large]);
-        assert_eq!(coalesced_smrr_range(&regions), Some(MmramRegion::new(large.0, large.1, false)));
+        assert_eq!(coalesced_smrr_range(&regions), MemoryRange::new(large.0, large.1).ok());
     }
 
     #[test]
@@ -668,7 +642,7 @@ mod tests {
         let above_size = SIZE_256KB as u64 * 2;
         let above = (base + size, above_size, false);
         let regions = regions_from(&[(base, size, false), above]);
-        assert_eq!(coalesced_smrr_range(&regions), Some(MmramRegion::new(base, size + above_size, false)));
+        assert_eq!(coalesced_smrr_range(&regions), MemoryRange::new(base, size + above_size).ok());
     }
 
     #[test]
@@ -681,7 +655,7 @@ mod tests {
         let size = SIZE_256KB as u64 * 6; // selected as the largest region
         let below = (low_base, below_size, false);
         let regions = regions_from(&[below, (base, size, false)]);
-        assert_eq!(coalesced_smrr_range(&regions), Some(MmramRegion::new(low_base, size + below_size, false)));
+        assert_eq!(coalesced_smrr_range(&regions), MemoryRange::new(low_base, size + below_size).ok());
     }
 
     #[test]
@@ -703,6 +677,6 @@ mod tests {
         // SMRR must cover a single contiguous physical range.
         let above = (base + size, size, true);
         let regions = regions_from(&[(base, size, false), above]);
-        assert_eq!(coalesced_smrr_range(&regions), Some(MmramRegion::new(base, size * 2, false)));
+        assert_eq!(coalesced_smrr_range(&regions), MemoryRange::new(base, size * 2).ok());
     }
 }

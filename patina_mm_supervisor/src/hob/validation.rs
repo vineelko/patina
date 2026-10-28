@@ -61,7 +61,7 @@ use patina::pi::hob::{
     RESOURCE_DESCRIPTOR2, ResourceDescriptor, ResourceDescriptorV2, UEFI_CAPSULE,
 };
 use patina::standard::efi;
-use patina::{UEFI_PAGE_SIZE, align_range};
+use patina::{MemoryRange, UEFI_PAGE_SIZE, align_range};
 use patina_paging::{MemoryAttributes, PageTable};
 use zerocopy::FromBytes;
 
@@ -386,41 +386,26 @@ fn ranges_overlap(a: (u64, u64), b: (u64, u64)) -> bool {
 /// Validates that the scanned MMRAM regions form a single contiguous, non-overlapping span and
 /// returns that span as `(base, size)`. The regions are not required to be sorted.
 fn validate_mmram_contiguous(regions: &[MmramRegion]) -> MmSupervisorResult<(u64, u64)> {
-    // (lowest base, highest exclusive end), built only from ranges that passed the checks.
-    let mut bounds: Option<(u64, u64)> = None;
-    for region in regions {
-        let end = checked_range_end("MMRAM region", region.base, region.size)?;
-        bounds = Some(match bounds {
-            Some((base, max_end)) => (base.min(region.base), max_end.max(end)),
-            None => (region.base, end),
-        });
-    }
-    let (base, end) = bounds.ok_or(HobValidationError::NoMmramRegions)?;
+    let ranges = regions.iter().map(|region| region.range);
+    let span = MemoryRange::collapse(ranges.clone()).map_err(|_| HobValidationError::NoMmramRegions)?;
 
-    for (i, a) in regions.iter().enumerate() {
-        for b in regions.iter().skip(i + 1) {
-            if ranges_overlap((a.base, a.size), (b.base, b.size)) {
-                return Err(HobValidationError::MmramRegionsOverlap {
-                    base_a: a.base,
-                    size_a: a.size,
-                    base_b: b.base,
-                    size_b: b.size,
-                }
-                .into());
-            }
+    if let Some((a, b)) = MemoryRange::find_overlap(ranges.clone()) {
+        return Err(HobValidationError::MmramRegionsOverlap {
+            base_a: a.base(),
+            size_a: a.size(),
+            base_b: b.base(),
+            size_b: b.size(),
         }
+        .into());
     }
 
-    // `end` is the end of some region, which lies above that region's base and so above `base`.
-    let span = end - base;
-    // The regions are disjoint and all lie inside `[base, end)`, so their sizes sum to at most
-    // `span`. With no overlaps, an equal sum means no gaps.
-    let covered: u64 = regions.iter().map(|r| r.size).sum();
-    if covered != span {
-        return Err(HobValidationError::MmramNotContiguous { covered, span }.into());
+    if MemoryRange::coalesce(ranges).is_err() {
+        // The regions are disjoint, so their sizes sum to less than the span they cover.
+        let covered: u64 = regions.iter().map(|region| region.range.size()).sum();
+        return Err(HobValidationError::MmramNotContiguous { covered, span: span.size() }.into());
     }
 
-    Ok((base, span))
+    Ok((span.base(), span.size()))
 }
 
 /// Returns whether `[base, base + size)` lies entirely inside the MMRAM span.
@@ -848,14 +833,7 @@ fn dump_hobs(handoff: &PhaseHandoffInformationTable) {
 fn dump_regions(regions: &[MmramRegion]) {
     log::debug!("---- Scanned MMRAM regions ({}) ----", regions.len());
     for (i, r) in regions.iter().enumerate() {
-        log::debug!(
-            "Region {}: base=0x{:x}, size=0x{:x}, end=0x{:x}, pre_allocated={}",
-            i,
-            r.base,
-            r.size,
-            r.base.saturating_add(r.size),
-            r.pre_allocated
-        );
+        log::debug!("Region {i}: {}, size=0x{:x}, pre_allocated={}", r.range, r.range.size(), r.pre_allocated);
     }
     log::debug!("---- End MMRAM region dump ----");
 }
@@ -1105,7 +1083,7 @@ mod tests {
     };
 
     fn region(base: u64, size: u64) -> MmramRegion {
-        MmramRegion::new(base, size, false)
+        MmramRegion::from_parts(base, size, false)
     }
 
     /// MMRAM span covering `[0x1000, 0x10_1000)`, which holds every address the HOB fixtures name.
@@ -1319,14 +1297,13 @@ mod tests {
 
     #[test]
     fn test_mm_supervisor_hob_validation_dump_regions() {
-        // The dump builds each region's end address inside log::debug!, which skips its
-        // arguments when no logger is installed. The silent test logger makes the saturating
-        // arithmetic run, so a region at the top of the address space cannot overflow the dump.
+        // log::debug! skips its arguments when no logger is installed. The silent test logger
+        // makes each region format, including one that ends at the top of the address space.
         crate::test_support::init_test_logger();
 
         dump_regions(&[]);
-        dump_regions(&[MmramRegion::new(0x1000, 0x1000, false), MmramRegion::new(0x2000, 0x2000, true)]);
-        dump_regions(&[MmramRegion::new(u64::MAX - 0xfff, 0x1000, false)]);
+        dump_regions(&[MmramRegion::from_parts(0x1000, 0x1000, false), MmramRegion::from_parts(0x2000, 0x2000, true)]);
+        dump_regions(&[MmramRegion::from_parts(u64::MAX - 0x1000, 0x1000, false)]);
     }
 
     #[test]
@@ -1376,18 +1353,6 @@ mod tests {
     #[test]
     fn test_mm_supervisor_hob_validation_empty_regions_rejected() {
         assert_eq!(validate_mmram_contiguous(&[]), Err(HobValidationError::NoMmramRegions.into()));
-    }
-
-    #[test]
-    fn test_mm_supervisor_hob_validation_invalid_mmram_ranges_rejected() {
-        assert!(matches!(
-            validate_mmram_contiguous(&[region(0x1000, 0)]),
-            Err(MmSupervisorError::HobValidation(HobValidationError::InvalidAddressRange { kind: "MMRAM region", .. }))
-        ));
-        assert!(matches!(
-            validate_mmram_contiguous(&[region(u64::MAX, 1)]),
-            Err(MmSupervisorError::HobValidation(HobValidationError::InvalidAddressRange { kind: "MMRAM region", .. }))
-        ));
     }
 
     #[test]

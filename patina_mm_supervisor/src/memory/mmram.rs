@@ -9,31 +9,34 @@
 
 use core::fmt;
 
+use patina::MemoryRange;
+
 use crate::error::MmSupervisorResult;
 use crate::state::security_state;
 
 /// Anchor object placed in the supervisor's own image.
 static IMAGE_ANCHOR: u8 = 0;
 
-/// A region of MMRAM: a physical base address, a size in bytes, and whether it
-/// was reported as pre-allocated in the HOB list.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// A region of MMRAM: its address range, and whether it was reported as pre-allocated in the
+/// HOB list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MmramRegion {
-    /// Physical base address of the region.
-    pub base: u64,
-    /// Size of the region, in bytes.
-    pub size: u64,
+    /// Physical address range of the region.
+    pub range: MemoryRange,
     /// Whether the region was reported as pre-allocated (`EFI_ALLOCATED`).
     pub pre_allocated: bool,
-    /// Explicit tail padding, always zero. See the note on the type.
-    reserved: [u8; 7],
 }
 
 impl MmramRegion {
-    /// Creates a region, zeroing the explicit tail padding.
-    pub(crate) const fn new(base: u64, size: u64, pre_allocated: bool) -> Self {
-        Self { base, size, pre_allocated, reserved: [0; 7] }
+    /// Creates a region.
+    pub(crate) const fn new(range: MemoryRange, pre_allocated: bool) -> Self {
+        Self { range, pre_allocated }
+    }
+
+    /// Creates a region from a base and size that tests know to be valid.
+    #[cfg(test)]
+    pub(crate) fn from_parts(base: u64, size: u64, pre_allocated: bool) -> Self {
+        Self::new(MemoryRange::new(base, size).expect("test region is a valid range"), pre_allocated)
     }
 }
 
@@ -88,14 +91,14 @@ pub(crate) fn supervisor_image_anchor() -> u64 {
 pub(crate) fn establish_mmram_bound(
     scanned: &[MmramRegion],
     anchor: u64,
-    coalesce_mmram_regions: impl FnOnce(&[MmramRegion]) -> Option<MmramRegion>,
-) -> MmSupervisorResult<MmramRegion> {
+    coalesce_mmram_regions: impl FnOnce(&[MmramRegion]) -> Option<MemoryRange>,
+) -> MmSupervisorResult<MemoryRange> {
     if !regions_contain(scanned, anchor) {
         return Err(MmramBoundError::AnchorOutsideRegions { anchor }.into());
     }
 
     let range = coalesce_mmram_regions(scanned).ok_or(MmramBoundError::NoSmrrRange)?;
-    log::info!("Discovered MMRAM range: base=0x{:08x}, size=0x{:08x}", range.base, range.size);
+    log::info!("Discovered MMRAM range: {range}");
     Ok(range)
 }
 
@@ -162,9 +165,7 @@ pub(crate) fn classify_coverage(
 
 /// Returns whether any region in `regions` contains `address`.
 pub(crate) fn regions_contain(regions: &[MmramRegion], address: u64) -> bool {
-    regions.iter().any(|region| {
-        region.base <= address && region.base.checked_add(region.size).is_some_and(|region_end| address < region_end)
-    })
+    regions.iter().any(|region| region.range.contains(address))
 }
 
 /// Returns whether `[base, base + size)` lies entirely inside MMRAM.
@@ -212,8 +213,8 @@ mod tests {
 
     #[test]
     fn test_establish_mmram_bound_returns_the_derived_range() {
-        let regions = [MmramRegion::new(0x1000, 0x2000, false)];
-        let range = MmramRegion::new(0x1000, 0x2000, false);
+        let regions = [MmramRegion::from_parts(0x1000, 0x2000, false)];
+        let range = MemoryRange::new(0x1000, 0x2000).unwrap();
 
         assert_eq!(establish_mmram_bound(&regions, 0x1500, |_| Some(range)), Ok(range));
     }
@@ -222,12 +223,12 @@ mod tests {
     fn test_establish_mmram_bound_rejects_descriptors_that_do_not_cover_the_anchor() {
         // A HOB list describing MMRAM somewhere other than where the supervisor is executing is
         // refused outright, and before a range is selected from it.
-        let regions = [MmramRegion::new(0x1000, 0x2000, false)];
+        let regions = [MmramRegion::from_parts(0x1000, 0x2000, false)];
         let selected = core::cell::Cell::new(false);
 
         let result = establish_mmram_bound(&regions, 0x4000, |_| {
             selected.set(true);
-            Some(MmramRegion::new(0x1000, 0x2000, false))
+            MemoryRange::new(0x1000, 0x2000).ok()
         });
 
         assert_eq!(result, Err(MmramBoundError::AnchorOutsideRegions { anchor: 0x4000 }.into()));
@@ -236,8 +237,8 @@ mod tests {
 
     #[test]
     fn test_establish_mmram_bound_covers_a_region_end_to_end() {
-        let regions = [MmramRegion::new(0x1000, 0x2000, false)];
-        let range = MmramRegion::new(0x1000, 0x2000, false);
+        let regions = [MmramRegion::from_parts(0x1000, 0x2000, false)];
+        let range = MemoryRange::new(0x1000, 0x2000).unwrap();
 
         assert!(establish_mmram_bound(&regions, 0x1000, |_| Some(range)).is_ok());
         assert!(establish_mmram_bound(&regions, 0x2fff, |_| Some(range)).is_ok());
@@ -249,7 +250,7 @@ mod tests {
 
     #[test]
     fn test_establish_mmram_bound_rejects_regions_without_an_smrr_range() {
-        let regions = [MmramRegion::new(0x1000, 0x2000, false)];
+        let regions = [MmramRegion::from_parts(0x1000, 0x2000, false)];
 
         assert_eq!(establish_mmram_bound(&regions, 0x1000, |_| None), Err(MmramBoundError::NoSmrrRange.into()));
     }
@@ -263,7 +264,7 @@ mod tests {
 
     /// Builds SMRAM descriptors from `(base, size, pre_allocated)` triples.
     fn regions_from(specs: &[(u64, u64, bool)]) -> Vec<MmramRegion> {
-        specs.iter().map(|&(base, size, pre)| MmramRegion::new(base, size, pre)).collect()
+        specs.iter().map(|&(base, size, pre)| MmramRegion::from_parts(base, size, pre)).collect()
     }
 
     #[test]
@@ -278,14 +279,6 @@ mod tests {
         assert!(!regions_contain(&regions, 0x3000));
         assert!(!regions_contain(&regions, 0x9000));
         assert!(!regions_contain(&[], 0x1000));
-    }
-
-    #[test]
-    fn test_regions_contain_address_does_not_overflow() {
-        let regions = regions_from(&[(u64::MAX - 0xfff, 0x2000, false)]);
-
-        // The declared extent wraps, so nothing can be shown to be inside it.
-        assert!(!regions_contain(&regions, u64::MAX));
     }
 
     #[test]

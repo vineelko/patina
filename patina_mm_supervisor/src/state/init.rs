@@ -20,7 +20,7 @@ use core::{
 
 use spin::Once;
 
-use crate::memory::mmram::MmramRegion;
+use patina::MemoryRange;
 
 /// Boot-time and per-core synchronization state for the MM Supervisor Core.
 pub(crate) struct InitState {
@@ -47,8 +47,8 @@ pub(crate) struct InitState {
     ap_startup_fn: Once<fn(u64, u64, u64) -> u64>,
     /// Set once `ExitBootServices` has been signaled.
     at_runtime: Once<()>,
-    /// SMRR region (base and size) derived during BSP initialization.
-    smrr_range: Once<MmramRegion>,
+    /// SMRR range derived during BSP initialization.
+    smrr_range: Once<MemoryRange>,
 }
 
 impl InitState {
@@ -185,13 +185,13 @@ impl InitState {
         self.at_runtime.is_completed()
     }
 
-    /// Stores the SMRR region (one-time).
-    pub(crate) fn set_smrr_range(&self, range: MmramRegion) {
+    /// Stores the SMRR range (one-time).
+    pub(crate) fn set_smrr_range(&self, range: MemoryRange) {
         self.smrr_range.call_once(|| range);
     }
 
-    /// Returns the SMRR region, if set.
-    pub(crate) fn smrr_range(&self) -> Option<MmramRegion> {
+    /// Returns the SMRR range, if set.
+    pub(crate) fn smrr_range(&self) -> Option<MemoryRange> {
         self.smrr_range.get().copied()
     }
 }
@@ -292,7 +292,7 @@ mod tests {
         static REPLACEMENT_BUFFER: [AtomicU8; 1] = [AtomicU8::new(2)];
 
         let state = InitState::new();
-        let smrr = MmramRegion::new(0x6000_0000, 0x10_0000, false);
+        let smrr = MemoryRange::new(0x6000_0000, 0x10_0000).unwrap();
 
         state.set_mm_initialized_buffer(&INITIALIZED_BUFFER);
         state.set_mseg_base(0x7000_0000);
@@ -300,7 +300,7 @@ mod tests {
 
         state.set_mm_initialized_buffer(&REPLACEMENT_BUFFER);
         state.set_mseg_base(0x9000_0000);
-        state.set_smrr_range(MmramRegion::new(0x9000_0000, 0x2000, true));
+        state.set_smrr_range(MemoryRange::new(0x9000_0000, 0x2000).unwrap());
 
         let stored_buffer = state.mm_initialized_buffer().expect("initialized buffer should be stored");
         assert!(core::ptr::eq(stored_buffer, &INITIALIZED_BUFFER));
