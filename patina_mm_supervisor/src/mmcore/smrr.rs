@@ -144,29 +144,6 @@ const fn get_power_of_two32(value: u32) -> u32 {
     if value == 0 { 0 } else { 1u32 << value.ilog2() }
 }
 
-/// Sets the memory type field ([7:0]) of a raw SMRR base register value.
-const fn base_reg_set_memtype(raw: u64, memtype: u8) -> u64 {
-    (raw & !MEMTYPE_MASK) | (memtype as u64 & MEMTYPE_MASK)
-}
-
-/// Sets the physical base address field ([31:12]) of a raw SMRR base register
-/// value.
-const fn base_reg_set_base(raw: u64, base: u32) -> u64 {
-    // `base` is a naturally aligned physical address whose low 12 bits are
-    // zero, so its address bits [31:12] already sit at the register field's
-    // positions; mask them in place without shifting.
-    (raw & !PHYS_ADDR_MASK) | (base as u64 & PHYS_ADDR_MASK)
-}
-
-/// Sets the mask field ([31:12]) of a raw SMRR mask register value for the
-/// given region `size`.
-const fn mask_reg_set_mask(raw: u64, size: u32) -> u64 {
-    // Mask field = ~(size - 1), which for a power-of-two `size` has zeros in the
-    // low bits and ones above; mask its bits [31:12] in place without shifting.
-    let mask_bits = (!(size.wrapping_sub(1))) as u64 & PHYS_ADDR_MASK;
-    (raw & !PHYS_ADDR_MASK) | mask_bits
-}
-
 /// Returns `true` if bit 10 is set in a raw SMRR mask register value.
 const fn mask_reg_bit10_set(raw: u64) -> bool {
     (raw & MASK_BIT_10) != 0
@@ -225,12 +202,6 @@ fn is_smrr_ext_supported() -> bool {
     smrr_ext_supported(unsafe { read_msr(MSR_MTRR_CAP) })
 }
 
-/// Returns the value to write to `MSR_SMRR_BASE` to map `smrr_base` as write-back
-/// cacheable, preserving the register's unrelated bits.
-const fn smrr_base_value(raw: u64, smrr_base: u32) -> u64 {
-    base_reg_set_base(base_reg_set_memtype(raw, MTRR_CACHE_WRITE_BACK), smrr_base)
-}
-
 /// Programs the SMRR base and mask registers to protect the given SMRAM region.
 ///
 /// The region is configured as write-back cacheable but is not yet enabled or finalized; call
@@ -276,11 +247,14 @@ pub(crate) fn smrr_initialize(range: MemoryRange) -> MmSupervisorResult<()> {
     // `verify_smrr_base_size`, so the values written form a well-formed SMRR
     // range. The valid bit is left clear, so the range is not yet enforced.
     unsafe {
-        let base = smrr_base_value(read_msr(MSR_SMRR_BASE), smrr_base);
-        write_msr(MSR_SMRR_BASE, base);
+        // Bits [7:0] hold the memory type and bits [31:12] the base. `smrr_base` is aligned to at
+        // least 4 KiB, so it has no bits below bit 12.
+        let base = read_msr(MSR_SMRR_BASE) & !(PHYS_ADDR_MASK | MEMTYPE_MASK);
+        write_msr(MSR_SMRR_BASE, base | u64::from(smrr_base) | u64::from(MTRR_CACHE_WRITE_BACK));
 
-        let mask = mask_reg_set_mask(read_msr(MSR_SMRR_MASK), smrr_size);
-        write_msr(MSR_SMRR_MASK, mask);
+        // Bits [31:12] hold the mask, which is !(size - 1) for a power-of-two size.
+        let mask = read_msr(MSR_SMRR_MASK) & !PHYS_ADDR_MASK;
+        write_msr(MSR_SMRR_MASK, mask | (u64::from(!(smrr_size - 1)) & PHYS_ADDR_MASK));
     }
 
     Ok(())
@@ -463,39 +437,6 @@ mod tests {
     }
 
     #[test]
-    fn test_smrr_base_reg_set_memtype_sets_low_byte_only() {
-        // Memory type occupies bits [7:0]; all other bits must be preserved.
-        assert_eq!(base_reg_set_memtype(0, MTRR_CACHE_WRITE_BACK), u64::from(MTRR_CACHE_WRITE_BACK));
-        // Existing memory-type bits are replaced, not OR-ed.
-        assert_eq!(base_reg_set_memtype(0xFF, MTRR_CACHE_WRITE_BACK), u64::from(MTRR_CACHE_WRITE_BACK));
-        // Upper bits outside [7:0] are left untouched.
-        assert_eq!(
-            base_reg_set_memtype(0x1234_5600, MTRR_CACHE_WRITE_BACK),
-            0x1234_5600 | u64::from(MTRR_CACHE_WRITE_BACK)
-        );
-    }
-
-    #[test]
-    fn test_smrr_base_reg_set_base_sets_phys_addr_bits() {
-        // Base address occupies bits [31:12].
-        assert_eq!(base_reg_set_base(0, 0x0080_0000), 0x0080_0000);
-        // Bits below [12] of the supplied base are ignored (masked out).
-        assert_eq!(base_reg_set_base(0, 0x0080_0FFF), 0x0080_0000);
-        // Existing [31:12] bits are replaced while [11:0] and [63:32] are preserved.
-        assert_eq!(base_reg_set_base(0xFFFF_FFFF_FFFF_FFFF, 0x0080_0000), 0xFFFF_FFFF_0080_0FFF);
-    }
-
-    #[test]
-    fn test_smrr_mask_reg_set_mask_computes_size_mask() {
-        // Mask field = ~(size - 1) restricted to [31:12].
-        assert_eq!(mask_reg_set_mask(0, SIZE_4KB), 0xFFFF_F000);
-        assert_eq!(mask_reg_set_mask(0, 0x0080_0000), 0xFF80_0000);
-        assert_eq!(mask_reg_set_mask(0, 0x1000_0000), 0xF000_0000);
-        // Bits outside [31:12] of `raw` are preserved.
-        assert_eq!(mask_reg_set_mask(0xFFFF_FFFF_0000_0FFF, 0x0080_0000), 0xFFFF_FFFF_FF80_0FFF);
-    }
-
-    #[test]
     fn test_smrr_mask_reg_bit10_detection() {
         assert!(!mask_reg_bit10_set(0));
         assert!(!mask_reg_bit10_set(MASK_VALID_BIT));
@@ -541,22 +482,9 @@ mod tests {
     }
 
     #[test]
-    fn test_smrr_base_value_applies_write_back_type_and_base() {
-        assert_eq!(smrr_base_value(0, 0x0080_0000), 0x0080_0000 | u64::from(MTRR_CACHE_WRITE_BACK));
-        // A stale memory type in the register is replaced rather than OR-ed.
-        assert_eq!(smrr_base_value(0xFF, 0x0080_0000), 0x0080_0000 | u64::from(MTRR_CACHE_WRITE_BACK));
-        // Bits above [31:12] are preserved.
-        assert_eq!(
-            smrr_base_value(0xFFFF_FFFF_0000_0000, 0x1000_0000),
-            0xFFFF_FFFF_1000_0000 | u64::from(MTRR_CACHE_WRITE_BACK)
-        );
-    }
-
-    #[test]
     fn test_smrr_enable_mask_sets_valid_and_bit10() {
         assert_eq!(smrr_enable_mask(0), Some(MASK_VALID_BIT | MASK_BIT_10));
         // The programmed range mask is preserved alongside the new bits.
-        assert_eq!(mask_reg_set_mask(0, 0x0080_0000), 0xFF80_0000);
         assert_eq!(smrr_enable_mask(0xFF80_0000), Some(0xFF80_0000 | MASK_VALID_BIT | MASK_BIT_10));
     }
 
