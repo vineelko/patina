@@ -632,7 +632,7 @@ impl PageAllocator {
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
-    use crate::{memory::mmram::classify_coverage, test_support};
+    use crate::test_support;
 
     /// Returns `[base, base + size)` as a range.
     fn range(base: u64, size: u64) -> MemoryRange {
@@ -1178,7 +1178,7 @@ mod tests {
             (base + span - page, span),
         ] {
             assert_eq!(
-                classify_coverage(addr, size, [range(base, span)]),
+                MmramPlacement::from(range(addr, size).coverage([range(base, span)])),
                 fixture.allocator.classify_mmram(&range(addr, size)).expect("fixture allocator is initialized"),
                 "classification diverged for 0x{addr:016x} size 0x{size:x}"
             );

@@ -9,9 +9,7 @@
 
 use core::fmt;
 
-use core::borrow::Borrow;
-
-use patina::{MemoryRange, MemoryRangeError, memory_range::Coverage};
+use patina::{MemoryRange, memory_range::Coverage};
 
 use crate::error::MmSupervisorResult;
 use crate::state::security_state;
@@ -116,24 +114,16 @@ pub enum MmramPlacement {
 }
 
 impl MmramPlacement {
-    /// Returns the placement of a range that [`MemoryRange::new`] rejected. An empty range holds no
-    /// MMRAM, and one whose end overflows is reported as partly inside so it fails closed.
-    pub(crate) const fn of_invalid_range(err: MemoryRangeError) -> Self {
-        match err {
-            MemoryRangeError::Empty => Self::Outside,
-            _ => Self::PartlyInside,
-        }
-    }
-
-    /// Resolves this placement to whether `[base, base + size)` may be treated as MM memory.
-    pub fn is_inside(self, base: u64, size: u64) -> bool {
+    /// Resolves this placement of `range` to whether `range` may be treated as MM memory.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the placement is [`MmramPlacement::PartlyInside`].
+    pub fn is_inside(self, range: &MemoryRange) -> bool {
         match self {
             Self::Inside => true,
             Self::Outside => false,
-            Self::PartlyInside => {
-                let end = base.saturating_add(size);
-                panic!("Buffer 0x{base:016x}-0x{end:016x} crosses an MMRAM boundary");
-            }
+            Self::PartlyInside => panic!("Buffer {range} crosses an MMRAM boundary"),
         }
     }
 }
@@ -145,24 +135,6 @@ impl From<Coverage> for MmramPlacement {
             Coverage::Partial => Self::PartlyInside,
             Coverage::Disjoint => Self::Outside,
         }
-    }
-}
-
-/// Classifies `[addr, addr + size)` against `regions`.
-///
-/// Coverage is measured over the union of the regions, so a range spanning two adjacent regions
-/// is [`MmramPlacement::Inside`] rather than partly inside. An empty range is
-/// [`MmramPlacement::Outside`]; a range whose end overflows is reported as partly inside so a
-/// malformed descriptor fails closed.
-pub(crate) fn classify_coverage<I>(addr: u64, size: u64, regions: I) -> MmramPlacement
-where
-    I: IntoIterator,
-    I::IntoIter: Clone,
-    I::Item: Borrow<MemoryRange>,
-{
-    match MemoryRange::new(addr, size) {
-        Ok(range) => range.coverage(regions).into(),
-        Err(err) => MmramPlacement::of_invalid_range(err),
     }
 }
 
@@ -186,7 +158,7 @@ fn classify_buffer(range: &MemoryRange) -> Option<MmramPlacement> {
 ///
 /// Panics when `range` is only partly inside MMRAM, as [`MmramPlacement::is_inside`] does.
 pub(crate) fn is_range_inside_mmram(range: &MemoryRange) -> bool {
-    classify_buffer(range).is_some_and(|p| p.is_inside(range.base(), range.size()))
+    classify_buffer(range).is_some_and(|p| p.is_inside(range))
 }
 
 /// Returns whether `range` touches MMRAM at all, including a range that only crosses a boundary.
@@ -294,26 +266,17 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_coverage() {
-        let regions = [MemoryRange::new(0x1000, 0x1000).unwrap(), MemoryRange::new(0x2000, 0x1000).unwrap()];
-        let classify = |addr, size| classify_coverage(addr, size, regions);
-
-        assert_eq!(classify(0x1000, 0x1000), MmramPlacement::Inside);
-        // Adjacent regions cover the range jointly, so this is wholly inside.
-        assert_eq!(classify(0x1000, 0x2000), MmramPlacement::Inside);
-        assert_eq!(classify(0x4000, 0x1000), MmramPlacement::Outside);
-        assert_eq!(classify(0x2800, 0x1000), MmramPlacement::PartlyInside);
-        assert_eq!(classify(0x0800, 0x1000), MmramPlacement::PartlyInside);
-        assert_eq!(classify(0x1000, 0), MmramPlacement::Outside);
-        // A range whose end overflows fails closed.
-        assert_eq!(classify(u64::MAX, 0x1000), MmramPlacement::PartlyInside);
-        assert_eq!(classify_coverage(0x1000, 0x1000, core::iter::empty::<MemoryRange>()), MmramPlacement::Outside);
+    fn test_mmram_placement_from_coverage() {
+        assert_eq!(MmramPlacement::from(Coverage::Full), MmramPlacement::Inside);
+        assert_eq!(MmramPlacement::from(Coverage::Partial), MmramPlacement::PartlyInside);
+        assert_eq!(MmramPlacement::from(Coverage::Disjoint), MmramPlacement::Outside);
     }
 
     #[test]
     fn test_mmram_placement_resolves_to_containment() {
-        assert!(MmramPlacement::Inside.is_inside(0x1000, 0x1000));
-        assert!(!MmramPlacement::Outside.is_inside(0x1000, 0x1000));
+        let range = MemoryRange::new(0x1000, 0x1000).unwrap();
+        assert!(MmramPlacement::Inside.is_inside(&range));
+        assert!(!MmramPlacement::Outside.is_inside(&range));
     }
 
     #[test]
@@ -322,11 +285,8 @@ mod tests {
 
         // A range that is neither wholly in nor wholly out of MMRAM has no safe reading, so it is
         // reported as the configuration error it is rather than resolved either way.
-        let result = catch_unwind(|| MmramPlacement::PartlyInside.is_inside(0x1000, 0x1000));
-        assert!(result.is_err());
-
-        // A size that overflows the end address still produces a message rather than a second panic.
-        let result = catch_unwind(|| MmramPlacement::PartlyInside.is_inside(u64::MAX, 0x1000));
+        let range = MemoryRange::new(0x1000, 0x1000).unwrap();
+        let result = catch_unwind(|| MmramPlacement::PartlyInside.is_inside(&range));
         assert!(result.is_err());
     }
 
@@ -340,11 +300,5 @@ mod tests {
         // Nothing can be shown to lie outside MMRAM before the regions are known, so a range the
         // supervisor is asked to treat as non-MM memory is reported as overlapping instead.
         assert!(range_overlaps_mmram(&MemoryRange::new(0x1000, 0x1000).unwrap()));
-    }
-
-    #[test]
-    fn test_mmram_placement_of_invalid_range() {
-        assert_eq!(MmramPlacement::of_invalid_range(MemoryRangeError::Empty), MmramPlacement::Outside);
-        assert_eq!(MmramPlacement::of_invalid_range(MemoryRangeError::Overflow), MmramPlacement::PartlyInside);
     }
 }
