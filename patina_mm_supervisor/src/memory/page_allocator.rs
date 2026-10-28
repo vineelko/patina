@@ -62,8 +62,7 @@ pub struct RegionInfo {
 impl RegionInfo {
     /// Returns the region's address range, or `None` if its page count does not describe one.
     pub(crate) fn range(&self) -> Option<MemoryRange> {
-        let size = u64::try_from(self.total_pages.checked_mul(UEFI_PAGE_SIZE)?).ok()?;
-        MemoryRange::new(self.base, size).ok()
+        MemoryRange::from_pages(self.base, u64::try_from(self.total_pages).ok()?, UEFI_PAGE_SIZE as u64).ok()
     }
 }
 

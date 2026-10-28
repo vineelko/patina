@@ -166,14 +166,12 @@ impl CommChannel {
             log::error!("Supervisor communication buffer page count {pages} does not fit the target architecture");
             CommBufferError::InvalidSize { pages }
         })?;
-        let size = pages.checked_mul(UEFI_PAGE_SIZE as u64).filter(|size| *size != 0).ok_or_else(|| {
-            log::error!("Supervisor communication buffer page count {pages} produces an invalid byte size");
-            CommBufferError::InvalidSize { pages }
-        })?;
-        if external.checked_add(size).is_none() {
-            log::error!("Supervisor communication buffer address 0x{external:016x} plus size 0x{size:x} overflows");
-            return Err(CommBufferError::InvalidSize { pages }.into());
-        }
+        let size = MemoryRange::from_pages(external, pages, UEFI_PAGE_SIZE as u64)
+            .map_err(|err| {
+                log::error!("Supervisor communication buffer of {pages} pages at 0x{external:016x} is invalid: {err}");
+                CommBufferError::InvalidSize { pages }
+            })?
+            .size();
 
         require_external_comm_buffer(external, size, "Supervisor communication buffer");
         require_external_comm_buffer(
@@ -233,14 +231,12 @@ impl CommChannel {
             log::error!("User communication buffer page count {pages} does not fit the target architecture");
             CommBufferError::InvalidSize { pages }
         })?;
-        let size = pages.checked_mul(UEFI_PAGE_SIZE as u64).filter(|size| *size != 0).ok_or_else(|| {
-            log::error!("User communication buffer page count {pages} produces an invalid byte size");
-            CommBufferError::InvalidSize { pages }
-        })?;
-        if external.checked_add(size).is_none() {
-            log::error!("User communication buffer address 0x{external:016x} plus size 0x{size:x} overflows");
-            return Err(CommBufferError::InvalidSize { pages }.into());
-        }
+        let size = MemoryRange::from_pages(external, pages, UEFI_PAGE_SIZE as u64)
+            .map_err(|err| {
+                log::error!("User communication buffer of {pages} pages at 0x{external:016x} is invalid: {err}");
+                CommBufferError::InvalidSize { pages }
+            })?
+            .size();
 
         require_external_comm_buffer(external, size, "User communication buffer");
         require_external_comm_buffer(status, core::mem::size_of::<MmCommBufferStatus>() as u64, "User status buffer");
