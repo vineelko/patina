@@ -9,12 +9,14 @@
 
 use core::fmt;
 
+use patina::MemoryRange;
+
 use zerocopy::FromBytes;
 use zerocopy_derive::Immutable;
 
 use crate::error::MmSupervisorResult;
 use crate::intrinsics::{DescriptorTablePointer, read_idtr};
-use crate::memory::mmram::is_buffer_inside_mmram;
+use crate::memory::mmram::is_range_inside_mmram;
 
 /// Offset from SMBASE where the SMI handler code is located.
 pub(crate) const SMM_HANDLER_OFFSET: u64 = 0x8000;
@@ -129,12 +131,12 @@ pub(crate) struct SmiHandlerIdtPatchInputs {
 ///
 /// `is_inside_mmram` is taken as a parameter so the check can be driven in a test without a live
 /// page allocator; production passes
-/// [`is_buffer_inside_mmram`](crate::memory::mmram::is_buffer_inside_mmram).
+/// [`is_range_inside_mmram`](crate::memory::mmram::is_range_inside_mmram).
 fn validate_smi_handler_idt_patch_inputs(
     sm_base_array: u64,
     number_of_cpus: usize,
     mmi_entry_size: u64,
-    is_inside_mmram: impl Fn(u64, u64) -> bool,
+    is_inside_mmram: impl Fn(&MemoryRange) -> bool,
 ) -> MmSupervisorResult<SmiHandlerIdtPatchInputs> {
     if mmi_entry_size == 0 {
         return Err(SmiHandlerIdtPatchError::ZeroEntrySize.into());
@@ -149,9 +151,7 @@ fn validate_smi_handler_idt_patch_inputs(
         .ok_or(SmiHandlerIdtPatchError::SmBaseArraySizeOverflow)?;
     let sm_base_array_size_u64 =
         u64::try_from(sm_base_array_size).map_err(|_| SmiHandlerIdtPatchError::SmBaseArraySizeOverflow)?;
-    if sm_base_array.checked_add(sm_base_array_size_u64).is_none()
-        || !is_inside_mmram(sm_base_array, sm_base_array_size_u64)
-    {
+    if !MemoryRange::new(sm_base_array, sm_base_array_size_u64).is_ok_and(|range| is_inside_mmram(&range)) {
         return Err(SmiHandlerIdtPatchError::SmBaseArrayOutsideMmram.into());
     }
 
@@ -222,7 +222,7 @@ pub(crate) fn patch_smi_handler_idt(sm_base_array: u64, number_of_cpus: usize, m
         sm_base_array,
         number_of_cpus,
         mmi_entry_size,
-        is_buffer_inside_mmram,
+        is_range_inside_mmram,
     ) {
         Ok(inputs) => inputs,
         Err(error) => {
@@ -256,7 +256,8 @@ pub(crate) fn patch_smi_handler_idt(sm_base_array: u64, number_of_cpus: usize, m
             log::error!("CPU {cpu}: SMBASE 0x{smbase:016x} overflows the SMI handler address");
             continue;
         };
-        if !is_buffer_inside_mmram(mmi_entry_base, inputs.mmi_entry_size_u64) {
+        if !MemoryRange::new(mmi_entry_base, inputs.mmi_entry_size_u64).is_ok_and(|range| is_range_inside_mmram(&range))
+        {
             log::error!(
                 "CPU {cpu}: SMI handler at 0x{mmi_entry_base:016x} with size 0x{:x} is not inside MMRAM",
                 inputs.mmi_entry_size
@@ -279,7 +280,8 @@ pub(crate) fn patch_smi_handler_idt(sm_base_array: u64, number_of_cpus: usize, m
             log::warn!("CPU {cpu}: Fixup64[{FIXUP64_SMI_HANDLER_IDTR}] (SMI_HANDLER_IDTR) is null");
             continue;
         }
-        if !is_buffer_inside_mmram(idt_desc_addr, core::mem::size_of::<DescriptorTablePointer>() as u64) {
+        let idt_desc = MemoryRange::new(idt_desc_addr, core::mem::size_of::<DescriptorTablePointer>() as u64);
+        if !idt_desc.is_ok_and(|range| is_range_inside_mmram(&range)) {
             log::error!("CPU {cpu}: SMI handler IDT descriptor at 0x{idt_desc_addr:016x} is not inside MMRAM");
             continue;
         }
@@ -358,8 +360,8 @@ mod tests {
 
     #[test]
     fn test_validate_smi_handler_idt_patch_inputs() {
-        let inputs = validate_smi_handler_idt_patch_inputs(0x1000, 4, 0x200, |base, size| {
-            base == 0x1000 && size == 4 * size_of::<u64>() as u64
+        let inputs = validate_smi_handler_idt_patch_inputs(0x1000, 4, 0x200, |range| {
+            *range == MemoryRange::new(0x1000, 4 * size_of::<u64>() as u64).unwrap()
         })
         .expect("valid patch inputs should pass");
 
@@ -376,31 +378,31 @@ mod tests {
     #[test]
     fn test_validate_smi_handler_idt_patch_inputs_rejects_invalid_values() {
         assert_eq!(
-            validate_smi_handler_idt_patch_inputs(0x1000, 1, 0, |_, _| true),
+            validate_smi_handler_idt_patch_inputs(0x1000, 1, 0, |_| true),
             Err(SmiHandlerIdtPatchError::ZeroEntrySize.into())
         );
         assert_eq!(
-            validate_smi_handler_idt_patch_inputs(0, 1, 0x100, |_, _| true),
+            validate_smi_handler_idt_patch_inputs(0, 1, 0x100, |_| true),
             Err(SmiHandlerIdtPatchError::MissingSmBaseArray.into())
         );
         assert_eq!(
-            validate_smi_handler_idt_patch_inputs(0x1000, 0, 0x100, |_, _| true),
+            validate_smi_handler_idt_patch_inputs(0x1000, 0, 0x100, |_| true),
             Err(SmiHandlerIdtPatchError::MissingSmBaseArray.into())
         );
         assert_eq!(
-            validate_smi_handler_idt_patch_inputs(0x1000, usize::MAX, 0x100, |_, _| true),
+            validate_smi_handler_idt_patch_inputs(0x1000, usize::MAX, 0x100, |_| true),
             Err(SmiHandlerIdtPatchError::SmBaseArraySizeOverflow.into())
         );
         assert_eq!(
-            validate_smi_handler_idt_patch_inputs(0x1000, 1, 0x100, |_, _| false),
+            validate_smi_handler_idt_patch_inputs(0x1000, 1, 0x100, |_| false),
             Err(SmiHandlerIdtPatchError::SmBaseArrayOutsideMmram.into())
         );
         assert_eq!(
-            validate_smi_handler_idt_patch_inputs(u64::MAX - 3, 1, 0x100, |_, _| true),
+            validate_smi_handler_idt_patch_inputs(u64::MAX - 3, 1, 0x100, |_| true),
             Err(SmiHandlerIdtPatchError::SmBaseArrayOutsideMmram.into())
         );
         assert_eq!(
-            validate_smi_handler_idt_patch_inputs(0x1000, 1, isize::MAX as u64 + 1, |_, _| true),
+            validate_smi_handler_idt_patch_inputs(0x1000, 1, isize::MAX as u64 + 1, |_| true),
             Err(SmiHandlerIdtPatchError::EntrySizeTooLarge.into())
         );
     }

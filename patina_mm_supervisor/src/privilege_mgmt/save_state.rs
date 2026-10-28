@@ -42,6 +42,7 @@
 //!
 //! SPDX-License-Identifier: Apache-2.0
 
+use patina::MemoryRange;
 use patina::standard::efi::Status;
 use patina_internal_cpu::save_state::{
     IO_INFO_SIZE, IO_TYPE_INPUT, MmSaveStateRegister, SMRAM_SAVE_STATE_MAP_SIZE, SaveState, SaveStateError,
@@ -251,16 +252,17 @@ impl SaveStateInfo {
 /// Supervisor-only mapping is what keeps the syscall the only way in.
 pub(crate) fn validate_save_state_regions(
     info: &SaveStateInfo,
-    is_inside_mmram: impl Fn(u64, u64) -> bool,
-    is_supervisor_owned: impl Fn(u64, u64) -> bool,
+    is_inside_mmram: impl Fn(&MemoryRange) -> bool,
+    is_supervisor_owned: impl Fn(&MemoryRange) -> bool,
 ) -> MmSupervisorResult<()> {
-    // `SaveStateInfo::new` already rejected a null, empty, misaligned, or overflowing array.
     let (smbase_array, number_of_cpus) = (info.smbase_array(), info.number_of_cpus());
-    let array_size = info.smbase_array_size();
-    if !is_inside_mmram(smbase_array, array_size) {
-        return Err(SaveStateValidationError::UnusableSmBaseArray { base: smbase_array, count: number_of_cpus }.into());
+    let unusable_array = || SaveStateValidationError::UnusableSmBaseArray { base: smbase_array, count: number_of_cpus };
+    // `SaveStateInfo::new` already rejected a null, empty, misaligned, or overflowing array.
+    let array = MemoryRange::new(smbase_array, info.smbase_array_size()).map_err(|_| unusable_array())?;
+    if !is_inside_mmram(&array) {
+        return Err(unusable_array().into());
     }
-    if !is_supervisor_owned(smbase_array, array_size) {
+    if !is_supervisor_owned(&array) {
         return Err(SaveStateValidationError::SmBaseArrayNotSupervisorOwned {
             base: smbase_array,
             count: number_of_cpus,
@@ -273,9 +275,11 @@ pub(crate) fn validate_save_state_regions(
         let smbase = info
             .smbase(cpu_index)
             .map_err(|_| SaveStateValidationError::UnusableSmBaseArray { base: smbase_array, count: number_of_cpus })?;
-        match info.save_state_map_base(cpu_index) {
-            Ok(map_base) if is_inside_mmram(map_base, MAP_SIZE) => {
-                if !is_supervisor_owned(map_base, MAP_SIZE) {
+        let map =
+            info.save_state_map_base(cpu_index).ok().and_then(|map_base| MemoryRange::new(map_base, MAP_SIZE).ok());
+        match map {
+            Some(map) if is_inside_mmram(&map) => {
+                if !is_supervisor_owned(&map) {
                     return Err(
                         SaveStateValidationError::SaveStateRegionNotSupervisorOwned { cpu_index, smbase }.into()
                     );
@@ -693,12 +697,8 @@ mod tests {
     }
 
     /// Accepts only ranges lying wholly inside one of `allowed`.
-    fn inside_any(allowed: Vec<(u64, u64)>) -> impl Fn(u64, u64) -> bool {
-        move |addr, size| {
-            allowed
-                .iter()
-                .any(|&(base, len)| addr >= base && addr.checked_add(size).is_some_and(|end| end <= base + len))
-        }
+    fn inside_any(allowed: Vec<(u64, u64)>) -> impl Fn(&MemoryRange) -> bool {
+        move |range| allowed.iter().any(|&(base, len)| range.base() >= base && range.end() <= base + len)
     }
 
     /// Wraps an SMBASE array that the validator must reject before it reads any entry.
@@ -708,7 +708,7 @@ mod tests {
     }
 
     /// Answers "supervisor-owned" for every range, isolating the containment rules.
-    fn all_supervisor_owned(_addr: u64, _size: u64) -> bool {
+    fn all_supervisor_owned(_range: &MemoryRange) -> bool {
         true
     }
 
@@ -808,7 +808,7 @@ mod tests {
         let info = smram.info();
 
         assert_eq!(
-            validate_save_state_regions(&info, inside_any(fake_smram_ranges(&smram)), |_, _| false),
+            validate_save_state_regions(&info, inside_any(fake_smram_ranges(&smram)), |_| false),
             Err(SaveStateValidationError::SmBaseArrayNotSupervisorOwned { base: info.smbase_array(), count: 2 }.into())
         );
     }
@@ -822,7 +822,7 @@ mod tests {
         let array_size = (smram.sm_bases.len() * core::mem::size_of::<u64>()) as u64;
 
         // Only the array itself is supervisor-owned; the maps it points at are not.
-        let owned = move |addr: u64, size: u64| addr == info.smbase_array() && size == array_size;
+        let owned = move |range: &MemoryRange| range.base() == info.smbase_array() && range.size() == array_size;
 
         assert_eq!(
             validate_save_state_regions(&info, inside_any(fake_smram_ranges(&smram)), owned),
@@ -838,7 +838,7 @@ mod tests {
     fn test_validate_save_state_regions_rejects_an_array_outside_mmram_without_reading_it() {
         // The array has to be refused before it is dereferenced, so this points at an address
         // that would fault if the check were done in the wrong order.
-        let result = validate_save_state_regions(&unchecked_info(0xdead_0000, 4), |_, _| false, all_supervisor_owned);
+        let result = validate_save_state_regions(&unchecked_info(0xdead_0000, 4), |_| false, all_supervisor_owned);
 
         assert_eq!(result, Err(SaveStateValidationError::UnusableSmBaseArray { base: 0xdead_0000, count: 4 }.into()));
     }
@@ -873,7 +873,7 @@ mod tests {
         smram.set_smbase(0, u64::MAX);
 
         assert_eq!(
-            validate_save_state_regions(&smram.info(), |_, _| true, all_supervisor_owned),
+            validate_save_state_regions(&smram.info(), |_| true, all_supervisor_owned),
             Err(SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 0, smbase: u64::MAX }.into())
         );
     }

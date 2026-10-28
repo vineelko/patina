@@ -41,7 +41,7 @@ use crate::{
     memory::{
         self, AllocationType, PAGE_STEP, PageAllocator, SharedPagingAllocator,
         mmram::MmramRegion,
-        mmram::{is_buffer_inside_mmram, is_range_inside_mmram},
+        mmram::is_range_inside_mmram,
         page_ownership::{PageOwnership, query_address_ownership},
     },
     policy::{self, MemDescriptorV1_0, dump_policy, gate::PolicyGate, walk_page_table},
@@ -343,7 +343,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // A zero-length walk means the list has no HOBs at all, which is not a list. The producer
         // named this range, so it is confirmed to be MMRAM before it is read.
-        if hob_list_size == 0 || !is_buffer_inside_mmram(hob_base, hob_list_size) {
+        if !MemoryRange::new(hob_base, hob_list_size).is_ok_and(|range| is_range_inside_mmram(&range)) {
             return Err(HobValidationError::HobListOutsideMmram { base: hob_base, size: hob_list_size }.into());
         }
 
@@ -682,7 +682,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         if number_of_cpus == 0 || number_of_cpus > MAX_CPUS {
             return Err(CoreInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }.into());
         }
-        if !is_buffer_inside_mmram(buffer, number_of_cpus as u64) {
+        if !MemoryRange::new(buffer, number_of_cpus as u64).is_ok_and(|range| is_range_inside_mmram(&range)) {
             log::error!("MM initialized buffer at 0x{buffer:016x} does not contain {number_of_cpus} slot(s) in MMRAM");
             return Err(CoreInitError::InitializedBufferInvalid.into());
         }
@@ -704,8 +704,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// The save-state syscall reads these regions on Ring 3's behalf, so they are proven once
     /// here rather than trusted at each read.
     fn check_save_state_regions(&self, save_state_info: &SaveStateInfo) -> MmSupervisorResult<()> {
-        validate_save_state_regions(save_state_info, is_buffer_inside_mmram, |base, size| {
-            matches!(query_address_ownership(base, size), Some(PageOwnership::Supervisor))
+        validate_save_state_regions(save_state_info, is_range_inside_mmram, |range| {
+            matches!(query_address_ownership(range.base(), range.size()), Some(PageOwnership::Supervisor))
         })
         .inspect_err(|e| log::error!("PassDown HOB does not describe usable save-state regions: {e}"))?;
         log::info!(
