@@ -40,6 +40,8 @@ const _MTRR_CACHE_WRITE_PROTECTED: u8 = 5;
 const MTRR_CACHE_WRITE_BACK: u8 = 6;
 
 const PHYS_ADDR_MASK: u64 = 0xFFFF_F000; // bits [31:12]
+/// The SMRR registers hold address bits [31:12], so a range must end at or below 4 GiB.
+const SMRR_MAX_ADDRESS: u64 = 1 << 32;
 const MEMTYPE_MASK: u64 = 0x0000_00FF; // bits [7:0]
 const MASK_BIT_10: u64 = 1 << 10;
 const MASK_VALID_BIT: u64 = 1 << 11;
@@ -72,9 +74,9 @@ pub enum SmrrError {
     /// The region is not a power-of-two size of at least 4 KiB on a naturally aligned base.
     RangeNotAligned {
         /// Base address that failed the check.
-        base: u32,
+        base: u64,
         /// Size that failed the check.
-        size: u32,
+        size: u64,
     },
 }
 
@@ -145,10 +147,12 @@ const fn mask_reg_bit10_set(raw: u64) -> bool {
 
 /// Validates that `range` satisfies the SMRR alignment and size constraints.
 ///
-/// A valid region must be at least 4 KiB and naturally aligned: its size is a power of two and
-/// its base is a multiple of its size.
+/// A valid region must be at least 4 KiB and smaller than 4 GiB, end at or below 4 GiB, and be
+/// naturally aligned: its size is a power of two and its base is a multiple of its size.
 pub(crate) fn verify_smrr_base_size(range: &MemoryRange) -> bool {
-    range.size() >= u64::from(SIZE_4KB) && range.is_naturally_aligned()
+    (u64::from(SIZE_4KB)..SMRR_MAX_ADDRESS).contains(&range.size())
+        && range.end() <= SMRR_MAX_ADDRESS
+        && range.is_naturally_aligned()
 }
 
 /// Returns `true` if a raw CPUID leaf 1 `edx` value reports MTRR support.
@@ -221,27 +225,27 @@ pub(crate) fn smrr_initialize(range: MemoryRange) -> MmSupervisorResult<()> {
     // validate and program a completely different region than the one handed in, leaving the
     // real MMRAM unprotected, so a region that does not fit is fatal rather than narrowed.
     let (base, size) = range.into_parts();
-    let (Ok(smrr_base), Ok(smrr_size)) = (u32::try_from(base), u32::try_from(size)) else {
+    if range.end() > SMRR_MAX_ADDRESS {
         return Err(SmrrError::RangeNotAddressable { base, size }.into());
-    };
+    }
 
     if !verify_smrr_base_size(&range) {
-        return Err(SmrrError::RangeNotAligned { base: smrr_base, size: smrr_size }.into());
+        return Err(SmrrError::RangeNotAligned { base, size }.into());
     }
 
     // SAFETY: SMRR support was verified above, so MSR_SMRR_BASE/MSR_SMRR_MASK
-    // are valid architectural MSRs. `smrr_base`/`smrr_size` were validated by
+    // are valid architectural MSRs. `base`/`size` were validated by
     // `verify_smrr_base_size`, so the values written form a well-formed SMRR
     // range. The valid bit is left clear, so the range is not yet enforced.
     unsafe {
-        // Bits [7:0] hold the memory type and bits [31:12] the base. `smrr_base` is aligned to at
-        // least 4 KiB, so it has no bits below bit 12.
-        let base = read_msr(MSR_SMRR_BASE) & !(PHYS_ADDR_MASK | MEMTYPE_MASK);
-        write_msr(MSR_SMRR_BASE, base | u64::from(smrr_base) | u64::from(MTRR_CACHE_WRITE_BACK));
+        // Bits [7:0] hold the memory type and bits [31:12] the base. `base` is aligned to at
+        // least 4 KiB and is below 4 GiB, so it has no bits outside [31:12].
+        let base_reg = read_msr(MSR_SMRR_BASE) & !(PHYS_ADDR_MASK | MEMTYPE_MASK);
+        write_msr(MSR_SMRR_BASE, base_reg | base | u64::from(MTRR_CACHE_WRITE_BACK));
 
         // Bits [31:12] hold the mask, which is !(size - 1) for a power-of-two size.
-        let mask = read_msr(MSR_SMRR_MASK) & !PHYS_ADDR_MASK;
-        write_msr(MSR_SMRR_MASK, mask | (u64::from(!(smrr_size - 1)) & PHYS_ADDR_MASK));
+        let mask_reg = read_msr(MSR_SMRR_MASK) & !PHYS_ADDR_MASK;
+        write_msr(MSR_SMRR_MASK, mask_reg | (!(size - 1) & PHYS_ADDR_MASK));
     }
 
     Ok(())
@@ -292,8 +296,6 @@ pub(crate) fn smrr_enable() {
 pub(crate) fn coalesced_smrr_range(regions: &[MmramRegion]) -> Option<MemoryRange> {
     /// Lowest CPU start address a candidate SMRR range may have.
     const BASE_1MB: u64 = 0x0010_0000;
-    /// Highest address the primary SMRR can cover (4 GiB).
-    const SMRR_MAX_ADDRESS: u64 = 0x1_0000_0000;
     /// Smallest region that can be selected (256 KiB - 4 KiB).
     const MIN_SIZE: u64 = SIZE_256KB as u64 - UEFI_PAGE_SIZE as u64;
 
@@ -324,9 +326,7 @@ pub(crate) fn coalesced_smrr_range(regions: &[MmramRegion]) -> Option<MemoryRang
         }
     }
 
-    let smrr_base = u32::try_from(smrr.base()).ok()?;
-    let smrr_size = u32::try_from(smrr.size()).ok()?;
-
+    let (smrr_base, smrr_size) = smrr.into_parts();
     if !verify_smrr_base_size(&smrr) {
         log::warn!(
             "Coalesced SMRR range base=0x{smrr_base:x} size=0x{smrr_size:x} does not meet SMRR alignment/size requirements"
@@ -390,6 +390,17 @@ mod tests {
     fn test_smrr_verify_rejects_non_power_of_two_size() {
         for size in [0x3000, 0x5000, 0x1001] {
             assert!(!verify_smrr_base_size(&MemoryRange::new(0, size).unwrap()), "size 0x{size:x}");
+        }
+    }
+
+    #[test]
+    fn test_smrr_verify_requires_a_range_below_4gib() {
+        // A range may end exactly at 4 GiB.
+        assert!(verify_smrr_base_size(&MemoryRange::new(0xFF00_0000, 0x0100_0000).unwrap()));
+        // The mask cannot describe a 4 GiB size, and the registers cannot hold a base at or
+        // above 4 GiB.
+        for (base, size) in [(0, 1 << 32), (1 << 32, 0x1000), (1 << 33, 1 << 33)] {
+            assert!(!verify_smrr_base_size(&MemoryRange::new(base, size).unwrap()), "0x{base:x} +0x{size:x}");
         }
     }
 
