@@ -59,6 +59,14 @@ pub struct RegionInfo {
     pub bitmap_start_bit: usize,
 }
 
+impl RegionInfo {
+    /// Returns the region's address range, or `None` if its page count does not describe one.
+    pub(crate) fn range(&self) -> Option<MemoryRange> {
+        let size = u64::try_from(self.total_pages.checked_mul(UEFI_PAGE_SIZE)?).ok()?;
+        MemoryRange::new(self.base, size).ok()
+    }
+}
+
 /// Maximum number of SMRAM regions collected on the stack while scanning the
 /// HOB list. The authoritative region metadata is stored in SMRAM afterwards.
 pub(crate) const MAX_TEMP_REGIONS: usize = 256;
@@ -1170,7 +1178,7 @@ mod tests {
             (u64::MAX, page),
         ] {
             assert_eq!(
-                classify_coverage(addr, size, core::iter::once((base, base + span))),
+                classify_coverage(addr, size, [MemoryRange::new(base, span).unwrap()]),
                 fixture.allocator.classify_mmram(addr, size).expect("fixture allocator is initialized"),
                 "classification diverged for 0x{addr:016x} size 0x{size:x}"
             );

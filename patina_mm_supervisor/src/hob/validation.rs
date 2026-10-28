@@ -61,7 +61,7 @@ use patina::pi::hob::{
     RESOURCE_DESCRIPTOR2, ResourceDescriptor, ResourceDescriptorV2, UEFI_CAPSULE,
 };
 use patina::standard::efi;
-use patina::{MemoryRange, UEFI_PAGE_SIZE, align_range};
+use patina::{MemoryRange, UEFI_PAGE_SIZE};
 use patina_paging::{MemoryAttributes, PageTable};
 use zerocopy::FromBytes;
 
@@ -69,6 +69,7 @@ use crate::error::MmSupervisorResult;
 use crate::hob::pass_down::{
     MM_SUPV_PASS_DOWN_HOB_GUID, MM_SUPV_PASS_DOWN_HOB_REVISION, MmSupvPassDownHobData, PassDownHobError,
 };
+use crate::memory::PAGE_STEP;
 use crate::memory::mmram::{MmramRegion, classify_coverage};
 use crate::state::security::SupervisorPageTable;
 use crate::state::security_state;
@@ -357,35 +358,15 @@ impl fmt::Display for HobValidationError {
     }
 }
 
-/// Returns the exclusive end of a non-empty address range.
-fn checked_range_end(kind: &'static str, base: u64, length: u64) -> MmSupervisorResult<u64> {
-    if length == 0 {
-        return Err(HobValidationError::InvalidAddressRange { kind, base, length }.into());
-    }
-    base.checked_add(length).ok_or(HobValidationError::InvalidAddressRange { kind, base, length }.into())
-}
-
-/// Returns whether the two `[base, base + size)` ranges overlap.
-fn ranges_overlap(a: (u64, u64), b: (u64, u64)) -> bool {
-    let (a_base, a_size) = a;
-    let (b_base, b_size) = b;
-    if a_size == 0 || b_size == 0 {
-        return false;
-    }
-    // Treat overflowing ranges as overlapping so callers that use this predicate
-    // directly fail closed.
-    let Some(a_end) = a_base.checked_add(a_size) else {
-        return true;
-    };
-    let Some(b_end) = b_base.checked_add(b_size) else {
-        return true;
-    };
-    a_base < b_end && b_base < a_end
+/// Returns `[base, base + length)` as a range, or reports it as an invalid address range when it
+/// is empty or runs past the end of the address space.
+fn checked_range(kind: &'static str, base: u64, length: u64) -> MmSupervisorResult<MemoryRange> {
+    MemoryRange::new(base, length).map_err(|_| HobValidationError::InvalidAddressRange { kind, base, length }.into())
 }
 
 /// Validates that the scanned MMRAM regions form a single contiguous, non-overlapping span and
-/// returns that span as `(base, size)`. The regions are not required to be sorted.
-fn validate_mmram_contiguous(regions: &[MmramRegion]) -> MmSupervisorResult<(u64, u64)> {
+/// returns that span. The regions are not required to be sorted.
+fn validate_mmram_contiguous(regions: &[MmramRegion]) -> MmSupervisorResult<MemoryRange> {
     let ranges = regions.iter().map(|region| region.range);
     let span = MemoryRange::collapse(ranges.clone()).map_err(|_| HobValidationError::NoMmramRegions)?;
 
@@ -405,24 +386,23 @@ fn validate_mmram_contiguous(regions: &[MmramRegion]) -> MmSupervisorResult<(u64
         return Err(HobValidationError::MmramNotContiguous { covered, span: span.size() }.into());
     }
 
-    Ok((span.base(), span.size()))
+    Ok(span)
 }
 
 /// Returns whether `[base, base + size)` lies entirely inside the MMRAM span.
 ///
-/// `mmram` is the `(base, size)` span returned by [`validate_mmram_contiguous`]. Containment is
-/// resolved against it rather than the page allocator, so the pre-paging checks can run before
-/// the allocator has committed to the scanned descriptors.
+/// `mmram` is the span returned by [`validate_mmram_contiguous`]. Containment is resolved against
+/// it rather than the page allocator, so the pre-paging checks can run before the allocator has
+/// committed to the scanned descriptors.
 ///
 /// # Panics
 ///
-/// Panics when the range is only partly inside MMRAM, as [`MmramPlacement::is_inside`] does.
+/// Panics when the range is only partly inside MMRAM, or when its end runs past the end of the
+/// address space, as [`MmramPlacement::is_inside`] does.
 ///
 /// [`MmramPlacement::is_inside`]: crate::memory::mmram::MmramPlacement::is_inside
-fn is_inside_mmram(mmram: (u64, u64), base: u64, size: u64) -> bool {
-    let (mmram_base, mmram_size) = mmram;
-    let mmram_span = core::iter::once((mmram_base, mmram_base.saturating_add(mmram_size)));
-    classify_coverage(base, size, mmram_span).is_inside(base, size)
+fn is_inside_mmram(mmram: MemoryRange, base: u64, size: u64) -> bool {
+    classify_coverage(base, size, [mmram]).is_inside(base, size)
 }
 
 /// Validates the `PassDown` HOB revision and that every pointer it reports references memory
@@ -430,7 +410,7 @@ fn is_inside_mmram(mmram: (u64, u64), base: u64, size: u64) -> bool {
 ///
 /// Every pointer is required. A null one needs no separate check: MMRAM never covers address 0,
 /// so the containment check rejects it and names the field.
-fn validate_pass_down_pointers(pass_down: &MmSupvPassDownHobData, mmram: (u64, u64)) -> MmSupervisorResult<()> {
+fn validate_pass_down_pointers(pass_down: &MmSupvPassDownHobData, mmram: MemoryRange) -> MmSupervisorResult<()> {
     if pass_down.revision != MM_SUPV_PASS_DOWN_HOB_REVISION {
         return Err(PassDownHobError::InvalidRevision {
             found: pass_down.revision,
@@ -453,11 +433,6 @@ fn validate_pass_down_pointers(pass_down: &MmSupvPassDownHobData, mmram: (u64, u
     }
 
     Ok(())
-}
-
-/// Returns whether `[base, base + length)` overlaps the MMRAM span.
-fn buffer_overlaps_mmram(mmram: (u64, u64), base: u64, length: u64) -> bool {
-    ranges_overlap((base, length), mmram)
 }
 
 /// Returns the smallest length a HOB of `hob_type` can have.
@@ -495,7 +470,7 @@ fn min_hob_length(hob_type: u16) -> usize {
 pub(crate) unsafe fn validate_hob_list_structure(handoff: &PhaseHandoffInformationTable) -> MmSupervisorResult<u64> {
     let base = core::ptr::from_ref(handoff).cast::<HobHeader>();
     let limit = MAX_HOB_LIST_SIZE;
-    checked_range_end("HOB list", base.addr() as u64, limit as u64)?;
+    checked_range("HOB list", base.addr() as u64, limit as u64)?;
 
     let mut offset = 0usize;
     loop {
@@ -532,7 +507,7 @@ pub(crate) unsafe fn validate_hob_list_structure(handoff: &PhaseHandoffInformati
 /// later maps it readable to Ring 3, so it has to be inside MMRAM for the same
 /// reason its contents do.
 ///
-/// `mmram` is the `(base, size)` span returned by [`validate_mmram_contiguous`].
+/// `mmram` is the span returned by [`validate_mmram_contiguous`].
 ///
 /// # Panics
 ///
@@ -540,7 +515,7 @@ pub(crate) unsafe fn validate_hob_list_structure(handoff: &PhaseHandoffInformati
 fn validate_hob_list_inside_mmram(
     handoff: &PhaseHandoffInformationTable,
     length: u64,
-    mmram: (u64, u64),
+    mmram: MemoryRange,
 ) -> MmSupervisorResult<()> {
     let base = core::ptr::from_ref(handoff) as u64;
 
@@ -558,14 +533,13 @@ fn validate_hob_list_inside_mmram(
 /// contiguous span validated by [`validate_mmram_contiguous`].
 fn validate_memory_allocations<'a>(
     hobs: impl IntoIterator<Item = Hob<'a>>,
-    mmram: (u64, u64),
+    mmram: MemoryRange,
 ) -> MmSupervisorResult<()> {
     for current in hobs {
         if let Hob::MemoryAllocation(alloc) = current {
             let base = alloc.alloc_descriptor.memory_base_address;
             let length = alloc.alloc_descriptor.memory_length;
-            checked_range_end("memory allocation HOB", base, length)?;
-            if buffer_overlaps_mmram(mmram, base, length) {
+            if checked_range("memory allocation HOB", base, length)?.overlaps(&mmram) {
                 return Err(HobValidationError::MemoryAllocationInsideMmram { base, length }.into());
             }
         }
@@ -575,12 +549,12 @@ fn validate_memory_allocations<'a>(
 
 /// Validates supervisor module allocations, including the standard PI Init allocation.
 ///
-/// `mmram` is the `(base, size)` span returned by [`validate_mmram_contiguous`].
+/// `mmram` is the span returned by [`validate_mmram_contiguous`].
 fn validate_allocation_modules<'a>(
     hobs: impl IntoIterator<Item = Hob<'a>>,
-    mmram: (u64, u64),
+    mmram: MemoryRange,
 ) -> MmSupervisorResult<()> {
-    let mut modules: [(u64, u64); MAX_ALLOC_MODULES] = [(0, 0); MAX_ALLOC_MODULES];
+    let mut modules: [Option<MemoryRange>; MAX_ALLOC_MODULES] = [None; MAX_ALLOC_MODULES];
     let mut count = 0usize;
     let mut has_init = false;
     let mut has_supv_core = false;
@@ -597,21 +571,20 @@ fn validate_allocation_modules<'a>(
                 && module.module_name == MM_SUPERVISOR_CORE_GUID;
             let base = module.alloc_descriptor.memory_base_address;
             let length = module.alloc_descriptor.memory_length;
-            checked_range_end("allocation module HOB", base, length)?;
+            let range = checked_range("allocation module HOB", base, length)?;
             if base == 0 {
                 return Err(
                     HobValidationError::InvalidAddressRange { kind: "allocation module HOB", base, length }.into()
                 );
             }
-            if is_init && (!base.is_multiple_of(UEFI_PAGE_SIZE as u64) || !length.is_multiple_of(UEFI_PAGE_SIZE as u64))
-            {
+            if is_init && !matches!(range.is_aligned(UEFI_PAGE_SIZE as u64), Ok(true)) {
                 return Err(HobValidationError::InitModuleNotPageAligned { base, length }.into());
             }
             if !is_inside_mmram(mmram, base, length) {
                 return Err(HobValidationError::AllocationModuleOutsideMmram { base, length }.into());
             }
             let entry_point = module.entry_point;
-            if !entry_point_in_range(entry_point, base, length) {
+            if !range.contains(entry_point) {
                 return Err(
                     HobValidationError::AllocationModuleEntryPointOutOfRange { entry_point, base, length }.into()
                 );
@@ -619,7 +592,7 @@ fn validate_allocation_modules<'a>(
             let slot = modules
                 .get_mut(count)
                 .ok_or(HobValidationError::TooManyAllocationModules { limit: MAX_ALLOC_MODULES })?;
-            *slot = (base, length);
+            *slot = Some(range);
             count += 1;
         }
     }
@@ -628,50 +601,17 @@ fn validate_allocation_modules<'a>(
         return Err(HobValidationError::MissingModule { has_init, has_supv_core }.into());
     }
 
-    if let Some((a, b)) = find_overlap(modules.get_mut(..count).unwrap_or(&mut [])) {
+    if let Some((a, b)) = MemoryRange::find_overlap(modules.iter().flatten()) {
         return Err(HobValidationError::AllocationModulesOverlap {
-            base_a: a.0,
-            size_a: a.1,
-            base_b: b.0,
-            size_b: b.1,
+            base_a: a.base(),
+            size_a: a.size(),
+            base_b: b.base(),
+            size_b: b.size(),
         }
         .into());
     }
 
     Ok(())
-}
-
-/// Returns whether `entry_point` lies within the `[base, base + length)` range.
-fn entry_point_in_range(entry_point: u64, base: u64, length: u64) -> bool {
-    base.checked_add(length).is_some_and(|end| entry_point >= base && entry_point < end)
-}
-
-/// Returns the first pair of overlapping `[base, size)` ranges, if any.
-///
-/// Callers must first check every range with [`checked_range_end`], so each one is non-empty and
-/// its end fits in a `u64`. A range whose end overflows is still reported, paired with itself, so
-/// a caller that skips the check fails closed instead of having the end clamped to `u64::MAX`.
-fn find_overlap(ranges: &mut [(u64, u64)]) -> Option<((u64, u64), (u64, u64))> {
-    ranges.sort_unstable_by_key(|&(base, _)| base);
-    let mut prev = *ranges.first()?;
-    let Some(mut prev_end) = prev.0.checked_add(prev.1) else {
-        return Some((prev, prev));
-    };
-    for &cur in ranges.iter().skip(1) {
-        if ranges_overlap(prev, cur) {
-            return Some((prev, cur));
-        }
-        // Keep the interval with the greatest end so a later range is compared
-        // against the widest predecessor (catches nested/contained ranges).
-        let Some(cur_end) = cur.0.checked_add(cur.1) else {
-            return Some((cur, cur));
-        };
-        if cur_end > prev_end {
-            prev = cur;
-            prev_end = cur_end;
-        }
-    }
-    None
 }
 
 /// Returns whether a resource type describes an I/O (rather than memory) region.
@@ -691,14 +631,14 @@ fn is_memory_type_info(resource: &ResourceDescriptor) -> bool {
 
 /// Reports the first overlapping pair within a single resource descriptor
 /// category as a [`HobValidationError::ResourceDescriptorsOverlap`].
-fn check_category_overlap(ranges: &mut [(u64, u64)], kind: &'static str) -> MmSupervisorResult<()> {
-    if let Some((a, b)) = find_overlap(ranges) {
+fn check_category_overlap(ranges: &[Option<MemoryRange>], kind: &'static str) -> MmSupervisorResult<()> {
+    if let Some((a, b)) = MemoryRange::find_overlap(ranges.iter().flatten()) {
         return Err(HobValidationError::ResourceDescriptorsOverlap {
             kind,
-            base_a: a.0,
-            size_a: a.1,
-            base_b: b.0,
-            size_b: b.1,
+            base_a: a.base(),
+            size_a: a.size(),
+            base_b: b.base(),
+            size_b: b.size(),
         }
         .into());
     }
@@ -707,14 +647,14 @@ fn check_category_overlap(ranges: &mut [(u64, u64)], kind: &'static str) -> MmSu
 
 /// Appends `range` to `ranges`, updating `count`.
 fn push_range(
-    ranges: &mut [(u64, u64)],
+    ranges: &mut [Option<MemoryRange>],
     count: &mut usize,
-    range: (u64, u64),
+    range: MemoryRange,
     kind: &'static str,
 ) -> MmSupervisorResult<()> {
     let limit = ranges.len();
     let slot = ranges.get_mut(*count).ok_or(HobValidationError::TooManyResourceDescriptors { kind, limit })?;
-    *slot = range;
+    *slot = Some(range);
     *count += 1;
     Ok(())
 }
@@ -729,11 +669,11 @@ fn push_range(
 /// feature. Without it they are ignored, as in `patina_dxe_core`.
 fn validate_resource_descriptor_overlaps<'a>(hobs: impl IntoIterator<Item = Hob<'a>>) -> MmSupervisorResult<()> {
     #[cfg(feature = "v1_resource_descriptor_support")]
-    let (mut v1_mem, mut v1_io) = ([(0u64, 0u64); MAX_RESOURCE_HOBS], [(0u64, 0u64); MAX_RESOURCE_HOBS]);
+    let (mut v1_mem, mut v1_io) = ([None; MAX_RESOURCE_HOBS], [None; MAX_RESOURCE_HOBS]);
     #[cfg(feature = "v1_resource_descriptor_support")]
     let (mut v1_mem_n, mut v1_io_n) = (0usize, 0usize);
-    let mut v2_mem = [(0u64, 0u64); MAX_RESOURCE_HOBS];
-    let mut v2_io = [(0u64, 0u64); MAX_RESOURCE_HOBS];
+    let mut v2_mem = [None; MAX_RESOURCE_HOBS];
+    let mut v2_io = [None; MAX_RESOURCE_HOBS];
     let (mut v2_mem_n, mut v2_io_n) = (0usize, 0usize);
 
     for current in hobs {
@@ -745,12 +685,12 @@ fn validate_resource_descriptor_overlaps<'a>(hobs: impl IntoIterator<Item = Hob<
                 if is_memory_type_info(rd) {
                     continue;
                 }
-                let range = (rd.physical_start, rd.resource_length);
+                let (base, length) = (rd.physical_start, rd.resource_length);
                 if is_io(rd.resource_type) {
-                    checked_range_end("v1 I/O resource descriptor HOB", range.0, range.1)?;
+                    let range = checked_range("v1 I/O resource descriptor HOB", base, length)?;
                     push_range(&mut v1_io, &mut v1_io_n, range, "v1 I/O")?;
                 } else {
-                    checked_range_end("v1 memory resource descriptor HOB", range.0, range.1)?;
+                    let range = checked_range("v1 memory resource descriptor HOB", base, length)?;
                     push_range(&mut v1_mem, &mut v1_mem_n, range, "v1 memory")?;
                 }
             }
@@ -758,12 +698,12 @@ fn validate_resource_descriptor_overlaps<'a>(hobs: impl IntoIterator<Item = Hob<
                 if is_memory_type_info(&rd.v1) {
                     continue;
                 }
-                let range = (rd.v1.physical_start, rd.v1.resource_length);
+                let (base, length) = (rd.v1.physical_start, rd.v1.resource_length);
                 if is_io(rd.v1.resource_type) {
-                    checked_range_end("v2 I/O resource descriptor HOB", range.0, range.1)?;
+                    let range = checked_range("v2 I/O resource descriptor HOB", base, length)?;
                     push_range(&mut v2_io, &mut v2_io_n, range, "v2 I/O")?;
                 } else {
-                    checked_range_end("v2 memory resource descriptor HOB", range.0, range.1)?;
+                    let range = checked_range("v2 memory resource descriptor HOB", base, length)?;
                     push_range(&mut v2_mem, &mut v2_mem_n, range, "v2 memory")?;
                 }
             }
@@ -773,11 +713,11 @@ fn validate_resource_descriptor_overlaps<'a>(hobs: impl IntoIterator<Item = Hob<
 
     #[cfg(feature = "v1_resource_descriptor_support")]
     {
-        check_category_overlap(v1_mem.get_mut(..v1_mem_n).unwrap_or(&mut []), "v1 memory")?;
-        check_category_overlap(v1_io.get_mut(..v1_io_n).unwrap_or(&mut []), "v1 I/O")?;
+        check_category_overlap(&v1_mem, "v1 memory")?;
+        check_category_overlap(&v1_io, "v1 I/O")?;
     }
-    check_category_overlap(v2_mem.get_mut(..v2_mem_n).unwrap_or(&mut []), "v2 memory")?;
-    check_category_overlap(v2_io.get_mut(..v2_io_n).unwrap_or(&mut []), "v2 I/O")?;
+    check_category_overlap(&v2_mem, "v2 memory")?;
+    check_category_overlap(&v2_io, "v2 I/O")?;
 
     Ok(())
 }
@@ -840,8 +780,8 @@ fn dump_regions(regions: &[MmramRegion]) {
 
 /// Validates the `PassDown` HOB present in the HOB list.
 ///
-/// `mmram` is the `(base, size)` span returned by [`validate_mmram_contiguous`].
-fn validate_pass_down<'a>(hobs: impl IntoIterator<Item = Hob<'a>>, mmram: (u64, u64)) -> MmSupervisorResult<()> {
+/// `mmram` is the span returned by [`validate_mmram_contiguous`].
+fn validate_pass_down<'a>(hobs: impl IntoIterator<Item = Hob<'a>>, mmram: MemoryRange) -> MmSupervisorResult<()> {
     let data = hobs
         .into_iter()
         .find_map(|hob| match hob {
@@ -987,9 +927,9 @@ pub(crate) fn verify_cpl3_stacks_user_accessible(base: u64, length: u64) -> MmSu
 /// Verifies that every page in `[base, base + length)` has all of the `required`
 /// attributes set and none of the `forbidden` attributes set in `page_table`.
 ///
-/// The range is page-aligned (base rounded down, length rounded up) and each
-/// page is queried individually, so attributes that differ across the range are
-/// detected per page rather than merged into a single range query.
+/// The range is widened to whole pages and each page is queried individually, so
+/// attributes that differ across the range are detected per page rather than merged
+/// into a single range query.
 fn verify_page_attributes(
     page_table: &impl PageTable,
     base: u64,
@@ -997,20 +937,13 @@ fn verify_page_attributes(
     required: MemoryAttributes,
     forbidden: MemoryAttributes,
 ) -> MmSupervisorResult<()> {
-    let page_size = UEFI_PAGE_SIZE as u64;
-    if length == 0 || base.checked_add(length).is_none() {
-        return Err(HobValidationError::PageAttributeQueryFailed { addr: base }.into());
-    }
-    let (aligned_base, aligned_len) = align_range(base, length, page_size)
+    let pages = MemoryRange::new(base, length)
+        .and_then(|range| range.align_outward(UEFI_PAGE_SIZE as u64))
         .map_err(|_| HobValidationError::PageAttributeQueryFailed { addr: base })?;
-    let end = aligned_base
-        .checked_add(aligned_len)
-        .ok_or(HobValidationError::PageAttributeQueryFailed { addr: aligned_base })?;
 
-    let mut addr = aligned_base;
-    while addr < end {
+    for addr in pages.step_by(PAGE_STEP) {
         let attrs = page_table
-            .query_memory_region(addr, page_size)
+            .query_memory_region(addr, UEFI_PAGE_SIZE as u64)
             .map_err(|_| HobValidationError::PageAttributeQueryFailed { addr })?;
         if !attrs.contains(required) {
             return Err(HobValidationError::PageMissingAttribute {
@@ -1028,7 +961,6 @@ fn verify_page_attributes(
             }
             .into());
         }
-        addr = addr.saturating_add(page_size);
     }
 
     Ok(())
@@ -1037,16 +969,13 @@ fn verify_page_attributes(
 /// Verifies that the page containing `entry_point` is a code page in
 /// `page_table`, confirming the entry point lands in the module's code section.
 fn verify_entry_point_on_code_page(page_table: &impl PageTable, entry_point: u64) -> MmSupervisorResult<()> {
-    let page_size = UEFI_PAGE_SIZE as u64;
-    if entry_point.checked_add(1).is_none() {
-        return Err(HobValidationError::PageAttributeQueryFailed { addr: entry_point }.into());
-    }
-    let (page_base, _) = align_range(entry_point, 1, page_size)
+    let page = MemoryRange::new(entry_point, 1)
+        .and_then(|range| range.align_outward(UEFI_PAGE_SIZE as u64))
         .map_err(|_| HobValidationError::PageAttributeQueryFailed { addr: entry_point })?;
 
     let attrs = page_table
-        .query_memory_region(page_base, page_size)
-        .map_err(|_| HobValidationError::PageAttributeQueryFailed { addr: page_base })?;
+        .query_memory_region(page.base(), page.size())
+        .map_err(|_| HobValidationError::PageAttributeQueryFailed { addr: page.base() })?;
     validate_entry_point_attributes(entry_point, attrs)
 }
 
@@ -1086,9 +1015,14 @@ mod tests {
         MmramRegion::from_parts(base, size, false)
     }
 
+    /// Returns `[base, base + size)` as a range.
+    fn span(base: u64, size: u64) -> MemoryRange {
+        MemoryRange::new(base, size).unwrap()
+    }
+
     /// MMRAM span covering `[0x1000, 0x10_1000)`, which holds every address the HOB fixtures name.
-    fn mmram() -> (u64, u64) {
-        (0x1000, 0x10_0000)
+    fn mmram() -> MemoryRange {
+        span(0x1000, 0x10_0000)
     }
 
     fn pass_down() -> MmSupvPassDownHobData {
@@ -1307,10 +1241,10 @@ mod tests {
     }
 
     #[test]
-    fn test_mm_supervisor_hob_validation_checked_range_end() {
-        assert_eq!(checked_range_end("test", 0x1000, 0x1000), Ok(0x2000));
+    fn test_mm_supervisor_hob_validation_checked_range() {
+        assert_eq!(checked_range("test", 0x1000, 0x1000), Ok(span(0x1000, 0x1000)));
         assert!(matches!(
-            checked_range_end("test", 0x1000, 0),
+            checked_range("test", 0x1000, 0),
             Err(MmSupervisorError::HobValidation(HobValidationError::InvalidAddressRange {
                 kind: "test",
                 base: 0x1000,
@@ -1318,7 +1252,7 @@ mod tests {
             }))
         ));
         assert!(matches!(
-            checked_range_end("test", u64::MAX, 1),
+            checked_range("test", u64::MAX, 1),
             Err(MmSupervisorError::HobValidation(HobValidationError::InvalidAddressRange {
                 kind: "test",
                 base: u64::MAX,
@@ -1328,26 +1262,16 @@ mod tests {
     }
 
     #[test]
-    fn test_mm_supervisor_hob_validation_ranges_overlap() {
-        assert!(ranges_overlap((0, 0x1000), (0x800, 0x1000)));
-        assert!(!ranges_overlap((0, 0x1000), (0x1000, 0x1000)));
-        assert!(!ranges_overlap((0x1000, 0x1000), (0, 0x1000)));
-        // Empty ranges do not overlap, even when located inside another range.
-        assert!(!ranges_overlap((0x1000, 0), (0, 0x1000)));
-        assert!(!ranges_overlap((0x800, 0), (0, 0x1000)));
-    }
-
-    #[test]
     fn test_mm_supervisor_hob_validation_contiguous_single_region() {
         // A single region maps to itself.
-        assert_eq!(validate_mmram_contiguous(&[region(0x1000, 0x2000)]), Ok((0x1000, 0x2000)));
+        assert_eq!(validate_mmram_contiguous(&[region(0x1000, 0x2000)]), Ok(span(0x1000, 0x2000)));
     }
 
     #[test]
     fn test_mm_supervisor_hob_validation_contiguous_adjacent_unsorted() {
         // Two adjacent regions provided out of order collapse to one [min_base, max_end) span.
         let regions = [region(0x3000, 0x1000), region(0x1000, 0x2000)];
-        assert_eq!(validate_mmram_contiguous(&regions), Ok((0x1000, 0x3000)));
+        assert_eq!(validate_mmram_contiguous(&regions), Ok(span(0x1000, 0x3000)));
     }
 
     #[test]
@@ -1375,42 +1299,19 @@ mod tests {
     }
 
     #[test]
-    fn test_mm_supervisor_hob_validation_find_overlap() {
-        assert!(find_overlap(&mut [(0, 0x1000), (0x2000, 0x1000)]).is_none());
-        assert!(find_overlap(&mut [(0, 0x1000), (0x800, 0x1000)]).is_some());
-        // Unsorted input with a contained range is still detected after sorting.
-        assert!(find_overlap(&mut [(0x4000, 0x1000), (0, 0x8000), (0x1000, 0x100)]).is_some());
-        // A range whose end overflows is reported, alone or after a range it does not overlap.
-        let overflowing = (u64::MAX, 1);
-        assert_eq!(find_overlap(&mut [overflowing]), Some((overflowing, overflowing)));
-        assert_eq!(find_overlap(&mut [(0, 0), overflowing]), Some((overflowing, overflowing)));
-    }
-
-    #[test]
-    fn test_mm_supervisor_hob_validation_buffer_overlaps_mmram() {
-        let mmram = (0x1000u64, 0x1000u64); // [0x1000, 0x2000)
-        // An allocation outside the MMRAM span does not overlap.
-        assert!(!buffer_overlaps_mmram(mmram, 0x2000, 0x1000));
-        // An allocation landing inside the MMRAM span overlaps.
-        assert!(buffer_overlaps_mmram(mmram, 0x1400, 0x100));
-        // A partial overlap at the span boundary is detected.
-        assert!(buffer_overlaps_mmram(mmram, 0x0800, 0x1000));
-    }
-
-    #[test]
     fn test_mm_supervisor_hob_validation_memory_allocations() {
         let outside = memory_allocation(0x3000, 0x1000);
-        assert_eq!(validate_memory_allocations([Hob::MemoryAllocation(&outside)], (0x1000, 0x1000)), Ok(()));
+        assert_eq!(validate_memory_allocations([Hob::MemoryAllocation(&outside)], span(0x1000, 0x1000)), Ok(()));
 
         let inside = memory_allocation(0x1800, 0x1000);
         assert_eq!(
-            validate_memory_allocations([Hob::MemoryAllocation(&inside)], (0x1000, 0x1000)),
+            validate_memory_allocations([Hob::MemoryAllocation(&inside)], span(0x1000, 0x1000)),
             Err(HobValidationError::MemoryAllocationInsideMmram { base: 0x1800, length: 0x1000 }.into())
         );
 
         let invalid = memory_allocation(u64::MAX, 1);
         assert!(matches!(
-            validate_memory_allocations([Hob::MemoryAllocation(&invalid)], (0x1000, 0x1000)),
+            validate_memory_allocations([Hob::MemoryAllocation(&invalid)], span(0x1000, 0x1000)),
             Err(MmSupervisorError::HobValidation(HobValidationError::InvalidAddressRange {
                 kind: "memory allocation HOB",
                 ..
@@ -1442,7 +1343,7 @@ mod tests {
                     Hob::MemoryAllocationModule(&second),
                     Hob::MemoryAllocationModule(&init)
                 ],
-                (0x1000, 0x3000)
+                span(0x1000, 0x3000)
             ),
             Ok(())
         );
@@ -1455,7 +1356,7 @@ mod tests {
             0x4000,
         );
         assert_eq!(
-            validate_allocation_modules([Hob::MemoryAllocationModule(&outside)], (0x1000, 0x3000)),
+            validate_allocation_modules([Hob::MemoryAllocationModule(&outside)], span(0x1000, 0x3000)),
             Err(HobValidationError::AllocationModuleOutsideMmram { base: 0x4000, length: 0x1000 }.into())
         );
 
@@ -1608,7 +1509,7 @@ mod tests {
             assert_eq!(
                 validate_allocation_modules(
                     [Hob::MemoryAllocationModule(&init), Hob::MemoryAllocationModule(&core)],
-                    (0x1000, 0x8000),
+                    span(0x1000, 0x8000),
                 ),
                 Err(expected.into())
             );
@@ -1658,16 +1559,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mm_supervisor_hob_validation_entry_point_in_range() {
-        assert!(entry_point_in_range(0x1000, 0x1000, 0x1000)); // at base
-        assert!(entry_point_in_range(0x1800, 0x1000, 0x1000)); // interior
-        assert!(!entry_point_in_range(0x2000, 0x1000, 0x1000)); // at end (exclusive)
-        assert!(!entry_point_in_range(0x800, 0x1000, 0x1000)); // below base
-        assert!(!entry_point_in_range(0, 0x1000, 0x1000)); // null
-        assert!(!entry_point_in_range(u64::MAX, u64::MAX - 1, 4)); // overflowing allocation
-    }
-
-    #[test]
     fn test_mm_supervisor_hob_validation_is_io() {
         assert!(is_io(EFI_RESOURCE_IO));
         assert!(is_io(EFI_RESOURCE_IO_RESERVED));
@@ -1691,12 +1582,15 @@ mod tests {
 
     #[test]
     fn test_mm_supervisor_hob_validation_check_category_overlap_none() {
-        assert_eq!(check_category_overlap(&mut [(0, 0x1000), (0x1000, 0x1000)], "v1 memory"), Ok(()));
+        assert_eq!(
+            check_category_overlap(&[Some(span(0, 0x1000)), Some(span(0x1000, 0x1000)), None], "v1 memory"),
+            Ok(())
+        );
     }
 
     #[test]
     fn test_mm_supervisor_hob_validation_check_category_overlap_reports() {
-        let result = check_category_overlap(&mut [(0, 0x2000), (0x1000, 0x1000)], "v2 I/O");
+        let result = check_category_overlap(&[Some(span(0, 0x2000)), Some(span(0x1000, 0x1000))], "v2 I/O");
         assert!(matches!(
             result,
             Err(MmSupervisorError::HobValidation(HobValidationError::ResourceDescriptorsOverlap {
@@ -1973,13 +1867,13 @@ mod tests {
             end_of_hob_list: 0,
         };
         let base = &raw const handoff as u64;
-        let around_list = (base, 0x40);
+        let around_list = span(base, 0x40);
 
         assert_eq!(validate_hob_list_inside_mmram(&handoff, 0x40, around_list), Ok(()));
 
         // A list the producer placed outside MMRAM would be mapped readable to Ring 3 later.
         assert_eq!(
-            validate_hob_list_inside_mmram(&handoff, 0x40, (0x1000, 0x10_0000)),
+            validate_hob_list_inside_mmram(&handoff, 0x40, mmram()),
             Err(HobValidationError::HobListOutsideMmram { base, size: 0x40 }.into())
         );
 
@@ -2010,7 +1904,7 @@ mod tests {
         let base = &raw const handoff as u64;
 
         // The span covers the start of the list but ends before the list does.
-        let _ = validate_hob_list_inside_mmram(&handoff, 0x40, (base, 0x20));
+        let _ = validate_hob_list_inside_mmram(&handoff, 0x40, span(base, 0x20));
     }
 
     /// Lays out HOB headers back to back in an 8-byte aligned buffer, with zeroed payloads.
@@ -2134,7 +2028,7 @@ mod tests {
 
     #[test]
     fn test_mm_supervisor_hob_validation_pass_down_pointer_outside_mmram() {
-        let result = validate_pass_down_pointers(&pass_down(), (0x10_0000, 0x1000));
+        let result = validate_pass_down_pointers(&pass_down(), span(0x10_0000, 0x1000));
         assert_eq!(
             result,
             Err(PassDownHobError::PointerOutsideMmram { field: "cpl3_stack_base", addr: 0x1000, size: 0x1000 }.into())
@@ -2199,19 +2093,18 @@ mod tests {
 
     #[test]
     fn test_mm_supervisor_hob_validation_push_range() {
-        let mut ranges = [(0u64, 0u64); 2];
+        let mut ranges = [None; 2];
         let mut count = 0usize;
-        assert_eq!(push_range(&mut ranges, &mut count, (0x1000, 0x100), "test"), Ok(()));
-        assert_eq!(push_range(&mut ranges, &mut count, (0x2000, 0x200), "test"), Ok(()));
+        assert_eq!(push_range(&mut ranges, &mut count, span(0x1000, 0x100), "test"), Ok(()));
+        assert_eq!(push_range(&mut ranges, &mut count, span(0x2000, 0x200), "test"), Ok(()));
         assert_eq!(count, 2);
-        assert_eq!(ranges.first(), Some(&(0x1000, 0x100)));
-        assert_eq!(ranges.get(1), Some(&(0x2000, 0x200)));
+        assert_eq!(ranges, [Some(span(0x1000, 0x100)), Some(span(0x2000, 0x200))]);
         assert_eq!(
-            push_range(&mut ranges, &mut count, (0x3000, 0x300), "test"),
+            push_range(&mut ranges, &mut count, span(0x3000, 0x300), "test"),
             Err(HobValidationError::TooManyResourceDescriptors { kind: "test", limit: 2 }.into())
         );
         assert_eq!(count, 2);
-        assert_eq!(ranges.get(1), Some(&(0x2000, 0x200)));
+        assert_eq!(ranges, [Some(span(0x1000, 0x100)), Some(span(0x2000, 0x200))]);
     }
 
     #[test]

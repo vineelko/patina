@@ -16,7 +16,7 @@
 use core::{ffi::c_void, sync::atomic::AtomicU8};
 
 use patina::{
-    UEFI_PAGE_SIZE, align_range,
+    MemoryRange, UEFI_PAGE_SIZE, align_range,
     management_mode::{
         comm_buffer_hob::MM_COMM_BUFFER_HOB_GUID,
         supervisor::{MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID, MM_SUPERVISOR_USER_GUID},
@@ -39,7 +39,7 @@ use crate::{
     hob::validation::{self, HobValidationError},
     intrinsics::read_cr3,
     memory::{
-        self, AllocationType, PageAllocator, SharedPagingAllocator,
+        self, AllocationType, PAGE_STEP, PageAllocator, SharedPagingAllocator,
         mmram::MmramRegion,
         mmram::is_buffer_inside_mmram,
         page_ownership::{PageOwnership, query_address_ownership},
@@ -265,8 +265,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             return Err(CoreInitError::InitModuleRegionMissing.into());
         };
 
-        state
-            .set_init_module_region(module.alloc_descriptor.memory_base_address, module.alloc_descriptor.memory_length);
+        let (base, length) = (module.alloc_descriptor.memory_base_address, module.alloc_descriptor.memory_length);
+        let range = MemoryRange::new(base, length).map_err(|_| HobValidationError::InvalidAddressRange {
+            kind: "MM Init module allocation",
+            base,
+            length,
+        })?;
+        state.set_init_module_region(range);
         Ok(())
     }
 
@@ -277,18 +282,17 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         if state.is_init_module_freed() {
             return;
         }
-        let Some((base, size)) = state.init_module_region() else {
+        let Some(init_module) = state.init_module_region() else {
             log::warn!("MM Init module region was not discovered during initialization");
             return;
         };
-        assert!(is_buffer_inside_mmram(base, size), "MM Init module is outside MMRAM");
+        assert!(is_buffer_inside_mmram(init_module.base(), init_module.size()), "MM Init module is outside MMRAM");
 
         // Wrap in a block to drop the lock automatically
         {
             let page_table = security_state().lock_page_table();
             let page_table = page_table.as_ref().expect("Page table required to validate MM Init module");
-            let end = base.checked_add(size).expect("MM Init module allocation overflows");
-            for address in (base..end).step_by(UEFI_PAGE_SIZE) {
+            for address in init_module.step_by(PAGE_STEP) {
                 let attributes = page_table
                     .query_memory_region(address, UEFI_PAGE_SIZE as u64)
                     .expect("Failed to query MM Init module page");
@@ -298,10 +302,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         security_state()
             .page_allocator()
-            .free_pages_checked(base, size as usize / UEFI_PAGE_SIZE, AllocationType::Supervisor)
+            .free_pages_checked(
+                init_module.base(),
+                init_module.size() as usize / UEFI_PAGE_SIZE,
+                AllocationType::Supervisor,
+            )
             .expect("Failed to free MM Init module");
         state.mark_init_module_freed();
-        log::info!("Freed MM Init module at 0x{base:016x} (0x{size:x} bytes)");
+        log::info!("Freed MM Init module at {init_module}");
     }
 
     /// Initializes the policy gate from the `PassDown` HOB and runs an initial
@@ -1258,7 +1266,7 @@ mod tests {
 
         let init_base = mapped.init_module.alloc_descriptor.memory_base_address;
         let init_size = mapped.init_module.alloc_descriptor.memory_length;
-        assert_eq!(mapped.state.init_module_region(), Some((init_base, init_size)));
+        assert_eq!(mapped.state.init_module_region(), MemoryRange::new(init_base, init_size).ok());
         assert!(!mapped.state.is_init_module_freed());
         assert_eq!(allocator.get_allocation_type(init_base), Some(AllocationType::Supervisor));
         let reclaimed_pages = size / UEFI_PAGE_SIZE;

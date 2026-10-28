@@ -15,6 +15,10 @@ pub(crate) mod paging_allocator;
 pub(crate) use page_allocator::{AllocationType, PageAllocator};
 pub(crate) use paging_allocator::{DEFAULT_PAGING_POOL_PAGES, PagingPoolAllocator, SharedPagingAllocator};
 
+/// The UEFI page size as a step for [`MemoryRange::step_by`](patina::MemoryRange::step_by).
+pub(crate) const PAGE_STEP: core::num::NonZeroU64 =
+    core::num::NonZeroU64::new(patina::UEFI_PAGE_SIZE as u64).expect("the UEFI page size is not zero");
+
 /// Errors reported by the memory allocators.
 ///
 /// Both allocators share this type. They differ in the backing structure, not in the ways a

@@ -394,14 +394,7 @@ impl LockedState<'_> {
 
     /// Classifies `[addr, addr + size)` against the committed MMRAM regions.
     pub(crate) fn classify_mmram(&self, addr: u64, size: u64) -> MmramPlacement {
-        classify_coverage(
-            addr,
-            size,
-            self.regions().iter().filter_map(|region| {
-                let size = u64::try_from(region.total_pages.checked_mul(UEFI_PAGE_SIZE)?).ok()?;
-                Some((region.base, region.base.checked_add(size)?))
-            }),
-        )
+        classify_coverage(addr, size, self.regions().iter().filter_map(RegionInfo::range))
     }
 
     /// Populates freshly-zeroed bookkeeping with per-region metadata and marks
