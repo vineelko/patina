@@ -24,7 +24,7 @@ use patina::management_mode::protocol::mm_supervisor_request::{
 
 use crate::{
     error::{MmSupervisorError, MmSupervisorResult},
-    memory::mmram::buffer_overlaps_mmram,
+    memory::mmram::range_overlaps_mmram,
     policy::{self, MemDescriptorV1_0, RESOURCE_ATTR_EXECUTE, RESOURCE_ATTR_READ, RESOURCE_ATTR_WRITE},
     state::security_state,
 };
@@ -127,11 +127,6 @@ fn request_range(base: u64, size: u64) -> Result<MemoryRange, UnblockError> {
         MemoryRangeError::Empty => UnblockError::InvalidParameter,
         _ => UnblockError::AddressOverflow,
     })
-}
-
-/// Returns whether `range` touches MMRAM at all, including a range that only crosses a boundary.
-fn range_overlaps_mmram(range: &MemoryRange) -> bool {
-    buffer_overlaps_mmram(range.base(), range.size())
 }
 
 /// Internal state for the unblocked memory tracker.

@@ -9,13 +9,13 @@
 
 use core::{mem::size_of, ops::Range, slice};
 
-use patina::{UEFI_PAGE_SIZE, uefi_pages_to_size};
+use patina::{MemoryRange, UEFI_PAGE_SIZE, uefi_pages_to_size};
 use spin::{MutexGuard, relax::Spin};
 
 use super::mmram::MmramRegion;
 use crate::error::MmSupervisorResult;
 use crate::memory::AllocError;
-use crate::memory::mmram::{MmramPlacement, classify_coverage};
+use crate::memory::mmram::MmramPlacement;
 use crate::memory::page_allocator::{AllocationType, RegionInfo};
 
 /// Converts a byte size to a page count without truncation or overflow.
@@ -391,9 +391,9 @@ impl LockedState<'_> {
         if self.is_bit_allocated(bit) { Some(self.bit_type(bit)) } else { None }
     }
 
-    /// Classifies `[addr, addr + size)` against the committed MMRAM regions.
-    pub(crate) fn classify_mmram(&self, addr: u64, size: u64) -> MmramPlacement {
-        classify_coverage(addr, size, self.regions().iter().filter_map(RegionInfo::range))
+    /// Classifies `range` against the committed MMRAM regions.
+    pub(crate) fn classify_mmram(&self, range: &MemoryRange) -> MmramPlacement {
+        range.coverage(self.regions().iter().filter_map(RegionInfo::range)).into()
     }
 
     /// Populates freshly-zeroed bookkeeping with per-region metadata and marks

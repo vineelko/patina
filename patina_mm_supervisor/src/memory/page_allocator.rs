@@ -617,16 +617,15 @@ impl PageAllocator {
         self.lock_state().region_count()
     }
 
-    /// Classifies `[addr, addr + size)` against the MMRAM regions, or `None` if the regions are
-    /// not known yet.
+    /// Classifies `range` against the MMRAM regions, or `None` if the regions are not known yet.
     ///
     /// Callers decide what an unknown layout means for them; nothing can be proven to be either
     /// inside or outside MMRAM before the allocator is initialized.
-    pub fn classify_mmram(&self, addr: u64, size: u64) -> Option<MmramPlacement> {
+    pub fn classify_mmram(&self, range: &MemoryRange) -> Option<MmramPlacement> {
         if !self.is_initialized() {
             return None;
         }
-        Some(self.lock_state().classify_mmram(addr, size))
+        Some(self.lock_state().classify_mmram(range))
     }
 }
 
@@ -635,6 +634,11 @@ impl PageAllocator {
 mod tests {
     use super::*;
     use crate::{memory::mmram::classify_coverage, test_support};
+
+    /// Returns `[base, base + size)` as a range.
+    fn range(base: u64, size: u64) -> MemoryRange {
+        MemoryRange::new(base, size).unwrap()
+    }
 
     const TEST_REGION_PAGES: usize = 16;
     const TEST_REGION_BYTES: usize = TEST_REGION_PAGES * UEFI_PAGE_SIZE;
@@ -702,7 +706,7 @@ mod tests {
         assert_eq!(allocator.allocate_pages(1), Err(AllocError::NotInitialized.into()));
         assert_eq!(allocator.free_pages(UEFI_PAGE_SIZE as u64, 1), Err(AllocError::NotInitialized.into()));
         assert_eq!(allocator.get_allocation_type(UEFI_PAGE_SIZE as u64), None);
-        assert_eq!(allocator.classify_mmram(UEFI_PAGE_SIZE as u64, UEFI_PAGE_SIZE as u64), None);
+        assert_eq!(allocator.classify_mmram(&range(UEFI_PAGE_SIZE as u64, UEFI_PAGE_SIZE as u64)), None);
 
         let mut state = allocator.lock_state();
         assert!(state.regions().is_empty());
@@ -797,7 +801,10 @@ mod tests {
         assert_eq!(fixture.allocator.get_allocation_type(user), Some(AllocationType::User));
         assert_eq!(fixture.allocator.allocated_page_count(AllocationType::Supervisor), 3);
         assert_eq!(fixture.allocator.allocated_page_count(AllocationType::User), 3);
-        assert_eq!(fixture.allocator.classify_mmram(user, 3 * UEFI_PAGE_SIZE as u64), Some(MmramPlacement::Inside));
+        assert_eq!(
+            fixture.allocator.classify_mmram(&range(user, 3 * UEFI_PAGE_SIZE as u64)),
+            Some(MmramPlacement::Inside)
+        );
 
         assert_eq!(
             fixture.allocator.free_pages_checked(user, 3, AllocationType::Supervisor),
@@ -850,7 +857,7 @@ mod tests {
         let fixture = AllocatorFixture::new();
         let base = fixture.base;
         let end = base + TEST_REGION_BYTES as u64;
-        let classify = |addr, size| fixture.allocator.classify_mmram(addr, size);
+        let classify = |addr, size| fixture.allocator.classify_mmram(&range(addr, size));
 
         // Wholly inside.
         assert_eq!(classify(base, 0x1000), Some(MmramPlacement::Inside));
@@ -867,10 +874,6 @@ mod tests {
         // Clear of the region on either side, and touching only its exclusive bounds.
         assert_eq!(classify(base - 0x1000, 0x1000), Some(MmramPlacement::Outside));
         assert_eq!(classify(end, 0x1000), Some(MmramPlacement::Outside));
-
-        // An empty range touches nothing; an overflowing one fails closed.
-        assert_eq!(classify(base, 0), Some(MmramPlacement::Outside));
-        assert_eq!(classify(u64::MAX, 2), Some(MmramPlacement::PartlyInside));
     }
 
     #[test]
@@ -880,7 +883,7 @@ mod tests {
         let allocator = PageAllocator::new();
 
         assert!(!allocator.is_initialized());
-        assert_eq!(allocator.classify_mmram(0x1000, 0x1000), None);
+        assert_eq!(allocator.classify_mmram(&range(0x1000, 0x1000)), None);
     }
 
     #[test]
@@ -1033,16 +1036,16 @@ mod tests {
         let fixture = AllocatorFixture::new();
         let state = fixture.allocator.lock_state();
 
-        assert_eq!(state.classify_mmram(fixture.base, TEST_REGION_BYTES as u64), MmramPlacement::Inside);
-        assert_eq!(state.classify_mmram(fixture.base + TEST_REGION_BYTES as u64, 0), MmramPlacement::Outside);
+        assert_eq!(state.classify_mmram(&range(fixture.base, TEST_REGION_BYTES as u64)), MmramPlacement::Inside);
         assert_eq!(
-            state.classify_mmram(
+            state.classify_mmram(&range(
                 fixture.base + TEST_REGION_BYTES as u64 - UEFI_PAGE_SIZE as u64,
                 2 * UEFI_PAGE_SIZE as u64
-            ),
+            )),
             MmramPlacement::PartlyInside
         );
-        assert_eq!(state.classify_mmram(u64::MAX - 1, 2), MmramPlacement::PartlyInside);
+        // A range ending at the top of the address space is classified without overflowing.
+        assert_eq!(state.classify_mmram(&range(u64::MAX - 2, 2)), MmramPlacement::Outside);
     }
 
     #[test]
@@ -1174,12 +1177,10 @@ mod tests {
             (base - page, page),
             (base - page, span),
             (base + span - page, span),
-            (base, 0),
-            (u64::MAX, page),
         ] {
             assert_eq!(
-                classify_coverage(addr, size, [MemoryRange::new(base, span).unwrap()]),
-                fixture.allocator.classify_mmram(addr, size).expect("fixture allocator is initialized"),
+                classify_coverage(addr, size, [range(base, span)]),
+                fixture.allocator.classify_mmram(&range(addr, size)).expect("fixture allocator is initialized"),
                 "classification diverged for 0x{addr:016x} size 0x{size:x}"
             );
         }
