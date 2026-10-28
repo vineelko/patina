@@ -67,6 +67,12 @@ pub enum CommBufferError {
         /// The page count the HOB reported.
         pages: u64,
     },
+    /// The status buffer address leaves no room for an `MmCommBufferStatus` below the end of the
+    /// address space.
+    InvalidStatusBuffer {
+        /// The status buffer address the HOB reported.
+        address: u64,
+    },
     /// The internal copy of a communication buffer could not be allocated.
     AllocationFailed,
     /// One or more communication buffers were left at address zero.
@@ -89,6 +95,9 @@ impl fmt::Display for CommBufferError {
                 write!(f, "the MM Communication Buffer HOB payload is {found} bytes, but {expected} are required")
             }
             Self::InvalidSize { pages } => write!(f, "the page count {pages} does not describe a usable buffer"),
+            Self::InvalidStatusBuffer { address } => {
+                write!(f, "the status buffer address 0x{address:016x} does not describe a usable buffer")
+            }
             Self::AllocationFailed => write!(f, "the internal copy of the buffer could not be allocated"),
             Self::Missing => write!(f, "one or more communication buffers are not properly initialized"),
         }
@@ -166,19 +175,18 @@ impl CommChannel {
             log::error!("Supervisor communication buffer page count {pages} does not fit the target architecture");
             CommBufferError::InvalidSize { pages }
         })?;
-        let size = MemoryRange::from_pages(external, pages, UEFI_PAGE_SIZE as u64)
-            .map_err(|err| {
-                log::error!("Supervisor communication buffer of {pages} pages at 0x{external:016x} is invalid: {err}");
-                CommBufferError::InvalidSize { pages }
-            })?
-            .size();
+        let buffer = MemoryRange::from_pages(external, pages, UEFI_PAGE_SIZE as u64).map_err(|err| {
+            log::error!("Supervisor communication buffer of {pages} pages at 0x{external:016x} is invalid: {err}");
+            CommBufferError::InvalidSize { pages }
+        })?;
+        let status_buffer =
+            MemoryRange::new(status, core::mem::size_of::<MmCommBufferStatus>() as u64).map_err(|err| {
+                log::error!("Supervisor status buffer at 0x{status:016x} is invalid: {err}");
+                CommBufferError::InvalidStatusBuffer { address: status }
+            })?;
 
-        require_external_comm_buffer(external, size, "Supervisor communication buffer");
-        require_external_comm_buffer(
-            status,
-            core::mem::size_of::<MmCommBufferStatus>() as u64,
-            "Supervisor status buffer",
-        );
+        require_external_comm_buffer(&buffer, "Supervisor communication buffer");
+        require_external_comm_buffer(&status_buffer, "Supervisor status buffer");
 
         let internal = security_state()
             .page_allocator()
@@ -188,7 +196,7 @@ impl CommChannel {
                 CommBufferError::AllocationFailed
             })?;
 
-        Ok(Self { external, size, internal, status })
+        Ok(Self { external, size: buffer.size(), internal, status })
     }
 
     /// Builds the user channel from an `MM_COMM_BUFFER_HOB_GUID` payload.
@@ -231,15 +239,18 @@ impl CommChannel {
             log::error!("User communication buffer page count {pages} does not fit the target architecture");
             CommBufferError::InvalidSize { pages }
         })?;
-        let size = MemoryRange::from_pages(external, pages, UEFI_PAGE_SIZE as u64)
-            .map_err(|err| {
-                log::error!("User communication buffer of {pages} pages at 0x{external:016x} is invalid: {err}");
-                CommBufferError::InvalidSize { pages }
-            })?
-            .size();
+        let buffer = MemoryRange::from_pages(external, pages, UEFI_PAGE_SIZE as u64).map_err(|err| {
+            log::error!("User communication buffer of {pages} pages at 0x{external:016x} is invalid: {err}");
+            CommBufferError::InvalidSize { pages }
+        })?;
+        let status_buffer =
+            MemoryRange::new(status, core::mem::size_of::<MmCommBufferStatus>() as u64).map_err(|err| {
+                log::error!("User status buffer at 0x{status:016x} is invalid: {err}");
+                CommBufferError::InvalidStatusBuffer { address: status }
+            })?;
 
-        require_external_comm_buffer(external, size, "User communication buffer");
-        require_external_comm_buffer(status, core::mem::size_of::<MmCommBufferStatus>() as u64, "User status buffer");
+        require_external_comm_buffer(&buffer, "User communication buffer");
+        require_external_comm_buffer(&status_buffer, "User status buffer");
 
         let internal = security_state()
             .page_allocator()
@@ -249,7 +260,7 @@ impl CommChannel {
                 CommBufferError::AllocationFailed
             })?;
 
-        let channel = Self { external, size, internal, status };
+        let channel = Self { external, size: buffer.size(), internal, status };
 
         // TODO: Remove the logic that overwrites the HOB's physical_start with the internal buffer address
         // so the user module sees it after demotion.
@@ -275,7 +286,7 @@ impl CommChannel {
     }
 }
 
-/// Requires that `[address, address + size)` is usable as an external communication buffer:
+/// Requires that `range` is usable as an external communication buffer:
 /// entirely outside MMRAM, and mapped supervisor-only in the active page table.
 ///
 /// The MM IPL names these buffers and sits outside the supervisor's trust boundary. The
@@ -284,24 +295,15 @@ impl CommChannel {
 /// containment, since a partly-inside buffer carries the same primitive in its tail. Ring 3 works
 /// on the internal copy, so direct access here would let a demoted driver rewrite a request, or
 /// its status mailbox, while it is being serviced.
-///
-/// An address and size that do not form a valid range are refused the same way.
-fn require_external_comm_buffer(address: u64, size: u64, description: &str) {
-    let range = MemoryRange::new(address, size)
-        .unwrap_or_else(|err| panic!("{description} at 0x{address:016x} (+0x{size:x}) is not a valid range: {err}"));
-    let end = range.end();
+fn require_external_comm_buffer(range: &MemoryRange, description: &str) {
+    assert!(!range_overlaps_mmram(range), "{description} at {range} overlaps MMRAM; it must lie entirely outside");
 
-    assert!(
-        !range_overlaps_mmram(&range),
-        "{description} at 0x{address:016x}-0x{end:016x} overlaps MMRAM; it must lie entirely outside"
-    );
-
-    match query_address_ownership(address, size) {
+    match query_address_ownership(range.base(), range.size()) {
         Some(PageOwnership::Supervisor) => {}
-        Some(PageOwnership::User) => panic!(
-            "{description} at 0x{address:016x}-0x{end:016x} is mapped user-accessible; it must be supervisor-only"
-        ),
-        None => panic!("{description} at 0x{address:016x}-0x{end:016x} is unmapped or not uniformly mapped"),
+        Some(PageOwnership::User) => {
+            panic!("{description} at {range} is mapped user-accessible; it must be supervisor-only")
+        }
+        None => panic!("{description} at {range} is unmapped or not uniformly mapped"),
     }
 }
 
@@ -348,18 +350,6 @@ mod tests {
         assert_eq!(cfg.supervisor.external, 0x1000);
     }
 
-    #[test]
-    #[should_panic(expected = "Test buffer at 0x0000000000001000 (+0x0) is not a valid range")]
-    fn test_require_external_comm_buffer_rejects_an_empty_buffer() {
-        require_external_comm_buffer(0x1000, 0, "Test buffer");
-    }
-
-    #[test]
-    #[should_panic(expected = "is not a valid range")]
-    fn test_require_external_comm_buffer_rejects_a_buffer_past_the_end_of_the_address_space() {
-        require_external_comm_buffer(u64::MAX, 0x1000, "Test buffer");
-    }
-
     /// Installs MMRAM and an empty page table, and returns the memory backing MMRAM.
     fn comm_buffer_state() -> PageAlignedMemory {
         test_support::init_test_logger();
@@ -371,7 +361,8 @@ mod tests {
     /// Runs [`require_external_comm_buffer`] and returns its panic message, or `None` if it
     /// accepted the buffer.
     fn rejection(address: u64, size: u64) -> Option<String> {
-        catch_unwind(|| require_external_comm_buffer(address, size, "Test buffer")).err().map(|payload| {
+        let range = MemoryRange::new(address, size).expect("a valid test range");
+        catch_unwind(|| require_external_comm_buffer(&range, "Test buffer")).err().map(|payload| {
             payload
                 .downcast_ref::<String>()
                 .cloned()
@@ -593,6 +584,24 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_communication_buffer_hobs_reject_a_status_buffer_past_the_end_of_the_address_space() {
+        // The status range is checked before either buffer is required or anything is allocated,
+        // so this is reported without reaching global state.
+        let status = u64::MAX - 1;
+        assert_eq!(
+            CommChannel::from_supv_hob(&supv_comm_buffer_hob_data(0x1000, 1, status)),
+            Err(CommBufferError::InvalidStatusBuffer { address: status }.into())
+        );
+
+        let mut user = user_comm_buffer_hob_data(0x1000, 1, status);
+        let user_len = user.len();
+        // SAFETY: `user` is a live, writable payload and no references into it are held across
+        // the call. The range check stops the work before the HOB is rewritten.
+        let user_result = unsafe { CommChannel::from_user_hob(user.as_mut_ptr(), user_len) };
+        assert_eq!(user_result, Err(CommBufferError::InvalidStatusBuffer { address: status }.into()));
+    }
+
+    #[test]
     fn test_comm_buffer_error_displays_each_variant() {
         let errors = [
             CommBufferError::CommRegionHobMissing,
@@ -600,6 +609,7 @@ mod tests {
             CommBufferError::CommRegionHobTooSmall { found: 31, expected: 32 },
             CommBufferError::CommunicationBufferHobTooSmall { found: 31, expected: 32 },
             CommBufferError::InvalidSize { pages: 0 },
+            CommBufferError::InvalidStatusBuffer { address: u64::MAX },
             CommBufferError::AllocationFailed,
             CommBufferError::Missing,
         ];
