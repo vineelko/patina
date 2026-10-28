@@ -116,6 +116,15 @@ pub enum MmramPlacement {
 }
 
 impl MmramPlacement {
+    /// Returns the placement of a range that [`MemoryRange::new`] rejected. An empty range holds no
+    /// MMRAM, and one whose end overflows is reported as partly inside so it fails closed.
+    pub(crate) const fn of_invalid_range(err: MemoryRangeError) -> Self {
+        match err {
+            MemoryRangeError::Empty => Self::Outside,
+            _ => Self::PartlyInside,
+        }
+    }
+
     /// Resolves this placement to whether `[base, base + size)` may be treated as MM memory.
     pub fn is_inside(self, base: u64, size: u64) -> bool {
         match self {
@@ -153,8 +162,7 @@ where
 {
     match MemoryRange::new(addr, size) {
         Ok(range) => range.coverage(regions).into(),
-        Err(MemoryRangeError::Empty) => MmramPlacement::Outside,
-        Err(_) => MmramPlacement::PartlyInside,
+        Err(err) => MmramPlacement::of_invalid_range(err),
     }
 }
 
@@ -163,12 +171,23 @@ pub(crate) fn regions_contain(regions: &[MmramRegion], address: u64) -> bool {
     regions.iter().any(|region| region.range.contains(address))
 }
 
+/// Classifies `[base, base + size)` against the committed MMRAM regions, or `None` if the regions
+/// are not known yet. A buffer that is not a valid range is placed by
+/// [`MmramPlacement::of_invalid_range`].
+fn classify_buffer(base: u64, size: u64) -> Option<MmramPlacement> {
+    let allocator = security_state().page_allocator();
+    match MemoryRange::new(base, size) {
+        Ok(range) => allocator.classify_mmram(&range),
+        Err(err) => allocator.is_initialized().then_some(MmramPlacement::of_invalid_range(err)),
+    }
+}
+
 /// Returns whether `[base, base + size)` lies entirely inside MMRAM.
 ///
 /// Reports `false` before the regions are known, since nothing can be shown to be inside MMRAM
 /// until then.
 pub(crate) fn is_buffer_inside_mmram(base: u64, size: u64) -> bool {
-    security_state().page_allocator().classify_mmram(base, size).is_some_and(|p| p.is_inside(base, size))
+    classify_buffer(base, size).is_some_and(|p| p.is_inside(base, size))
 }
 
 /// Returns whether `[base, base + size)` touches MMRAM at all, including a range that only
@@ -177,7 +196,12 @@ pub(crate) fn is_buffer_inside_mmram(base: u64, size: u64) -> bool {
 /// Reports an overlap when the regions are not known yet, since nothing can be shown to lie
 /// outside MMRAM before then.
 pub(crate) fn buffer_overlaps_mmram(base: u64, size: u64) -> bool {
-    !matches!(security_state().page_allocator().classify_mmram(base, size), Some(MmramPlacement::Outside))
+    !matches!(classify_buffer(base, size), Some(MmramPlacement::Outside))
+}
+
+/// Returns whether `range` touches MMRAM at all, as [`buffer_overlaps_mmram`] does.
+pub(crate) fn range_overlaps_mmram(range: &MemoryRange) -> bool {
+    !matches!(security_state().page_allocator().classify_mmram(range), Some(MmramPlacement::Outside))
 }
 
 #[cfg(test)]
@@ -324,5 +348,12 @@ mod tests {
         // supervisor is asked to treat as non-MM memory is reported as overlapping instead.
         assert!(buffer_overlaps_mmram(0x1000, 0x1000));
         assert!(buffer_overlaps_mmram(u64::MAX, 1));
+        assert!(range_overlaps_mmram(&MemoryRange::new(0x1000, 0x1000).unwrap()));
+    }
+
+    #[test]
+    fn test_mmram_placement_of_invalid_range() {
+        assert_eq!(MmramPlacement::of_invalid_range(MemoryRangeError::Empty), MmramPlacement::Outside);
+        assert_eq!(MmramPlacement::of_invalid_range(MemoryRangeError::Overflow), MmramPlacement::PartlyInside);
     }
 }
