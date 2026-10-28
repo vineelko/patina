@@ -234,8 +234,9 @@ pub(crate) fn smrr_initialize(range: MemoryRange) -> MmSupervisorResult<()> {
     // SMRR_BASE and SMRR_MASK only describe addresses below 4 GiB. Truncating here would
     // validate and program a completely different region than the one handed in, leaving the
     // real MMRAM unprotected, so a region that does not fit is fatal rather than narrowed.
-    let (Ok(smrr_base), Ok(smrr_size)) = (u32::try_from(range.base()), u32::try_from(range.size())) else {
-        return Err(SmrrError::RangeNotAddressable { base: range.base(), size: range.size() }.into());
+    let (base, size) = range.into_parts();
+    let (Ok(smrr_base), Ok(smrr_size)) = (u32::try_from(base), u32::try_from(size)) else {
+        return Err(SmrrError::RangeNotAddressable { base, size }.into());
     };
 
     if !verify_smrr_base_size(smrr_base, smrr_size) {
