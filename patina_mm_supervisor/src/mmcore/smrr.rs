@@ -66,17 +66,13 @@ pub enum SmrrError {
     /// Truncating would program a different region than the one handed in and leave the real
     /// MMRAM unprotected, so this is fatal rather than narrowed.
     RangeNotAddressable {
-        /// Base address of the region that did not fit.
-        base: u64,
-        /// Size of the region that did not fit.
-        size: u64,
+        /// The region that did not fit.
+        range: MemoryRange,
     },
     /// The region is not a power-of-two size of at least 4 KiB on a naturally aligned base.
     RangeNotAligned {
-        /// Base address that failed the check.
-        base: u64,
-        /// Size that failed the check.
-        size: u64,
+        /// The region that failed the check.
+        range: MemoryRange,
     },
 }
 
@@ -93,13 +89,12 @@ impl core::fmt::Display for SmrrError {
             Self::SmmCodeAccessCheckUnsupported => {
                 write!(f, "unsupported CPU: SMM Code Access Check is not supported")
             }
-            Self::RangeNotAddressable { base, size } => {
-                write!(f, "SMRAM region [0x{base:x}, +0x{size:x}) does not fit the 32-bit SMRR registers")
+            Self::RangeNotAddressable { range } => {
+                write!(f, "SMRAM region {range} does not fit the 32-bit SMRR registers")
             }
-            Self::RangeNotAligned { base, size } => write!(
-                f,
-                "SMRAM region base 0x{base:x} size 0x{size:x} does not meet the SMRR alignment and size requirements"
-            ),
+            Self::RangeNotAligned { range } => {
+                write!(f, "SMRAM region {range} does not meet the SMRR alignment and size requirements")
+            }
         }
     }
 }
@@ -224,14 +219,15 @@ pub(crate) fn smrr_initialize(range: MemoryRange) -> MmSupervisorResult<()> {
     // SMRR_BASE and SMRR_MASK only describe addresses below 4 GiB. Truncating here would
     // validate and program a completely different region than the one handed in, leaving the
     // real MMRAM unprotected, so a region that does not fit is fatal rather than narrowed.
-    let (base, size) = range.into_parts();
     if range.end() > SMRR_MAX_ADDRESS {
-        return Err(SmrrError::RangeNotAddressable { base, size }.into());
+        return Err(SmrrError::RangeNotAddressable { range }.into());
     }
 
     if !verify_smrr_base_size(&range) {
-        return Err(SmrrError::RangeNotAligned { base, size }.into());
+        return Err(SmrrError::RangeNotAligned { range }.into());
     }
+
+    let (base, size) = range.into_parts();
 
     // SAFETY: SMRR support was verified above, so MSR_SMRR_BASE/MSR_SMRR_MASK
     // are valid architectural MSRs. `base`/`size` were validated by
@@ -356,12 +352,15 @@ mod tests {
             "unsupported CPU: SMM Code Access Check is not supported"
         );
         assert_eq!(
-            format!("{}", SmrrError::RangeNotAddressable { base: 0x1_0000_0000, size: 0x80_0000 }),
-            "SMRAM region [0x100000000, +0x800000) does not fit the 32-bit SMRR registers"
+            format!(
+                "{}",
+                SmrrError::RangeNotAddressable { range: MemoryRange::new(0x1_0000_0000, 0x80_0000).unwrap() }
+            ),
+            "SMRAM region 0x100000000..=0x1007fffff does not fit the 32-bit SMRR registers"
         );
         assert_eq!(
-            format!("{}", SmrrError::RangeNotAligned { base: 0x801000, size: 0x800000 }),
-            "SMRAM region base 0x801000 size 0x800000 does not meet the SMRR alignment and size requirements"
+            format!("{}", SmrrError::RangeNotAligned { range: MemoryRange::new(0x80_1000, 0x80_0000).unwrap() }),
+            "SMRAM region 0x801000..=0x1000fff does not meet the SMRR alignment and size requirements"
         );
     }
 
