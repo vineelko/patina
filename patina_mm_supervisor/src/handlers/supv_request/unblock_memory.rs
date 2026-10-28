@@ -731,21 +731,12 @@ fn validate_unblock_request(params: &MmSupervisorUnblockMemoryParams) -> Result<
         return Err(efi::Status::INVALID_PARAMETER);
     }
 
-    if number_of_pages == 0 {
-        log::error!("UNBLOCK_MEM: NumberOfPages is 0");
-        return Err(efi::Status::INVALID_PARAMETER);
-    }
-
-    let region_size = if let Some(s) = number_of_pages.checked_mul(UEFI_PAGE_SIZE as u64) {
-        s
-    } else {
-        log::error!("UNBLOCK_MEM: NumberOfPages ({number_of_pages}) * UEFI_PAGE_SIZE overflows u64");
-        return Err(efi::Status::INVALID_PARAMETER);
-    };
-
-    let Ok(range) = MemoryRange::new(physical_start, region_size) else {
-        log::error!("UNBLOCK_MEM: address range 0x{physical_start:016x} + 0x{region_size:x} overflows");
-        return Err(efi::Status::INVALID_PARAMETER);
+    let range = match MemoryRange::from_pages(physical_start, number_of_pages, UEFI_PAGE_SIZE as u64) {
+        Ok(range) => range,
+        Err(err) => {
+            log::error!("UNBLOCK_MEM: {number_of_pages} pages at 0x{physical_start:016x} is not a valid range: {err}");
+            return Err(efi::Status::INVALID_PARAMETER);
+        }
     };
 
     let is_supervisor_page = (params.memory_descriptor.attribute & efi::MEMORY_SP) != 0;
