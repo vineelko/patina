@@ -8,6 +8,7 @@
 //! let range = MemoryRange::new(0x1000, 0x2000)?;
 //! assert!(range.contains(0x2fff));
 //! assert_eq!(range.last(), 0x2fff);
+//! assert_eq!(MemoryRange::from_pages(0x1000, 2, 0x1000)?, range);
 //!
 //! let other = MemoryRange::new(0x2000, 0x2000)?;
 //! assert_eq!(range.intersection(&other), MemoryRange::new(0x2000, 0x1000));
@@ -118,6 +119,21 @@ impl MemoryRange {
         }
         match last.checked_add(1) {
             Some(end) => Self::new(first, end - first),
+            None => Err(MemoryRangeError::Overflow),
+        }
+    }
+
+    /// Creates a range of `pages` pages of `page_size` bytes each, starting at `base`.
+    ///
+    /// `base` is not required to be aligned to `page_size`; use [`MemoryRange::is_aligned`] when that matters.
+    ///
+    /// # Errors
+    ///
+    /// [`MemoryRangeError::Empty`] if `pages` or `page_size` is zero; [`MemoryRangeError::Overflow`] if
+    /// `pages * page_size` or `base + pages * page_size` exceeds `u64::MAX`.
+    pub const fn from_pages(base: u64, pages: u64, page_size: u64) -> Result<Self, MemoryRangeError> {
+        match pages.checked_mul(page_size) {
+            Some(size) => Self::new(base, size),
             None => Err(MemoryRangeError::Overflow),
         }
     }
@@ -540,6 +556,17 @@ mod tests {
         assert_eq!(MemoryRange::from_inclusive(2, 1), Err(MemoryRangeError::InvalidBounds));
         assert_eq!(MemoryRange::from_inclusive(0, MAX), Err(MemoryRangeError::Overflow));
         assert_eq!(MemoryRange::from_inclusive(MAX, MAX), Err(MemoryRangeError::Overflow));
+    }
+
+    #[test]
+    fn test_memory_range_from_pages() {
+        assert_eq!(MemoryRange::from_pages(0x1000, 3, 0x1000), Ok(mr(0x1000, 0x3000)));
+        assert_eq!(MemoryRange::from_pages(0x1234, 1, 0x200), Ok(mr(0x1234, 0x200)));
+        assert_eq!(MemoryRange::from_pages(MAX - 0x2000, 2, 0x1000), Ok(mr(MAX - 0x2000, 0x2000)));
+        assert_eq!(MemoryRange::from_pages(0x1000, 0, 0x1000), Err(MemoryRangeError::Empty));
+        assert_eq!(MemoryRange::from_pages(0x1000, 4, 0), Err(MemoryRangeError::Empty));
+        assert_eq!(MemoryRange::from_pages(0, MAX, 0x1000), Err(MemoryRangeError::Overflow));
+        assert_eq!(MemoryRange::from_pages(MAX - 0xfff, 1, 0x1000), Err(MemoryRangeError::Overflow));
     }
 
     #[test]
