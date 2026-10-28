@@ -148,6 +148,18 @@ impl MemoryRange {
         self.size
     }
 
+    /// Returns the base and the size as a `(base, size)` tuple.
+    ///
+    /// ```rust
+    /// # use patina::MemoryRange;
+    /// let (base, size) = MemoryRange::new(0x1000, 0x2000)?.into_parts();
+    /// assert_eq!((base, size), (0x1000, 0x2000));
+    /// # Ok::<(), patina::MemoryRangeError>(())
+    /// ```
+    pub const fn into_parts(self) -> (u64, u64) {
+        (self.base, self.size)
+    }
+
     /// Returns the exclusive end, `base + size`.
     pub const fn end(&self) -> u64 {
         // Cannot overflow: the constructors reject any `base + size` above `u64::MAX`.
@@ -523,6 +535,8 @@ mod tests {
 
         let single = mr(0, 1);
         assert_eq!(single.last(), 0);
+
+        assert_eq!(range.into_parts(), (0x1000, 0x2000));
     }
 
     #[test]
