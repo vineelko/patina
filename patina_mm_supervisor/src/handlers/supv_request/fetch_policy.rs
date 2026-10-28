@@ -17,7 +17,7 @@ use crate::{
     error::{MmSupervisorError, MmSupervisorResult},
     handlers::UnblockedMemoryTracker,
     intrinsics::read_cr3,
-    memory::mmram::is_buffer_inside_mmram,
+    memory::mmram::is_range_inside_mmram,
     policy::{MemDescriptorV1_0, PolicyGate, PolicyGateError},
     state::security_state,
 };
@@ -63,7 +63,7 @@ impl FetchPolicyContext for SupervisorFetchPolicyContext<'_> {
     fn take_snapshot(&self, gate: &Self::Gate) -> MmSupervisorResult<()> {
         // SAFETY: CR3 points to the active root page table inside MM, and the
         // memory policy buffer was configured during initialization.
-        unsafe { gate.take_snapshot(read_cr3(), is_buffer_inside_mmram) }.map(|_| ())
+        unsafe { gate.take_snapshot(read_cr3(), is_range_inside_mmram) }.map(|_| ())
     }
 
     fn lock_unblocked_memory(&self) {
@@ -114,7 +114,7 @@ impl SnapshotVerificationContext for SupervisorSnapshotVerificationContext<'_> {
     fn verify_snapshot(&self, scratch: *mut MemDescriptorV1_0, max_count: usize) -> MmSupervisorResult<()> {
         // SAFETY: `scratch` was allocated by the page allocator for `max_count` descriptors, and
         // CR3 identifies the active, stable page table for this MM invocation.
-        unsafe { self.gate.verify_snapshot(self.cr3, is_buffer_inside_mmram, scratch, max_count) }
+        unsafe { self.gate.verify_snapshot(self.cr3, is_range_inside_mmram, scratch, max_count) }
     }
 
     fn free_scratch(&self, base: u64, pages: usize) -> Result<(), ()> {

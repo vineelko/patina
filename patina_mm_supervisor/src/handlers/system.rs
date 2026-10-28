@@ -17,7 +17,7 @@ use crate::{
     error::MmSupervisorError,
     handlers::UnblockedMemoryTracker,
     intrinsics::read_cr3,
-    memory::mmram::is_buffer_inside_mmram,
+    memory::mmram::is_range_inside_mmram,
     policy::PolicyGate,
     state::{InitState, init_state, security_state},
 };
@@ -72,7 +72,7 @@ impl ReadyToLockContext for SupervisorReadyToLockContext<'_> {
         let cr3 = read_cr3();
         // SAFETY: CR3 points to the active root page table inside MM, and the memory
         // policy buffer was configured during initialization.
-        unsafe { gate.take_snapshot(cr3, is_buffer_inside_mmram) }.map(|_| ())
+        unsafe { gate.take_snapshot(cr3, is_range_inside_mmram) }.map(|_| ())
     }
 
     fn lock_unblocked_memory(&self) {

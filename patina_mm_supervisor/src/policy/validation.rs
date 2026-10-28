@@ -22,6 +22,8 @@ use super::{
 };
 use core::mem::size_of;
 
+use patina::MemoryRange;
+
 use patina_paging::{MemoryAttributes, PagingType, x64::X64PageTable};
 
 use crate::{error::MmSupervisorResult, memory::SharedPagingAllocator, state::security_state};
@@ -396,10 +398,10 @@ impl core::fmt::Display for PageTableWalkError {
     }
 }
 
-/// Callback type for checking if a buffer is inside MMRAM.
+/// Callback type for checking if a range is inside MMRAM.
 ///
-/// Returns `true` if the buffer `[base, base + size)` is fully inside MMRAM.
-pub type IsInsideMmramFn = fn(base: u64, size: u64) -> bool;
+/// Returns `true` if the range is fully inside MMRAM.
+pub type IsInsideMmramFn = fn(&MemoryRange) -> bool;
 
 /// Walks `x86_64` 4-level page tables and generates memory policy descriptors.
 ///
@@ -442,8 +444,9 @@ pub unsafe fn walk_page_table(
     let mut builder = unsafe { MemoryPolicyBuilder::new(buffer, max_count) };
 
     for region in page_table.iter_mapped_regions(None) {
-        // Skip regions that lie fully inside MMRAM.
-        if is_inside_mmram(region.pa, region.size) {
+        // Skip regions that lie fully inside MMRAM. A region that is not a valid range is never
+        // inside MMRAM, so it is kept.
+        if MemoryRange::new(region.pa, region.size).is_ok_and(|range| is_inside_mmram(&range)) {
             continue;
         }
 
@@ -746,11 +749,11 @@ mod tests {
         // SAFETY: both calls bail out on the argument check before dereferencing anything.
         unsafe {
             assert_eq!(
-                walk_page_table(0, buffer.as_mut_ptr(), buffer.len(), |_, _| false),
+                walk_page_table(0, buffer.as_mut_ptr(), buffer.len(), |_| false),
                 Err(PageTableWalkError::InvalidCr3.into())
             );
             assert_eq!(
-                walk_page_table(0x1000, core::ptr::null_mut(), 1, |_, _| false),
+                walk_page_table(0x1000, core::ptr::null_mut(), 1, |_| false),
                 Err(PageTableWalkError::InvalidCr3.into())
             );
         }

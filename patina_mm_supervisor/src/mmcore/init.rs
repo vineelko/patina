@@ -790,7 +790,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // to the live root page table, and this function's contract gives
         // `descriptors` room for `MEMORY_POLICY_DESCRIPTORS_PER_PAGE` entries.
         let descriptor_count =
-            unsafe { walk_page_table(cr3, descriptors, MEMORY_POLICY_DESCRIPTORS_PER_PAGE, is_buffer_inside_mmram) }?;
+            unsafe { walk_page_table(cr3, descriptors, MEMORY_POLICY_DESCRIPTORS_PER_PAGE, is_range_inside_mmram) }?;
         log::info!("Generated {descriptor_count} memory policy descriptor(s) from the page table walk");
 
         // SAFETY: `walk_page_table` succeeded, so the buffer holds `descriptor_count` initialized

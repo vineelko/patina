@@ -1117,7 +1117,7 @@ mod tests {
 
         assert_eq!(
             // SAFETY: the buffer check fails before `cr3` is ever dereferenced.
-            unsafe { gate.take_snapshot(0x1000, |_, _| false) },
+            unsafe { gate.take_snapshot(0x1000, |_| false) },
             Err(PolicyGateError::InternalError.into())
         );
     }
@@ -1134,7 +1134,7 @@ mod tests {
         assert_eq!(gate.record_snapshot(7), 3);
 
         // SAFETY: the recorded count short-circuits before `cr3` is dereferenced.
-        assert_eq!(unsafe { gate.take_snapshot(0x1000, |_, _| false) }, Ok(3));
+        assert_eq!(unsafe { gate.take_snapshot(0x1000, |_| false) }, Ok(3));
     }
 
     #[test]
@@ -1146,7 +1146,7 @@ mod tests {
         // page-table tampering after lock.
         assert_eq!(
             // SAFETY: the missing snapshot short-circuits before `cr3`/`scratch` are dereferenced.
-            unsafe { gate.verify_snapshot(0x1000, |_, _| false, core::ptr::null_mut(), 0) },
+            unsafe { gate.verify_snapshot(0x1000, |_| false, core::ptr::null_mut(), 0) },
             Err(PolicyGateError::InternalError.into())
         );
     }
