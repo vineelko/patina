@@ -24,8 +24,10 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 use core::{
+    borrow::Borrow,
     cmp::Ordering,
     fmt,
+    num::NonZeroU64,
     ops::{Add, Range, RangeInclusive},
 };
 
@@ -64,6 +66,17 @@ impl From<MemoryRangeError> for EfiError {
     fn from(_: MemoryRangeError) -> Self {
         EfiError::InvalidParameter
     }
+}
+
+/// How much of a [`MemoryRange`] a set of ranges covers. Returned by [`MemoryRange::coverage`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Coverage {
+    /// Every address in the range is covered.
+    Full,
+    /// Some addresses in the range are covered and some are not.
+    Partial,
+    /// No address in the range is covered.
+    Disjoint,
 }
 
 /// A non-empty, contiguous `[base, base + size)` address range. `size` is never zero and `base + size` never exceeds
@@ -232,11 +245,17 @@ impl MemoryRange {
     /// # Errors
     ///
     /// [`MemoryRangeError::Empty`] if `ranges` is empty.
-    pub fn collapse(ranges: &[MemoryRange]) -> Result<MemoryRange, MemoryRangeError> {
-        let (first, rest) = ranges.split_first().ok_or(MemoryRangeError::Empty)?;
-        let (base, end) = rest
-            .iter()
-            .fold((first.base, first.end()), |(base, end), range| (base.min(range.base), end.max(range.end())));
+    pub fn collapse<I>(ranges: I) -> Result<MemoryRange, MemoryRangeError>
+    where
+        I: IntoIterator,
+        I::Item: Borrow<MemoryRange>,
+    {
+        let mut ranges = ranges.into_iter();
+        let first = *ranges.next().ok_or(MemoryRangeError::Empty)?.borrow();
+        let (base, end) = ranges.fold((first.base, first.end()), |(base, end), range| {
+            let range = range.borrow();
+            (base.min(range.base), end.max(range.end()))
+        });
         Self::new(base, end - base)
     }
 
@@ -253,14 +272,87 @@ impl MemoryRange {
     ///
     /// [`MemoryRangeError::Disjoint`] if the ranges are not contiguous; [`MemoryRangeError::Empty`] if `ranges` is
     /// empty.
-    pub fn coalesce(ranges: &[MemoryRange]) -> Result<MemoryRange, MemoryRangeError> {
-        let covering = Self::collapse(ranges)?;
+    pub fn coalesce<I>(ranges: I) -> Result<MemoryRange, MemoryRangeError>
+    where
+        I: IntoIterator,
+        I::IntoIter: Clone,
+        I::Item: Borrow<MemoryRange>,
+    {
+        let ranges = ranges.into_iter();
+        let covering = Self::collapse(ranges.clone())?;
         // A gap always starts where some range ends, so the ranges are contiguous exactly when every range end below
         // the covering end falls inside another range.
-        let has_gap = ranges
-            .iter()
-            .any(|range| range.end() < covering.end() && !ranges.iter().any(|other| other.contains(range.end())));
+        let has_gap = ranges.clone().any(|range| {
+            let end = range.borrow().end();
+            end < covering.end() && !ranges.clone().any(|other| other.borrow().contains(end))
+        });
         if has_gap { Err(MemoryRangeError::Disjoint) } else { Ok(covering) }
+    }
+
+    /// Returns the first pair of ranges that overlap, in input order, or `None` if no two ranges share an address.
+    /// Adjacent ranges do not overlap:
+    ///
+    /// ```text
+    /// [a][b]  [c]   - None
+    /// [a[]b]  [c]   - Some((a, b))
+    /// [a]  [b[c]]   - Some((b, c))
+    /// ```
+    ///
+    /// Runs in O(n²) time without allocating.
+    pub fn find_overlap<I>(ranges: I) -> Option<(MemoryRange, MemoryRange)>
+    where
+        I: IntoIterator,
+        I::IntoIter: Clone,
+        I::Item: Borrow<MemoryRange>,
+    {
+        let ranges = ranges.into_iter();
+        ranges.clone().enumerate().find_map(|(index, first)| {
+            let first = *first.borrow();
+            ranges
+                .clone()
+                .skip(index + 1)
+                .map(|second| *second.borrow())
+                .find(|second| first.overlaps(second))
+                .map(|second| (first, second))
+        })
+    }
+
+    /// Returns how much of `self` the union of `ranges` covers. Ranges that only touch each other still cover
+    /// contiguously (`s` = `self`, `r` = ranges):
+    ///
+    /// ```text
+    /// [r[s]]        - Full
+    /// [r][r]        - Full when `s` spans both
+    /// [r[]s]        - Partial
+    /// [r] [r]       - Partial when `s` spans the gap
+    /// [r] [s]       - Disjoint
+    /// ```
+    ///
+    /// Runs in O(n²) time without allocating.
+    pub fn coverage<I>(&self, ranges: I) -> Coverage
+    where
+        I: IntoIterator,
+        I::IntoIter: Clone,
+        I::Item: Borrow<MemoryRange>,
+    {
+        let ranges = ranges.into_iter();
+        // Extend the covered prefix of `self` one range at a time until a gap appears. Each step moves `cursor`
+        // forward, because the range found contains it and so ends above it.
+        let mut cursor = self.base;
+        while let Some(end) =
+            ranges.clone().map(|range| *range.borrow()).find(|range| range.contains(cursor)).map(|r| r.end())
+        {
+            if end >= self.end() {
+                return Coverage::Full;
+            }
+            cursor = end;
+        }
+
+        if cursor > self.base || ranges.clone().any(|range| self.overlaps(range.borrow())) {
+            Coverage::Partial
+        } else {
+            Coverage::Disjoint
+        }
     }
 
     /// Returns `true` if base and size are multiples of `align`.
@@ -303,6 +395,40 @@ impl MemoryRange {
             Some(size) => MemoryRange::new(self.base, size),
             None => Err(MemoryRangeError::Overflow),
         }
+    }
+
+    /// Returns the smallest range aligned to `align` that contains `self`: the base is rounded down and the end is
+    /// rounded up to a multiple of `align`.
+    ///
+    /// ```text
+    /// align:   |       |       |       |
+    /// self:        [s      ]
+    /// output:  [               ]
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`MemoryRangeError::InvalidAlignment`] if `align` is not a non-zero power of two;
+    /// [`MemoryRangeError::Overflow`] if the rounded end would exceed `u64::MAX`.
+    pub const fn align_outward(&self, align: u64) -> Result<MemoryRange, MemoryRangeError> {
+        if !align.is_power_of_two() {
+            return Err(MemoryRangeError::InvalidAlignment);
+        }
+        let mask = align - 1;
+        let base = self.base & !mask;
+        match self.end().checked_add(mask) {
+            Some(end) => MemoryRange::new(base, (end & !mask) - base),
+            None => Err(MemoryRangeError::Overflow),
+        }
+    }
+
+    /// Returns the addresses `base`, `base + step`, `base + 2 * step`, ... that lie in the range.
+    ///
+    /// The first address is always `base`, so the range is visited in full when its base and size are multiples
+    /// of `step`.
+    pub fn step_by(&self, step: NonZeroU64) -> impl Iterator<Item = u64> + use<> {
+        let (step, end) = (step.get(), self.end());
+        core::iter::successors(Some(self.base), move |&address| address.checked_add(step).filter(|&next| next < end))
     }
 }
 
@@ -543,14 +669,14 @@ mod tests {
 
     #[test]
     fn test_memory_range_collapse_empty_and_single() {
-        assert_eq!(MemoryRange::collapse(&[]), Err(MemoryRangeError::Empty));
-        assert_eq!(MemoryRange::collapse(&[mr(0x1000, 0x10)]), Ok(mr(0x1000, 0x10)));
+        assert_eq!(MemoryRange::collapse(core::iter::empty::<MemoryRange>()), Err(MemoryRangeError::Empty));
+        assert_eq!(MemoryRange::collapse([mr(0x1000, 0x10)]), Ok(mr(0x1000, 0x10)));
     }
 
     #[test]
     fn test_memory_range_collapse_covers_gaps() {
         let input = [mr(0x5000, 0x10), mr(0x1000, 0x10), mr(0x3000, 0x10)];
-        assert_eq!(MemoryRange::collapse(&input), Ok(mr(0x1000, 0x4010)));
+        assert_eq!(MemoryRange::collapse(input), Ok(mr(0x1000, 0x4010)));
     }
 
     #[test]
@@ -563,25 +689,116 @@ mod tests {
             mr(0x2000, 0x1000), // adjacent to a
             mr(0x6100, 0x10),   // contained in c
         ];
-        assert_eq!(MemoryRange::collapse(&input), Ok(mr(0x1000, 0x6000)));
+        assert_eq!(MemoryRange::collapse(input), Ok(mr(0x1000, 0x6000)));
     }
 
     #[test]
     fn test_memory_range_collapse_highest_end_is_not_highest_base() {
         let input = [mr(0x1000, 0x8000), mr(0x2000, 0x10)];
-        assert_eq!(MemoryRange::collapse(&input), Ok(mr(0x1000, 0x8000)));
+        assert_eq!(MemoryRange::collapse(input), Ok(mr(0x1000, 0x8000)));
     }
 
     #[test]
     fn test_memory_range_collapse_at_top_of_address_space() {
         let input = [mr(MAX - 0x1000, 0x1000), mr(0, 0x1000)];
-        assert_eq!(MemoryRange::collapse(&input), Ok(mr(0, MAX)));
+        assert_eq!(MemoryRange::collapse(input), Ok(mr(0, MAX)));
     }
 
     #[test]
     fn test_memory_range_coalesce_empty_and_single() {
-        assert_eq!(MemoryRange::coalesce(&[]), Err(MemoryRangeError::Empty));
-        assert_eq!(MemoryRange::coalesce(&[mr(0x1000, 0x10)]), Ok(mr(0x1000, 0x10)));
+        assert_eq!(MemoryRange::coalesce(core::iter::empty::<MemoryRange>()), Err(MemoryRangeError::Empty));
+        assert_eq!(MemoryRange::coalesce([mr(0x1000, 0x10)]), Ok(mr(0x1000, 0x10)));
+    }
+
+    #[test]
+    fn test_memory_range_collapse_and_coalesce_accept_owned_iterators() {
+        let ranges = [(0x2000, 0x1000), (0x1000, 0x1000)];
+        let owned = || ranges.iter().map(|&(base, size)| mr(base, size));
+        assert_eq!(MemoryRange::collapse(owned()), Ok(mr(0x1000, 0x2000)));
+        assert_eq!(MemoryRange::coalesce(owned()), Ok(mr(0x1000, 0x2000)));
+    }
+
+    #[test]
+    fn test_memory_range_find_overlap() {
+        assert_eq!(MemoryRange::find_overlap(core::iter::empty::<MemoryRange>()), None);
+        assert_eq!(MemoryRange::find_overlap([mr(0x1000, 0x10)]), None);
+
+        // Adjacent and separate ranges do not overlap.
+        assert_eq!(MemoryRange::find_overlap([mr(0x1000, 0x1000), mr(0x2000, 0x1000), mr(0x5000, 0x10)]), None);
+
+        // The pair is reported in input order, even when the second range has the lower base.
+        let (a, b) = (mr(0x2000, 0x1000), mr(0x1800, 0x1000));
+        assert_eq!(MemoryRange::find_overlap([a, b]), Some((a, b)));
+
+        // A range nested in an earlier, larger range is found even when other ranges sit between them.
+        let (outer, gap, inner) = (mr(0x1000, 0x8000), mr(0x10000, 0x10), mr(0x4000, 0x10));
+        assert_eq!(MemoryRange::find_overlap([outer, gap, inner]), Some((outer, inner)));
+
+        // The first overlapping pair wins.
+        let (c, d) = (mr(0x7000, 0x100), mr(0x70f0, 0x100));
+        assert_eq!(MemoryRange::find_overlap([mr(0x100, 0x10), c, d, a, b]), Some((c, d)));
+
+        // Identical ranges overlap.
+        assert_eq!(MemoryRange::find_overlap([a, a]), Some((a, a)));
+    }
+
+    #[test]
+    fn test_memory_range_coverage() {
+        let ranges = [mr(0x1000, 0x1000), mr(0x2000, 0x1000), mr(0x5000, 0x1000)];
+
+        assert_eq!(mr(0x1000, 0x1000).coverage(ranges), Coverage::Full);
+        // Adjacent ranges cover the range jointly.
+        assert_eq!(mr(0x1800, 0x1000).coverage(ranges), Coverage::Full);
+        assert_eq!(mr(0x1000, 0x2000).coverage(ranges), Coverage::Full);
+        // The query runs past the covered prefix.
+        assert_eq!(mr(0x2800, 0x1000).coverage(ranges), Coverage::Partial);
+        // The query starts before any range.
+        assert_eq!(mr(0x0800, 0x1000).coverage(ranges), Coverage::Partial);
+        // The query spans a gap between two covered parts.
+        assert_eq!(mr(0x2800, 0x3000).coverage(ranges), Coverage::Partial);
+        assert_eq!(mr(0x3000, 0x1000).coverage(ranges), Coverage::Disjoint);
+        assert_eq!(mr(0x3000, 0x2000).coverage(ranges), Coverage::Disjoint);
+        assert_eq!(mr(0x1000, 0x10).coverage(core::iter::empty::<MemoryRange>()), Coverage::Disjoint);
+
+        // The order of the ranges does not matter.
+        let reversed = [ranges[2], ranges[1], ranges[0]];
+        assert_eq!(mr(0x1000, 0x2000).coverage(reversed), Coverage::Full);
+
+        // A range ending at the top of the address space can cover a query that does too.
+        let top = mr(MAX - 0x1000, 0x1000);
+        assert_eq!(mr(MAX - 0x10, 0x10).coverage([top]), Coverage::Full);
+    }
+
+    #[test]
+    fn test_memory_range_align_outward() {
+        assert_eq!(mr(0x1234, 0x1000).align_outward(0x1000), Ok(mr(0x1000, 0x2000)));
+        assert_eq!(mr(0x1000, 0x1000).align_outward(0x1000), Ok(mr(0x1000, 0x1000)));
+        assert_eq!(mr(0x1001, 1).align_outward(0x1000), Ok(mr(0x1000, 0x1000)));
+        // Matches the documented `align_range` example.
+        assert_eq!(mr(1023, 2048).align_outward(512), Ok(mr(512, 2560)));
+
+        // An unaligned range near the top of the address space rounds to the last whole pages below it.
+        let top = mr(MAX - 0x1fef, 0xff0);
+        assert_eq!(top.align_outward(0x1000), Ok(mr(MAX - 0x1fff, 0x1000)));
+        // Rounding an end at the top of the address space up would pass `u64::MAX`.
+        assert_eq!(mr(MAX - 0x10, 0x10).align_outward(0x1000), Err(MemoryRangeError::Overflow));
+
+        assert_eq!(mr(0x1000, 0x10).align_outward(0), Err(MemoryRangeError::InvalidAlignment));
+        assert_eq!(mr(0x1000, 0x10).align_outward(0x1800), Err(MemoryRangeError::InvalidAlignment));
+    }
+
+    #[test]
+    fn test_memory_range_step_by() {
+        let step = NonZeroU64::new(0x1000).unwrap();
+        assert_eq!(mr(0x1000, 0x3000).step_by(step).collect::<Vec<_>>(), vec![0x1000, 0x2000, 0x3000]);
+        // A size that is not a multiple of the step still yields the base and every later step inside the range.
+        assert_eq!(mr(0x1000, 0x1001).step_by(step).collect::<Vec<_>>(), vec![0x1000, 0x2000]);
+        assert_eq!(mr(0x1000, 1).step_by(step).collect::<Vec<_>>(), vec![0x1000]);
+
+        // The last step below the top of the address space does not wrap.
+        let top = mr(MAX - 0x1fff, 0x1fff);
+        assert_eq!(top.step_by(step).collect::<Vec<_>>(), vec![MAX - 0x1fff, MAX - 0xfff]);
+        assert_eq!(mr(0, MAX).step_by(NonZeroU64::new(1 << 63).unwrap()).collect::<Vec<_>>(), vec![0, 1 << 63]);
     }
 
     #[test]
@@ -592,23 +809,23 @@ mod tests {
             mr(0x3800, 0x1000), // overlaps the first range
             mr(0x1800, 0x100),  // contained in the second range
         ];
-        assert_eq!(MemoryRange::coalesce(&input), Ok(mr(0x1000, 0x3800)));
+        assert_eq!(MemoryRange::coalesce(input), Ok(mr(0x1000, 0x3800)));
     }
 
     #[test]
     fn test_memory_range_coalesce_rejects_gaps() {
-        assert_eq!(MemoryRange::coalesce(&[mr(0x1000, 0x1000), mr(0x2001, 0x10)]), Err(MemoryRangeError::Disjoint));
-        assert_eq!(MemoryRange::coalesce(&[mr(0x3000, 0x10), mr(0x1000, 0x1000)]), Err(MemoryRangeError::Disjoint));
+        assert_eq!(MemoryRange::coalesce([mr(0x1000, 0x1000), mr(0x2001, 0x10)]), Err(MemoryRangeError::Disjoint));
+        assert_eq!(MemoryRange::coalesce([mr(0x3000, 0x10), mr(0x1000, 0x1000)]), Err(MemoryRangeError::Disjoint));
 
         // The range with the highest end is not the one followed by the gap.
         let input = [mr(0x1000, 0x8000), mr(0x1100, 0x10), mr(0xa000, 0x10)];
-        assert_eq!(MemoryRange::coalesce(&input), Err(MemoryRangeError::Disjoint));
+        assert_eq!(MemoryRange::coalesce(input), Err(MemoryRangeError::Disjoint));
     }
 
     #[test]
     fn test_memory_range_coalesce_at_top_of_address_space() {
         let input = [mr(MAX - 0x1000, 0x1000), mr(0, MAX - 0x1000)];
-        assert_eq!(MemoryRange::coalesce(&input), Ok(mr(0, MAX)));
+        assert_eq!(MemoryRange::coalesce(input), Ok(mr(0, MAX)));
     }
 
     #[test]
