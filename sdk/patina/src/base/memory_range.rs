@@ -396,6 +396,15 @@ impl MemoryRange {
         Ok(self.base & mask == 0 && self.size & mask == 0)
     }
 
+    /// Returns `true` if the size is a power of two and the base is a multiple of the size.
+    ///
+    /// Hardware that describes a region with a base and a mask, such as an MTRR or a large page
+    /// mapping, can only describe a range like this.
+    pub const fn is_naturally_aligned(&self) -> bool {
+        // `size` is never zero, so `size - 1` cannot underflow.
+        self.size.is_power_of_two() && self.base & (self.size - 1) == 0
+    }
+
     /// Rounds the size up to a multiple of `align`, keeping the base fixed.
     ///
     /// # Errors
@@ -877,6 +886,19 @@ mod tests {
         assert_eq!(mr(0x1000, 0x10).is_aligned(0x1000), Ok(false));
         assert_eq!(range.is_aligned(0), Err(MemoryRangeError::InvalidAlignment));
         assert_eq!(range.is_aligned(0x1800), Err(MemoryRangeError::InvalidAlignment));
+    }
+
+    #[test]
+    fn test_memory_range_is_naturally_aligned() {
+        assert!(mr(0, 1).is_naturally_aligned());
+        assert!(mr(0x8000, 0x1000).is_naturally_aligned());
+        assert!(mr(0x80_0000, 0x80_0000).is_naturally_aligned());
+        assert!(mr(1 << 62, 1 << 62).is_naturally_aligned());
+        // The size is not a power of two.
+        assert!(!mr(0, 0x3000).is_naturally_aligned());
+        // The base is not a multiple of the size.
+        assert!(!mr(0x1000, 0x2000).is_naturally_aligned());
+        assert!(!mr(0x80_1000, 0x80_0000).is_naturally_aligned());
     }
 
     #[test]
