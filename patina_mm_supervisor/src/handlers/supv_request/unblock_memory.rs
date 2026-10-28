@@ -292,18 +292,6 @@ impl UnblockedMemoryTracker {
         self.core_init_complete.load(Ordering::Acquire)
     }
 
-    /// Unblocks a memory region for access.
-    ///
-    /// This adds a new region to the unblocked list after validating:
-    /// - The region does not overlap with MMRAM
-    /// - The region is not already unblocked with different attributes
-    /// - Identical unblock requests are allowed (idempotent)
-    #[cfg(test)]
-    pub fn unblock_memory(&self, base: u64, size: u64, attributes: u32) -> MmSupervisorResult<()> {
-        let range = MemoryRange::new(base, size).map_err(UnblockError::from)?;
-        self.track_unblocked_memory(range, attributes).map(|_| ())
-    }
-
     /// Records a region as unblocked, reporting whether it was newly added.
     ///
     /// An identical request for a region already recorded reports
@@ -1289,7 +1277,9 @@ mod tests {
         let tracker = create_test_tracker();
 
         // Unblock a region
-        assert!(tracker.unblock_memory(0x1000, 0x1000, RESOURCE_ATTR_READ | RESOURCE_ATTR_WRITE).is_ok());
+        assert!(
+            tracker.track_unblocked_memory(range(0x1000, 0x1000), RESOURCE_ATTR_READ | RESOURCE_ATTR_WRITE).is_ok()
+        );
 
         tracker.set_core_init_complete();
 
@@ -1306,14 +1296,17 @@ mod tests {
         let tracker = create_test_tracker();
 
         // First unblock
-        assert!(tracker.unblock_memory(0x1000, 0x1000, RESOURCE_ATTR_READ).is_ok());
+        assert_eq!(tracker.track_unblocked_memory(range(0x1000, 0x1000), RESOURCE_ATTR_READ), Ok(TrackOutcome::Added));
 
         // Identical unblock should succeed
-        assert!(tracker.unblock_memory(0x1000, 0x1000, RESOURCE_ATTR_READ).is_ok());
+        assert_eq!(
+            tracker.track_unblocked_memory(range(0x1000, 0x1000), RESOURCE_ATTR_READ),
+            Ok(TrackOutcome::Existing)
+        );
 
         // Same region with different attributes should fail
         assert_eq!(
-            tracker.unblock_memory(0x1000, 0x1000, RESOURCE_ATTR_READ | RESOURCE_ATTR_WRITE),
+            tracker.track_unblocked_memory(range(0x1000, 0x1000), RESOURCE_ATTR_READ | RESOURCE_ATTR_WRITE),
             Err(UnblockError::ConflictingAttributes.into())
         );
     }
@@ -1323,11 +1316,11 @@ mod tests {
         let tracker = create_test_tracker();
 
         // First unblock
-        assert!(tracker.unblock_memory(0x1000, 0x1000, RESOURCE_ATTR_READ).is_ok());
+        assert!(tracker.track_unblocked_memory(range(0x1000, 0x1000), RESOURCE_ATTR_READ).is_ok());
 
         // Overlapping unblock should fail
         assert_eq!(
-            tracker.unblock_memory(0x1800, 0x1000, RESOURCE_ATTR_READ),
+            tracker.track_unblocked_memory(range(0x1800, 0x1000), RESOURCE_ATTR_READ),
             Err(UnblockError::ConflictingAttributes.into())
         );
     }
@@ -1337,19 +1330,14 @@ mod tests {
         let tracker = create_test_tracker();
         tracker.set_core_init_complete();
 
-        // Zero size
-        assert_eq!(tracker.unblock_memory(0x1000, 0, RESOURCE_ATTR_READ), Err(UnblockError::InvalidParameter.into()));
-
-        // Overflow
-        assert_eq!(
-            tracker.unblock_memory(u64::MAX, 0x1000, RESOURCE_ATTR_READ),
-            Err(UnblockError::AddressOverflow.into())
-        );
+        // A range that cannot be built is reported by kind.
+        assert_eq!(UnblockError::from(MemoryRangeError::Empty), UnblockError::InvalidParameter);
+        assert_eq!(UnblockError::from(MemoryRangeError::Overflow), UnblockError::AddressOverflow);
 
         // The request itself fits, but rounding it up to a whole page would run past the end of
         // the address space, so it is not tracked.
         assert_eq!(
-            tracker.unblock_memory(u64::MAX - 0x10, 0x10, RESOURCE_ATTR_READ),
+            tracker.track_unblocked_memory(range(u64::MAX - 0x10, 0x10), RESOURCE_ATTR_READ),
             Err(UnblockError::AddressOverflow.into())
         );
         assert_eq!(tracker.region_count(), 0);
@@ -1361,10 +1349,10 @@ mod tests {
 
         assert_eq!(tracker.region_count(), 0);
 
-        tracker.unblock_memory(0x1000, 0x1000, RESOURCE_ATTR_READ).unwrap();
+        tracker.track_unblocked_memory(range(0x1000, 0x1000), RESOURCE_ATTR_READ).unwrap();
         assert_eq!(tracker.region_count(), 1);
 
-        tracker.unblock_memory(0x3000, 0x1000, RESOURCE_ATTR_WRITE).unwrap();
+        tracker.track_unblocked_memory(range(0x3000, 0x1000), RESOURCE_ATTR_WRITE).unwrap();
         assert_eq!(tracker.region_count(), 2);
     }
 
