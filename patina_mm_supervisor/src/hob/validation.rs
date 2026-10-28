@@ -70,7 +70,7 @@ use crate::hob::pass_down::{
     MM_SUPV_PASS_DOWN_HOB_GUID, MM_SUPV_PASS_DOWN_HOB_REVISION, MmSupvPassDownHobData, PassDownHobError,
 };
 use crate::memory::PAGE_STEP;
-use crate::memory::mmram::{MmramRegion, classify_coverage};
+use crate::memory::mmram::{MmramPlacement, MmramRegion};
 use crate::state::security::SupervisorPageTable;
 use crate::state::security_state;
 
@@ -397,12 +397,9 @@ fn validate_mmram_contiguous(regions: &[MmramRegion]) -> MmSupervisorResult<Memo
 ///
 /// # Panics
 ///
-/// Panics when the range is only partly inside MMRAM, or when its end runs past the end of the
-/// address space, as [`MmramPlacement::is_inside`] does.
-///
-/// [`MmramPlacement::is_inside`]: crate::memory::mmram::MmramPlacement::is_inside
-fn is_inside_mmram(mmram: MemoryRange, base: u64, size: u64) -> bool {
-    classify_coverage(base, size, [mmram]).is_inside(base, size)
+/// Panics when the range is only partly inside MMRAM, as [`MmramPlacement::is_inside`] does.
+fn is_inside_mmram(mmram: MemoryRange, range: &MemoryRange) -> bool {
+    MmramPlacement::from(range.coverage([mmram])).is_inside(range)
 }
 
 /// Validates the `PassDown` HOB revision and that every pointer it reports references memory
@@ -427,7 +424,7 @@ fn validate_pass_down_pointers(pass_down: &MmSupvPassDownHobData, mmram: MemoryR
     ];
 
     for (field, addr, size) in checks {
-        if !is_inside_mmram(mmram, addr, size) {
+        if !MemoryRange::new(addr, size).is_ok_and(|range| is_inside_mmram(mmram, &range)) {
             return Err(PassDownHobError::PointerOutsideMmram { field, addr, size }.into());
         }
     }
@@ -519,7 +516,7 @@ fn validate_hob_list_inside_mmram(
 ) -> MmSupervisorResult<()> {
     let base = core::ptr::from_ref(handoff) as u64;
 
-    if length == 0 || !is_inside_mmram(mmram, base, length) {
+    if !MemoryRange::new(base, length).is_ok_and(|range| is_inside_mmram(mmram, &range)) {
         return Err(HobValidationError::HobListOutsideMmram { base, size: length }.into());
     }
 
@@ -580,7 +577,7 @@ fn validate_allocation_modules<'a>(
             if is_init && !matches!(range.is_aligned(UEFI_PAGE_SIZE as u64), Ok(true)) {
                 return Err(HobValidationError::InitModuleNotPageAligned { base, length }.into());
             }
-            if !is_inside_mmram(mmram, base, length) {
+            if !is_inside_mmram(mmram, &range) {
                 return Err(HobValidationError::AllocationModuleOutsideMmram { base, length }.into());
             }
             let entry_point = module.entry_point;
