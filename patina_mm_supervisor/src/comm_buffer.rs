@@ -293,27 +293,14 @@ impl CommChannel {
 fn require_external_comm_buffer(address: u64, size: u64, description: &str) {
     let range = MemoryRange::new(address, size)
         .unwrap_or_else(|err| panic!("{description} at 0x{address:016x} (+0x{size:x}) is not a valid range: {err}"));
-    require_external_comm_buffer_with(range, description, range_overlaps_mmram, |range| {
-        query_address_ownership(range.base(), range.size())
-    });
-}
-
-/// Applies the [`require_external_comm_buffer`] rules to the results of `overlaps_mmram` and
-/// `query`.
-fn require_external_comm_buffer_with(
-    range: MemoryRange,
-    description: &str,
-    overlaps_mmram: impl FnOnce(&MemoryRange) -> bool,
-    query: impl FnOnce(&MemoryRange) -> Option<PageOwnership>,
-) {
-    let (address, end) = (range.base(), range.end());
+    let end = range.end();
 
     assert!(
-        !overlaps_mmram(&range),
+        !range_overlaps_mmram(&range),
         "{description} at 0x{address:016x}-0x{end:016x} overlaps MMRAM; it must lie entirely outside"
     );
 
-    match query(&range) {
+    match query_address_ownership(address, size) {
         Some(PageOwnership::Supervisor) => {}
         Some(PageOwnership::User) => panic!(
             "{description} at 0x{address:016x}-0x{end:016x} is mapped user-accessible; it must be supervisor-only"
@@ -377,95 +364,96 @@ mod tests {
         require_external_comm_buffer(u64::MAX, 0x1000, "Test buffer");
     }
 
+    /// Installs MMRAM and an empty page table, and returns the memory backing MMRAM.
+    fn comm_buffer_state() -> PageAlignedMemory {
+        test_support::init_test_logger();
+        let mmram = PageAlignedMemory::new(memory::DEFAULT_PAGING_POOL_PAGES + 8);
+        init_global_state_over(&mmram);
+        mmram
+    }
+
+    /// Runs [`require_external_comm_buffer`] and returns its panic message, or `None` if it
+    /// accepted the buffer.
+    fn rejection(address: u64, size: u64) -> Option<String> {
+        catch_unwind(|| require_external_comm_buffer(address, size, "Test buffer")).err().map(|payload| {
+            payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|message| (*message).to_string()))
+                .unwrap_or_default()
+        })
+    }
+
+    /// Asserts that [`require_external_comm_buffer`] refuses the buffer with a message containing
+    /// `expected`.
+    fn assert_rejected(address: u64, size: u64, expected: &str) {
+        let message = rejection(address, size).expect("the buffer was accepted");
+        assert!(message.contains(expected), "expected a rejection containing {expected:?}, got {message:?}");
+    }
+
     #[test]
+    #[serial]
     fn test_require_external_comm_buffer_accepts_a_supervisor_mapped_buffer_outside_mmram() {
-        require_external_comm_buffer_with(
-            MemoryRange::new(0x1000, 0x1000).unwrap(),
-            "Test buffer",
-            overlaps(false),
-            owned_as(Some(PageOwnership::Supervisor)),
-        );
+        let _mmram = comm_buffer_state();
+        let external = PageAlignedMemory::new(2);
+        map_supervisor_only(&external);
+
+        assert_eq!(rejection(external.base(), external.size()), None);
     }
 
     #[test]
-    #[should_panic(expected = "Test buffer at 0x0000000000001000-0x0000000000002000 overlaps MMRAM")]
+    #[serial]
     fn test_require_external_comm_buffer_rejects_a_buffer_touching_mmram() {
-        // The copy-back would otherwise turn a payload chosen outside MM into an MMRAM write.
-        // Ownership is supervisor-only here, so the MMRAM rule is what has to reject it.
-        require_external_comm_buffer_with(
-            MemoryRange::new(0x1000, 0x1000).unwrap(),
-            "Test buffer",
-            overlaps(true),
-            owned_as(Some(PageOwnership::Supervisor)),
-        );
+        // The copy-back would otherwise turn a payload chosen outside MM into an MMRAM write. The
+        // MMRAM pages are not mapped in this page table, so these are refused for touching MMRAM
+        // before the ownership query could refuse them as unmapped.
+        let mmram = comm_buffer_state();
+        let page = UEFI_PAGE_SIZE as u64;
+
+        assert_rejected(mmram.base(), page, "overlaps MMRAM");
+        // Only the tail of this buffer reaches MMRAM.
+        assert_rejected(mmram.base() - page, 2 * page, "overlaps MMRAM");
     }
 
     #[test]
-    fn test_require_external_comm_buffer_checks_mmram_before_ownership() {
-        // A buffer in MMRAM must be refused on that ground alone, without the ownership query
-        // getting a chance to accept it.
-        let queried = core::cell::Cell::new(false);
-
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            require_external_comm_buffer_with(
-                MemoryRange::new(0x1000, 0x1000).unwrap(),
-                "Test buffer",
-                overlaps(true),
-                |_| {
-                    queried.set(true);
-                    Some(PageOwnership::Supervisor)
-                },
-            );
-        }));
-
-        assert!(result.is_err());
-        assert!(!queried.get(), "ownership was queried for a buffer already known to be in MMRAM");
-    }
-
-    #[test]
-    #[should_panic(expected = "Test buffer at 0x0000000000001000-0x0000000000002000 is mapped user-accessible")]
+    #[serial]
     fn test_require_external_comm_buffer_rejects_a_user_mapped_buffer() {
-        require_external_comm_buffer_with(
-            MemoryRange::new(0x1000, 0x1000).unwrap(),
-            "Test buffer",
-            overlaps(false),
-            owned_as(Some(PageOwnership::User)),
-        );
+        let _mmram = comm_buffer_state();
+        let external = PageAlignedMemory::new(2);
+        {
+            let mut pt_guard = security_state().lock_page_table();
+            let pt = pt_guard.as_mut().expect("a page table is installed");
+            pt.map_memory_region(external.base(), external.size(), MemoryAttributes::ExecuteProtect)
+                .expect("map the external buffer");
+        }
+
+        assert_rejected(external.base(), external.size(), "is mapped user-accessible");
     }
 
     #[test]
-    #[should_panic(expected = "Test buffer at 0x0000000000001000-0x0000000000002000 is unmapped")]
+    #[serial]
     fn test_require_external_comm_buffer_rejects_an_unmapped_buffer() {
-        require_external_comm_buffer_with(
-            MemoryRange::new(0x1000, 0x1000).unwrap(),
-            "Test buffer",
-            overlaps(false),
-            owned_as(None),
-        );
+        let _mmram = comm_buffer_state();
+        let external = PageAlignedMemory::new(2);
+
+        assert_rejected(external.base(), external.size(), "is unmapped");
     }
 
     #[test]
+    #[serial]
     fn test_require_external_comm_buffer_queries_the_whole_buffer() {
-        let mmram_range = core::cell::Cell::new(None);
-        let owner_range = core::cell::Cell::new(None);
+        // Only the first page is mapped supervisor-only. A check that looked at the first page
+        // alone would accept a buffer whose tail Ring 3 cannot be shown not to reach.
+        let _mmram = comm_buffer_state();
+        let external = PageAlignedMemory::new(2);
+        {
+            let attrs = MemoryAttributes::ExecuteProtect | MemoryAttributes::Supervisor;
+            let mut pt_guard = security_state().lock_page_table();
+            let pt = pt_guard.as_mut().expect("a page table is installed");
+            pt.map_memory_region(external.base(), UEFI_PAGE_SIZE as u64, attrs).expect("map the first page");
+        }
 
-        require_external_comm_buffer_with(
-            MemoryRange::new(0x2000, 0x3000).unwrap(),
-            "Test buffer",
-            |range| {
-                mmram_range.set(Some((range.base(), range.size())));
-                false
-            },
-            |range| {
-                owner_range.set(Some((range.base(), range.size())));
-                Some(PageOwnership::Supervisor)
-            },
-        );
-
-        // Both rules must see the full span, or a buffer whose tail reaches MMRAM or a
-        // user-mapped page would pass.
-        assert_eq!(mmram_range.get(), Some((0x2000, 0x3000)));
-        assert_eq!(owner_range.get(), Some((0x2000, 0x3000)));
+        assert_rejected(external.base(), external.size(), "not uniformly mapped");
     }
 
     #[test]

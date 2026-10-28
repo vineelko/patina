@@ -17,7 +17,7 @@ use crate::mmcore::mseg::MSEG_SMRAM_HOB_GUID;
 use crate::mmcore::smi_idt_patch::{FIXUP64_SMI_HANDLER_IDTR, PerCoreMmiEntryStructHdr};
 use crate::{
     MmSupervisorCore, PlatformInfo,
-    memory::{AllocationType, PageAllocator, mmram::MmramRegion, page_ownership::PageOwnership},
+    memory::{AllocationType, PageAllocator, mmram::MmramRegion},
     state::{InitState, security_state},
 };
 use core::ffi::c_void;
@@ -26,7 +26,7 @@ use patina::management_mode::comm_buffer_hob::MM_COMM_BUFFER_HOB_GUID;
 use patina::management_mode::supervisor::{MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID};
 use patina::pi::guid::HOB_MEMORY_ALLOC_MODULE_GUID;
 use patina::pi::mmram::{SMM_SMRAM_MEMORY_GUID, SmramDescriptor, SmramReserveHobData};
-use patina::{MemoryRange, UEFI_PAGE_SIZE, management_mode::comm_buffer_hob::MmCommonBufferHobData};
+use patina::{UEFI_PAGE_SIZE, management_mode::comm_buffer_hob::MmCommonBufferHobData};
 use patina::{
     management_mode::supervisor::MM_SUPERVISOR_CORE_GUID,
     pi::BootMode,
@@ -44,12 +44,6 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
-pub(crate) fn owned_as(owner: Option<PageOwnership>) -> impl FnOnce(&MemoryRange) -> Option<PageOwnership> {
-    move |_| owner
-}
-pub(crate) fn overlaps(value: bool) -> impl FnOnce(&MemoryRange) -> bool {
-    move |_| value
-}
 pub(crate) struct TestPlatform;
 
 impl PlatformInfo for TestPlatform {}
