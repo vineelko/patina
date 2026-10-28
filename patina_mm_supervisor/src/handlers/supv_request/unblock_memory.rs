@@ -55,6 +55,17 @@ pub enum UnblockError {
 
 impl core::error::Error for UnblockError {}
 
+impl From<MemoryRangeError> for UnblockError {
+    /// Reports a zero size as an invalid parameter and an end past the end of the address space
+    /// as an overflow.
+    fn from(err: MemoryRangeError) -> Self {
+        match err {
+            MemoryRangeError::Empty => Self::InvalidParameter,
+            _ => Self::AddressOverflow,
+        }
+    }
+}
+
 impl core::fmt::Display for UnblockError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -118,15 +129,6 @@ impl UnblockedMemoryEntry {
     pub fn overlaps(&self, range: &MemoryRange) -> bool {
         self.range().is_some_and(|entry| entry.overlaps(range))
     }
-}
-
-/// Builds the range for a request, reporting a zero size as an invalid parameter and an end past
-/// the end of the address space as an overflow.
-fn request_range(base: u64, size: u64) -> Result<MemoryRange, UnblockError> {
-    MemoryRange::new(base, size).map_err(|err| match err {
-        MemoryRangeError::Empty => UnblockError::InvalidParameter,
-        _ => UnblockError::AddressOverflow,
-    })
 }
 
 /// Internal state for the unblocked memory tracker.
@@ -233,7 +235,7 @@ impl UnblockedMemoryTracker {
 
         // Add each descriptor as an unblocked region
         for desc in descriptors {
-            let range = request_range(desc.base_address, desc.size).inspect_err(|err| {
+            let range = MemoryRange::try_from(desc).map_err(UnblockError::from).inspect_err(|err| {
                 log::error!(
                     "UnblockedMemoryTracker init rejected: descriptor 0x{:016x} (+0x{:x}): {err}",
                     desc.base_address,
@@ -298,7 +300,8 @@ impl UnblockedMemoryTracker {
     /// - Identical unblock requests are allowed (idempotent)
     #[cfg(test)]
     pub fn unblock_memory(&self, base: u64, size: u64, attributes: u32) -> MmSupervisorResult<()> {
-        self.track_unblocked_memory(request_range(base, size)?, attributes).map(|_| ())
+        let range = MemoryRange::new(base, size).map_err(UnblockError::from)?;
+        self.track_unblocked_memory(range, attributes).map(|_| ())
     }
 
     /// Records a region as unblocked, reporting whether it was newly added.
