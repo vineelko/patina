@@ -34,6 +34,18 @@ impl MmramRegion {
     }
 }
 
+/// Queries over a list of MMRAM regions.
+pub(crate) trait MmramRegions {
+    /// Returns whether any region contains `address`.
+    fn contains_address(&self, address: u64) -> bool;
+}
+
+impl MmramRegions for [MmramRegion] {
+    fn contains_address(&self, address: u64) -> bool {
+        self.iter().any(|region| region.range.contains(address))
+    }
+}
+
 /// Errors produced while establishing an MMRAM bound from the incoming SMRAM descriptors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MmramBoundError {
@@ -87,7 +99,7 @@ pub(crate) fn establish_mmram_bound(
     anchor: u64,
     coalesce_mmram_regions: impl FnOnce(&[MmramRegion]) -> Option<MemoryRange>,
 ) -> MmSupervisorResult<MemoryRange> {
-    if !regions_contain(scanned, anchor) {
+    if !scanned.contains_address(anchor) {
         return Err(MmramBoundError::AnchorOutsideRegions { anchor }.into());
     }
 
@@ -130,11 +142,6 @@ impl From<Coverage> for MmramPlacement {
             Coverage::Disjoint => Self::Outside,
         }
     }
-}
-
-/// Returns whether any region in `regions` contains `address`.
-pub(crate) fn regions_contain(regions: &[MmramRegion], address: u64) -> bool {
-    regions.iter().any(|region| region.range.contains(address))
 }
 
 /// Classifies `range` against the committed MMRAM regions, or `None` if the regions are not known
@@ -246,17 +253,17 @@ mod tests {
     }
 
     #[test]
-    fn test_regions_contain_address() {
+    fn test_mmram_regions_contains_address() {
         let regions = regions_from(&[(0x1000, 0x2000, false), (0x8000, 0x1000, true)]);
 
-        assert!(regions_contain(&regions, 0x1000));
-        assert!(regions_contain(&regions, 0x2fff));
+        assert!(regions.contains_address(0x1000));
+        assert!(regions.contains_address(0x2fff));
         // Pre-allocated regions still describe MMRAM, so they anchor just as well.
-        assert!(regions_contain(&regions, 0x8000));
-        assert!(!regions_contain(&regions, 0x0fff));
-        assert!(!regions_contain(&regions, 0x3000));
-        assert!(!regions_contain(&regions, 0x9000));
-        assert!(!regions_contain(&[], 0x1000));
+        assert!(regions.contains_address(0x8000));
+        assert!(!regions.contains_address(0x0fff));
+        assert!(!regions.contains_address(0x3000));
+        assert!(!regions.contains_address(0x9000));
+        assert!(![].contains_address(0x1000));
     }
 
     #[test]
