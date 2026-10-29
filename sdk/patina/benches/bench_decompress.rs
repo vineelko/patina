@@ -25,21 +25,21 @@ fn bench_decompress(c: &mut Criterion) {
             true,
         ),
     ] {
+        let algorithm = || {
+            if tiano { DecompressionAlgorithm::TianoDecompress } else { DecompressionAlgorithm::UefiDecompress }
+        };
         let mut output = vec![0u8; original.len()];
+        decompress_into_with_algo(compressed, &mut output, algorithm()).expect("valid compressed fixture");
+        assert_eq!(output, original);
+
         group.throughput(Throughput::Bytes(original.len() as u64));
         group.bench_function(name, |b| {
             b.iter(|| {
-                let algorithm = if tiano {
-                    DecompressionAlgorithm::TianoDecompress
-                } else {
-                    DecompressionAlgorithm::UefiDecompress
-                };
-                decompress_into_with_algo(black_box(compressed), black_box(&mut output), algorithm)
+                decompress_into_with_algo(black_box(compressed), black_box(&mut output), algorithm())
                     .expect("valid compressed fixture");
                 black_box(&output);
             });
         });
-        assert_eq!(output, original);
     }
     group.finish();
 }
