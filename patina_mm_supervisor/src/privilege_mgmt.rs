@@ -26,7 +26,7 @@
 //! 4. Return: Ring 3 code returns via call gate or syscall dispatcher returns
 //!    via `sysret`.
 //!
-//! ## Segment Layout (from SmiException.nasm)
+//! ## Segment Layout (from SmiException.nasm, ported in [`gdt`])
 //!
 //! ```text
 //! PROTECTED_DS      = 0x20
@@ -50,6 +50,7 @@
 use patina::standard::efi::Status;
 
 pub(crate) mod call_gate;
+pub(crate) mod gdt;
 pub(crate) mod save_state;
 mod syscall_dispatcher;
 mod syscall_ops;

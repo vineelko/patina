@@ -27,7 +27,7 @@ use patina::{
     },
 };
 use patina_internal_cpu::{
-    interrupts::Interrupts,
+    cpu::Cpu,
     save_state::{PROCESSOR_INFO_ENTRY_SIZE, vendor_name},
 };
 use patina_paging::{MemoryAttributes, PageTable, PagingType, x64::X64PageTable};
@@ -55,6 +55,7 @@ use super::smi_idt_patch::patch_smi_handler_idt;
 use super::smrr::{configure_smm_code_access, smrr_initialize};
 use crate::hob::pass_down::{MM_SUPV_PASS_DOWN_HOB_GUID, MmSupvPassDownHobData, PassDownHobError};
 use crate::memory::mmram::{establish_mmram_bound, supervisor_image_anchor};
+use crate::privilege_mgmt::gdt;
 use crate::privilege_mgmt::save_state::{SaveStateInfo, log_save_state_map, validate_save_state_regions};
 
 // GUID for gMpInformationHobGuid (StandaloneMmPkg/Include/Guid/MpInformation.h)
@@ -110,7 +111,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ) -> MmSupervisorResult<u64> {
         log::info!("BSP performing one-time initialization...");
 
-        Interrupts::new().initialize(&[]).map_err(CoreInitError::InterruptManagerInit)?;
+        // SAFETY: `bsp_init` runs once on the BSP, so this is the only use of the static GDT. It
+        // lies in the supervisor image, holds the selectors it reports, and its TSS names an
+        // exception stack in IST1.
+        let mut cpu = unsafe { Cpu::with_gdt(gdt::prepare_static_gdt()) };
+        cpu.initialize(true, &[]).map_err(CoreInitError::CpuInit)?;
 
         // Check the HOB headers before anything walks the list, so no walk below can loop forever
         // or read past the end of the list.

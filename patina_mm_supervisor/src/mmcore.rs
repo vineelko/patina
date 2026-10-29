@@ -142,14 +142,14 @@ pub enum CoreInitError {
         /// Page-aligned size of the stack region.
         size: u64,
     },
-    /// The interrupt manager could not be initialized.
-    InterruptManagerInit(EfiError),
+    /// The CPU, including its interrupt manager, could not be initialized.
+    CpuInit(EfiError),
 }
 
 impl core::error::Error for CoreInitError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
-            Self::InterruptManagerInit(err) => Some(err),
+            Self::CpuInit(err) => Some(err),
             _ => None,
         }
     }
@@ -204,7 +204,7 @@ impl fmt::Display for CoreInitError {
             Self::Cpl3StacksNotMapped { base, size } => {
                 write!(f, "the Ring 3 stacks at 0x{base:016x} (0x{size:x} bytes) are not usable by Ring 3")
             }
-            Self::InterruptManagerInit(err) => write!(f, "the interrupt manager could not be initialized: {err}"),
+            Self::CpuInit(err) => write!(f, "the CPU could not be initialized: {err}"),
         }
     }
 }
@@ -352,8 +352,8 @@ mod tests {
             "the Ring 3 stacks at 0x0000000000001000 (0x8000 bytes) are not usable by Ring 3"
         );
         assert_eq!(
-            format!("{}", CoreInitError::InterruptManagerInit(EfiError::Unsupported)),
-            format!("the interrupt manager could not be initialized: {}", EfiError::Unsupported)
+            format!("{}", CoreInitError::CpuInit(EfiError::Unsupported)),
+            format!("the CPU could not be initialized: {}", EfiError::Unsupported)
         );
     }
 
@@ -361,17 +361,14 @@ mod tests {
     fn test_core_init_error_exposes_its_wrapped_sources() {
         use core::error::Error;
 
-        let error = CoreInitError::InterruptManagerInit(EfiError::DeviceError);
+        let error = CoreInitError::CpuInit(EfiError::DeviceError);
         assert!(error.source().is_some(), "the wrapped EfiError should be reachable as a source");
 
         // Variants that wrap nothing report no source.
         assert!(CoreInitError::UserEntryPointMissing.source().is_none());
 
         // The wrapped status is part of the identity.
-        assert_ne!(
-            CoreInitError::InterruptManagerInit(EfiError::DeviceError),
-            CoreInitError::InterruptManagerInit(EfiError::Unsupported)
-        );
+        assert_ne!(CoreInitError::CpuInit(EfiError::DeviceError), CoreInitError::CpuInit(EfiError::Unsupported));
     }
 
     #[test]

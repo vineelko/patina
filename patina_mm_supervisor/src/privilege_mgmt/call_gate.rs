@@ -13,6 +13,7 @@
 use patina_paging::x64::{disable_write_protection, enable_write_protection};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
+use super::gdt::{CALL_GATE_OFFSET, LONG_CS_R0, SmiGdt, TSS_DESC_OFFSET, TSS_SEL_OFFSET};
 use crate::error::MmSupervisorResult;
 
 // Firmware-only call-gate transfer assembly; included only for the UEFI target so host builds
@@ -20,29 +21,14 @@ use crate::error::MmSupervisorResult;
 #[cfg(target_os = "uefi")]
 core::arch::global_asm!(include_str!("call_gate_transfer.asm"));
 
-/// Long mode Ring 0 code segment selector.
-pub const LONG_CS_R0: u16 = 0x38;
-
-/// Call gate descriptor offset in GDT.
-pub const CALL_GATE_OFFSET: u16 = 0x60;
-
-/// TSS selector offset in GDT.
-pub const TSS_SEL_OFFSET: u16 = 0x70;
-
-/// TSS descriptor offset in GDT.
-pub const TSS_DESC_OFFSET: u16 = 0x80;
-
 /// Type and attribute byte of the return call gate: present (P = 1), callable from Ring 3
 /// (DPL = 3) and of type 0xC (64-bit call gate).
 const CALL_GATE_TYPE_ATTR: u8 = 0xEC;
 
-/// Number of bytes of the GDT image that [`setup_call_gate`] programs: everything up to and
-/// including the Task State Segment that follows the descriptors.
-///
-/// The platform lays the TSS out immediately after the GDT (see `SmiException.nasm`, where the
-/// TSS is emitted right after the last descriptor), so this window deliberately extends past the
-/// limit stored in the GDTR, which covers only the descriptors themselves.
-const GDT_PROGRAMMED_SIZE: usize = TSS_DESC_OFFSET as usize + core::mem::size_of::<TaskStateSegment>();
+/// Number of bytes of the GDT image that [`setup_call_gate`] programs: the descriptors and the TSS
+/// that follows them, as laid out by [`SmiGdt`]. This extends past the GDTR limit, which covers only
+/// the descriptors.
+const GDT_PROGRAMMED_SIZE: usize = core::mem::size_of::<SmiGdt>();
 
 /// Errors that can occur while programming the privilege transition entries of a GDT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,6 +185,19 @@ pub struct TaskStateSegment {
     reserved_4: u16,
     /// 16-bit offset to the I/O permission bitmap from the TSS base.
     pub io_map_base: u16,
+}
+
+impl TaskStateSegment {
+    /// A TSS with every field zero.
+    pub const ZERO: Self = Self {
+        reserved_1: 0,
+        privilege_stack_table: [0; 3],
+        reserved_2: 0,
+        interrupt_stack_table: [0; 7],
+        reserved_3: 0,
+        reserved_4: 0,
+        io_map_base: 0,
+    };
 }
 
 /// Gets the current GDT base address by reading the GDTR register.
@@ -452,6 +451,20 @@ mod tests {
         // RSP0 is what the CPU loads when Ring 3 transitions back into Ring 0.
         let rsp0 = tss_of(&gdt).privilege_stack_table[0];
         assert_eq!(rsp0, CPL0_STACK);
+    }
+
+    #[test]
+    fn test_program_privilege_transition_entries_on_the_smi_gdt() {
+        let mut gdt = SmiGdt::new().as_bytes().to_vec();
+        assert_eq!(program_privilege_transition_entries(&mut gdt, 0x1000, 0x2000, 0x3000), Ok(()));
+
+        assert_eq!(call_gate_of(&gdt).offset(), 0x2000);
+        assert_eq!(tss_descriptor_of(&gdt).base(), 0x1000 + u64::from(TSS_DESC_OFFSET));
+        let rsp0 = tss_of(&gdt).privilege_stack_table[0];
+        assert_eq!(rsp0, 0x3000);
+        // The type bytes of the template are kept.
+        assert_eq!(call_gate_of(&gdt).type_attr, CALL_GATE_TYPE_ATTR);
+        assert_eq!(tss_descriptor_of(&gdt).type_attr, 0x89);
     }
 
     #[test]
