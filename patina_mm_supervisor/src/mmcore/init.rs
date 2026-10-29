@@ -111,11 +111,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ) -> MmSupervisorResult<u64> {
         log::info!("BSP performing one-time initialization...");
 
+        let mut cpu = Cpu::default();
         // SAFETY: `bsp_init` runs once on the BSP, so this is the only use of the static GDT. It
         // lies in the supervisor image, holds the selectors it reports, and its TSS names an
         // exception stack in IST1.
-        let mut cpu = unsafe { Cpu::with_gdt(gdt::prepare_static_gdt()) };
-        cpu.initialize(true, &[]).map_err(CoreInitError::CpuInit)?;
+        // The local APIC belongs to the non-MM world, so virtual-wire mode is skipped. Interrupts
+        // stay disabled because the tables are loaded with the interrupt state MM entered with.
+        unsafe { cpu.initialize_with(&[], gdt::prepare_static_gdt(), false, true) }.map_err(CoreInitError::CpuInit)?;
 
         // Check the HOB headers before anything walks the list, so no walk below can loop forever
         // or read past the end of the list.

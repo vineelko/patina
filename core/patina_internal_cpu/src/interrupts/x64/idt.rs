@@ -103,9 +103,9 @@ fn get_vector_address(index: usize) -> u64 {
 #[cfg(target_os = "uefi")]
 static IDT: StaticIdt = StaticIdt(UnsafeCell::new(Idt::filled(IdtEntry::empty())));
 
+/// Fills the IDT with gates that use the code segment `cs`, and returns its descriptor.
 #[cfg(target_os = "uefi")]
-pub(crate) fn prepare_idt() -> crate::gdt::DescriptorTablePointer {
-    let cs = crate::gdt::CODE_SELECTOR;
+pub(crate) fn prepare_idt(cs: u16) -> crate::gdt::DescriptorTablePointer {
     // SAFETY: There is only path to access the IDT and it is not possible to have concurrent access.
     let idt = unsafe { &mut *IDT.0.get() };
 

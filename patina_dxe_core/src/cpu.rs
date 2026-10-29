@@ -10,7 +10,6 @@
 //!
 mod aliased_memory_map_protocol;
 mod cpu_arch_protocol;
-mod efi_cpu;
 #[cfg(all(target_os = "uefi", target_arch = "aarch64"))]
 mod hw_interrupt_protocol;
 mod mp_services;
@@ -26,9 +25,8 @@ pub(crate) use perf_timer::PerfTimer;
 #[derive(Default)]
 pub(crate) struct MpServicesEnabled(pub(crate) bool);
 
-use efi_cpu::EfiCpu;
-use patina_internal_cpu::interrupts::Interrupts;
 pub use patina_internal_cpu::interrupts::{ExceptionContext, ExceptionContextX64, ExceptionType, InterruptHandler};
+use patina_internal_cpu::{cpu::Cpu, interrupts::Interrupts};
 
 /// A configuration struct containing the GIC bases (`gic_d`, `gic_r`) for AARCH64 systems.
 ///
@@ -142,18 +140,13 @@ pub trait CpuInfo {
 pub fn initialize_cpu_subsystem(
     exception_handlers: &[(ExceptionType, &'static dyn InterruptHandler)],
 ) -> crate::error::Result<Interrupts> {
-    let mut cpu = EfiCpu::default();
+    let mut cpu = Cpu::default();
 
-    cpu.initialize().inspect_err(|err| {
+    cpu.initialize(exception_handlers).inspect_err(|err| {
         log::error!("Failed to initialize CPU subsystem: {err}");
     })?;
 
-    let mut interrupt_manager = Interrupts::new();
-    interrupt_manager.initialize(exception_handlers).inspect_err(|err| {
-        log::error!("Failed to initialize Interrupt Manager: {err}");
-    })?;
-
-    Ok(interrupt_manager)
+    Ok(cpu.interrupt_manager())
 }
 
 #[cfg(test)]

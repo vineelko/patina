@@ -43,14 +43,12 @@ impl InterruptsAarch64 {
         Self {}
     }
 
-    /// Initializes the hardware and software structures for interrupts and exceptions.
+    /// Registers the default exception handler, then `exception_handlers`.
     ///
-    /// This routine will initialize the architecture and platforms specific mechanisms
-    /// for interrupts and exceptions to be taken. This routine may install some
-    /// architecture specific default handlers for exceptions.
+    /// # Errors
     ///
-    /// Default and platform handlers are registered before activating the exception vector table.
-    pub fn initialize(
+    /// Returns an error if a handler in `exception_handlers` cannot be registered.
+    pub fn register_exception_handlers(
         &mut self,
         exception_handlers: &[(ExceptionType, &'static dyn InterruptHandler)],
     ) -> Result<(), EfiError> {
@@ -60,10 +58,12 @@ impl InterruptsAarch64 {
         for &(exception_type, handler) in exception_handlers {
             self.register_exception_handler(exception_type, HandlerType::Handler(handler))?;
         }
-
-        initialize_exception()?;
-
         Ok(())
+    }
+
+    /// Installs the exception vector table and the EL0 stack used for synchronous exceptions.
+    pub(crate) fn install_exception_vectors(&mut self) -> Result<(), EfiError> {
+        initialize_exception()
     }
 }
 

@@ -38,8 +38,12 @@ impl InterruptsStub {
         Self {}
     }
 
-    /// Registers supplied platform handlers without initializing hardware.
-    pub fn initialize(
+    /// Registers supplied platform handlers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a handler in `exception_handlers` cannot be registered.
+    pub fn register_exception_handlers(
         &mut self,
         exception_handlers: &[(ExceptionType, &'static dyn InterruptHandler)],
     ) -> Result<(), EfiError> {

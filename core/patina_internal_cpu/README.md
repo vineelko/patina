@@ -18,6 +18,16 @@ As an "internal" Patina crate, it is not intended for direct use by code outside
 
 ## Key Modules
 
+### `cpu`
+
+`cpu` defines the architecture specific `Cpu` type. It owns the interrupt manager and runs processor bring-up in
+order. On x86_64, `Cpu::initialize` programs the FPU and SSE control state, registers the exception handlers, loads
+the GDT and the IDT with interrupts disabled, restores the previous interrupt state, then programs virtual-wire mode,
+using the GDT of this crate. `Cpu::initialize_with` does the same with a GDT owned by the caller, and can skip the
+FPU setup and virtual-wire mode. `Cpu::initialize_idt` only registers the exception handlers and loads the IDT, and
+keeps the GDT and TSS that are already loaded. `Cpu::interrupt_manager` returns the interrupt manager for later handler
+registration.
+
 ### `interrupts`
 
 `interrupts` defines the `InterruptManager` trait, handler registration (`HandlerType`). The module selects a
@@ -44,9 +54,9 @@ required by a given architecture.
 
 | Target                | CPU service       | Interrupts backend | Paging adapter        |
 |-----------------------|-------------------|--------------------|-----------------------|
-| `x86_64`              | `EfiCpuX64`       | `InterruptsX64`    | `EfiCpuPagingX64`     |
-| `aarch64`             | `EfiCpuAarch64`   | `InterruptsAArch64`| `EfiCpuPagingAArch64` |
-| tests / documentation | `EfiCpuNull`      | `InterruptsNull`   | `EfiCpuPagingNull`    |
+| `x86_64`              | `CpuX64`          | `InterruptsX64`    | `EfiCpuPagingX64`     |
+| `aarch64`             | `CpuAarch64`      | `InterruptsAArch64`| `EfiCpuPagingAArch64` |
+| tests / documentation | `CpuStub`         | `InterruptsNull`   | `EfiCpuPagingNull`    |
 
 ## Related documentation
 

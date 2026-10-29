@@ -220,9 +220,25 @@ static GDT: spin::LazyLock<[u64; GDT_ENTRY_COUNT]> = spin::LazyLock::new(|| {
 
 /// Operand layout for the `lgdt` and `lidt` instructions.
 #[repr(C, packed)]
-pub(crate) struct DescriptorTablePointer {
-    pub(crate) limit: u16,
-    pub(crate) base: u64,
+#[derive(Clone, Copy)]
+pub struct DescriptorTablePointer {
+    /// Table size in bytes, minus one.
+    pub limit: u16,
+    /// Table base address.
+    pub base: u64,
+}
+
+/// A GDT to load, and the selectors of the segments to use from it.
+#[derive(Clone, Copy)]
+pub struct GdtInfo {
+    /// Location of the GDT.
+    pub gdtr: DescriptorTablePointer,
+    /// Selector of a 64-bit code segment.
+    pub code_selector: u16,
+    /// Selector of a writable data segment.
+    pub data_selector: u16,
+    /// Selector of an available 64-bit TSS.
+    pub tss_selector: u16,
 }
 
 /// Descriptor-table pointer for the GDT this module owns, for callers that need to

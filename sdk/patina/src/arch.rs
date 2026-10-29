@@ -96,7 +96,7 @@ pub fn enable_interrupts_and_sleep() {
 ///
 /// This function is only intended for low-level operations, and should not be used in
 /// components. Components should use the TPL (Task Priority Level) to manage interrupts.
-pub(crate) fn with_interrupts_disabled<F, R>(f: F) -> R
+pub fn with_interrupts_disabled<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {

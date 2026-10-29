@@ -11,7 +11,8 @@
 #![cfg_attr(all(not(feature = "std"), not(test), not(feature = "mockall")), no_std)]
 #![cfg_attr(coverage, feature(coverage_attribute))]
 
-#[cfg(target_arch = "x86_64")]
+pub mod cpu;
+#[cfg(any(target_arch = "x86_64", test))]
 pub mod gdt;
 pub mod interrupts;
 #[cfg(feature = "alloc")]
