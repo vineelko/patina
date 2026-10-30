@@ -119,6 +119,7 @@ pub fn core_uninstall_protocol_interface(
 
     //attempt to close all OPEN_BY_DRIVER usages.
     let mut usage_close_status = Ok(());
+    let mut disconnected_agents = Vec::new();
     loop {
         let mut item_found = false;
         let usages = match PROTOCOL_DB.get_open_protocol_information_by_protocol(handle, protocol) {
@@ -130,12 +131,18 @@ pub fn core_uninstall_protocol_interface(
         for usage in usages {
             if (usage.attributes & driver::OPEN_PROTOCOL_BY_DRIVER) != 0 {
                 debug_assert!(usage.agent_handle.is_some());
+                // Prevent a Stop() that succeeds without closing its usage from causing an infinite loop.
+                if disconnected_agents.contains(&usage.agent_handle) {
+                    usage_close_status = Err(EfiError::AccessDenied);
+                    break;
+                }
                 // SAFETY: handles are validated inside core_disconnect_controller. The implicit UEFI
                 // spec assumption that driver bindings remain valid for the duration of the call
                 // cannot be verified here; see core_disconnect_controller's safety documentation.
                 usage_close_status = unsafe { core_disconnect_controller(handle, usage.agent_handle, None) };
                 if usage_close_status.is_ok() {
                     item_found = true;
+                    disconnected_agents.push(usage.agent_handle);
                 }
                 break;
             }
@@ -1609,6 +1616,40 @@ mod tests {
                 let (status, interface) = open(handle, agent, core::ptr::null_mut(), OPEN_PROTOCOL_GET);
                 assert_eq!(status, efi::Status::SUCCESS);
                 assert_eq!(interface as usize, TEST_INTERFACE);
+            }
+        });
+    }
+
+    #[test]
+    fn test_uninstall_with_by_driver_holder_that_stays_open_after_stop_is_access_denied() {
+        with_locked_state(|| {
+            for attributes in [OPEN_PROTOCOL_BY_DRIVER, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE] {
+                let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+                let holder = new_driver_agent(driver_stop_without_close);
+                assert_eq!(open(handle, holder, handle, attributes).0, efi::Status::SUCCESS);
+
+                STOP_CALLS.store(0, Ordering::SeqCst);
+                let result = core_uninstall_protocol_interface(handle, TEST_GUID, TEST_INTERFACE as *mut c_void);
+                assert_eq!(result, Err(EfiError::AccessDenied), "{attributes:#x}");
+                assert_eq!(STOP_CALLS.load(Ordering::SeqCst), 1, "{attributes:#x}");
+                assert_eq!(usage_count(handle), 1);
+                assert_eq!(PROTOCOL_DB.get_interface_for_handle(handle, TEST_GUID), Ok(TEST_INTERFACE as *mut c_void));
+            }
+        });
+    }
+
+    #[test]
+    fn test_uninstall_with_by_driver_holder_that_closes_in_stop_succeeds() {
+        with_locked_state(|| {
+            for attributes in [OPEN_PROTOCOL_BY_DRIVER, OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE] {
+                let handle = new_handle(TEST_GUID, TEST_INTERFACE);
+                let holder = new_driver_agent(driver_stop_and_close);
+                assert_eq!(open(handle, holder, handle, attributes).0, efi::Status::SUCCESS);
+
+                STOP_CALLS.store(0, Ordering::SeqCst);
+                let result = core_uninstall_protocol_interface(handle, TEST_GUID, TEST_INTERFACE as *mut c_void);
+                assert_eq!(result, Ok(()), "{attributes:#x}");
+                assert_eq!(STOP_CALLS.load(Ordering::SeqCst), 1, "{attributes:#x}");
             }
         });
     }
