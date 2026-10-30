@@ -110,7 +110,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ) -> MmSupervisorResult<u64> {
         log::info!("BSP performing one-time initialization...");
 
-        Interrupts::new().initialize(&[]).map_err(CoreInitError::InterruptManagerInit)?;
+        // The GDT and TSS loaded on MM entry stay in place, so only the IDT is loaded. That GDT has a
+        // 64-bit code segment at 0x38, which the IDT gates use.
+        Interrupts::new().initialize_idt(&[]).map_err(CoreInitError::InterruptManagerInit)?;
 
         // Check the HOB headers before anything walks the list, so no walk below can loop forever
         // or read past the end of the list.
