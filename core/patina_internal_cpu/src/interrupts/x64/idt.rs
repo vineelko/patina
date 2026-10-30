@@ -9,8 +9,6 @@
 
 #[cfg(target_os = "uefi")]
 use core::{arch::global_asm, cell::UnsafeCell};
-#[cfg(target_os = "uefi")]
-use patina::SIZE_4GB;
 
 pub(crate) const IDT_ENTRY_COUNT: usize = 256;
 
@@ -103,9 +101,9 @@ fn get_vector_address(index: usize) -> u64 {
 #[cfg(target_os = "uefi")]
 static IDT: StaticIdt = StaticIdt(UnsafeCell::new(Idt::filled(IdtEntry::empty())));
 
+/// Fills every IDT gate with its assembly entry point using the code segment selector `cs`.
 #[cfg(target_os = "uefi")]
-pub(crate) fn prepare_idt() -> crate::gdt::DescriptorTablePointer {
-    let cs = crate::gdt::CODE_SELECTOR;
+pub(crate) fn prepare_idt(cs: u16) -> crate::gdt::DescriptorTablePointer {
     // SAFETY: There is only path to access the IDT and it is not possible to have concurrent access.
     let idt = unsafe { &mut *IDT.0.get() };
 
@@ -117,6 +115,5 @@ pub(crate) fn prepare_idt() -> crate::gdt::DescriptorTablePointer {
             IdtEntry::interrupt_gate(get_vector_address(vector), cs, ist_index);
     }
 
-    assert!((IDT.0.get() as usize) < SIZE_4GB, "IDT above 4GB, MP services will fail");
     idt.descriptor()
 }
