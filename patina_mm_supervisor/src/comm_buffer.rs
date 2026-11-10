@@ -346,7 +346,6 @@ mod tests {
     use super::*;
     use patina::UEFI_PAGE_SIZE;
     use serial_test::serial;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use crate::memory;
     use crate::test_support;
@@ -392,16 +391,10 @@ mod tests {
         mmram
     }
 
-    /// Runs [`require_external_comm_buffer`] and returns its panic message, or `None` if it
+    /// Runs [`require_external_comm_buffer`] and returns its error message, or `None` if it
     /// accepted the buffer.
     fn rejection(range: MemoryRange) -> Option<String> {
-        catch_unwind(|| require_external_comm_buffer(&range, "Test buffer")).err().map(|payload| {
-            payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| payload.downcast_ref::<&str>().map(|message| (*message).to_string()))
-                .unwrap_or_default()
-        })
+        require_external_comm_buffer(&range, "Test buffer").err().map(|error| error.to_string())
     }
 
     /// Asserts that [`require_external_comm_buffer`] refuses the buffer with a message containing
@@ -512,9 +505,8 @@ mod tests {
         // MMRAM write with a payload chosen outside MM.
         let data = supv_comm_buffer_hob_data(mmram.base(), 1, mmram.base());
 
-        let result = catch_unwind(|| CommChannel::from_supv_hob(&data));
-
-        assert!(result.is_err(), "a communication buffer inside MMRAM produced a channel");
+        let range = MemoryRange::from_pages(mmram.base(), 1).expect("one page at the MMRAM base");
+        assert_eq!(CommChannel::from_supv_hob(&data), Err(CommBufferError::OverlapsMmram { range }.into()));
     }
 
     #[test]
@@ -560,12 +552,11 @@ mod tests {
         }
         let mut data = user_comm_buffer_hob_data(external.base(), 1, external.base() + UEFI_PAGE_SIZE as u64);
 
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            // SAFETY: `data` is a live, writable payload of exactly one `MmCommonBufferHobData`.
-            unsafe { CommChannel::from_user_hob(data.as_mut_ptr(), data.len()) }
-        }));
+        // SAFETY: `data` is a live, writable payload of exactly one `MmCommonBufferHobData`.
+        let result = unsafe { CommChannel::from_user_hob(data.as_mut_ptr(), data.len()) };
 
-        assert!(result.is_err(), "a user-accessible communication buffer produced a channel");
+        let range = MemoryRange::from_pages(external.base(), 1).expect("one page at the buffer base");
+        assert_eq!(result, Err(CommBufferError::UserAccessible { range }.into()));
     }
 
     #[test]
@@ -643,6 +634,9 @@ mod tests {
             CommBufferError::CommunicationBufferHobTooSmall { found: 31, expected: 32 },
             CommBufferError::InvalidSize { pages: 0 },
             CommBufferError::InvalidStatusBuffer { address: u64::MAX },
+            CommBufferError::OverlapsMmram { range: MemoryRange::new(0x1000, 0x1000).expect("valid range") },
+            CommBufferError::UserAccessible { range: MemoryRange::new(0x1000, 0x1000).expect("valid range") },
+            CommBufferError::NotUniformlyMapped { range: MemoryRange::new(0x1000, 0x1000).expect("valid range") },
             CommBufferError::AllocationFailed,
             CommBufferError::Missing,
         ];

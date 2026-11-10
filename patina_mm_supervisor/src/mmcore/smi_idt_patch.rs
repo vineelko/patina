@@ -491,7 +491,7 @@ mod tests {
     /// Reads back a descriptor the patch may have rewritten, as `(limit, base)`.
     ///
     /// The fields are copied out rather than compared in place, because the struct is
-    /// `packed(2)` and a reference to a field of a packed struct is undefined behavior.
+    /// `packed(2)` and a reference to a field of a packed struct does not compile (E0793).
     fn read_descriptor(address: u64) -> (u16, u64) {
         // SAFETY: the address came from `place_descriptor`, so it is a live, initialized slot.
         let descriptor = unsafe { core::ptr::read_unaligned(address as *const DescriptorTablePointer) };

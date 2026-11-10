@@ -812,16 +812,16 @@ mod tests {
         for idx in
             [SyscallIndex::RdMsr, SyscallIndex::WrMsr, SyscallIndex::Cli, SyscallIndex::IoRead, SyscallIndex::IoWrite]
         {
-            assert_eq!(SyscallIndex::from_u64(idx.as_u64()), Some(idx));
+            assert_eq!(SyscallIndex::try_from(idx.as_u64()), Ok(idx));
         }
     }
 
     #[test]
     fn test_unknown_syscall_index() {
         // Values that fall in the gaps between defined indices map to `None`.
-        assert_eq!(SyscallIndex::from_u64(0x0008), None);
-        assert_eq!(SyscallIndex::from_u64(0x10000), None);
-        assert_eq!(SyscallIndex::from_u64(0xDEAD_BEEF), None);
+        assert_eq!(SyscallIndex::try_from(0x0008), Err(0x0008));
+        assert_eq!(SyscallIndex::try_from(0x10000), Err(0x10000));
+        assert_eq!(SyscallIndex::try_from(0xDEAD_BEEF), Err(0xDEAD_BEEF));
     }
 
     #[test]
@@ -1089,6 +1089,16 @@ mod tests {
     }
 
     #[test]
+    fn test_msr_index_over_32_bits_is_rejected_before_the_policy_check() {
+        let dispatcher = new_dispatcher(MockOps::default());
+        let index = 0x1_0000_001B;
+
+        assert_eq!(dispatcher.handle_rdmsr(&ctx(0, index, 0, 0)), Err(Status::INVALID_PARAMETER));
+        assert_eq!(dispatcher.handle_wrmsr(&ctx(0, index, 0x5A, 0)), Err(Status::INVALID_PARAMETER));
+        assert!(dispatcher.ops.effects().is_empty(), "a truncated MSR index must not reach the policy gate");
+    }
+
+    #[test]
     fn test_wrmsr_denied_by_policy() {
         let dispatcher = new_dispatcher(MockOps {
             msr_policy: PolicyDecision::Denied(PolicyGateError::AccessDenied.into()),
@@ -1235,7 +1245,7 @@ mod tests {
 
         // Every rejected request must be refused with the documented status and must never
         // reach the page allocator, so each case checks the recorded effects of its own mock.
-        let cases: [(&str, MockOps, u64, u64, u64, Status); 4] = [
+        let cases: [(&str, MockOps, u64, u64, u64, Status); 6] = [
             // Only the BSP may allocate, since allocation updates the page table.
             ("AP request", MockOps { is_bsp: false, ..Default::default() }, any, data, 1, Status::ACCESS_DENIED),
             // Only EfiRuntimeServicesData is allocatable by Ring 3.
@@ -1244,6 +1254,9 @@ mod tests {
             ("wrong allocate type", MockOps::default(), any + 1, data, 1, Status::UNSUPPORTED),
             // A zero page count is meaningless.
             ("zero pages", MockOps::default(), any, data, 0, Status::INVALID_PARAMETER),
+            // Set high bits must not be dropped to make a valid 32-bit enum value.
+            ("allocate type over 32 bits", MockOps::default(), any | (1 << 32), data, 1, Status::INVALID_PARAMETER),
+            ("memory type over 32 bits", MockOps::default(), any, data | (1 << 32), 1, Status::INVALID_PARAMETER),
         ];
 
         for (name, ops, alloc_type, mem_type, page_count, expected) in cases {

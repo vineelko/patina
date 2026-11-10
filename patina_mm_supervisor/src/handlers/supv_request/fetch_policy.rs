@@ -581,9 +581,9 @@ mod tests {
     }
 
     #[test]
-    fn maps_internal_policy_copy_errors_to_buffer_too_small() {
+    fn maps_a_small_policy_destination_to_buffer_too_small() {
         let mut context = TestFetchPolicyContext::unlocked();
-        context.fetch_result = Err(PolicyGateError::InternalError.into());
+        context.fetch_result = Err(PolicyGateError::BufferTooSmall.into());
         let mut buffer = [0u8; MmSupervisorRequestHeader::SIZE];
 
         assert_eq!(
@@ -592,6 +592,19 @@ mod tests {
         );
         assert_eq!(context.snapshot_calls.get(), 1);
         assert_eq!(context.lock_unblocked_memory_calls.get(), 1);
+        assert_eq!(context.fetch_calls.get(), 1);
+    }
+
+    #[test]
+    fn maps_internal_policy_copy_errors_to_device_error() {
+        let mut context = TestFetchPolicyContext::unlocked();
+        context.fetch_result = Err(PolicyGateError::InternalError.into());
+        let mut buffer = [0u8; MmSupervisorRequestHeader::SIZE];
+
+        assert_eq!(
+            process_fetch_policy(&mut buffer, &context),
+            (efi::Status::DEVICE_ERROR, MmSupervisorRequestHeader::SIZE)
+        );
         assert_eq!(context.fetch_calls.get(), 1);
     }
 

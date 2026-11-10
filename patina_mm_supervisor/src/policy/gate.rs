@@ -809,6 +809,7 @@ mod tests {
                 "the policy blob's internal offsets do not describe a structure inside its own buffer",
             ),
             (PolicyGateError::AccessDenied, "the firmware policy denied the access"),
+            (PolicyGateError::BufferTooSmall, "the destination buffer is too small for the policy"),
             (PolicyGateError::InternalError, "an internal error occurred while evaluating the policy"),
         ];
 
@@ -1231,7 +1232,7 @@ mod tests {
         assert_eq!(
             // SAFETY: `dest` is writable for `dest.len()` bytes.
             unsafe { gate.fetch_and_update_policy(dest.as_mut_ptr(), dest.len()) },
-            Err(PolicyGateError::InternalError.into())
+            Err(PolicyGateError::BufferTooSmall.into())
         );
     }
 
@@ -1392,5 +1393,47 @@ mod tests {
         // SAFETY: the patched memory root describes the descriptors appended above.
         let appended = unsafe { mem_root.get_mem_descriptors(dest_bytes.as_ptr()) };
         assert_eq!(appended, snapshot.as_slice());
+    }
+
+    #[test]
+    fn test_fetch_and_update_policy_writes_to_an_unaligned_destination() {
+        let policy = PolicyBuilder::new()
+            .root(ACCESS_ATTR_DENY, Descriptors::Mem(vec![]))
+            .root(ACCESS_ATTR_ALLOW, Descriptors::Io(vec![io(0x60, 1, READ)]))
+            .build();
+        let firmware_size = policy.header().size as usize;
+
+        let mut gate = policy.gate();
+        let mut snapshot = [mem(0x1000, 0x1000, RESOURCE_ATTR_READ)];
+        gate.set_memory_policy_buffer(snapshot.as_mut_ptr(), snapshot.len());
+        gate.record_snapshot(snapshot.len());
+
+        let total = firmware_size + size_of::<MemDescriptorV1_0>();
+        let mut storage = vec![0u64; total.div_ceil(8) + 1];
+        // Start one byte past an 8-byte boundary, as a destination after a request header can.
+        let dest_bytes = &mut storage.as_mut_slice().as_mut_bytes()[1..=total];
+
+        // SAFETY: `dest_bytes` is writable for its whole length.
+        let written = unsafe { gate.fetch_and_update_policy(dest_bytes.as_mut_ptr(), dest_bytes.len()) }
+            .expect("policy fits in the destination");
+        assert_eq!(written, total);
+
+        // SAFETY: `fetch_and_update_policy` wrote a complete header at the start of `dest_bytes`.
+        let header = unsafe { dest_bytes.as_ptr().cast::<SecurePolicyDataV1_0>().read_unaligned() };
+        assert_eq!(header.size as usize, total);
+        assert_eq!(header.memory_policy_count, 0);
+
+        let root_size = size_of::<PolicyRootV1>();
+        let mem_root = (0..header.policy_root_count as usize)
+            .map(|index| {
+                let offset = header.policy_root_offset as usize + index * root_size;
+                // SAFETY: the roots array lies inside the policy copied into `dest_bytes`.
+                unsafe { dest_bytes.as_ptr().add(offset).cast::<PolicyRootV1>().read_unaligned() }
+            })
+            .find(|root| root.policy_type == TYPE_MEM)
+            .expect("memory policy root");
+        assert_eq!(mem_root.access_attr, ACCESS_ATTR_ALLOW);
+        assert_eq!(mem_root.offset as usize, firmware_size);
+        assert_eq!(mem_root.count, 1);
     }
 }

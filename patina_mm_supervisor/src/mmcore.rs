@@ -374,6 +374,18 @@ mod tests {
             "the Ring 3 stacks at 0x1000..=0x8fff are not usable by Ring 3"
         );
         assert_eq!(
+            format!("{}", CoreInitError::PageTableFromCr3Failed { cr3: 0x1000 }),
+            "the page table at CR3 0x0000000000001000 could not be adopted"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::PolicyGateUnavailable),
+            "the policy gate was not initialized before the security policy check"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::SmrrRangeUnavailable),
+            "per-core init ran before the BSP recorded the SMRR range"
+        );
+        assert_eq!(
             format!("{}", CoreInitError::InterruptManagerInit(EfiError::Unsupported)),
             format!("the interrupt manager could not be initialized: {}", EfiError::Unsupported)
         );

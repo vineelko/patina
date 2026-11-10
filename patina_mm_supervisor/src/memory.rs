@@ -95,12 +95,14 @@ mod tests {
             AllocError::InvalidAlignment,
             AllocError::InvalidAddress,
             AllocError::NotAllocated,
+            AllocError::TypeMismatch,
+            AllocError::MapFailed,
             AllocError::UnmapFailed,
             AllocError::InvalidSize,
             AllocError::PoolTooSmall,
         ];
 
-        let mut rendered = [""; 9];
+        let mut rendered = [""; 11];
         for (slot, error) in rendered.iter_mut().zip(all) {
             let text: &'static str = match error {
                 AllocError::NotInitialized => "the allocator has not been initialized",
@@ -109,6 +111,8 @@ mod tests {
                 AllocError::InvalidAlignment => "the requested address or alignment is not page aligned",
                 AllocError::InvalidAddress => "the address is not within any known SMRAM region",
                 AllocError::NotAllocated => "the address was not previously allocated",
+                AllocError::TypeMismatch => "the pages were allocated with a different allocation type",
+                AllocError::MapFailed => "the range could not be mapped as data in the page table",
                 AllocError::UnmapFailed => {
                     "the freed range could not be made inaccessible in the page table, so it stays allocated"
                 }

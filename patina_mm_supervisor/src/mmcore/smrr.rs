@@ -347,7 +347,7 @@ mod tests {
     #[test]
     fn test_smrr_verify_accepts_minimum_size() {
         // A 4 KiB region at base 0 is the smallest valid configuration.
-        assert!(verify_smrr_base_size(&MemoryRange::new(0, u64::from(SIZE_4KB)).unwrap()));
+        assert!(verify_smrr_base_size(&MemoryRange::new(0, UEFI_PAGE_SIZE as u64).unwrap()));
     }
 
     #[test]
@@ -406,8 +406,8 @@ mod tests {
         assert!(smm_code_access_supported(SMM_CODE_ACCESS_CHK_BIT));
 
         assert!(!mtrr_supported(0));
-        assert!(!mtrr_supported(!(1 << 12)));
-        assert!(mtrr_supported(1 << 12));
+        assert!(!mtrr_supported(!CPUID_EDX_MTRR));
+        assert!(mtrr_supported(CPUID_EDX_MTRR));
 
         // The two MTRR_CAP capabilities are reported by distinct bits.
         assert!(!smrr_supported(0));
@@ -444,8 +444,8 @@ mod tests {
     }
 
     #[test]
-    fn test_smrr_enable_mask_skips_an_already_finalized_range() {
-        // Bit 10 means the range is locked until reset, so no write must be issued.
+    fn test_smrr_enable_mask_skips_a_mask_with_bit10_set() {
+        // With bit 10 already set, no write is issued.
         assert_eq!(smrr_enable_mask(MASK_BIT_10), None);
         assert_eq!(smrr_enable_mask(0xFF80_0000 | MASK_VALID_BIT | MASK_BIT_10), None);
     }

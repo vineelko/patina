@@ -175,6 +175,10 @@ mod tests {
             "the syscall interface is already initialized"
         );
         assert_eq!(format!("{}", SyscallSetupError::InvalidCpuIndex), "the CPU index exceeds the configured CPU count");
+        assert_eq!(
+            format!("{}", SyscallSetupError::InvalidCpuCount),
+            "the CPU count is zero or exceeds the supported maximum"
+        );
     }
 
     #[test]
@@ -250,7 +254,7 @@ mod tests {
     #[test]
     fn test_max_cpus_exceeded() {
         let interface: SyscallInterface<4> = SyscallInterface::new();
-        assert_eq!(interface.init(8, 0x10000, 0x4000), Err(SyscallSetupError::InvalidCpuIndex));
+        assert_eq!(interface.init(8, 0x10000, 0x4000), Err(SyscallSetupError::InvalidCpuCount));
         // A rejected count must leave the interface uninitialized rather than half-configured.
         assert!(!interface.is_initialized());
     }
@@ -273,13 +277,21 @@ mod tests {
 
         let stack = interface.get_cpl3_stack(0).unwrap();
         assert_eq!(stack, (u64::MAX - 0x100).wrapping_add(0x1000).wrapping_sub(core::mem::size_of::<usize>() as u64));
+
+        // The per-CPU offset (stack size times CPU number) wraps too.
+        let interface: SyscallInterface<4> = SyscallInterface::new();
+        interface.init(2, 0x10000, usize::MAX).unwrap();
+
+        let stack = interface.get_cpl3_stack(1).unwrap();
+        let offset = (usize::MAX as u64).wrapping_mul(2);
+        assert_eq!(stack, 0x10000u64.wrapping_add(offset).wrapping_sub(core::mem::size_of::<usize>() as u64));
     }
 
     #[test]
     fn test_zero_cpus_rejected_and_interface_stays_usable() {
         let interface: SyscallInterface<8> = SyscallInterface::new();
 
-        assert_eq!(interface.init(0, 0x10000, 0x4000), Err(SyscallSetupError::InvalidCpuIndex));
+        assert_eq!(interface.init(0, 0x10000, 0x4000), Err(SyscallSetupError::InvalidCpuCount));
         assert!(!interface.is_initialized());
 
         // A rejected initialization must not lock out the real one that follows it.

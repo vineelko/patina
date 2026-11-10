@@ -180,7 +180,10 @@ mod tests {
     use super::*;
 
     use super::super::test_support::{Descriptors, PolicyBuilder, full_policy, instruction, io, msr, save_state};
-    use super::super::{ACCESS_ATTR_DENY, Instruction, RESOURCE_ATTR_COND_READ, SaveStateCondition, SaveStateField};
+    use super::super::{
+        ACCESS_ATTR_DENY, Instruction, InstructionDescriptorV1_0, RESOURCE_ATTR_COND_READ, SaveStateCondition,
+        SaveStateDescriptorV1_0, SaveStateField,
+    };
 
     #[test]
     fn test_dump_mem_policy_entry() {
@@ -236,6 +239,21 @@ mod tests {
     }
 
     #[test]
+    fn test_dump_policy_skips_a_root_past_the_declared_size_without_panicking() {
+        crate::test_support::init_test_logger();
+        let full = PolicyBuilder::new().root(7, Descriptors::Io(vec![io(0x60, 1, 0)])).build();
+        // Cutting one byte from the declared size leaves the last descriptor outside the policy.
+        let short = PolicyBuilder::new()
+            .root(7, Descriptors::Io(vec![io(0x60, 1, 0)]))
+            .declared_size(full.header().size - 1)
+            .build();
+
+        // SAFETY: the builder produced a valid policy buffer that outlives this call. Only its
+        // declared size is reduced.
+        unsafe { dump_policy(short.as_ptr()) };
+    }
+
+    #[test]
     fn test_dump_policy_rejects_null_and_undersized_buffers() {
         // SAFETY: `dump_policy` checks for null before dereferencing.
         unsafe { dump_policy(core::ptr::null()) };
@@ -247,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_dump_policy_formats_entry_ranges_when_logging_is_enabled() {
-        // The dump builds every range through log::info!, which skips its arguments when no
+        // The dump builds every range through log::debug!, which skips its arguments when no
         // logger is installed. The silent test logger reports every level as enabled, so the
         // end address arithmetic for a memory, I/O and MSR entry runs rather than being
         // skipped.

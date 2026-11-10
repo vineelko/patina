@@ -1112,7 +1112,8 @@ mod tests {
         // PROCESSOR_ID always writes 8
         assert_eq!(actual_write_size(MmSaveStateRegister::ProcessorId, 8), 8);
 
-        // LMA supports 4 and 8
+        // LMA supports 1 (the EDK2 width), 4 and 8
+        assert_eq!(actual_write_size(MmSaveStateRegister::Lma, 1), 1);
         assert_eq!(actual_write_size(MmSaveStateRegister::Lma, 4), 4);
         assert_eq!(actual_write_size(MmSaveStateRegister::Lma, 8), 8);
         assert_eq!(actual_write_size(MmSaveStateRegister::Lma, 3), 0);

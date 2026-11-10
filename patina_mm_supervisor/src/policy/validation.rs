@@ -542,7 +542,10 @@ mod tests {
         // table that maps an invalid region.
         let cases = [
             (PageTableWalkError::BufferFull, "the descriptor buffer is full, the walk cannot continue"),
-            (PageTableWalkError::InvalidCr3, "the CR3 value is null, so no page table can be walked"),
+            (
+                PageTableWalkError::InvalidCr3,
+                "the CR3 value or the descriptor buffer is null, so no page table can be walked",
+            ),
             (
                 PageTableWalkError::InvalidRegion { base: 0x1000, size: 0 },
                 "the page table maps an invalid region at 0x1000 (size 0x0)",

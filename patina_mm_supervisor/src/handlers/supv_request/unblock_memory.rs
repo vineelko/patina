@@ -918,6 +918,16 @@ mod tests {
     }
 
     #[test]
+    fn process_rejects_a_page_count_that_does_not_fit_a_tracker_entry() {
+        let context = TestUnblockMemoryContext::new();
+        let buffer = request_buffer(0x1000, u64::from(u32::MAX) + 1, 0, true);
+
+        assert_eq!(process_unblock_mem(&buffer, &context), efi::Status::INVALID_PARAMETER);
+        assert_eq!(context.mmram_checks.get(), 0);
+        assert_eq!(context.track_calls.get(), 0);
+    }
+
+    #[test]
     fn process_rejects_an_address_range_that_overflows() {
         let context = TestUnblockMemoryContext::new();
         let buffer = request_buffer(u64::MAX - (UEFI_PAGE_SIZE as u64 - 1), 1, 0, true);
@@ -1184,21 +1194,26 @@ mod tests {
 
     #[test]
     fn test_entry_size_round_trips_pages() {
-        let entry = UnblockedMemoryEntry::new(range(0x2000, 4 * UEFI_PAGE_SIZE as u64), RESOURCE_ATTR_READ);
+        let entry = UnblockedMemoryEntry::new(range(0x2000, 4 * UEFI_PAGE_SIZE as u64), RESOURCE_ATTR_READ)
+            .expect("4 pages fit");
         assert_eq!(entry.num_pages, 4);
         assert_eq!(entry.size(), 4 * UEFI_PAGE_SIZE as u64);
         assert_eq!(entry.range(), MemoryRange::new(0x2000, 4 * UEFI_PAGE_SIZE as u64).ok());
         assert_eq!(UnblockedMemoryEntry::empty().range(), None);
 
         // A sub-page size rounds up to a whole page (matching the page-granular mapping).
-        let partial = UnblockedMemoryEntry::new(range(0x1000, 1), RESOURCE_ATTR_READ);
+        let partial = UnblockedMemoryEntry::new(range(0x1000, 1), RESOURCE_ATTR_READ).expect("1 page fits");
         assert_eq!(partial.num_pages, 1);
         assert_eq!(partial.size(), UEFI_PAGE_SIZE as u64);
+
+        // A page count above `u32::MAX` cannot be recorded.
+        let too_many_pages = (u64::from(u32::MAX) + 1) * UEFI_PAGE_SIZE as u64;
+        assert!(UnblockedMemoryEntry::new(range(0x1000, too_many_pages), RESOURCE_ATTR_READ).is_none());
     }
 
     #[test]
     fn test_entry_contains() {
-        let entry = UnblockedMemoryEntry::new(range(0x1000, 0x1000), RESOURCE_ATTR_READ);
+        let entry = UnblockedMemoryEntry::new(range(0x1000, 0x1000), RESOURCE_ATTR_READ).expect("1 page fits");
 
         // Fully contained
         assert!(entry.contains(&range(0x1000, 0x1000)));
@@ -1219,7 +1234,7 @@ mod tests {
 
     #[test]
     fn test_entry_overlaps() {
-        let entry = UnblockedMemoryEntry::new(range(0x1000, 0x1000), RESOURCE_ATTR_READ);
+        let entry = UnblockedMemoryEntry::new(range(0x1000, 0x1000), RESOURCE_ATTR_READ).expect("1 page fits");
 
         // Overlapping cases
         assert!(entry.overlaps(&range(0x1000, 0x1000))); // Exact match

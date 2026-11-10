@@ -732,9 +732,9 @@ mod tests {
         assert_eq!(fixture.allocator.allocated_page_count(AllocationType::Supervisor), 1);
         assert_eq!(fixture.allocator.allocated_page_count(AllocationType::User), 0);
         assert_eq!(fixture.allocator.get_allocation_type(fixture.base), Some(AllocationType::Supervisor));
-        assert_eq!(fixture.allocator.allocate_pages(0), Err(AllocError::OutOfMemory.into()));
+        assert_eq!(fixture.allocator.allocate_pages(0), Err(AllocError::InvalidSize.into()));
         assert_eq!(fixture.allocator.free_pages(fixture.base + 1, 1), Err(AllocError::InvalidAlignment.into()));
-        assert_eq!(fixture.allocator.free_pages(fixture.base, 0), Err(AllocError::InvalidAddress.into()));
+        assert_eq!(fixture.allocator.free_pages(fixture.base, 0), Err(AllocError::InvalidSize.into()));
         assert_eq!(
             fixture.allocator.free_pages(fixture.base + TEST_REGION_BYTES as u64, 1),
             Err(AllocError::InvalidAddress.into())
@@ -810,7 +810,7 @@ mod tests {
 
         assert_eq!(
             fixture.allocator.free_pages_checked(user, 3, AllocationType::Supervisor),
-            Err(AllocError::InvalidAddress.into())
+            Err(AllocError::TypeMismatch.into())
         );
         assert_eq!(fixture.allocator.free_pages_checked(user, 3, AllocationType::User), Ok(()));
         assert_eq!(fixture.allocator.free_pages(supervisor, 2), Ok(()));
@@ -897,7 +897,7 @@ mod tests {
 
         assert_eq!(
             state.verify_allocated_with_type(user, 2, AllocationType::Supervisor),
-            Err(AllocError::InvalidAddress.into())
+            Err(AllocError::TypeMismatch.into())
         );
         assert_eq!(state.allocation_type(user), Some(AllocationType::User));
         assert_eq!(state.allocation_type(user + UEFI_PAGE_SIZE as u64), Some(AllocationType::User));
@@ -906,7 +906,7 @@ mod tests {
             state.verify_allocated_with_type(user, 2, AllocationType::User).expect("the range is user-allocated");
         state.mark_free(bit_range);
         assert_eq!(state.verify_allocated(user, 2), Err(AllocError::NotAllocated.into()));
-        assert_eq!(state.verify_allocated(user, 0), Err(AllocError::InvalidAddress.into()));
+        assert_eq!(state.verify_allocated(user, 0), Err(AllocError::InvalidSize.into()));
     }
 
     #[test]
@@ -979,7 +979,7 @@ mod tests {
 
         assert_eq!(
             fixture.allocator.allocate_pages_with_type(0, AllocationType::User),
-            Err(AllocError::OutOfMemory.into())
+            Err(AllocError::InvalidSize.into())
         );
     }
 

@@ -948,7 +948,7 @@ mod tests {
         let mut config = buffers.config();
         config.supervisor.external = 0;
 
-        core.process_supervisor_request(&config, &valid_status(), 0);
+        core.process_supervisor_request(&config, 0);
         // The early return leaves the mailbox untouched.
         assert_eq!(buffers.supv_status.return_status, 0);
     }
@@ -959,7 +959,7 @@ mod tests {
         let mut buffers = TestBuffers::new(EfiMmCommunicateHeader::size() - 1);
         let config = buffers.config();
 
-        core.process_supervisor_request(&config, &valid_status(), 0);
+        core.process_supervisor_request(&config, 0);
         assert_eq!(buffers.supv_status.return_status, efi::Status::BAD_BUFFER_SIZE.as_usize() as u64);
     }
 
@@ -971,7 +971,7 @@ mod tests {
         buffers.write_supv_request(TEST_HANDLER_GUID, 1024, &[]);
         let config = buffers.config();
 
-        core.process_supervisor_request(&config, &valid_status(), 0);
+        core.process_supervisor_request(&config, 0);
         assert_eq!(buffers.supv_status.return_status, efi::Status::BAD_BUFFER_SIZE.as_usize() as u64);
         assert_eq!(buffers.supv_status.is_comm_buffer_valid, 0);
     }
@@ -987,13 +987,13 @@ mod tests {
         let core = TestCore::new();
         let mut short = TestBuffers::new(EfiMmCommunicateHeader::size() - 1);
         let short_config = short.config();
-        core.process_supervisor_request(&short_config, &valid_status(), 0);
+        core.process_supervisor_request(&short_config, 0);
         assert_eq!(short.supv_status.return_status, efi::Status::BAD_BUFFER_SIZE.as_usize() as u64);
 
         let mut overlong = TestBuffers::new(64);
         overlong.write_supv_request(TEST_HANDLER_GUID, 1024, &[]);
         let overlong_config = overlong.config();
-        core.process_supervisor_request(&overlong_config, &valid_status(), 0);
+        core.process_supervisor_request(&overlong_config, 0);
         assert_eq!(overlong.supv_status.return_status, efi::Status::BAD_BUFFER_SIZE.as_usize() as u64);
     }
 
@@ -1005,7 +1005,7 @@ mod tests {
         buffers.write_supv_request(unknown, 4, &[1, 2, 3, 4]);
         let config = buffers.config();
 
-        core.process_supervisor_request(&config, &valid_status(), 0);
+        core.process_supervisor_request(&config, 0);
 
         assert_eq!(HANDLER_CALLS.load(Ordering::SeqCst), 0);
         assert_eq!(buffers.supv_status.return_status, efi::Status::NOT_FOUND.as_usize() as u64);
@@ -1019,7 +1019,7 @@ mod tests {
         let config = buffers.config();
         HANDLER_RESPONSE_SIZE.store(8, Ordering::SeqCst);
 
-        core.process_supervisor_request(&config, &valid_status(), 0);
+        core.process_supervisor_request(&config, 0);
 
         assert_eq!(HANDLER_CALLS.load(Ordering::SeqCst), 1);
         // The handler's payload edit is copied back to the external buffer.
@@ -1037,7 +1037,7 @@ mod tests {
         HANDLER_RESPONSE_SIZE.store(4, Ordering::SeqCst);
         HANDLER_SHOULD_FAIL.store(1, Ordering::SeqCst);
 
-        core.process_supervisor_request(&config, &valid_status(), 0);
+        core.process_supervisor_request(&config, 0);
 
         assert_eq!(buffers.supv_status.return_status, efi::Status::NOT_FOUND.as_usize() as u64);
     }
@@ -1052,7 +1052,7 @@ mod tests {
         // which would use it to read past the end of the communication buffer.
         HANDLER_RESPONSE_SIZE.store(1024, Ordering::SeqCst);
 
-        core.process_supervisor_request(&config, &valid_status(), 0);
+        core.process_supervisor_request(&config, 0);
 
         // Nothing is copied out and the caller is told why, rather than being handed a prefix of
         // a response the handler never agreed to send.
@@ -1069,7 +1069,7 @@ mod tests {
         // Adding the header to this size would wrap an unchecked `usize`.
         HANDLER_RESPONSE_SIZE.store(usize::MAX, Ordering::SeqCst);
 
-        core.process_supervisor_request(&config, &valid_status(), 0);
+        core.process_supervisor_request(&config, 0);
 
         assert_eq!(buffers.supv_status.return_status, efi::Status::BAD_BUFFER_SIZE.as_usize() as u64);
         assert_eq!(buffers.supv_status.return_buffer_size, 0);
@@ -1084,7 +1084,7 @@ mod tests {
         buffers.write_supv_request(TEST_HANDLER_GUID, 4, &[1, 2, 3, 4]);
         let config = buffers.config();
 
-        core.process_supervisor_request(&config, &valid_status(), 0);
+        core.process_supervisor_request(&config, 0);
 
         assert_eq!(HANDLER_CALLS.load(Ordering::SeqCst), 0);
         assert_eq!(buffers.supv_status.return_status, efi::Status::ACCESS_DENIED.as_usize() as u64);
@@ -1097,7 +1097,7 @@ mod tests {
         *buffers.supv_status = valid_status();
         let config = buffers.config();
 
-        core.write_supv_status(&config, &valid_status(), efi::Status::UNSUPPORTED, 0x40);
+        core.write_supv_status(&config, efi::Status::UNSUPPORTED, 0x40);
 
         assert_eq!(buffers.supv_status.is_comm_buffer_valid, 0);
         assert_eq!(buffers.supv_status.return_status, efi::Status::UNSUPPORTED.as_usize() as u64);
