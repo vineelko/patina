@@ -334,7 +334,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// zeroed tail of its last page.
     fn publish_hob_list_to_user(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<u64> {
         // We need to convert back to *const c_void because
-        // `get_pi_hob_list_size()` do not accept a reference directly.
+        // `get_pi_hob_list_size()` does not accept a reference directly.
         let hob_list: *const c_void = core::ptr::from_ref(hob_hand_off_table).cast();
         let hob_base = hob_list as u64;
         // SAFETY: `hob_list` is a valid HOB list per this function's contract.
@@ -516,7 +516,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             .inspect_err(|err| log::error!("Failed to initialize supervisor communication buffer: {err}"))?;
 
         // The user channel still uses the legacy `MM_COMM_BUFFER_HOB_GUID` so the user core's own
-        // HOB walk keeps working (see the HACKHACK at the tail of `CommChannel::from_user_hob`).
+        // HOB walk keeps working (see the TODO in `CommChannel::from_user_hob` in `comm_buffer.rs`).
         //
         // The lookup is scoped so the shared slice it returns is dead before the call below
         // rewrites the same bytes. Taking the address is the only way to hand over write access:
@@ -606,9 +606,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// Returns the CPU count from the MP Information HOB.
     ///
     /// The count is validated against `MAX_CPUS` here and returned as a `usize`, so callers
-    /// index and size allocations with it directly. [`CoreInitError::InvalidCpuCount`] keeps the
-    /// raw `u64` from the HOB, because the value it reports may be one that does not fit a
-    /// `usize`.
+    /// index and size allocations with it directly. A raw `u64` count from the HOB that does not
+    /// fit a `usize` is reported in [`CoreInitError::InvalidCpuCount`] as `usize::MAX`.
     fn parse_mp_information_hob(&self, data: &[u8]) -> MmSupervisorResult<usize> {
         /// Offset of `ProcessorInfoBuffer[]` within `MP_INFORMATION_HOB_DATA`.
         const PROCESSOR_INFO_BUFFER_OFFSET: usize = 16;

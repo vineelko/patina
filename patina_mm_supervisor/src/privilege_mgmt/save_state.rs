@@ -4,7 +4,7 @@
 //! `EFI_MM_CPU_PROTOCOL.ReadSaveState()` user-space API.
 //!
 //! Phase 1 (`SyscallIndex::SaveStateRead`): stores the requested register
-//! and CPU index in a per-BSP holder.
+//! and CPU index in a single hand-off slot shared by every core.
 //!
 //! Phase 2 (`SyscallIndex::SaveStateRead2`): validates the request against
 //! the MM security policy, reads the register value from the CPU's SMRAM save
@@ -14,7 +14,7 @@
 //!
 //! - User buffer addresses are validated via page-table ownership queries.
 //! - Policy-gated registers (RAX, IO) are checked through
-//!   [`PolicyGate::is_save_state_read_allowed`](patina_mm_policy::PolicyGate::is_save_state_read_allowed).
+//!   [`PolicyGate::is_save_state_read_allowed`](crate::policy::gate::PolicyGate::is_save_state_read_allowed).
 //! - `PROCESSOR_ID` is always allowed (informational, not security-sensitive).
 //! - Every other register has no policy field, so no descriptor can name it. An
 //!   `ACCESS_ATTR_ALLOW` policy permits only the reads it names, so it denies these

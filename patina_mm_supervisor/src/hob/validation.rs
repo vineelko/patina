@@ -33,9 +33,9 @@
 //! Run after the page table is initialized, so per-page attributes can be
 //! queried from it:
 //!
-//! 7. Every page of the MM Supervisor Core module is supervisor-owned (the U/S
-//!    "SP" bit is set) and every page of the MM Supervisor User module is
-//!    user-accessible (the SP bit is clear).
+//! 7. Every page of the MM Supervisor Core module is supervisor-owned (the
+//!    `Supervisor` attribute is set, i.e. U/S = 0) and every page of the MM Supervisor
+//!    User module is user-accessible (the `Supervisor` attribute is clear, i.e. U/S = 1).
 //! 8. Each module's entry point lies on a code page: present (`ReadProtect`
 //!    clear), read-only (`ReadOnly` set) and executable (`ExecuteProtect`
 //!    clear), i.e. it sits in the module's code section.

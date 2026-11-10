@@ -1,5 +1,5 @@
 #
-# Exception entry point logic for X64.
+# Image entry point shim for the MM Supervisor Core.
 #
 # Copyright (c) Microsoft Corporation.
 #

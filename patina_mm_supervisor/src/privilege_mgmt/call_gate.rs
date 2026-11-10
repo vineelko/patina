@@ -287,7 +287,7 @@ fn program_privilege_transition_entries(
 }
 
 /// Sets up the call gate for returning from a demoted routine.
-/// This function is called from assembly code (`InvokeDemotedRoutine`).
+/// This function is called from assembly code (`invoke_demoted_routine`).
 ///
 /// ## Safety
 ///

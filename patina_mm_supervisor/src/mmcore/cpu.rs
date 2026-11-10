@@ -114,9 +114,10 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
     /// `cpu_id` is the APIC ID read from CPUID (sparse, not 0-based), while `cpu_index` is
     /// the dense, 0-based UEFI processor index that selects this CPU's slot.
     ///
-    /// Returns `Some(cpu_index)` on success. Re-registering the same CPU is idempotent and
-    /// returns the same index. Returns `None` if `cpu_index` is out of range or the
-    /// slot is already occupied by a different CPU.
+    /// Returns `Ok(cpu_index)` on success. Re-registering the same CPU is idempotent and
+    /// returns the same index. Returns [`CoreInitError::CpuIndexOutOfRange`] if `cpu_index` is
+    /// out of range, or [`CoreInitError::CpuIndexAlreadyRegistered`] if the slot is already
+    /// occupied by a different CPU.
     pub fn register_cpu(&self, cpu_id: u32, cpu_index: usize, is_bsp: bool) -> MmSupervisorResult<usize> {
         // Each physical CPU owns a distinct, stable `cpu_index`, so this slot is only
         // ever written by this CPU. That makes the load-check-then-store below safe

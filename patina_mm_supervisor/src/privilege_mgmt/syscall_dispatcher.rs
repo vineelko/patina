@@ -2,7 +2,7 @@
 //!
 //! This module handles syscall requests from Ring 3 code. When Ring 3 code
 //! executes the `syscall` instruction, the CPU jumps to the address in
-//! `MSR_IA32_LSTAR` (our `SyscallCenter` assembly stub), which then calls into
+//! `MSR_IA32_LSTAR` (our `syscall_center` assembly stub), which then calls into
 //! this dispatcher.
 //!
 //! ## Syscall Interface
@@ -208,7 +208,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
     ///
     /// Validates the MSR read against firmware policy, then executes `rdmsr`.
     /// - Arg1: MSR index
-    /// - Returns: MSR value in result.value
+    /// - Returns: MSR value (RAX)
     fn handle_rdmsr(&self, ctx: &SyscallContext) -> SyscallResult {
         let msr_index = ctx.arg1 as u32;
         log::trace!("RDMSR: msr=0x{msr_index:x}");
@@ -262,7 +262,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
     /// Validates the I/O read against firmware policy, then executes the `in` instruction.
     /// - Arg1: I/O port address
     /// - Arg2: `EFI_MM_IO_WIDTH` (0=UINT8, 1=UINT16, 2=UINT32)
-    /// - Returns: Value read from the port in result.value
+    /// - Returns: Value read from the port (RAX)
     ///
     /// A port outside the 16-bit I/O space is rejected with `EFI_INVALID_PARAMETER` rather than
     /// truncated, so the supervisor never accesses a port the caller did not ask for.
@@ -361,7 +361,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
     /// - Arg1: Allocate type (`EFI_ALLOCATE_TYPE`)
     /// - Arg2: Memory type (must be `EfiRuntimeServicesData`)
     /// - Arg3: Page count
-    /// - Returns: Allocated physical address in result.value
+    /// - Returns: Allocated physical address (RAX)
     fn handle_alloc_page(&self, ctx: &SyscallContext) -> SyscallResult {
         let alloc_type = ctx.arg1 as AllocateType;
         let mem_type = ctx.arg2 as MemoryType;
@@ -456,7 +456,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
     /// Handles start AP procedure syscall.
     ///
     /// Validates the request and delegates to the platform-specific AP startup
-    /// function registered during [`MmSupervisorCore`] initialization.
+    /// function registered during [`MmSupervisorCore`](crate::MmSupervisorCore) initialization.
     ///
     /// Checks performed before dispatch:
     /// - Caller is the BSP
@@ -628,7 +628,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
 
 /// C-compatible syscall dispatcher entry point.
 ///
-/// This function is called from the assembly syscall entry stub (`SyscallCenter`). Its parameters
+/// This function is called from the assembly syscall entry stub (`syscall_center`). Its parameters
 /// carry the syscall registers described by the module-level calling convention, and its return
 /// value is the result placed in RAX for the Ring 3 caller.
 #[unsafe(no_mangle)]

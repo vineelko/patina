@@ -18,7 +18,6 @@ designed to run on x64 systems where:
 constants provided via const generics:
 
 - `MAX_CPUS` - Maximum number of CPUs supported, supplied as a const generic argument to `MmSupervisorCore`
-- `MAX_HANDLERS` - Maximum number of request handlers
 
 This allows the entire supervisor to be instantiated as a `static` with no runtime allocation.
 
@@ -38,19 +37,12 @@ This allows the entire supervisor to be instantiated as a `static` with no runti
    rustup override set nightly
    ```
 
-### Build Command
+### Build
 
-Build the example MM Supervisor binary:
-
-```bash
-cargo build --target x86_64-unknown-uefi --bin example_mm_supervisor --features x64,save_state_amd,supv --no-default-features
-```
-
-The output PE/COFF binary with the AMD64 save state layout will be at:
-
-```text
-target/x86_64-unknown-uefi/release/example_mm_supervisor.efi
-```
+This crate is a library. A platform supervisor binary crate links it in, supplies the `PlatformInfo` implementation
+and the entry point, and is built for `x86_64-unknown-uefi` to produce the PE/COFF image. Enable this crate's
+`save_state_amd` feature from that binary crate when the platform uses the AMD64 save state layout (see
+[Selecting the Save State Layout](#selecting-the-save-state-layout)).
 
 ### Entry Point
 
@@ -58,8 +50,9 @@ The MM Supervisor exports `MmSupervisorMain` as its entry point, matching the ED
 
 ```rust
 #[unsafe(export_name = "MmSupervisorMain")]
-pub extern "efiapi" fn mm_supervisor_main(hob_list: *const c_void) -> ! {
-    SUPERVISOR.entry_point(hob_list)
+pub extern "efiapi" fn mm_supervisor_main(cpu_index: usize, hob_list: *const c_void) {
+    // SAFETY: invoked once per core by the MM environment with a valid HOB list.
+    unsafe { SUPERVISOR.entry_point(cpu_index, hob_list) };
 }
 ```
 
@@ -126,8 +119,9 @@ fn panic(_info: &PanicInfo) -> ! {
 }
 
 #[unsafe(export_name = "MmSupervisorMain")]
-pub extern "efiapi" fn mm_supervisor_main(hob_list: *const c_void) -> ! {
-    SUPERVISOR.entry_point(hob_list)
+pub extern "efiapi" fn mm_supervisor_main(cpu_index: usize, hob_list: *const c_void) {
+    // SAFETY: invoked once per core by the MM environment with a valid HOB list.
+    unsafe { SUPERVISOR.entry_point(cpu_index, hob_list) };
 }
 ```
 

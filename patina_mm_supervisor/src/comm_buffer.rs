@@ -1,7 +1,8 @@
 //! Communication Buffer Configuration for the MM Supervisor Core
 //!
-//! Defines the communication buffer layout extracted from the MM Supervisor
-//! `PassDown` HOB and shared across the supervisor for routing user- and
+//! Defines the communication buffer layout built from the MM Common Region HOB
+//! (`gMmCommonRegionHobGuid`, supervisor channel) and the `MM_COMM_BUFFER_HOB_GUID`
+//! HOB (user channel), and shared across the supervisor for routing user- and
 //! supervisor-targeted requests.
 //!
 //! ## License
@@ -104,7 +105,8 @@ impl fmt::Display for CommBufferError {
     }
 }
 
-/// Communication buffer configuration extracted from `PassDown` HOB.
+/// Communication buffer configuration built from the MM Common Region HOB (supervisor channel)
+/// and the `MM_COMM_BUFFER_HOB_GUID` HOB (user channel).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CommBufferConfig {
     /// The channel carrying supervisor-targeted requests.

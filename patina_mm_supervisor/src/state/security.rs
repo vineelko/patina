@@ -43,7 +43,7 @@ pub(crate) struct SecurityState {
     paging_allocator: PagingPoolAllocator,
     /// Tracker for all unblocked memory regions.
     unblocked_memory_tracker: UnblockedMemoryTracker,
-    /// Communication buffer configuration from the `PassDown` HOB.
+    /// Communication buffer configuration from the MM Common Region and `MM_COMM_BUFFER_HOB_GUID` HOBs.
     comm_buffer_config: Once<CommBufferConfig>,
     /// Per-CPU save-state metadata for the save-state read syscall.
     save_state_info: Once<SaveStateInfo>,
@@ -125,6 +125,7 @@ impl SecurityState {
 /// Global security-relevant state instance.
 static SECURITY_STATE: SecurityState = SecurityState::new();
 
+/// Returns the global [`SecurityState`].
 #[inline]
 pub(crate) fn security_state() -> &'static SecurityState {
     &SECURITY_STATE

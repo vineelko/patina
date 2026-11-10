@@ -1,16 +1,19 @@
 //! Syscall Interface Setup
 //!
-//! This module handles the initialization and configuration of syscall/sysret MSRs
-//! for privilege level transitions. It manages per-CPU storage for MSR values and
-//! the syscall cache structure used during ring transitions.
+//! This module handles the initialization of the syscall interface used for privilege level
+//! transitions. It records the CPL3 stack array base, the per-CPU stack size and the configured
+//! CPU count, and hands out each CPU's CPL3 stack top for Ring 3 demotion.
 //!
 //! ## MSR Configuration
 //!
-//! - `MSR_IA32_STAR`: Contains segment selectors for syscall/sysret
-//!   - Bits 47:32 = SYSRET CS and SS (`LONG_CS_R3_PH` << 16)
-//!   - Bits 31:16 = SYSCALL CS and SS (`LONG_CS_R0`)
+//! `invoke_demoted_routine` programs these MSRs in situ before each demotion and restores them on
+//! return.
 //!
-//! - `MSR_IA32_LSTAR`: Contains the 64-bit RIP for syscall entry (`SyscallCenter`)
+//! - `MSR_IA32_STAR`: Contains segment selectors for syscall/sysret
+//!   - Bits 63:48 = SYSRET CS and SS base (`LONG_CS_R3_PH`)
+//!   - Bits 47:32 = SYSCALL CS and SS base (`LONG_CS_R0`)
+//!
+//! - `MSR_IA32_LSTAR`: Contains the 64-bit RIP for syscall entry (`syscall_center`)
 //!
 //! - `MSR_IA32_FMASK`: RFLAGS bits the CPU clears on `syscall` entry. `syscall` performs
 //!   no other flag sanitization, so this is the only thing preventing Ring 3 from choosing the

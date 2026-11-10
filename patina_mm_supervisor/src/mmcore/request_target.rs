@@ -16,7 +16,9 @@ use patina::management_mode::MmCommBufferStatus;
 /// mailboxes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestTarget {
-    /// No pending request (neither mailbox is valid).
+    /// Nothing to dispatch: the communication buffers or both status mailboxes are not set up yet.
+    /// [`RequestTarget::select`] never returns this; a request with neither mailbox valid is an
+    /// asynchronous MMI routed to [`RequestTarget::User`].
     None,
     /// Request targets the Supervisor.
     Supervisor,

@@ -12,7 +12,8 @@ use patina::management_mode::protocol::mm_supervisor_request::MmSupervisorReques
 
 /// Handle a `COMM_UPDATE` request.
 ///
-/// Updates the communication buffer address for future SMI entries.
+/// Rejects dynamic communication buffer updates, which this implementation does not support,
+/// with `ACCESS_DENIED`.
 pub(super) fn handle_comm_update(_comm_buffer: *mut u8, comm_buffer_size: &mut usize) -> efi::Status {
     // We do not support dynamic communication buffer updates in this implementation, because
     // we expect the runtime allocation will fall into PEI memory bin.

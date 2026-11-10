@@ -96,7 +96,7 @@ pub(crate) fn mm_supv_request_handler(comm_buffer: *mut u8, comm_buffer_size: &m
 /// The status is stored as its raw `usize` representation cast to `u64`,
 /// matching the C `MM_SUPERVISOR_REQUEST_HEADER.Result` convention.
 ///
-/// ## Safety
+/// ## Requirements
 ///
 /// `comm_buffer` must point to at least `MmSupervisorRequestHeader::SIZE` bytes of writable memory.
 fn write_request_result(comm_buffer: *mut u8, status: efi::Status) {

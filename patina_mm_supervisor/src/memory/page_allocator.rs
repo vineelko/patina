@@ -1,7 +1,6 @@
-//! MM Supervisor Core Page and Pool Allocators
+//! MM Supervisor Core Page Allocator
 //!
-//! Provides a page-granularity memory allocator and a pool allocator for the MM
-//! Supervisor Core.
+//! Provides a page-granularity memory allocator for the MM Supervisor Core.
 //!
 //! ## License
 //!
@@ -410,10 +409,11 @@ impl PageAllocator {
         Ok(addr)
     }
 
-    /// Applies supervisor page table attributes to a newly allocated region.
+    /// Applies data page table attributes to a newly allocated region.
     ///
-    /// Marks pages as supervisor-owned data pages: Read/Write + Non-Executable (NX).
-    /// This ensures supervisor data cannot be executed, providing W^X enforcement.
+    /// Marks pages as data pages: Read/Write + Non-Executable (NX), and supervisor-only (U/S = 0)
+    /// for [`AllocationType::Supervisor`].
+    /// This ensures data cannot be executed, providing W^X enforcement.
     ///
     /// If the global page table is not yet initialized (e.g., during early boot),
     /// this is a no-op with a warning.
@@ -430,9 +430,11 @@ impl PageAllocator {
             }
 
             if let Err(err) = pt.map_memory_region(addr, size, attributes) {
-                log::error!("Failed to set supervisor page attributes for 0x{addr:016x} ({num_pages} pages): {err:?}");
+                log::error!(
+                    "Failed to set {alloc_type:?} page attributes for 0x{addr:016x} ({num_pages} pages): {err:?}"
+                );
             } else {
-                log::trace!("Marked 0x{addr:016x} ({num_pages} pages) as supervisor R/W+NX");
+                log::trace!("Marked 0x{addr:016x} ({num_pages} pages) as {alloc_type:?} R/W+NX");
             }
         } else {
             log::warn!("Page table not initialized, skipping attribute update for 0x{addr:016x}");
@@ -459,9 +461,8 @@ impl PageAllocator {
 
     /// Applies restrictive page table attributes to freed pages.
     ///
-    /// Marks pages as completely inaccessible: Supervisor + `ReadProtect` + `ExecuteProtect` (NX).
-    /// This prevents any read, write, or execute access to freed memory, mitigating
-    /// use-after-free vulnerabilities.
+    /// Unmaps the range so it is completely inaccessible. This prevents any read, write, or
+    /// execute access to freed memory, mitigating use-after-free vulnerabilities.
     ///
     /// A failure is reported so the caller can leave the range allocated rather than hand a still
     /// reachable range back to the pool.
@@ -477,22 +478,20 @@ impl PageAllocator {
             return Ok(());
         };
 
-        // Freed pages: ReadProtect (not present) + NX (no execute) + ReadOnly (no write)
-        // This makes the pages completely inaccessible.
+        // Freed pages are unmapped, which makes them completely inaccessible.
         if let Err(err) = pt.unmap_memory_region(addr, size) {
             log::error!("Failed to set freed page attributes for 0x{addr:016x} ({num_pages} pages): {err:?}");
             return Err(AllocError::UnmapFailed.into());
         }
 
-        log::trace!("Marked 0x{addr:016x} ({num_pages} pages) as inaccessible (RP+NX+RO+S)");
+        log::trace!("Marked 0x{addr:016x} ({num_pages} pages) as inaccessible (unmapped)");
         Ok(())
     }
 
     /// Frees previously allocated pages.
     ///
     /// The pages are zeroed so their contents cannot be recovered through a later allocation, then
-    /// marked as inaccessible in the page table (Supervisor + `ReadProtect` + `ExecuteProtect`) to
-    /// prevent use-after-free.
+    /// unmapped from the page table to prevent use-after-free.
     pub fn free_pages(&self, addr: u64, num_pages: usize) -> MmSupervisorResult<()> {
         self.release_pages(addr, num_pages, None)
     }
@@ -500,8 +499,7 @@ impl PageAllocator {
     /// Frees previously allocated pages, verifying the allocation type matches.
     ///
     /// The pages are zeroed so their contents cannot be recovered through a later allocation, then
-    /// marked as inaccessible in the page table (Supervisor + `ReadProtect` + `ExecuteProtect`) to
-    /// prevent use-after-free.
+    /// unmapped from the page table to prevent use-after-free.
     pub fn free_pages_checked(
         &self,
         addr: u64,

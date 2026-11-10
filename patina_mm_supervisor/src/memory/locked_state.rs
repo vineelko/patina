@@ -144,7 +144,7 @@ impl LockedState<'_> {
         let bitmap = self.alloc_bitmap();
         let byte_index = bit_index / (u8::BITS as usize);
         let bit_offset = bit_index % (u8::BITS as usize);
-        // Out of bounds is treated as allocated.
+        // Out of bounds panics.
         match bitmap.get(byte_index) {
             Some(byte) => (byte & (1 << bit_offset)) != 0,
             None => panic!(
@@ -161,7 +161,7 @@ impl LockedState<'_> {
         let bitmap = self.type_bitmap();
         let byte_index = bit_index / (u8::BITS as usize);
         let bit_offset = bit_index % (u8::BITS as usize);
-        // Out of bounds (or a clear bit) is treated as supervisor-owned.
+        // Out of bounds panics; a clear bit is supervisor-owned.
         match bitmap.get(byte_index) {
             None => panic!(
                 "{}: bit_index {} out of bounds (total_pages = {})",

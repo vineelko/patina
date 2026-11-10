@@ -223,7 +223,7 @@ pub struct MsrDescriptorV1_0 {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InstructionDescriptorV1_0 {
-    /// Instruction index (one of `INSTRUCTION_*` constants).
+    /// Instruction index (an [`Instruction`] value).
     pub instruction_index: u16,
     /// Instruction attributes (combination of `RESOURCE_ATTR_*`).
     pub attributes: u16,
@@ -235,11 +235,11 @@ pub struct InstructionDescriptorV1_0 {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SaveStateDescriptorV1_0 {
-    /// Save state map field (one of `SVST_*` constants).
+    /// Save state map field (a [`SaveStateField`] value).
     pub map_field: u32,
     /// Save state attributes (combination of `RESOURCE_ATTR_*`).
     pub attributes: u32,
-    /// Access condition (one of `SVST_CONDITION_*` constants).
+    /// Access condition (a [`SaveStateCondition`] value).
     pub access_condition: u32,
     /// Reserved, must be 0.
     pub reserved: u32,

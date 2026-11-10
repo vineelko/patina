@@ -137,7 +137,7 @@ impl SnapshotVerificationContext for SupervisorSnapshotVerificationContext<'_> {
 ///    fresh result against the saved snapshot. Any discrepancy is a security
 ///    violation.
 /// 3. **Merges** the memory policy snapshot with the static firmware policy blob
-///    from `POLICY_GATE` and writes the combined result into `comm_buffer`.
+///    from the policy gate and writes the combined result into `comm_buffer`.
 ///
 /// ## Response layout
 ///
@@ -180,7 +180,7 @@ fn process_fetch_policy<C: FetchPolicyContext>(comm_buffer: &mut [u8], context: 
     let gate = if let Some(gate) = context.policy_gate() {
         gate
     } else {
-        log::error!("FETCH_POLICY: POLICY_GATE not initialized");
+        log::error!("FETCH_POLICY: policy gate not initialized");
         return (efi::Status::NOT_READY, MmSupervisorRequestHeader::SIZE);
     };
 

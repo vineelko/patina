@@ -83,9 +83,9 @@ pub unsafe fn write_msr(msr: u32, value: u64) {
     }
 }
 
-/// Gets the current CPU's APIC ID.
+/// Returns the raw CPUID leaf 1 (version information) result for the current CPU.
 ///
-/// On `x86_64`, this reads the APIC ID from the Local APIC or CPUID.
+/// The initial APIC ID is in `EBX[31:24]` of the returned [`CpuidResult`]; callers extract it.
 /// Depends on the running processor's `cpuid` state, which cannot be exercised
 /// deterministically in a host-based unit test.
 pub fn get_current_cpu_id() -> CpuidResult {

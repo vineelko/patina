@@ -4,7 +4,7 @@
 //! and Ring 3 (user) in the MM environment. It provides:
 //!
 //! - One-time initialization of syscall/sysret MSRs
-//! - Demotion of code execution to Ring 3 via `InvokeDemotedRoutine`
+//! - Demotion of code execution to Ring 3 via `invoke_demoted_routine`
 //! - Handling of syscall requests from Ring 3 code
 //! - Call gate and TSS descriptor management for privilege transitions
 //!
@@ -16,11 +16,11 @@
 //!    and `MSR_IA32_EFER` to set up syscall entry points, segment selectors, and the
 //!    RFLAGS bits the CPU clears when Ring 3 enters Ring 0.
 //!
-//! 2. Demotion: Use `InvokeDemotedRoutine` to transition from Ring 0 to Ring 3.
+//! 2. Demotion: Use `invoke_demoted_routine` to transition from Ring 0 to Ring 3.
 //!    This sets up call gates for return and prepares the Ring 3 stack.
 //!
 //! 3. Syscall Entry: When Ring 3 code executes `syscall`, the CPU jumps to
-//!    the address in `MSR_IA32_LSTAR` (our `SyscallCenter`), which dispatches
+//!    the address in `MSR_IA32_LSTAR` (our `syscall_center`), which dispatches
 //!    to the appropriate handler.
 //!
 //! 4. Return: Ring 3 code returns via call gate or syscall dispatcher returns

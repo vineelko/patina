@@ -219,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn test_boundary_io_audit_stays_quiet_on_ports_a_platform_legitimately_drives() {
+    fn test_boundary_io_audit_reports_only_the_platform_port_inside_the_pci_config_window() {
         let granted = [
             io(0x0062, 2, READ_WRITE),    // embedded controller
             io(0x0070, 2, READ_WRITE),    // CMOS index/data

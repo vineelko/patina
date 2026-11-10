@@ -6,11 +6,13 @@
 #
 # Module Name:
 #
-#   WriteTr.nasm
+#   syscall_entry.asm
 #
 # Abstract:
 #
-#   Write TR register
+#   The `syscall` entry stub, syscall_center. It swaps to the supervisor GS base, switches to
+#   the supervisor stack, saves the Ring 3 register state and calls syscall_dispatcher, then
+#   restores that state and returns to Ring 3 with `sysret`.
 #
 # Notes:
 #
@@ -46,7 +48,7 @@
 # Backend Interface:
 # /// C-compatible syscall dispatcher entry point.
 # ///
-# /// This function is called from the assembly syscall entry stub (SyscallCenter).
+# /// This function is called from the assembly syscall entry stub (syscall_center).
 # ///
 # /// # Arguments
 # ///

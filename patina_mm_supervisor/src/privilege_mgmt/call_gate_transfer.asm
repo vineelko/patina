@@ -5,11 +5,14 @@
 #
 # Module Name:
 #
-#   WriteTr.nasm
+#   call_gate_transfer.asm
 #
 # Abstract:
 #
-#   Write TR register
+#   Ring 3 demotion through invoke_demoted_routine: programs the syscall MSRs, calls
+#   setup_call_gate to install the call gate the demoted routine returns through, and far
+#   returns into the CPL3 routine. Also holds the call gate return path, which restores the
+#   saved MSRs, segments and nonvolatile registers before returning to the Ring 0 caller.
 #
 # Notes:
 #
@@ -20,9 +23,6 @@
 .global invoke_demoted_routine
 .global setup_call_gate
 .global syscall_center
-
-# .global SetupCpl0MsrStar
-# .global RestoreCpl0MsrStar
 
 .section .text
 .align 8
@@ -69,9 +69,10 @@
 #   @param[in]      CpuIndex            CpuIndex value of intended core, cannot be
 #                                       greater than mNumberOfCpus.
 #   @param[in]      Cpl3Routine         Function pointer to demoted routine.
+#   @param[in]      Cpl3Stack           Top of the CPL3 stack the demoted routine runs on.
 #   @param[in]      ArgCount            Number of arguments needed by Cpl3Routine.
 #   @param          ...                 The variable argument list whose count is defined by
-#                                       ArgCount. Its contented will be accessed and populated
+#                                       ArgCount. Its contents will be accessed and populated
 #                                       to the registers and/or CPL3 stack areas per EFIAPI
 #                                       calling convention.
 #
@@ -247,7 +248,7 @@ invoke_demoted_routine:
     mov     r8, [rbp + 0x40]            #Third input argument for demoted routine
     dec     rax
     CHECK_RAX
-    mov     r9, [rbp + 0x48]            #Forth input argument for demoted routine
+    mov     r9, [rbp + 0x48]            #Fourth input argument for demoted routine
     dec     rax
     CHECK_RAX
     #For further input arguments, they will be put on the stack
@@ -280,8 +281,6 @@ invoke_demoted_routine:
     shl     r15, 32                     #Call gate on call far stack should be CS:rIP
 
     retfq
-
-    #2000 years later...
 
 5:
     # A call gate, unlike an interrupt gate, leaves RFLAGS untouched across the privilege

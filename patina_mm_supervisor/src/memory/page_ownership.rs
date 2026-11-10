@@ -19,9 +19,9 @@ use crate::state::security_state;
 /// Result of a page table ownership query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PageOwnership {
-    /// The page is user-accessible (U/S = 1, `SpecialPurpose` clear).
+    /// The page is user-accessible (U/S = 1, `Supervisor` attribute clear).
     User,
-    /// The page is supervisor-only (U/S = 0, `SpecialPurpose` set).
+    /// The page is supervisor-only (U/S = 0, `Supervisor` attribute set).
     Supervisor,
 }
 

@@ -17,7 +17,7 @@ const CPUID_TIME_STAMP_COUNTER: u32 = 0x15;
 const CPUID_PROCESSOR_FREQUENCY: u32 = 0x16;
 
 // TODO: This is copied from perf_timer.rs in patina_dxe_core
-/// Returns the current CPU count using architecture-specific methods.
+/// Returns the current time stamp counter (TSC) tick count.
 ///
 /// Skip coverage as any value could be valid, including 0.
 #[cfg_attr(coverage, coverage(off))]
@@ -73,7 +73,7 @@ fn base_frequency(leaf: CpuidResult) -> u64 {
     u64::from(leaf.eax) * 1_000_000
 }
 
-/// Spins until at least `timeout_us` microseconds have elapsed.
+/// Spins until `condition` returns true or `timeout_us` microseconds elapse.
 ///
 /// Returns `true` when the provided `condition` closure returns `true`
 /// before the deadline, or `false` on timeout.

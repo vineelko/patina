@@ -148,14 +148,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // Read both status mailboxes. A buffer that hasn't been published yet
         // is treated as an all-zero (idle) status.
         let user_status = if config.user.status != 0 {
-            // SAFETY: `user_status_buffer` is non-zero here and, provided by the MM IPL, references
+            // SAFETY: `config.user.status` is non-zero here and, provided by the MM IPL, references
             // an MMRAM-resident `MmCommBufferStatus`, so the volatile read is valid.
             unsafe { core::ptr::read_volatile(config.user.status as *const MmCommBufferStatus) }
         } else {
             MmCommBufferStatus::new()
         };
         let supv_status = if config.supervisor.status != 0 {
-            // SAFETY: `supv_status_buffer` is non-zero here and, provided by the MM IPL, references
+            // SAFETY: `config.supervisor.status` is non-zero here and, provided by the MM IPL, references
             // an MMRAM-resident `MmCommBufferStatus`, so the volatile read is valid.
             unsafe { core::ptr::read_volatile(config.supervisor.status as *const MmCommBufferStatus) }
         } else {
@@ -285,7 +285,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         if sync_mmi != 0 {
             // Copy user buffer to user internal buffer for processing in Ring 3
             // SAFETY: both buffers are the user-owned communication buffers published by MM IPL,
-            // and both are `user_comm_buffer_size` bytes, so the copy made while SMAP is lifted
+            // and both are `config.user.size` bytes, so the copy made while SMAP is lifted
             // stays inside those user ranges.
             unsafe {
                 with_user_access(|| {
@@ -327,7 +327,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // Copy the response from the internal buffer back to the user buffer
         if sync_mmi != 0 {
             // SAFETY: as for the copy in, both buffers are the user-owned communication buffers
-            // published by MM IPL and both are `user_comm_buffer_size` bytes.
+            // published by MM IPL and both are `config.user.size` bytes.
             unsafe {
                 with_user_access(|| {
                     core::ptr::copy_nonoverlapping(
@@ -372,7 +372,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             final_status.return_buffer_size = 0;
         }
 
-        // SAFETY: user_status_buffer is valid and writable
+        // SAFETY: `config.user.status` is valid and writable
         unsafe {
             let status_ptr = config.user.status as *mut MmCommBufferStatus;
             core::ptr::write_volatile(status_ptr, final_status);
@@ -457,7 +457,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         }
 
         // Compute pointer to the data payload (after the header)
-        // SAFETY: `supv_comm_buffer_internal` is a valid buffer of `buffer_size` bytes, and we
+        // SAFETY: `config.supervisor.internal` is a valid buffer of `buffer_size` bytes, and we
         // verified above that `buffer_size >= EfiMmCommunicateHeader::size()`, so offsetting by
         // the header size stays within the same allocation.
         let data_ptr = unsafe { (config.supervisor.internal as *mut u8).add(EfiMmCommunicateHeader::size()) };
@@ -535,7 +535,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         return_status: efi::Status,
         return_buffer_size: u64,
     ) {
-        // SAFETY: supv_status_buffer is valid and writable, set up by MM IPL
+        // SAFETY: `config.supervisor.status` is valid and writable, set up by MM IPL
         unsafe {
             let status_ptr = config.supervisor.status as *mut MmCommBufferStatus;
             let updated = MmCommBufferStatus {

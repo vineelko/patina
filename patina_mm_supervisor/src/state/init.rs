@@ -73,7 +73,7 @@ impl InitState {
     /// Records the supervisor instance address.
     ///
     /// Returns `true` if `addr` is the value now stored (i.e. this call won the
-    /// one-time initialization), matching the previous `call_once` comparison.
+    /// one-time initialization).
     pub(crate) fn set_supervisor(&self, addr: NonZeroUsize) -> bool {
         &addr == self.supervisor.call_once(|| addr)
     }

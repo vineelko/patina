@@ -189,7 +189,7 @@ impl fmt::Display for CoreInitError {
                 write!(f, "the MP Information HOB is too short or its processor entries do not fit")
             }
             Self::InvalidCpuCount { found, maximum } => {
-                write!(f, "the producer reported {found} CPUs, more than the supported maximum of {maximum}")
+                write!(f, "the producer reported {found} CPUs, outside the supported range 1..={maximum}")
             }
             Self::InitializedBufferInvalid => {
                 write!(f, "the per-core initialized buffer is not addressable or not resident in MMRAM")
@@ -267,7 +267,7 @@ pub struct MmSupervisorCore<P: PlatformInfo, const MAX_CPUS: usize> {
     pub(crate) syscall_interface: SyscallInterface<MAX_CPUS>,
     /// Flag indicating if the core has been initialized.
     pub(crate) initialized: AtomicBool,
-    /// TESTING: serializes per-core initialization so only one core runs it at a time.
+    /// Serializes per-core initialization so only one core runs it at a time.
     pub(crate) init_lock: Mutex<()>,
     /// Phantom data for the platform type.
     pub(crate) _phantom: core::marker::PhantomData<fn() -> P>,
@@ -335,7 +335,7 @@ mod tests {
         );
         assert_eq!(
             format!("{}", CoreInitError::InvalidCpuCount { found: 9, maximum: 4 }),
-            "the producer reported 9 CPUs, more than the supported maximum of 4"
+            "the producer reported 9 CPUs, outside the supported range 1..=4"
         );
         assert_eq!(
             format!("{}", CoreInitError::InitializedBufferInvalid),

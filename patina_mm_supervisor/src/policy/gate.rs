@@ -202,15 +202,15 @@ impl PolicyGate {
     /// Must be called before [`take_snapshot`](Self::take_snapshot). Typically
     /// the buffer address and size come from the `PassDown` HOB.
     ///
-    /// ## Safety
+    /// ## Requirements
     ///
     /// The caller must ensure that `buffer` points to a valid memory region
     /// that can hold at least `max_count` `MemDescriptorV1_0` entries and that
     /// this memory remains valid for the lifetime of the `PolicyGate`.
     ///
     /// Storing the pointer is safe; the contract is enforced when the buffer
-    /// is later dereferenced by [`take_snapshot`], [`verify_snapshot`], or
-    /// [`fetch_and_update_policy`].
+    /// is later dereferenced by [`Self::take_snapshot`], [`Self::verify_snapshot`], or
+    /// [`Self::fetch_and_update_policy`].
     pub fn set_memory_policy_buffer(&mut self, buffer: *mut MemDescriptorV1_0, max_count: usize) {
         self.memory_policy_buffer = buffer;
         self.memory_policy_max_count = max_count;
@@ -448,7 +448,7 @@ impl PolicyGate {
             root
         } else {
             // No save state policy = level 20, allow all reads
-            log::error!("No save state policy root found, allowing read (level 20 policy).");
+            log::warn!("No save state policy root found, allowing read (level 20 policy).");
             return Ok(());
         };
 
@@ -525,8 +525,6 @@ impl PolicyGate {
     }
 
     /// Returns the firmware policy blob size (from `SecurePolicyDataV1_0::size`).
-    ///
-    /// Returns `0` if the policy pointer is null (should not happen after construction).
     pub fn firmware_policy_size(&self) -> usize {
         self.policy().size as usize
     }
@@ -544,7 +542,7 @@ impl PolicyGate {
     /// ## Safety
     ///
     /// - `cr3` must point to a valid, stable PML4 table.
-    /// - The memory policy buffer (set via [`set_memory_policy_buffer`])
+    /// - The memory policy buffer (set via [`Self::set_memory_policy_buffer`])
     ///   must still be valid and large enough.
     pub unsafe fn take_snapshot(&self, cr3: u64, is_inside_mmram: IsInsideMmramFn) -> MmSupervisorResult<usize> {
         // Idempotent: if already locked, return the saved count.
@@ -1381,7 +1379,7 @@ mod tests {
         assert_eq!(mem_root.offset as usize, firmware_size);
         assert_eq!(mem_root.count as usize, snapshot.len());
 
-        // The unrelated roots are copied through untouched.
+        // No MSR root appears, since the firmware policy declared none.
         assert!(!roots.iter().any(|root| root.policy_type == TYPE_MSR));
         // SAFETY: the patched memory root describes the descriptors appended above.
         let appended = unsafe { mem_root.get_mem_descriptors(dest_bytes.as_ptr()) };

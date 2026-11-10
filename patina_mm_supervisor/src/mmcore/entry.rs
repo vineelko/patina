@@ -102,7 +102,6 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     }
 
     /// Gets the static MM Supervisor Core instance for global access.
-    #[allow(unused)]
     pub(crate) fn instance<'a>() -> &'a Self {
         // SAFETY: The pointer is guaranteed to be valid as set_instance ensures single initialization.
         unsafe {
@@ -193,7 +192,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
             // SAFETY: We are transitioning from the supervisor (CPL0) to the user module (CPL3) for the first time.
             // The entry point and stack have been validated and set up during initialization, and the user module is
-            // will be responsible for validating any further inputs.
+            // responsible for validating any further inputs.
             let ret = unsafe {
                 invoke_demoted_routine(
                     cpu_index,
@@ -244,10 +243,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             log::info!("All {expected_cpus} cores completed initialization, returning to caller.");
         }
 
-        Ok(())
-
         // First entry returns to caller after init is complete
         // (Each core has already marked itself as initialized via mark_core_initialized)
+        Ok(())
     }
 
     /// Get the CPU manager.

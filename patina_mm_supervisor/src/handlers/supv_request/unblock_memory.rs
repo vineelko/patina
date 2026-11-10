@@ -588,7 +588,7 @@ fn update_unblocked_page_table<P: PageTable>(
 /// 6. **Overflow** - `NumberOfPages * UEFI_PAGE_SIZE` and `PhysicalStart + size` must not overflow.
 /// 7. **MMRAM overlap** - region must not overlap supervisor RAM.
 /// 8. **Duplicate / conflict** - checked by the [`UnblockedMemoryTracker`].
-/// 9. **Page attributes** - pages must be not-present (RP set) and not read-only.
+/// 9. **Page attributes** - the range must be unmapped; a range that is already present is refused.
 /// 10. **Page table update** - make pages present, R/W, NX; optionally supervisor-only (SP).
 pub(crate) fn handle_unblock_mem(comm_buffer: *mut u8, comm_buffer_size: &mut usize) -> efi::Status {
     if comm_buffer.is_null() {
