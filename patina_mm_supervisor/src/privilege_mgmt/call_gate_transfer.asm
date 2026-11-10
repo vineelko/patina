@@ -258,7 +258,7 @@ invoke_demoted_routine:
     sub     r15, 0x20                   #r15-=0x20, 4 stack parameters
     and     r15, -16                    #finally we worry about the stack alignment in CPL3
 3:
-    mov     r14, [rbp + 0x48 + rbx]     #r14=*(rbp+0x48+rbx)
+    mov     r14, [rbp + 0x50 + rbx]     #r14=*(rbp+0x50+rbx), starting at the fifth input argument
     mov     [r15 + 0x20 + rbx], r14     #*(r15+0x20+rbx)=r14
     add     rbx, 0x08                   #rbx+=0x08
     dec     rax
