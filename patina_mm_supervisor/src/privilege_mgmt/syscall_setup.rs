@@ -43,6 +43,8 @@ pub enum SyscallSetupError {
     AlreadyInitialized,
     /// Invalid CPU index (exceeds configured CPU count).
     InvalidCpuIndex,
+    /// Invalid CPU count (zero, or greater than `MAX_CPUS`).
+    InvalidCpuCount,
 }
 
 impl core::error::Error for SyscallSetupError {}
@@ -53,6 +55,7 @@ impl fmt::Display for SyscallSetupError {
             Self::NotInitialized => write!(f, "the syscall interface has not been initialized"),
             Self::AlreadyInitialized => write!(f, "the syscall interface is already initialized"),
             Self::InvalidCpuIndex => write!(f, "the CPU index exceeds the configured CPU count"),
+            Self::InvalidCpuCount => write!(f, "the CPU count is zero or exceeds the supported maximum"),
         }
     }
 }
@@ -95,7 +98,7 @@ impl<const MAX_CPUS: usize> SyscallInterface<MAX_CPUS> {
     ///
     /// ## Errors
     ///
-    /// Returns `AlreadyInitialized` on a second call, and `InvalidCpuIndex` if `num_cpus` is 0
+    /// Returns `AlreadyInitialized` on a second call, and `InvalidCpuCount` if `num_cpus` is 0
     /// or greater than `MAX_CPUS`. A rejected call leaves the interface uninitialized.
     pub fn init(&self, num_cpus: usize, cpl3_stack_base: u64, stack_size: usize) -> Result<(), SyscallSetupError> {
         if self.initialized.swap(true, Ordering::SeqCst) {
@@ -106,7 +109,7 @@ impl<const MAX_CPUS: usize> SyscallInterface<MAX_CPUS> {
         if num_cpus == 0 || num_cpus > MAX_CPUS {
             self.initialized.store(false, Ordering::SeqCst);
             log::error!("Syscall interface init rejected: {num_cpus} CPUs is outside the range 1..={MAX_CPUS}");
-            return Err(SyscallSetupError::InvalidCpuIndex);
+            return Err(SyscallSetupError::InvalidCpuCount);
         }
 
         let mut state = self.state.lock();
@@ -146,7 +149,7 @@ impl<const MAX_CPUS: usize> SyscallInterface<MAX_CPUS> {
 
         let stack_top = state
             .cpl3_stack_base
-            .wrapping_add((state.stack_size as u64) * ((cpu_index as u64) + 1))
+            .wrapping_add((state.stack_size as u64).wrapping_mul((cpu_index as u64) + 1))
             .wrapping_sub(core::mem::size_of::<usize>() as u64);
 
         Ok(stack_top)

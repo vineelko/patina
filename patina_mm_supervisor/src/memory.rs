@@ -27,9 +27,9 @@ pub(crate) const PAGE_STEP: core::num::NonZeroU64 =
 
 /// Errors reported by the page allocator and the paging pool allocator.
 ///
-/// Not every variant can arise from both: `NotAllocated`, `InvalidAddress` and
-/// `UnmapFailed` come from the page allocator's free path, while `InvalidSize` and `PoolTooSmall`
-/// come from the paging pool.
+/// Not every variant can arise from both: `NotAllocated`, `InvalidAddress`, `TypeMismatch`,
+/// `MapFailed` and `UnmapFailed` come from the page allocator, `PoolTooSmall` comes from the
+/// paging pool, and `InvalidSize` can come from either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllocError {
     /// The allocator has not been initialized.
@@ -44,6 +44,10 @@ pub enum AllocError {
     InvalidAddress,
     /// The address was not previously allocated.
     NotAllocated,
+    /// The pages were allocated with a different allocation type than the caller expected.
+    TypeMismatch,
+    /// The range could not be mapped as R/W, non-executable data in the page table.
+    MapFailed,
     /// The freed range could not be made inaccessible in the page table, so it was left allocated.
     UnmapFailed,
     /// Invalid allocation size requested.
@@ -63,6 +67,8 @@ impl core::fmt::Display for AllocError {
             Self::InvalidAlignment => write!(f, "the requested address or alignment is not page aligned"),
             Self::InvalidAddress => write!(f, "the address is not within any known SMRAM region"),
             Self::NotAllocated => write!(f, "the address was not previously allocated"),
+            Self::TypeMismatch => write!(f, "the pages were allocated with a different allocation type"),
+            Self::MapFailed => write!(f, "the range could not be mapped as data in the page table"),
             Self::UnmapFailed => {
                 write!(f, "the freed range could not be made inaccessible in the page table, so it stays allocated")
             }

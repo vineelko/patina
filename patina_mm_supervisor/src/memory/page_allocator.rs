@@ -389,7 +389,7 @@ impl PageAllocator {
 
         if num_pages == 0 {
             log::error!("Page allocation rejected: page count is 0");
-            return Err(AllocError::OutOfMemory.into());
+            return Err(AllocError::InvalidSize.into());
         }
 
         // Reserve pages under the state lock, then release it before touching the
@@ -399,7 +399,15 @@ impl PageAllocator {
             AllocError::OutOfMemory
         })?;
 
-        self.apply_data_page_attributes(addr, num_pages, alloc_type);
+        if let Err(err) = self.apply_data_page_attributes(addr, num_pages, alloc_type) {
+            // Hand the reservation back so a failed mapping does not leak the pages. The next
+            // allocation of this range applies the attributes again.
+            let mut state = self.lock_state();
+            if let Ok(bit_range) = state.verify_allocated(addr, num_pages) {
+                state.mark_free(bit_range);
+            }
+            return Err(err);
+        }
 
         Ok(addr)
     }
@@ -407,9 +415,17 @@ impl PageAllocator {
     /// Maps a newly allocated range as data: R/W and NX, and supervisor-only (U/S = 0) for
     /// [`AllocationType::Supervisor`], so data pages are never executable (W^X).
     ///
-    /// Logs a warning and changes nothing if the page table is not initialized yet. A mapping
-    /// failure is logged, not returned.
-    fn apply_data_page_attributes(&self, addr: u64, num_pages: usize, alloc_type: AllocationType) {
+    /// Logs a warning and changes nothing if the page table is not initialized yet.
+    ///
+    /// ## Errors
+    ///
+    /// Returns `MapFailed` if the page table rejects the mapping.
+    fn apply_data_page_attributes(
+        &self,
+        addr: u64,
+        num_pages: usize,
+        alloc_type: AllocationType,
+    ) -> MmSupervisorResult<()> {
         let size = uefi_pages_to_size!(num_pages) as u64;
         let mut pt_guard = crate::state::security_state().lock_page_table();
         if let Some(ref mut pt) = *pt_guard {
@@ -425,12 +441,13 @@ impl PageAllocator {
                 log::error!(
                     "Failed to set {alloc_type:?} page attributes for 0x{addr:016x} ({num_pages} pages): {err:?}"
                 );
-            } else {
-                log::trace!("Marked 0x{addr:016x} ({num_pages} pages) as {alloc_type:?} R/W+NX");
+                return Err(AllocError::MapFailed.into());
             }
+            log::trace!("Marked 0x{addr:016x} ({num_pages} pages) as {alloc_type:?} R/W+NX");
         } else {
             log::warn!("Page table not initialized, skipping attribute update for 0x{addr:016x}");
         }
+        Ok(())
     }
 
     /// Overwrites a still-mapped page range with zeros.
@@ -546,8 +563,9 @@ impl PageAllocator {
         // A range this allocator handed out is already mapped R/W, but one marked allocated from a
         // producer's `EFI_ALLOCATED` descriptor keeps whatever the inherited page table gave it,
         // and the MM IPL maps its HOB list read-only. Restore the attributes the allocator would
-        // have set so the scrub cannot fault on a mapping it never chose.
-        self.apply_data_page_attributes(addr, num_pages, state.bit_type(bit_range.start));
+        // have set so the scrub cannot fault on a mapping it never chose. If that fails, the range
+        // stays allocated and nothing is written to it.
+        self.apply_data_page_attributes(addr, num_pages, state.bit_type(bit_range.start))?;
         Self::zero_pages(addr, num_pages);
         restrict(addr, num_pages)?;
         state.mark_free(bit_range);

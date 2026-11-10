@@ -2,7 +2,7 @@
 //!
 //! Moves execution between Ring 0 (supervisor) and Ring 3 (user) code in MM:
 //!
-//! - One-time setup of the syscall/sysret MSRs
+//! - Programming of the syscall/sysret MSRs for each demotion
 //! - Demotion of a routine to Ring 3 with `invoke_demoted_routine`
 //! - Dispatch of syscalls made by Ring 3 code
 //! - Call gate and TSS descriptor management
@@ -11,9 +11,10 @@
 //!
 //! The design follows the `x86_64` syscall/sysret model:
 //!
-//! 1. Initialization: program `MSR_IA32_STAR`, `MSR_IA32_LSTAR`, `MSR_IA32_FMASK`
-//!    and `MSR_IA32_EFER` with the syscall entry point, the segment selectors, and the
-//!    RFLAGS bits the CPU clears when Ring 3 enters Ring 0.
+//! 1. MSR setup: before each demotion, `invoke_demoted_routine` programs `MSR_IA32_STAR`,
+//!    `MSR_IA32_LSTAR`, `MSR_IA32_FMASK` and `MSR_IA32_EFER` with the syscall entry point,
+//!    the segment selectors, and the RFLAGS bits the CPU clears when Ring 3 enters Ring 0. It
+//!    restores the previous values on return.
 //!
 //! 2. Demotion: `invoke_demoted_routine` drops from Ring 0 to Ring 3. It sets up the
 //!    call gate used for the return and prepares the Ring 3 stack.
@@ -33,9 +34,9 @@
 //! LONG_CS_R3_PH     = 0x4B  (Ring 3 code segment placeholder)
 //! LONG_DS_R3        = 0x53  (Ring 3 data segment)
 //! LONG_CS_R3        = 0x5B  (Ring 3 code segment)
-//! CALL_GATE_OFFSET  = 0x60  (Call gate descriptor offset)
-//! TSS_SEL_OFFSET    = 0x70  (TSS selector offset)
-//! TSS_DESC_OFFSET   = 0x80  (TSS descriptor offset)
+//! CALL_GATE_OFFSET  = 0x60  (Call gate descriptor offset; the asm uses selector 0x63, RPL 3)
+//! TSS_SEL_OFFSET    = 0x70  (TSS descriptor offset in the GDT)
+//! TSS_DESC_OFFSET   = 0x80  (Offset of the TSS that follows the GDT)
 //! ```
 //!
 //! ## License
@@ -69,6 +70,9 @@ unsafe extern "efiapi" {
     fn invoke_demoted_routine_asm(cpu_index: usize, cpl3_routine: u64, cpl3_stack: u64, arg_count: usize, ...)
     -> usize;
 }
+
+/// Number of arguments [`invoke_demoted_routine`] passes to the demoted routine.
+pub(crate) const DEMOTED_ROUTINE_ARG_COUNT: usize = 3;
 
 /// Runs a routine at CPL 3 (Ring 3) and returns to Ring 0 through the call gate.
 ///

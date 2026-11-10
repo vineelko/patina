@@ -230,14 +230,14 @@ pub(crate) fn patch_smi_handler_idt(sm_base_array: u64, number_of_cpus: usize, m
     ) {
         Ok(inputs) => inputs,
         Err(error) => {
-            log::warn!("Cannot patch SMI handler IDT: {error:?}");
+            log::warn!("Cannot patch SMI handler IDT: {error}");
             return;
         }
     };
 
     let idtr = read_idtr();
     // Copy packed fields into aligned locals before formatting; taking a reference to a
-    // field of a `packed(2)` struct (as `log::info!` would) is undefined behavior.
+    // field of a `packed(2)` struct (as `log::info!` would) does not compile (E0793).
     let idtr_base = idtr.base;
     let idtr_limit = idtr.limit;
 
@@ -275,7 +275,7 @@ pub(crate) fn patch_smi_handler_idt(sm_base_array: u64, number_of_cpus: usize, m
         let idt_desc_addr = match parse_smi_handler_idt_descriptor(mmi_entry) {
             Ok(address) => address,
             Err(error) => {
-                log::error!("CPU {cpu}: invalid SMI handler fixup metadata: {error:?}");
+                log::error!("CPU {cpu}: invalid SMI handler fixup metadata: {error}");
                 continue;
             }
         };

@@ -217,9 +217,10 @@ impl LockedState<'_> {
         None
     }
 
-    /// Converts a region index and page-in-region to a global bit index.
-    pub(crate) fn region_page_to_bit(&self, region_index: usize, page_in_region: usize) -> usize {
-        self.regions().get(region_index).map_or(0, |region| region.bitmap_start_bit + page_in_region)
+    /// Converts a region index and page-in-region to a global bit index, or `None` if there is no
+    /// region at `region_index`.
+    pub(crate) fn region_page_to_bit(&self, region_index: usize, page_in_region: usize) -> Option<usize> {
+        self.regions().get(region_index).map(|region| region.bitmap_start_bit + page_in_region)
     }
 
     /// First-fit search for `num_pages` contiguous free pages, marking them
@@ -314,7 +315,7 @@ impl LockedState<'_> {
                     expected_type,
                     self.bit_type(bit)
                 );
-                return Err(AllocError::InvalidAddress.into());
+                return Err(AllocError::TypeMismatch.into());
             }
         }
 
@@ -325,7 +326,7 @@ impl LockedState<'_> {
     pub(crate) fn allocation_bit_range(&self, addr: u64, num_pages: usize) -> MmSupervisorResult<Range<usize>> {
         if num_pages == 0 {
             log::error!("0x{addr:016x}: page count is 0");
-            return Err(AllocError::InvalidAddress.into());
+            return Err(AllocError::InvalidSize.into());
         }
 
         let Some((region_index, page_in_region)) = self.find_region_for_address(addr) else {
@@ -380,7 +381,7 @@ impl LockedState<'_> {
     /// Returns the allocation type for `addr`, or `None` if not allocated.
     pub(crate) fn allocation_type(&self, addr: u64) -> Option<AllocationType> {
         let (region_index, page_in_region) = self.find_region_for_address(addr)?;
-        let bit = self.region_page_to_bit(region_index, page_in_region);
+        let bit = self.region_page_to_bit(region_index, page_in_region)?;
         if self.is_bit_allocated(bit) { Some(self.bit_type(bit)) } else { None }
     }
 

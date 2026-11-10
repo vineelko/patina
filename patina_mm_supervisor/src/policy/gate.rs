@@ -41,6 +41,8 @@ pub enum PolicyGateError {
     MalformedPolicy,
     /// Access denied by policy.
     AccessDenied,
+    /// The destination buffer is too small for the merged policy.
+    BufferTooSmall,
     /// Internal error during policy evaluation.
     InternalError,
 }
@@ -61,6 +63,7 @@ impl core::fmt::Display for PolicyGateError {
                 write!(f, "the policy blob's internal offsets do not describe a structure inside its own buffer")
             }
             Self::AccessDenied => write!(f, "the firmware policy denied the access"),
+            Self::BufferTooSmall => write!(f, "the destination buffer is too small for the policy"),
             Self::InternalError => write!(f, "an internal error occurred while evaluating the policy"),
         }
     }
@@ -257,9 +260,7 @@ impl PolicyGate {
             return Err(PolicyGateError::InvalidIoRange.into());
         }
 
-        let policy_root = if let Some(root) = self.find_policy_root(TYPE_IO) {
-            root
-        } else {
+        let Some(policy_root) = self.find_policy_root(TYPE_IO) else {
             log::warn!("Could not find IO policy root, denying access to be safe.");
             return Err(PolicyGateError::PolicyRootNotFound.into());
         };
@@ -328,9 +329,7 @@ impl PolicyGate {
             return Err(PolicyGateError::InvalidAccessMask.into());
         }
 
-        let policy_root = if let Some(root) = self.find_policy_root(TYPE_MSR) {
-            root
-        } else {
+        let Some(policy_root) = self.find_policy_root(TYPE_MSR) else {
             log::warn!("Could not find MSR policy root, denying access to be safe.");
             return Err(PolicyGateError::PolicyRootNotFound.into());
         };
@@ -384,10 +383,8 @@ impl PolicyGate {
             return Err(PolicyGateError::InvalidInstructionIndex.into());
         }
 
-        let policy_root = if let Some(root) = self.find_policy_root(TYPE_INSTRUCTION) {
-            root
-        } else {
-            log::error!("Could not find Instruction policy root, denying access to be safe.");
+        let Some(policy_root) = self.find_policy_root(TYPE_INSTRUCTION) else {
+            log::warn!("Could not find Instruction policy root, denying access to be safe.");
             return Err(PolicyGateError::PolicyRootNotFound.into());
         };
 
@@ -418,7 +415,7 @@ impl PolicyGate {
         };
 
         if !allowed {
-            log::error!("Rejecting instruction execution: {instruction:?}");
+            log::debug!("Rejecting instruction execution: {instruction:?}");
             return Err(PolicyGateError::AccessDenied.into());
         }
 
@@ -442,9 +439,7 @@ impl PolicyGate {
         width: usize,
         current_condition: Option<SaveStateCondition>,
     ) -> MmSupervisorResult<()> {
-        let policy_root = if let Some(root) = self.find_policy_root(TYPE_SAVE_STATE) {
-            root
-        } else {
+        let Some(policy_root) = self.find_policy_root(TYPE_SAVE_STATE) else {
             // No save state root means a level 20 policy, which allows all reads.
             log::warn!("No save state policy root found, allowing read (level 20 policy).");
             return Ok(());
@@ -499,7 +494,7 @@ impl PolicyGate {
         };
 
         if !allowed {
-            log::error!("Rejecting save state read: field={field:?}, width={width}");
+            log::debug!("Rejecting save state read: field={field:?}, width={width}");
             return Err(PolicyGateError::AccessDenied.into());
         }
 
@@ -642,8 +637,9 @@ impl PolicyGate {
     ///
     /// ## Errors
     ///
-    /// Returns `InternalError` when there is no snapshot, a size overflows, or `dest_size` is too
-    /// small, and `PolicyRootNotFound` when the firmware policy has no `TYPE_MEM` root.
+    /// Returns `BufferTooSmall` when `dest_size` cannot hold the merged policy, `InternalError`
+    /// when there is no snapshot or a size overflows, and `PolicyRootNotFound` when the firmware
+    /// policy has no `TYPE_MEM` root.
     ///
     /// ## Safety
     ///
@@ -673,7 +669,7 @@ impl PolicyGate {
 
         if dest_size < total_bytes {
             log::error!("fetch_and_update_policy: buffer too small ({dest_size} bytes, need {total_bytes})");
-            return Err(PolicyGateError::InternalError.into());
+            return Err(PolicyGateError::BufferTooSmall.into());
         }
 
         // 1. Copy the firmware policy blob (header + payload), then append the
@@ -691,37 +687,58 @@ impl PolicyGate {
             }
         }
 
-        // 2. Read the root table location from the copied header.
-        let (root_offset, root_count) = {
-            // SAFETY: `dest` now holds a valid `SecurePolicyDataV1_0` header copied from the
-            // validated firmware policy blob above.
-            let header = unsafe { &*(dest as *const SecurePolicyDataV1_0) };
-            (header.policy_root_offset as usize, header.policy_root_count as usize)
-        };
+        // `dest` follows the request header in the communication buffer, so it has no alignment
+        // guarantee. The header and roots are copied out and back with unaligned accesses rather
+        // than viewed through references.
+        let header_ptr = dest.cast::<SecurePolicyDataV1_0>();
 
-        // 3. View the policy roots as a slice so the lookup and patch run in safe code.
+        // 2. Read the root table location from the copied header.
+        //
+        // SAFETY: `dest` now holds a valid `SecurePolicyDataV1_0` header copied from the
+        // validated firmware policy blob above. `read_unaligned` has no alignment requirement.
+        let mut header = unsafe { header_ptr.read_unaligned() };
+        let root_offset = header.policy_root_offset as usize;
+        let root_count = header.policy_root_count as usize;
+
+        // 3. Find the TYPE_MEM root.
         //
         // SAFETY: `root_offset` and `root_count` come from the header copied from the blob, and
         // `new` checked that the roots array they describe ends within the blob's declared size,
         // which is `fw_size` and so within the `total_bytes` copied above.
-        let roots =
-            unsafe { core::slice::from_raw_parts_mut(dest.add(root_offset).cast::<PolicyRootV1>(), root_count) };
-
-        // Point the TYPE_MEM root at the appended snapshot.
-        let Some(mem_root) = roots.iter_mut().find(|root| root.policy_type == TYPE_MEM) else {
+        let roots_ptr = unsafe { dest.add(root_offset) }.cast::<PolicyRootV1>();
+        let mem_root = (0..root_count)
+            // SAFETY: `index < root_count`, so each root lies in the roots array (see above).
+            .map(|index| unsafe { roots_ptr.add(index) })
+            // SAFETY: Each pointer is in bounds, and `read_unaligned` has no alignment requirement.
+            .map(|root_ptr| (root_ptr, unsafe { root_ptr.read_unaligned() }))
+            .find(|(_, root)| root.policy_type == TYPE_MEM);
+        let Some((mem_root_ptr, mut mem_root)) = mem_root else {
             log::error!("fetch_and_update_policy: firmware policy has no TYPE_MEM policy root");
             return Err(PolicyGateError::PolicyRootNotFound.into());
         };
+
+        let to_u32 = |value: usize, what: &str| {
+            u32::try_from(value).map_err(|_| {
+                log::error!("fetch_and_update_policy: {what} {value} does not fit in u32");
+                PolicyGateError::InternalError
+            })
+        };
+
+        // Point the TYPE_MEM root at the appended snapshot.
         mem_root.access_attr = ACCESS_ATTR_ALLOW;
-        mem_root.offset = fw_size as u32;
-        mem_root.count = count as u32;
+        mem_root.offset = to_u32(fw_size, "firmware policy size")?;
+        mem_root.count = to_u32(count, "descriptor count")?;
 
         // 4. Update the total size and clear the legacy `memory_policy_count`.
-        //
-        // SAFETY: `dest` holds a valid `SecurePolicyDataV1_0` header (see above).
-        let header = unsafe { &mut *dest.cast::<SecurePolicyDataV1_0>() };
-        header.size = total_bytes as u32;
+        header.size = to_u32(total_bytes, "total policy size")?;
         header.memory_policy_count = 0;
+
+        // SAFETY: Both pointers were read above and lie within the `total_bytes` written to
+        // `dest`. `write_unaligned` has no alignment requirement.
+        unsafe {
+            mem_root_ptr.write_unaligned(mem_root);
+            header_ptr.write_unaligned(header);
+        }
 
         log::debug!(
             "fetch_and_update_policy: wrote {total_bytes} bytes (fw_policy={fw_size}, mem_policy={mem_policy_bytes} ({count} descs))",

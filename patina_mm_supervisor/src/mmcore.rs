@@ -151,6 +151,15 @@ pub enum CoreInitError {
         /// The stack region, widened to whole pages.
         range: MemoryRange,
     },
+    /// The page table hierarchy at the active CR3 could not be adopted.
+    PageTableFromCr3Failed {
+        /// The CR3 value that was read.
+        cr3: u64,
+    },
+    /// The policy gate was not initialized before the security policy check.
+    PolicyGateUnavailable,
+    /// Per-core init ran before the BSP recorded the SMRR range.
+    SmrrRangeUnavailable,
     /// The interrupt manager could not be initialized.
     InterruptManagerInit(EfiError),
 }
@@ -214,6 +223,13 @@ impl fmt::Display for CoreInitError {
                 write!(f, "the Ring 3 stacks at {range} are not inside MMRAM")
             }
             Self::Cpl3StacksNotMapped { range } => write!(f, "the Ring 3 stacks at {range} are not usable by Ring 3"),
+            Self::PageTableFromCr3Failed { cr3 } => {
+                write!(f, "the page table at CR3 0x{cr3:016x} could not be adopted")
+            }
+            Self::PolicyGateUnavailable => {
+                write!(f, "the policy gate was not initialized before the security policy check")
+            }
+            Self::SmrrRangeUnavailable => write!(f, "per-core init ran before the BSP recorded the SMRR range"),
             Self::InterruptManagerInit(err) => write!(f, "the interrupt manager could not be initialized: {err}"),
         }
     }

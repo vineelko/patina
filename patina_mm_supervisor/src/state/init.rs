@@ -175,10 +175,10 @@ impl InitState {
 
     /// Marks the supervisor as having entered runtime (`ExitBootServices` signaled).
     ///
-    /// Returns `true` only on the first call.
+    /// Returns `true` only on the first call, even when several cores call it at once.
     pub(crate) fn mark_at_runtime(&self) -> bool {
-        let first = !self.at_runtime.is_completed();
-        self.at_runtime.call_once(|| ());
+        let mut first = false;
+        self.at_runtime.call_once(|| first = true);
         first
     }
 

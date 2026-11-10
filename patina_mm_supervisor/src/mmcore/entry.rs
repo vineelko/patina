@@ -24,8 +24,8 @@ use crate::{
     MmSupervisorCore, PlatformInfo,
     error::{MmSupervisorError, MmSupervisorResult},
     intrinsics::{current_apic_id, is_bsp},
-    privilege_mgmt::invoke_demoted_routine,
     privilege_mgmt::syscall_setup::SyscallInterface,
+    privilege_mgmt::{DEMOTED_ROUTINE_ARG_COUNT, invoke_demoted_routine},
     state::init_state,
 };
 
@@ -103,7 +103,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// ## Panics
     ///
     /// Panics if no instance has been stored.
-    pub(crate) fn instance<'a>() -> &'a Self {
+    pub(crate) fn instance() -> &'static Self {
         // SAFETY: `set_instance` stores the address of a `&'static Self` and accepts only the
         // first one, so the address stays valid and never changes.
         unsafe {
@@ -133,7 +133,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     pub unsafe fn entry_point(&'static self, cpu_index: usize, hob_list: *const c_void) {
         // SAFETY: the caller upholds `entry_point_internal`'s contract, which is the same.
         if let Err(err) = unsafe { self.entry_point_internal(cpu_index, hob_list) } {
-            panic!("Failed to enter MM Supervisor Core internal entry point: {err:?}");
+            panic!("Failed to enter MM Supervisor Core internal entry point: {err}");
         }
     }
 
@@ -195,7 +195,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                     cpu_index,
                     user_entry,
                     cpl3_stack,
-                    3,
+                    DEMOTED_ROUTINE_ARG_COUNT,
                     UserCommandType::StartUserCore as u64,
                     user_hob_list,
                     0,

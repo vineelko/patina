@@ -21,7 +21,7 @@ use super::semaphore::{sem_signal, sem_try_take};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ApState {
-    /// The AP has not been registered yet.
+    /// The AP is not checked in: it has not registered yet, or it has checked out.
     NotPresent = 0,
     /// The AP is in the holding pen, waiting for work.
     InHoldingPen = 1,

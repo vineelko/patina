@@ -28,13 +28,13 @@
 .align 8
 
 # Segments defined in SmiException.nasm
-.equ PROTECTED_DS,                   0x20
 .equ LONG_CS_R0,                     0x38
 .equ LONG_DS_R0,                     0x40
 .equ LONG_CS_R3_PH,                  0x4B
 .equ LONG_DS_R3,                     0x53
 .equ LONG_CS_R3,                     0x5B
-.equ CALL_GATE_OFFSET,               0x63
+# Selector of the call gate at GDT offset 0x60, with RPL 3.
+.equ CALL_GATE_SEL,                  0x63
 
 # MSR constants
 .equ MSR_IA32_EFER,                 0xC0000080
@@ -66,8 +66,8 @@
 # /**
 #   Invoke specified routine on specified core in CPL 3.
 #
-#   @param[in]      CpuIndex            CpuIndex value of intended core, cannot be
-#                                       greater than mNumberOfCpus.
+#   @param[in]      CpuIndex            Index of the intended core, less than the CPU
+#                                       count. Not used by this routine.
 #   @param[in]      Cpl3Routine         Function pointer to demoted routine.
 #   @param[in]      Cpl3Stack           Top of the CPL3 stack the demoted routine runs on.
 #   @param[in]      ArgCount            Number of arguments needed by Cpl3Routine.
@@ -114,7 +114,10 @@ invoke_demoted_routine:
     # Save RBP again; the return path skips over this copy.
     push    rbp
 
+    # Reserve the 0x20-byte shadow space the EFIAPI callee may spill RCX, RDX, R8 and R9 into,
+    # so it stays inside this CPU's CPL3 stack whatever the argument count.
     mov     r15, r8
+    sub     r15, 0x20
     and     r15, -16
 
     # Save and program STAR, LSTAR, FMASK, EFER, GS_BASE and KERNEL_GS_BASE. The old values
@@ -190,7 +193,7 @@ invoke_demoted_routine:
 
     # The stack now looks like this:
     # Current RSP           <- MM_SUPV_RSP; syscalls run on the stack below this
-    # 0                     <- SAVED_USER_RSP
+    # (uninitialized)       <- SAVED_USER_RSP
     # KERNEL_GS_BASE * 2    <- Will be restored on return
     # GS_BASE * 2           <- Will be restored on return
     # EFER * 2              <- Will be restored on return
@@ -208,6 +211,7 @@ invoke_demoted_routine:
     # ?                     <- Padding if the caller's RSP was not 16-byte aligned
     # Original RBP
     # ---------------       <- RSP on entry
+    # return address
     # rcx
     # rdx
     # r8
@@ -221,7 +225,6 @@ invoke_demoted_routine:
     add     rsp, 0x20
 
     # Same-privilege far return to reload CS after the GDT update.
-    xor     rcx, rcx
     mov     rcx, cs
     push    rcx                 #prepare cs on the stack
     lea     rax, [rip + 2f]
@@ -257,7 +260,6 @@ invoke_demoted_routine:
     mov     r14, rax
     shl     r14, 3                      #r14=8*rax
     sub     r15, r14                    #r15-=r14, offset the stack for remainder of input arguments
-    sub     r15, 0x20                   #r15-=0x20, 4 stack parameters
     and     r15, -16                    #align the CPL3 stack to 16 bytes
 3:
     mov     r14, [rbp + 0x50 + rbx]     #r14=*(rbp+0x50+rbx), starting at the fifth input argument
@@ -277,7 +279,7 @@ invoke_demoted_routine:
     mov     rax, [rbp + 0x18]           #grab routine pointer from stack
     push    rax                         #prepare routine pointer on the stack
 
-    mov     r15, CALL_GATE_OFFSET       #call gate selector the demoted routine returns through
+    mov     r15, CALL_GATE_SEL          #call gate selector the demoted routine returns through
     shl     r15, 32                     #selector in bits 63:32 for the far call through the gate
 
     retfq

@@ -100,12 +100,14 @@ impl UnblockedMemoryEntry {
     }
 
     /// Creates an entry covering `range`, rounded up to whole pages, with `attributes`.
-    pub const fn new(range: MemoryRange, attributes: u32) -> Self {
-        Self {
-            base_address: range.base(),
-            num_pages: patina::uefi_size_to_pages!(range.size() as usize) as u32,
-            attributes,
+    ///
+    /// Returns `None` if the page count does not fit the `u32` the entry records.
+    pub const fn new(range: MemoryRange, attributes: u32) -> Option<Self> {
+        let num_pages = patina::uefi_size_to_pages!(range.size() as usize);
+        if num_pages > u32::MAX as usize {
+            return None;
         }
+        Some(Self { base_address: range.base(), num_pages: num_pages as u32, attributes })
     }
 
     /// Returns the size of this region in bytes.
@@ -166,7 +168,10 @@ impl UnblockedMemoryState {
     /// The entry is rounded to whole pages and refused if the rounded region runs past the end of
     /// the address space, so every tracked entry has a valid [`range`](UnblockedMemoryEntry::range).
     fn add_entry(&mut self, range: MemoryRange, attributes: u32) -> MmSupervisorResult<()> {
-        let entry = UnblockedMemoryEntry::new(range, attributes);
+        let entry = UnblockedMemoryEntry::new(range, attributes).ok_or_else(|| {
+            log::debug!("Cannot track unblocked region {range}: it has more pages than an entry records");
+            UnblockError::InvalidParameter
+        })?;
         if entry.range().is_none() {
             log::debug!("Cannot track unblocked region {range}: its page-rounded end overflows");
             return Err(UnblockError::AddressOverflow.into());
@@ -686,6 +691,13 @@ fn validate_unblock_request(params: &MmSupervisorUnblockMemoryParams) -> Result<
 
     if !physical_start.is_multiple_of(UEFI_PAGE_SIZE as u64) {
         log::error!("UNBLOCK_MEM: PhysicalStart 0x{physical_start:016x} is not page-aligned");
+        return Err(efi::Status::INVALID_PARAMETER);
+    }
+
+    // The tracker records page counts as `u32`. Reject larger requests before anything is
+    // mapped, so a mapped region always has a tracker entry to roll back.
+    if number_of_pages > u64::from(u32::MAX) {
+        log::error!("UNBLOCK_MEM: {number_of_pages} pages exceeds the {} pages one entry can track", u32::MAX);
         return Err(efi::Status::INVALID_PARAMETER);
     }
 

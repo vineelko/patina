@@ -29,7 +29,7 @@ use crate::{
     handlers::DEFAULT_SUPERVISOR_MMI_HANDLERS,
     intrinsics::is_bsp,
     memory::page_ownership::{PageOwnership, query_address_ownership},
-    privilege_mgmt::invoke_demoted_routine,
+    privilege_mgmt::{DEMOTED_ROUTINE_ARG_COUNT, invoke_demoted_routine},
     state::{init_state, security_state},
     user_access_guard::with_user_access,
 };
@@ -176,7 +176,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 self.process_user_request(config, &user_status, cpu_index);
             }
             RequestTarget::Supervisor => {
-                self.process_supervisor_request(config, &supv_status, cpu_index);
+                self.process_supervisor_request(config, cpu_index);
             }
         }
 
@@ -216,7 +216,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let cpl3_stack = match self.syscall_interface.get_cpl3_stack(cpu_index) {
             Ok(stack) => stack,
             Err(err) => {
-                log::error!("Failed to get CPL3 stack for CPU {cpu_index}: {err:?}");
+                log::error!("Failed to get CPL3 stack for CPU {cpu_index}: {err}");
                 return;
             }
         };
@@ -302,7 +302,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 cpu_index,
                 user_entry,
                 cpl3_stack,
-                3,
+                DEMOTED_ROUTINE_ARG_COUNT,
                 UserCommandType::UserRequest as u64,
                 config.supv_to_user_buffer,
                 context_size as u64,
@@ -379,12 +379,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// 6. Refuse the request if the handler reported more than the payload space it was given
     /// 7. Copy the internal buffer back to the external buffer
     /// 8. Update the status buffer with return status and total response size
-    fn process_supervisor_request(&self, config: &CommBufferConfig, status: &MmCommBufferStatus, cpu_index: usize) {
+    fn process_supervisor_request(&self, config: &CommBufferConfig, cpu_index: usize) {
         log::trace!("Processing Supervisor request on CPU {cpu_index}...");
 
         if init_state().is_at_runtime() {
             log::error!("Supervisor buffer cannot be used for communication after ExitBootServices is signaled!!");
-            self.write_supv_status(config, status, efi::Status::ACCESS_DENIED, 0);
+            self.write_supv_status(config, efi::Status::ACCESS_DENIED, 0);
             return;
         }
 
@@ -413,7 +413,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 buffer_size,
                 EfiMmCommunicateHeader::size()
             );
-            self.write_supv_status(config, status, efi::Status::BAD_BUFFER_SIZE, 0);
+            self.write_supv_status(config, efi::Status::BAD_BUFFER_SIZE, 0);
             return;
         }
 
@@ -430,7 +430,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 message_length,
                 buffer_size - EfiMmCommunicateHeader::size()
             );
-            self.write_supv_status(config, status, efi::Status::BAD_BUFFER_SIZE, 0);
+            self.write_supv_status(config, efi::Status::BAD_BUFFER_SIZE, 0);
             return;
         }
 
@@ -470,7 +470,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 "Handler reported a 0x{data_size:x}-byte response for 0x{max_data_size:x} bytes of payload space; \
                  rejecting"
             );
-            self.write_supv_status(config, status, efi::Status::BAD_BUFFER_SIZE, 0);
+            self.write_supv_status(config, efi::Status::BAD_BUFFER_SIZE, 0);
             return;
         }
 
@@ -496,18 +496,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // Any handler failure is reported to the caller as NOT_FOUND.
         let return_status =
             if dispatch_status == efi::Status::SUCCESS { efi::Status::SUCCESS } else { efi::Status::NOT_FOUND };
-        self.write_supv_status(config, status, return_status, total_response_size as u64);
+        self.write_supv_status(config, return_status, total_response_size as u64);
     }
 
     /// Writes the supervisor status mailbox: clears `is_comm_buffer_valid` and records the
     /// return status and response size.
-    fn write_supv_status(
-        &self,
-        config: &CommBufferConfig,
-        _status: &MmCommBufferStatus,
-        return_status: efi::Status,
-        return_buffer_size: u64,
-    ) {
+    fn write_supv_status(&self, config: &CommBufferConfig, return_status: efi::Status, return_buffer_size: u64) {
         // SAFETY: `config.supervisor.status` is the supervisor status mailbox from the comm region
         // HOB, which is valid and writable.
         unsafe {
@@ -599,7 +593,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             let cpl3_stack = match self.syscall_interface.get_cpl3_stack(cpu_index) {
                 Ok(stack) => stack,
                 Err(err) => {
-                    log::error!("AP (CPU {cpu_id}) failed to get CPL3 stack: {err:?}");
+                    log::error!("AP (CPU {cpu_id}) failed to get CPL3 stack: {err}");
                     return ApResponse::Error(efi::Status::DEVICE_ERROR.as_usize() as u32);
                 }
             };
@@ -626,7 +620,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                     cpu_index,
                     user_entry,
                     cpl3_stack,
-                    3,
+                    DEMOTED_ROUTINE_ARG_COUNT,
                     UserCommandType::UserApProcedure as u64,
                     procedure,
                     argument,

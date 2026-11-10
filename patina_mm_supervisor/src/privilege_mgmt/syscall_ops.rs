@@ -262,7 +262,7 @@ impl SyscallOps for FirmwareOps {
 
     fn start_ap_procedure(&self, cpu_index: u64, procedure: u64, argument: u64) -> Option<u64> {
         let start_fn = init_state().ap_startup_fn()?;
-        log::debug!(
+        log::trace!(
             "START_AP_PROC: Dispatching to AP startup function at {:p} for CPU {}",
             start_fn as *const (),
             cpu_index

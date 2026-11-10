@@ -18,9 +18,9 @@ use zerocopy_derive::Immutable;
 
 use crate::error::MmSupervisorResult;
 
-// GUID for gMmSupervisorPassDownHobGuid
-// { 0x3f2d2d1a, 0x7c6a, 0x4e2e, { 0x91, 0x2e, 0x5c, 0x4f, 0x5b, 0x8c, 0x2a, 0x9d } }
-/// GUID for the MM Supervisor `PassDown` HOB.
+/// GUID for the MM Supervisor `PassDown` HOB (`gMmSupervisorPassDownHobGuid`).
+///
+/// `{ 0x3f2d2d1a, 0x7c6a, 0x4e2e, { 0x91, 0x2e, 0x5c, 0x4f, 0x5b, 0x8c, 0x2a, 0x9d } }`
 pub(crate) const MM_SUPV_PASS_DOWN_HOB_GUID: patina::BinaryGuid =
     patina::BinaryGuid::from_string("3f2d2d1a-7c6a-4e2e-912e-5c4f5b8c2a9d");
 

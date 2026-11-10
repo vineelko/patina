@@ -488,8 +488,9 @@ fn read_gated_register(
     width: u64,
     out: &mut [u8],
 ) -> SyscallResult {
+    let width = usize::try_from(width).map_err(|_| Status::INVALID_PARAMETER)?;
     let check = |field: Option<SaveStateField>, condition: Option<SaveStateCondition>| {
-        gate.is_save_state_read_allowed(field, width as usize, condition).map_err(|err| {
+        gate.is_save_state_read_allowed(field, width, condition).map_err(|err| {
             log::error!("SAVE_STATE_READ2: Policy denied read of {register:?} (field {field:?}): {err:?}");
             Status::ACCESS_DENIED
         })
@@ -517,7 +518,6 @@ fn read_gated_register(
     }
 
     // Each reader decodes `state` into the validated `out` buffer.
-    let width = usize::try_from(width).map_err(|_| Status::INVALID_PARAMETER)?;
     let result = match register {
         MmSaveStateRegister::Io => state.read_io_register(out),
         MmSaveStateRegister::Lma => state.read_lma_register(width, out),
@@ -546,7 +546,7 @@ fn actual_write_size(register: MmSaveStateRegister, width: u64) -> usize {
         MmSaveStateRegister::Io => IO_INFO_SIZE,
         MmSaveStateRegister::ProcessorId => 8,
         MmSaveStateRegister::Lma => {
-            if width == 4 || width == 8 {
+            if matches!(width, 1 | 4 | 8) {
                 width as usize
             } else {
                 0
@@ -588,7 +588,7 @@ fn read_processor_id(cpu_index: u64, out: &mut [u8]) -> SyscallResult {
         })?
         .copy_from_slice(&processor_id.to_le_bytes());
 
-    log::debug!("PROCESSOR_ID: CPU {cpu_index} = 0x{processor_id:x}");
+    log::trace!("PROCESSOR_ID: CPU {cpu_index} = 0x{processor_id:x}");
     Ok(0)
 }
 

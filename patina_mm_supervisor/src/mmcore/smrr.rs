@@ -18,8 +18,6 @@ use crate::memory::mmram::MmramRegion;
 use core::arch::x86_64::__cpuid;
 use patina::{MemoryRange, SIZE_256KB, UEFI_PAGE_SIZE};
 
-const SIZE_4KB: u32 = 0x0000_1000;
-
 // SMM Code Access Check related MSR and bit definitions
 const MSR_SMM_MCA_CAP: u32 = 0x17D;
 const SMM_CODE_ACCESS_CHK_BIT: u64 = 1 << 58;
@@ -33,10 +31,12 @@ const MSR_MTRR_CAP: u32 = 0x0FE;
 const MTRR_CAP_SMRR_BIT: u64 = 1 << 11;
 const MTRR_CAP_SMRR_EXT_BIT: u64 = 1 << 14;
 
+/// CPUID leaf 1 `EDX` bit 12: MTRRs are supported.
+const CPUID_EDX_MTRR: u32 = 1 << 12;
+
 const MSR_SMRR_BASE: u32 = 0x1F2;
 const MSR_SMRR_MASK: u32 = 0x1F3;
 
-const _MTRR_CACHE_WRITE_PROTECTED: u8 = 5;
 const MTRR_CACHE_WRITE_BACK: u8 = 6;
 
 const PHYS_ADDR_MASK: u64 = 0xFFFF_F000; // bits [31:12]
@@ -147,14 +147,14 @@ const fn mask_reg_bit10_set(raw: u64) -> bool {
 /// A valid region must be at least 4 KiB and smaller than 4 GiB, end at or below 4 GiB, and be
 /// naturally aligned: its size is a power of two and its base is a multiple of its size.
 pub(crate) fn verify_smrr_base_size(range: &MemoryRange) -> bool {
-    (u64::from(SIZE_4KB)..SMRR_MAX_ADDRESS).contains(&range.size())
+    (UEFI_PAGE_SIZE as u64..SMRR_MAX_ADDRESS).contains(&range.size())
         && range.end() <= SMRR_MAX_ADDRESS
         && range.is_naturally_aligned()
 }
 
 /// Returns `true` if a raw CPUID leaf 1 `edx` value reports MTRR support.
 const fn mtrr_supported(cpuid_edx: u32) -> bool {
-    (cpuid_edx & (1 << 12)) != 0
+    (cpuid_edx & CPUID_EDX_MTRR) != 0
 }
 
 /// Returns `true` if a raw `MSR_MTRR_CAP` value reports SMRR support.
@@ -169,12 +169,11 @@ const fn smrr_ext_supported(mtrr_cap: u64) -> bool {
 
 /// Programs the SMRR base and mask registers to protect the given SMRAM region.
 ///
-/// The region is configured as write-back cacheable but is not yet enabled or finalized; call
+/// The region is configured as write-back cacheable but is not yet enabled; call
 /// [`smrr_enable`] to set the valid and bit-10 fields and activate the range.
 ///
-/// Returns without touching the registers when this processor's SMRR is already finalized, since
-/// a finalized range cannot be reprogrammed until the next reset. Before then a repeated call
-/// writes the same values again: the BSP programs its SMRR in one-time initialization and again
+/// Returns without touching the registers when bit 10 of this processor's SMRR mask register is
+/// already set. Otherwise a repeated call writes the same values again: the BSP programs its SMRR in one-time initialization and again
 /// in per-core initialization.
 #[cfg_attr(coverage, coverage(off))]
 pub(crate) fn smrr_initialize(range: MemoryRange) -> MmSupervisorResult<()> {
@@ -231,19 +230,17 @@ pub(crate) fn smrr_initialize(range: MemoryRange) -> MmSupervisorResult<()> {
     Ok(())
 }
 
-/// Returns the value to write to `MSR_SMRR_MASK` to enable and finalize the range,
-/// or `None` if bit 10 shows it is already finalized.
+/// Returns the value to write to `MSR_SMRR_MASK` to set the valid and bit-10 fields, or `None`
+/// if bit 10 is already set.
 const fn smrr_enable_mask(mask: u64) -> Option<u64> {
     if mask_reg_bit10_set(mask) { None } else { Some(mask | MASK_VALID_BIT | MASK_BIT_10) }
 }
 
-/// Enables and finalizes the SMRR by setting the valid and bit-10 fields on the
-/// mask register.
+/// Enables the SMRR by setting the valid and bit-10 fields on the mask register.
 ///
-/// Does nothing if bit 10 is already set, since a finalized SMRR cannot be modified until the
-/// next processor reset.
+/// Does nothing if bit 10 is already set.
 ///
-/// This runs on SMI entry rather than at the end of the first SMI. Finalizing the range while the
+/// This runs on SMI entry rather than at the end of the first SMI. Setting these fields while the
 /// supervisor still holds the CPU leaves it enforcing across the `RSM` back to the non-MM world,
 /// which faults on platforms whose pre-boot firmware still reaches into that range.
 ///
@@ -253,9 +250,8 @@ const fn smrr_enable_mask(mask: u64) -> Option<u64> {
 pub(crate) fn smrr_enable() {
     // SAFETY: SMRR support was verified in `smrr_initialize` before this point,
     // so MSR_SMRR_MASK is a valid architectural MSR. Only the valid and bit-10
-    // fields are set, to enable and finalize the previously programmed range,
-    // preserving all other bits. The write is skipped if the range is already
-    // finalized.
+    // fields are set, to enable the previously programmed range, preserving all
+    // other bits. The write is skipped if bit 10 is already set.
     unsafe {
         if let Some(mask) = smrr_enable_mask(read_msr(MSR_SMRR_MASK)) {
             write_msr(MSR_SMRR_MASK, mask);

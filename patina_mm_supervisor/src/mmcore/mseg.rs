@@ -1,4 +1,4 @@
-//! MSEG (SMM Transfer Monitor Range) Support
+//! MSEG (Monitor Segment) Support
 //!
 //! Reads the MSEG region from the MSEG SMRAM HOB and programs its base into each core's
 //! `IA32_SMM_MONITOR_CTL`.
@@ -13,7 +13,7 @@
 use zerocopy::FromBytes;
 
 use crate::{
-    intrinsics::{get_current_cpu_id, write_msr},
+    intrinsics::{cpuid_version_info, write_msr},
     state::init_state,
 };
 use patina::pi::mmram::SmramDescriptor;
@@ -35,6 +35,9 @@ const SMM_MONITOR_CTL_VALID: u64 = 1;
 
 /// `IA32_SMM_MONITOR_CTL.MsegBase` (bits 31:12).
 const SMM_MONITOR_CTL_MSEG_BASE_MASK: u64 = 0xffff_f000;
+
+/// CPUID leaf 1 `ECX` bit 5: VMX is supported.
+const CPUID_ECX_VMX: u32 = 1 << 5;
 
 /// Parses the MSEG SMRAM HOB payload (`gMsegSmramGuid`), a single
 /// [`SmramDescriptor`] describing the MSEG region carved out of SMRAM.
@@ -77,7 +80,7 @@ pub(crate) fn program_mseg_base(cpu_id: u32) {
 
     let value = (mseg_base & SMM_MONITOR_CTL_MSEG_BASE_MASK) | SMM_MONITOR_CTL_VALID;
 
-    if (get_current_cpu_id().ecx & (1 << 5)) == 0 {
+    if (cpuid_version_info().ecx & CPUID_ECX_VMX) == 0 {
         log::warn!("CPU {cpu_id} does not support VMX (CPUID.01H:ECX.VMX=0), cannot program IA32_SMM_MONITOR_CTL");
         return;
     }

@@ -25,12 +25,6 @@ This allows the entire supervisor to be instantiated as a `static` with no runti
    rustup target add x86_64-unknown-uefi
    ```
 
-2. Ensure you have the nightly toolchain (required for `#![feature(...)]`):
-
-   ```bash
-   rustup override set nightly
-   ```
-
 ### Build
 
 This crate is a library. A platform supervisor binary crate links it in, supplies the `PlatformInfo` implementation
@@ -40,10 +34,11 @@ and the entry point, and is built for `x86_64-unknown-uefi` to produce the PE/CO
 
 ### Entry Point
 
-The MM Supervisor exports `MmSupervisorMain` as its entry point, matching the EDK2 convention:
+The image entry point is `efi_main`, a shim in `src/entry_point.asm` that jumps to `rust_main`. The platform
+binary provides `rust_main`, which forwards to the supervisor core:
 
 ```rust
-#[unsafe(export_name = "MmSupervisorMain")]
+#[unsafe(export_name = "rust_main")]
 pub extern "efiapi" fn mm_supervisor_main(cpu_index: usize, hob_list: *const c_void) {
     // SAFETY: invoked once per core by the MM environment with a valid HOB list.
     unsafe { SUPERVISOR.entry_point(cpu_index, hob_list) };
@@ -86,7 +81,7 @@ pages. The HOB list is not read again after initialization.
 
 The mailbox system provides inter-processor communication:
 
-- Each AP has a dedicated mailbox (cache-line aligned to avoid false sharing)
+- Each CPU index, the BSP's included, has a dedicated mailbox (cache-line aligned to avoid false sharing)
 - BSP sends commands to APs via mailboxes
 - APs respond with results through the same mailbox
 - At the end of each MMI the BSP releases the APs through per-CPU semaphores and waits for each to acknowledge
@@ -115,7 +110,7 @@ fn panic(_info: &PanicInfo) -> ! {
     loop { core::hint::spin_loop(); }
 }
 
-#[unsafe(export_name = "MmSupervisorMain")]
+#[unsafe(export_name = "rust_main")]
 pub extern "efiapi" fn mm_supervisor_main(cpu_index: usize, hob_list: *const c_void) {
     // SAFETY: invoked once per core by the MM environment with a valid HOB list.
     unsafe { SUPERVISOR.entry_point(cpu_index, hob_list) };

@@ -74,6 +74,17 @@ fn io_port_from_arg(port: u64) -> Option<u16> {
     u16::try_from(port).ok()
 }
 
+/// Converts a raw syscall argument into a `u32`, such as an MSR index or an EFI enum value.
+///
+/// A value with any of bits 63:32 set is a malformed request. Rejecting it keeps the policy gate
+/// and the handlers from acting on a truncated value. `operation` names the syscall in the log.
+fn u32_from_arg(operation: &str, value: u64) -> Result<u32, Status> {
+    u32::try_from(value).map_err(|_| {
+        log::error!("{operation}: argument 0x{value:x} does not fit in 32 bits");
+        Status::INVALID_PARAMETER
+    })
+}
+
 /// Converts a firmware policy decision into a syscall result, logging why a request was refused.
 /// `operation` names the syscall in the log message.
 fn check_policy(operation: &str, decision: PolicyDecision) -> Result<(), Status> {
@@ -153,9 +164,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
     /// Panics if any other handler fails, or for the `LegacyMax` index, so Ring 3 cannot
     /// continue after a rejected privileged request.
     pub fn dispatch(&self, ctx: &SyscallContext) -> SyscallResult {
-        let index = if let Some(index) = SyscallIndex::from_u64(ctx.call_index) {
-            index
-        } else {
+        let Ok(index) = SyscallIndex::try_from(ctx.call_index) else {
             log::error!("Unknown syscall index: 0x{:x}", ctx.call_index);
             return Err(Status::UNSUPPORTED);
         };
@@ -208,14 +217,14 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
     /// - Arg1: MSR index
     /// - Returns: MSR value (RAX)
     fn handle_rdmsr(&self, ctx: &SyscallContext) -> SyscallResult {
-        let msr_index = ctx.arg1 as u32;
+        let msr_index = u32_from_arg("RDMSR", ctx.arg1)?;
         log::trace!("RDMSR: msr=0x{msr_index:x}");
 
         check_policy("RDMSR", self.ops.check_msr(msr_index, AccessType::Read))?;
 
         // SAFETY: the policy gate authorized reading this MSR, as `SyscallOps::read_msr` requires.
         let value = unsafe { self.ops.read_msr(msr_index) };
-        log::debug!("RDMSR: MSR 0x{msr_index:x} = 0x{value:x}");
+        log::trace!("RDMSR: MSR 0x{msr_index:x} = 0x{value:x}");
         Ok(value)
     }
 
@@ -224,7 +233,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
     /// - Arg1: MSR index
     /// - Arg2: Value to write
     fn handle_wrmsr(&self, ctx: &SyscallContext) -> SyscallResult {
-        let msr_index = ctx.arg1 as u32;
+        let msr_index = u32_from_arg("WRMSR", ctx.arg1)?;
         let value = ctx.arg2;
         log::trace!("WRMSR: msr=0x{msr_index:x}, value=0x{value:x}");
 
@@ -232,7 +241,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
 
         // SAFETY: the policy gate authorized writing this MSR, as `SyscallOps::write_msr` requires.
         unsafe { self.ops.write_msr(msr_index, value) };
-        log::debug!("WRMSR: MSR 0x{msr_index:x} written with 0x{value:x}");
+        log::trace!("WRMSR: MSR 0x{msr_index:x} written with 0x{value:x}");
         Ok(0)
     }
 
@@ -246,7 +255,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         // SAFETY: the policy gate authorized this instruction, as
         // `SyscallOps::execute_instruction` requires.
         unsafe { self.ops.execute_instruction(instruction) };
-        log::debug!("{instruction:?}: Executed");
+        log::trace!("{instruction:?}: Executed");
         Ok(0)
     }
 
@@ -264,17 +273,13 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         let efi_width = ctx.arg2;
         log::trace!("IO_READ: port=0x{port:x}, width={efi_width}");
 
-        let io_width = if let Some(io_width) = efi_io_width_to_io_width(efi_width) {
-            io_width
-        } else {
+        let Some(io_width) = efi_io_width_to_io_width(efi_width) else {
             log::error!("IO_READ: Invalid IO width: {efi_width}");
             return Err(Status::INVALID_PARAMETER);
         };
 
         // Reject ports outside the 16-bit I/O space before the policy gate sees them.
-        let port_addr = if let Some(port_addr) = io_port_from_arg(port) {
-            port_addr
-        } else {
+        let Some(port_addr) = io_port_from_arg(port) else {
             log::error!("IO_READ: Port 0x{port:x} is outside the 16-bit I/O space");
             return Err(Status::INVALID_PARAMETER);
         };
@@ -304,17 +309,13 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         let value = ctx.arg3;
         log::trace!("IO_WRITE: port=0x{port:x}, width={efi_width}, value=0x{value:x}");
 
-        let io_width = if let Some(io_width) = efi_io_width_to_io_width(efi_width) {
-            io_width
-        } else {
+        let Some(io_width) = efi_io_width_to_io_width(efi_width) else {
             log::error!("IO_WRITE: Invalid IO width: {efi_width}");
             return Err(Status::INVALID_PARAMETER);
         };
 
         // Reject ports outside the 16-bit I/O space before the policy gate sees them.
-        let port_addr = if let Some(port_addr) = io_port_from_arg(port) {
-            port_addr
-        } else {
+        let Some(port_addr) = io_port_from_arg(port) else {
             log::error!("IO_WRITE: Port 0x{port:x} is outside the 16-bit I/O space");
             return Err(Status::INVALID_PARAMETER);
         };
@@ -352,8 +353,8 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
     /// - Arg3: Page count
     /// - Returns: Allocated physical address (RAX)
     fn handle_alloc_page(&self, ctx: &SyscallContext) -> SyscallResult {
-        let alloc_type = ctx.arg1 as AllocateType;
-        let mem_type = ctx.arg2 as MemoryType;
+        let alloc_type: AllocateType = u32_from_arg("ALLOC_PAGE", ctx.arg1)?;
+        let mem_type: MemoryType = u32_from_arg("ALLOC_PAGE", ctx.arg2)?;
         let page_count = ctx.arg3;
         log::trace!("ALLOC_PAGE: alloc_type={alloc_type}, mem_type={mem_type}, count={page_count}");
 
@@ -426,7 +427,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         // The checked free fails if any page in the range is not a User allocation.
         match self.ops.free_user_pages(addr, page_count as usize) {
             Ok(()) => {
-                log::debug!("FREE_PAGE: Freed {range}");
+                log::trace!("FREE_PAGE: Freed {range}");
                 Ok(0)
             }
             Err(err) => {
@@ -455,7 +456,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         let cpu_index = ctx.arg2;
         let argument = ctx.arg3;
 
-        log::debug!("START_AP_PROC: proc=0x{procedure:x}, cpu={cpu_index}, arg=0x{argument:x}");
+        log::trace!("START_AP_PROC: proc=0x{procedure:x}, cpu={cpu_index}, arg=0x{argument:x}");
 
         // 1. Caller is the BSP. An AP reaching here is already running a procedure the BSP
         //    dispatched to it. Letting it dispatch in turn would nest the MP state machine: it
@@ -586,9 +587,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
             return Ok(0); // FALSE
         };
 
-        let config = if let Some(comm_buffer_config) = self.ops.comm_buffer_config() {
-            comm_buffer_config
-        } else {
+        let Some(config) = self.ops.comm_buffer_config() else {
             log::error!("MM_IS_COMM_BUFFER: Comm buffer config not initialized");
             return Ok(0); // FALSE
         };
@@ -597,7 +596,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         let is_valid =
             MemoryRange::new(config.user.internal, config.user.size).is_ok_and(|buffer| buffer.contains_range(&range));
 
-        log::debug!("MM_IS_COMM_BUFFER: {range} => {is_valid}");
+        log::trace!("MM_IS_COMM_BUFFER: {range} => {is_valid}");
         if is_valid { Ok(1) } else { Ok(0) }
     }
 }

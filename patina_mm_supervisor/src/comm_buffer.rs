@@ -74,6 +74,21 @@ pub enum CommBufferError {
         /// The status buffer address the HOB reported.
         address: u64,
     },
+    /// An external buffer overlaps MMRAM. It must lie entirely outside.
+    OverlapsMmram {
+        /// The buffer the HOB described.
+        range: MemoryRange,
+    },
+    /// An external buffer is mapped user-accessible. It must be supervisor-only.
+    UserAccessible {
+        /// The buffer the HOB described.
+        range: MemoryRange,
+    },
+    /// An external buffer is unmapped, or its pages do not share one mapping.
+    NotUniformlyMapped {
+        /// The buffer the HOB described.
+        range: MemoryRange,
+    },
     /// The internal copy of a communication buffer could not be allocated.
     AllocationFailed,
     /// One or more communication buffers were left at address zero.
@@ -98,6 +113,15 @@ impl fmt::Display for CommBufferError {
             Self::InvalidSize { pages } => write!(f, "the page count {pages} does not describe a usable buffer"),
             Self::InvalidStatusBuffer { address } => {
                 write!(f, "the status buffer address 0x{address:016x} does not describe a usable buffer")
+            }
+            Self::OverlapsMmram { range } => {
+                write!(f, "the buffer at {range} overlaps MMRAM; it must lie entirely outside")
+            }
+            Self::UserAccessible { range } => {
+                write!(f, "the buffer at {range} is mapped user-accessible; it must be supervisor-only")
+            }
+            Self::NotUniformlyMapped { range } => {
+                write!(f, "the buffer at {range} is unmapped or not uniformly mapped")
             }
             Self::AllocationFailed => write!(f, "the internal copy of the buffer could not be allocated"),
             Self::Missing => write!(f, "one or more communication buffers are not properly initialized"),
@@ -127,8 +151,8 @@ pub struct CommBufferConfig {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, FromBytes, Immutable)]
 pub struct MmCommonRegionHobData {
-    /// Region type discriminator. Always `MM_SUPERVISOR_BUFFER_T` (0) for
-    /// the HOB the supervisor consumes.
+    /// Region type discriminator. The MM IPL sets it to `MM_SUPERVISOR_BUFFER_T` (0) for the
+    /// HOB the supervisor consumes; the supervisor does not check it.
     pub region_type: u64,
     /// Base address of the communication buffer region.
     pub addr: u64,
@@ -188,8 +212,8 @@ impl CommChannel {
                 CommBufferError::InvalidStatusBuffer { address: status }
             })?;
 
-        require_external_comm_buffer(&buffer, "Supervisor communication buffer");
-        require_external_comm_buffer(&status_buffer, "Supervisor status buffer");
+        require_external_comm_buffer(&buffer, "Supervisor communication buffer")?;
+        require_external_comm_buffer(&status_buffer, "Supervisor status buffer")?;
 
         let internal = security_state()
             .page_allocator()
@@ -252,8 +276,8 @@ impl CommChannel {
                 CommBufferError::InvalidStatusBuffer { address: status }
             })?;
 
-        require_external_comm_buffer(&buffer, "User communication buffer");
-        require_external_comm_buffer(&status_buffer, "User status buffer");
+        require_external_comm_buffer(&buffer, "User communication buffer")?;
+        require_external_comm_buffer(&status_buffer, "User status buffer")?;
 
         let internal = security_state()
             .page_allocator()
@@ -269,14 +293,17 @@ impl CommChannel {
         // so the user module sees it after demotion.
         // SAFETY: parsing above proved `data` holds an `MmCommonBufferHobData`, so `physical_start`
         // lies inside the writable HOB buffer. `addr_of_mut!` avoids a reference to the packed
-        // field, and `write_volatile` keeps the store from being elided. The HOB pages may be
-        // mapped read-only, so `CR0.WP` is cleared for this one store. This runs in Ring 0 during
-        // single-threaded BSP init with interrupts masked, as `disable_write_protection` requires,
-        // and `enable_write_protection` restores the value it returned before the block ends.
+        // field. The field may not be 8-byte aligned, so the value is stored as a `[u8; 8]`, which
+        // has alignment 1, and `write_volatile` keeps the store from being elided. The HOB pages
+        // may be mapped read-only, so `CR0.WP` is cleared for this one store. This runs in Ring 0
+        // during single-threaded BSP init with interrupts masked, as `disable_write_protection`
+        // requires, and `enable_write_protection` restores the value it returned before the block
+        // ends.
         unsafe {
             let hob_ptr = data.cast::<MmCommonBufferHobData>();
+            let physical_start = core::ptr::addr_of_mut!((*hob_ptr).physical_start).cast::<[u8; 8]>();
             let original_cr0 = disable_write_protection();
-            core::ptr::write_volatile(core::ptr::addr_of_mut!((*hob_ptr).physical_start), channel.internal);
+            core::ptr::write_volatile(physical_start, channel.internal.to_le_bytes());
             enable_write_protection(original_cr0);
         }
 
@@ -294,19 +321,23 @@ impl CommChannel {
 /// on the internal copy, so direct access here would let a demoted driver rewrite a request, or
 /// its status mailbox, while it is being serviced.
 ///
-/// ## Panics
+/// ## Errors
 ///
-/// Panics if `range` overlaps MMRAM or is not mapped supervisor-only.
-fn require_external_comm_buffer(range: &MemoryRange, description: &str) {
-    assert!(!range_overlaps_mmram(range), "{description} at {range} overlaps MMRAM; it must lie entirely outside");
-
-    match query_address_ownership(range) {
-        Some(PageOwnership::Supervisor) => {}
-        Some(PageOwnership::User) => {
-            panic!("{description} at {range} is mapped user-accessible; it must be supervisor-only")
+/// Returns `OverlapsMmram` if `range` overlaps MMRAM, and `UserAccessible` or
+/// `NotUniformlyMapped` if it is not mapped supervisor-only. `description` names the buffer in
+/// the log.
+fn require_external_comm_buffer(range: &MemoryRange, description: &str) -> Result<(), CommBufferError> {
+    let error = if range_overlaps_mmram(range) {
+        CommBufferError::OverlapsMmram { range: *range }
+    } else {
+        match query_address_ownership(range) {
+            Some(PageOwnership::Supervisor) => return Ok(()),
+            Some(PageOwnership::User) => CommBufferError::UserAccessible { range: *range },
+            None => CommBufferError::NotUniformlyMapped { range: *range },
         }
-        None => panic!("{description} at {range} is unmapped or not uniformly mapped"),
-    }
+    };
+    log::error!("{description}: {error}");
+    Err(error)
 }
 
 #[cfg(test)]

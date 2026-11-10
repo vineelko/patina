@@ -24,10 +24,10 @@ pub const LONG_CS_R0: u16 = 0x38;
 /// Call gate descriptor offset in GDT.
 pub const CALL_GATE_OFFSET: u16 = 0x60;
 
-/// TSS selector offset in GDT.
+/// Offset of the TSS descriptor in the GDT (also its selector).
 pub const TSS_SEL_OFFSET: u16 = 0x70;
 
-/// TSS descriptor offset in GDT.
+/// Offset of the TSS itself, which follows the GDT entries in the same buffer.
 pub const TSS_DESC_OFFSET: u16 = 0x80;
 
 /// Type and attribute byte of the return call gate: present (P = 1), callable from Ring 3
@@ -78,7 +78,7 @@ pub struct CallGateDescriptor {
     pub offset_low: u16,
     /// Target code segment selector
     pub selector: u16,
-    /// Reserved (must be 0) and IST (bits 2:0)
+    /// Reserved. 64-bit call gates have no IST field; this byte is kept as the GDT was built.
     pub ist: u8,
     /// Type (0xC = 64-bit call gate) and DPL
     pub type_attr: u8,
@@ -198,12 +198,8 @@ pub struct TaskStateSegment {
 }
 
 /// Returns the base address of the current GDT, read from GDTR.
-///
-/// ## Safety
-///
-/// Only reads GDTR; there are no caller preconditions.
 // Reads the running processor's GDTR, so it cannot be tested deterministically on the host.
-pub unsafe fn get_current_gdt_base() -> u64 {
+pub fn get_current_gdt_base() -> u64 {
     let mut gdtr = GdtRegister::default();
     // SAFETY: sgdt only stores GDTR into `gdtr` and has no other side effects.
     unsafe {
@@ -219,8 +215,8 @@ pub unsafe fn get_current_gdt_base() -> u64 {
 
 /// Reads the entry of type `T` at `offset` in `gdt`, hands it to `update`, and writes it back.
 ///
-/// Reading first keeps the fields the supervisor does not program (for example the call gate
-/// IST field) as the GDT was built.
+/// Reading first keeps the fields the supervisor does not program (for example the reserved
+/// byte of the call gate) as the GDT was built.
 fn update_entry<T, F>(gdt: &mut [u8], offset: usize, update: F) -> MmSupervisorResult<()>
 where
     T: FromBytes + IntoBytes + Immutable,
@@ -291,8 +287,7 @@ fn program_privilege_transition_entries(
 /// Panics if the GDT image does not contain the call gate, TSS descriptor and TSS.
 #[unsafe(no_mangle)]
 pub unsafe extern "efiapi" fn setup_call_gate(return_pointer: u64, cpl0_stack_ptr: u64) {
-    // SAFETY: only reads GDTR; see `get_current_gdt_base`.
-    let gdt_base = unsafe { get_current_gdt_base() };
+    let gdt_base = get_current_gdt_base();
 
     // SAFETY: the GDT is mapped read-only. Write protection is cleared only for the update below
     // and restored right after it.

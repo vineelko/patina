@@ -32,20 +32,46 @@ use crate::{error::MmSupervisorResult, memory::SharedPagingAllocator, state::sec
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyValidationError {
     /// A reserved field contains non-zero data.
-    InvalidReservedField { policy_type: u32, entry_index: usize },
-    /// The same policy type appears multiple times.
-    DuplicatePolicyType { policy_type: u32 },
-    /// Size mismatch.
-    SizeMismatch { expected: usize, declared: usize },
-    /// Unrecognized policy type.
-    UnrecognizedPolicyType { policy_type: u32 },
-    /// Unrecognized header bits.
+    InvalidReservedField {
+        /// Policy type of the root or descriptor with the bad field.
+        policy_type: u32,
+        /// Index of the descriptor within its root, or of the root itself for a root field.
+        entry_index: usize,
+    },
+    /// The same policy type appears in more than one root.
+    DuplicatePolicyType {
+        /// The repeated policy type.
+        policy_type: u32,
+    },
+    /// The declared policy size does not match the size of the structures it contains.
+    SizeMismatch {
+        /// Size computed from the header, roots and descriptors.
+        expected: usize,
+        /// Size declared in the header.
+        declared: usize,
+    },
+    /// A root has a policy type the supervisor does not recognize.
+    UnrecognizedPolicyType {
+        /// The unrecognized policy type.
+        policy_type: u32,
+    },
+    /// The header sets flag or capability bits the supervisor does not recognize.
     UnrecognizedHeaderBits,
-    /// Unsupported attribute.
-    UnsupportedAttribute { policy_type: u32, entry_index: usize, attributes: u32 },
-    /// Conflicting condition.
-    ConflictingCondition { entry_index: usize },
-    /// Legacy memory policy detected.
+    /// A descriptor sets attribute bits its policy type does not support.
+    UnsupportedAttribute {
+        /// Policy type of the descriptor.
+        policy_type: u32,
+        /// Index of the descriptor within its root.
+        entry_index: usize,
+        /// The attribute bits the descriptor sets.
+        attributes: u32,
+    },
+    /// A save state descriptor combines access conditions that cannot both hold.
+    ConflictingCondition {
+        /// Index of the descriptor within its root.
+        entry_index: usize,
+    },
+    /// The policy uses the legacy memory policy fields instead of a `TYPE_MEM` root.
     LegacyMemoryPolicyDetected,
 }
 
@@ -98,7 +124,7 @@ pub(crate) fn security_policy_check(gate: &PolicyGate) -> MmSupervisorResult<()>
     let mut total_scanned_size = size_of::<SecurePolicyDataV1_0>();
     let mut type_flags: u64 = 0;
 
-    for root in gate.policy_roots() {
+    for (root_index, root) in gate.policy_roots().iter().enumerate() {
         // A type too large for the bitmask cannot be a recognized type.
         let type_bit = 1u64
             .checked_shl(root.policy_type)
@@ -110,9 +136,11 @@ pub(crate) fn security_policy_check(gate: &PolicyGate) -> MmSupervisorResult<()>
         type_flags |= type_bit;
 
         if !root.has_valid_reserved() {
-            return Err(
-                PolicyValidationError::InvalidReservedField { policy_type: root.policy_type, entry_index: 0 }.into()
-            );
+            return Err(PolicyValidationError::InvalidReservedField {
+                policy_type: root.policy_type,
+                entry_index: root_index,
+            }
+            .into());
         }
 
         // `PolicyGate::new` already checked that each descriptor array lies wholly inside the
@@ -384,7 +412,9 @@ impl core::fmt::Display for PageTableWalkError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::BufferFull => write!(f, "the descriptor buffer is full, the walk cannot continue"),
-            Self::InvalidCr3 => write!(f, "the CR3 value is null, so no page table can be walked"),
+            Self::InvalidCr3 => {
+                write!(f, "the CR3 value or the descriptor buffer is null, so no page table can be walked")
+            }
             Self::InvalidRegion { base, size } => {
                 write!(f, "the page table maps an invalid region at 0x{base:x} (size 0x{size:x})")
             }

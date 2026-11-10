@@ -42,7 +42,7 @@ const IA32_APIC_BSP: u64 = 1 << 8;
 /// The caller must ensure the MSR index is valid and readable on the current
 /// platform. Executes the privileged `rdmsr` instruction, which faults outside
 /// ring 0 and cannot run in a host-based unit test.
-pub unsafe fn read_msr(msr: u32) -> u64 {
+pub(crate) unsafe fn read_msr(msr: u32) -> u64 {
     let lo: u32;
     let hi: u32;
     // SAFETY: the caller guarantees the MSR index is valid and readable, and `rdmsr` touches no
@@ -67,7 +67,7 @@ pub unsafe fn read_msr(msr: u32) -> u64 {
 /// The caller must ensure the MSR index is valid and writable on the current
 /// platform. Executes the privileged `wrmsr` instruction, which faults outside
 /// ring 0 and cannot run in a host-based unit test.
-pub unsafe fn write_msr(msr: u32, value: u64) {
+pub(crate) unsafe fn write_msr(msr: u32, value: u64) {
     let lo = value as u32;
     let hi = (value >> 32) as u32;
     // SAFETY: the caller guarantees the MSR index is valid and writable (this function's
@@ -89,7 +89,7 @@ pub unsafe fn write_msr(msr: u32, value: u64) {
 /// The initial APIC ID is in EBX[31:24] of the returned [`CpuidResult`]; callers extract it.
 /// Depends on the running processor's `cpuid` state, which cannot be exercised
 /// deterministically in a host-based unit test.
-pub fn get_current_cpu_id() -> CpuidResult {
+pub(crate) fn cpuid_version_info() -> CpuidResult {
     // CPUID is always available on x86_64, and `__cpuid` is a safe intrinsic.
     __cpuid(CPUID_VERSION_INFO)
 }
@@ -97,8 +97,8 @@ pub fn get_current_cpu_id() -> CpuidResult {
 /// Returns the APIC ID of the processor executing this call.
 ///
 /// The initial APIC ID is EBX[31:24] of CPUID leaf 1.
-pub fn current_apic_id() -> u32 {
-    (get_current_cpu_id().ebx >> 24) & 0xff
+pub(crate) fn current_apic_id() -> u32 {
+    (cpuid_version_info().ebx >> 24) & 0xff
 }
 
 /// Returns whether the current processor is the Bootstrap Processor (BSP).
@@ -106,7 +106,7 @@ pub fn current_apic_id() -> u32 {
 /// Reads the BSP flag (bit 8) of the `IA32_APIC_BASE` MSR, which hardware sets at reset on the
 /// bootstrap processor. `rdmsr` faults outside ring 0, so this cannot run in a host-based unit
 /// test.
-pub fn is_bsp() -> bool {
+pub(crate) fn is_bsp() -> bool {
     // SAFETY: IA32_APIC_BASE is an architectural MSR on every x86_64 CPU, and reading it has no
     // side effects.
     let apic_base = unsafe { read_msr(IA32_APIC_BASE_MSR_INDEX) };
@@ -169,9 +169,11 @@ pub(crate) fn read_idtr() -> DescriptorTablePointer {
 /// performed while SMAP is lifted targets valid, correctly-owned user memory. Prefer
 /// [`with_user_access`](crate::user_access_guard::with_user_access), which guarantees the disable/enable pair is balanced.
 pub(crate) unsafe fn disable_smap() {
-    // SAFETY: `stac` only sets the AC flag in EFLAGS; it touches no memory and clobbers
-    // no registers (hence `nostack, preserves_flags`). It is a privileged instruction that
-    // is valid in the Ring 0 supervisor context this code always runs in.
+    // SAFETY: `stac` sets EFLAGS.AC and changes nothing else. `preserves_flags` is still valid
+    // because AC is not one of the flags Rust tracks, and `nomem` is left out on purpose so the
+    // instruction also acts as a compiler barrier for the user-memory accesses after it. It is a
+    // privileged instruction that is valid in the Ring 0 supervisor context this code always
+    // runs in.
     #[cfg(not(test))]
     unsafe {
         core::arch::asm!(
@@ -191,9 +193,11 @@ pub(crate) unsafe fn disable_smap() {
 /// [`with_user_access`](crate::user_access_guard::with_user_access), which guarantees the
 /// disable/enable pair is balanced.
 pub(crate) unsafe fn enable_smap() {
-    // SAFETY: `clac` only clears the AC flag in EFLAGS; it touches no memory and clobbers
-    // no registers (hence `nostack, preserves_flags`). It is a privileged instruction that
-    // is valid in the Ring 0 supervisor context this code always runs in.
+    // SAFETY: `clac` clears EFLAGS.AC and changes nothing else. `preserves_flags` is still
+    // valid because AC is not one of the flags Rust tracks, and `nomem` is left out on purpose
+    // so the instruction also acts as a compiler barrier for the user-memory accesses before it.
+    // It is a privileged instruction that is valid in the Ring 0 supervisor context this code
+    // always runs in.
     #[cfg(not(test))]
     unsafe {
         core::arch::asm!(

@@ -168,9 +168,7 @@ fn process_fetch_policy<C: FetchPolicyContext>(comm_buffer: &mut [u8], context: 
         return (efi::Status::BUFFER_TOO_SMALL, MmSupervisorRequestHeader::SIZE);
     };
 
-    let gate = if let Some(gate) = context.policy_gate() {
-        gate
-    } else {
+    let Some(gate) = context.policy_gate() else {
         log::error!("FETCH_POLICY: policy gate not initialized");
         return (efi::Status::NOT_READY, MmSupervisorRequestHeader::SIZE);
     };
@@ -192,9 +190,8 @@ fn process_fetch_policy<C: FetchPolicyContext>(comm_buffer: &mut [u8], context: 
     // Step 3: write the merged policy after the header.
     let payload_written = match context.fetch_policy(gate, payload) {
         Ok(written) => written,
-        Err(MmSupervisorError::PolicyGate(PolicyGateError::InternalError)) => {
-            // Buffer too small, size overflow, or missing snapshot.
-            log::error!("FETCH_POLICY: fetch_and_update_policy failed");
+        Err(MmSupervisorError::PolicyGate(PolicyGateError::BufferTooSmall)) => {
+            log::error!("FETCH_POLICY: communication buffer is too small for the policy");
             return (efi::Status::BUFFER_TOO_SMALL, MmSupervisorRequestHeader::SIZE);
         }
         Err(err) => {

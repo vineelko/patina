@@ -146,7 +146,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             )?;
         }
 
-        self.init_page_table();
+        self.init_page_table()?;
 
         // Validate the HOBs that need the page table, now that it exists. The checks that only
         // need the page allocator ran above.
@@ -208,16 +208,24 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// This allows the supervisor to modify page attributes on newly allocated
     /// pages. Must be called after [`init_page_allocators`](Self::init_page_allocators)
     /// because the page table draws its backing memory from the paging allocator.
-    fn init_page_table(&self) {
+    ///
+    /// ## Errors
+    ///
+    /// Returns `PageTableFromCr3Failed` if the hierarchy at CR3 cannot be adopted.
+    fn init_page_table(&self) -> MmSupervisorResult<()> {
         let cr3 = read_cr3();
         let paging_alloc = SharedPagingAllocator::new(security_state().paging_allocator());
         // SAFETY: `cr3` is read from the active control register, so it points to
         // the valid page table hierarchy currently in use by this core, and
         // `paging_alloc` owns the pool from which new paging structures are drawn.
-        let page_table = unsafe { X64PageTable::from_existing(cr3, paging_alloc, PagingType::Paging4Level) }
-            .expect("Failed to create page table from active CR3");
+        let page_table =
+            unsafe { X64PageTable::from_existing(cr3, paging_alloc, PagingType::Paging4Level) }.map_err(|err| {
+                log::error!("Failed to create page table from active CR3=0x{cr3:016x}: {err:?}");
+                CoreInitError::PageTableFromCr3Failed { cr3 }
+            })?;
         *security_state().lock_page_table() = Some(page_table);
         log::info!("Page table initialized from CR3=0x{cr3:016x}");
+        Ok(())
     }
 
     /// Finds the MM Supervisor User module in the HOB list and stores its entry point for
@@ -253,7 +261,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         Ok(())
     }
 
-    /// Saves the validated Supervisor Init image allocation before the producer's HOBs are reclaimed.
+    /// Saves the validated MM Init module allocation before the producer's HOBs are reclaimed.
     pub(crate) fn discover_and_store_init_region(
         &self,
         hob_hand_off_table: &PhaseHandoffInformationTable,
@@ -316,8 +324,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     fn init_policy_and_validate(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
         self.init_policy_from_hob_list(hob_hand_off_table)?;
 
-        let gate =
-            security_state().policy_gate().expect("Policy gate must be initialized before policy validation runs");
+        let gate = security_state().policy_gate().ok_or(CoreInitError::PolicyGateUnavailable)?;
         policy::validation::security_policy_check(gate)?;
 
         log::info!("Security policy check passed");
@@ -462,8 +469,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         super::mseg::program_mseg_base(cpu_id);
 
         // SMRR is per-logical-processor. The BSP already programmed the same range in `bsp_init`.
-        let range =
-            init_state().smrr_range().expect("SMRR range must be determined during BSP init before per-core init");
+        let range = init_state().smrr_range().ok_or(CoreInitError::SmrrRangeUnavailable)?;
         smrr_initialize(range)?;
         configure_smm_code_access();
 

@@ -37,7 +37,7 @@
 #------------------------------------------------------------------------------
 # Caller Interface:
 # UINT64
-# EFIAPI <SysV calling convention>
+# Custom convention: CallIndex in RAX, Arg1 in RDX, Arg2 in R8, Arg3 in R9
 # SysCall (
 #   UINTN CallIndex,
 #   UINTN Arg1,
