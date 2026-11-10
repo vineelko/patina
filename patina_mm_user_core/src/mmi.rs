@@ -47,16 +47,23 @@ use spin::Mutex;
 /// Re-exported from [`patina::pi::mm_cis::MmiHandlerEntryPoint`].
 use patina::pi::mm_cis::MmiHandlerEntryPoint;
 
-/// `EFI_WARN_INTERRUPT_SOURCE_QUIESCED` - PI spec warning status code.
+/// `MAX_BIT >> 2`, which `PI_ENCODE_WARNING` and `PI_ENCODE_ERROR` set so PI status codes do not
+/// collide with UEFI ones (`MdePkg/Include/Pi/PiMultiPhase.h`).
+const PI_STATUS_BIT: usize = 1 << (usize::BITS - 3);
+
+/// `MAX_BIT`, which marks a status as an error.
+const ERROR_BIT: usize = 1 << (usize::BITS - 1);
+
+/// `EFI_WARN_INTERRUPT_SOURCE_QUIESCED` - PI spec warning status code, `PI_ENCODE_WARNING (1)`.
 /// Indicates an interrupt source was quiesced.
-const WARN_INTERRUPT_SOURCE_QUIESCED: efi::Status = efi::Status::from_usize(3);
+const WARN_INTERRUPT_SOURCE_QUIESCED: efi::Status = efi::Status::from_usize(PI_STATUS_BIT | 1);
 
-/// `EFI_WARN_INTERRUPT_SOURCE_PENDING` - PI spec warning status code.
+/// `EFI_WARN_INTERRUPT_SOURCE_PENDING` - PI spec warning status code, `PI_ENCODE_WARNING (0)`.
 /// Indicates an interrupt source was processed but not quiesced.
-const WARN_INTERRUPT_SOURCE_PENDING: efi::Status = efi::Status::from_usize(2);
+const WARN_INTERRUPT_SOURCE_PENDING: efi::Status = efi::Status::from_usize(PI_STATUS_BIT);
 
-/// `EFI_INTERRUPT_PENDING` - PI spec status for pending interrupts.
-const INTERRUPT_PENDING: efi::Status = efi::Status::from_usize(0x80000000 | 0x00000004);
+/// `EFI_INTERRUPT_PENDING` - PI spec status for pending interrupts, `PI_ENCODE_ERROR (0)`.
+const INTERRUPT_PENDING: efi::Status = efi::Status::from_usize(ERROR_BIT | PI_STATUS_BIT);
 
 /// Signature for internal (Rust-native) MMI handlers.
 ///
@@ -266,9 +273,11 @@ impl MmiDatabase {
     /// `mmi_handler_unregister` without deadlocking.
     ///
     /// Returns:
-    /// - `EFI_SUCCESS` if at least one handler returned success
-    /// - `EFI_WARN_INTERRUPT_SOURCE_QUIESCED` if a source was quiesced
+    /// - `EFI_SUCCESS` if at least one handler returned success, or a source was quiesced
+    ///   (`EFI_WARN_INTERRUPT_SOURCE_QUIESCED` is reported as `EFI_SUCCESS`)
     /// - `EFI_INTERRUPT_PENDING` if a handler indicated the interrupt is still pending
+    /// - `EFI_WARN_INTERRUPT_SOURCE_PENDING` if a source was processed but not quiesced and no
+    ///   handler succeeded
     /// - `EFI_NOT_FOUND` if no handlers are registered for the given type
     pub fn mmi_manage(
         &self,
@@ -517,6 +526,16 @@ mod tests {
 
     fn register(db: &MmiDatabase, handler: MmiHandlerEntryPoint, guid: Option<&efi::Guid>) -> efi::Handle {
         db.mmi_handler_register(handler, guid).expect("registration succeeds")
+    }
+
+    #[test]
+    fn test_pi_interrupt_status_codes_match_pi_multi_phase() {
+        // `PI_ENCODE_WARNING (a)` is `(MAX_BIT >> 2) | a`, and `PI_ENCODE_ERROR (a)` also sets `MAX_BIT`.
+        assert_eq!(WARN_INTERRUPT_SOURCE_PENDING.as_usize() as u64, 0x2000_0000_0000_0000);
+        assert_eq!(WARN_INTERRUPT_SOURCE_QUIESCED.as_usize() as u64, 0x2000_0000_0000_0001);
+        assert_eq!(INTERRUPT_PENDING.as_usize() as u64, 0xA000_0000_0000_0000);
+        assert!(INTERRUPT_PENDING.is_error());
+        assert!(!WARN_INTERRUPT_SOURCE_PENDING.is_error());
     }
 
     #[test]
