@@ -501,6 +501,7 @@ impl core::ops::Deref for MmServiceProvider {
 // SAFETY: `MmServiceProvider` reads only the process-global component MM services
 // provider (a `&'static dyn MmServices`) and never accesses component `Storage`,
 // so it registers no storage access and cannot conflict with any other parameter.
+#[cfg(feature = "alloc")]
 unsafe impl crate::component::params::Param for MmServiceProvider {
     type State = ();
     type Item<'storage, 'state> = Self;
