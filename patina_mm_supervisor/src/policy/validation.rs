@@ -100,7 +100,10 @@ pub(crate) fn security_policy_check(gate: &PolicyGate) -> MmSupervisorResult<()>
     let mut type_flags: u64 = 0;
 
     for root in gate.policy_roots() {
-        let type_bit = 1u64 << root.policy_type;
+        // A type too large for the bitmask cannot be a recognized type.
+        let type_bit = 1u64
+            .checked_shl(root.policy_type)
+            .ok_or(PolicyValidationError::UnrecognizedPolicyType { policy_type: root.policy_type })?;
 
         if (type_flags & type_bit) != 0 {
             return Err(PolicyValidationError::DuplicatePolicyType { policy_type: root.policy_type }.into());
@@ -571,6 +574,13 @@ mod tests {
         assert_eq!(
             security_policy_check(&unknown_type.gate()),
             Err(PolicyValidationError::UnrecognizedPolicyType { policy_type: 9 }.into())
+        );
+
+        // A type past the end of the 64-bit duplicate mask is unrecognized, not a shift overflow.
+        let huge_type = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Unknown(64)).build();
+        assert_eq!(
+            security_policy_check(&huge_type.gate()),
+            Err(PolicyValidationError::UnrecognizedPolicyType { policy_type: 64 }.into())
         );
     }
 
