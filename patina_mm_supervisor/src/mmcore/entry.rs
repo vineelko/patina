@@ -71,9 +71,7 @@ fn core_already_initialized(cpu_index: usize) -> MmSupervisorResult<bool> {
 }
 
 impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
-    /// Creates a new instance of the MM Supervisor Core.
-    ///
-    /// This is a const fn that performs no heap allocation.
+    /// Creates the supervisor. Performs no heap allocation, so it can initialize a `static`.
     pub const fn new() -> Self {
         Self {
             cpu_manager: CpuManager::new(),
@@ -85,25 +83,29 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         }
     }
 
-    /// Sets the static supervisor instance for global access.
+    /// Stores this instance's address for [`Self::instance`].
     ///
-    /// Returns true if the address was successfully stored, false if already set.
-    /// Also registers the type-erased AP startup function pointer.
+    /// On the first call it also registers the processor ID lookup and the AP startup
+    /// trampoline for this instance's type. Returns `false` if an instance was already stored.
     #[must_use]
     pub(crate) fn set_instance(&'static self) -> bool {
         let physical_address = NonNull::from_ref(self).expose_provenance();
         let stored = init_state().set_supervisor(physical_address);
         if stored {
             init_state().set_processor_id_lookup_fn(Self::processor_id_by_index);
-            // Register the conformed AP startup function for this platform
             init_state().set_ap_startup_fn(Self::start_ap_procedure_trampoline);
         }
         stored
     }
 
-    /// Gets the static MM Supervisor Core instance for global access.
+    /// Returns the instance stored by [`Self::set_instance`].
+    ///
+    /// ## Panics
+    ///
+    /// Panics if no instance has been stored.
     pub(crate) fn instance<'a>() -> &'a Self {
-        // SAFETY: The pointer is guaranteed to be valid as set_instance ensures single initialization.
+        // SAFETY: `set_instance` stores the address of a `&'static Self` and accepts only the
+        // first one, so the address stays valid and never changes.
         unsafe {
             NonNull::<Self>::with_exposed_provenance(
                 init_state().supervisor().expect("MM Supervisor Core is not initialized."),
@@ -112,46 +114,45 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         }
     }
 
-    /// The entry point for the MM Supervisor Core.
+    /// Entry point for every core, BSP and APs.
     ///
-    /// This function is called on all cores (BSP and APs). The BSP performs initialization
-    /// and enters the request serving loop, while APs enter the holding pen.
+    /// On a core's first entry the BSP runs one-time initialization and starts the user core,
+    /// then every core runs per-core initialization. The BSP returns only after every registered
+    /// core has finished. On later entries the BSP serves the pending request while the APs wait
+    /// in the holding pen, and each core returns once the APs have been released.
+    ///
+    /// ## Panics
+    ///
+    /// Panics if entry fails. The supervisor cannot continue from a failed entry.
     ///
     /// ## Safety
     ///
-    /// This function is unsafe because it is called from the MM entry point and assumes the environment
-    /// is properly set up.
-    ///
-    /// `hob_list` must be valid during BSP initialization. It is not accessed on runtime entries.
+    /// Must be called from the MM entry path on each core, with the environment the MM IPL sets
+    /// up. `hob_list` must point to a valid HOB list during the BSP's first entry. It is not read
+    /// on later entries.
     pub unsafe fn entry_point(&'static self, cpu_index: usize, hob_list: *const c_void) {
-        // This wrapper ensures that any error from the internal entry point
-        // results in a panic.
-        // SAFETY: Same safety guarantees as `entry_point` apply.
+        // SAFETY: the caller upholds `entry_point_internal`'s contract, which is the same.
         if let Err(err) = unsafe { self.entry_point_internal(cpu_index, hob_list) } {
             panic!("Failed to enter MM Supervisor Core internal entry point: {err:?}");
         }
     }
 
-    /// Internal entry point for the MM Supervisor Core.
+    /// Runs [`Self::entry_point`], returning any failure instead of panicking.
     ///
-    /// Returns `Ok(())` on successful entry.
+    /// ## Safety
     ///
-    /// # Safety
-    ///
-    /// This function is unsafe for the same reasons as `entry_point`.
+    /// Same contract as [`Self::entry_point`].
     unsafe fn entry_point_internal(&'static self, cpu_index: usize, hob_list: *const c_void) -> MmSupervisorResult<()> {
-        // Get the current CPU's APIC ID, EBX[31:24] contains the initial APIC ID
         let cpu_id = current_apic_id();
 
-        // Determine if we're BSP by checking IA32_APIC_BASE MSR
+        // The BSP flag in IA32_APIC_BASE identifies the BSP.
         let is_bsp = is_bsp();
 
         log::trace!("CPU {cpu_id} (index {cpu_index}) entering MM Supervisor Core (BSP: {is_bsp})");
         let core_initialized = core_already_initialized(cpu_index)?;
 
-        // Check if this core has already completed initialization (per-core check)
         if core_initialized {
-            // Subsequent entry: go directly to request loop or holding pen (does not return)
+            // Later entry: serve the request or wait in the holding pen, then return.
             log::trace!("CPU {cpu_id} (index {cpu_index}) re-entering MM Supervisor Core, skipping initialization.");
             smrr_enable();
             if is_bsp {
@@ -164,9 +165,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         let _init_guard = self.init_lock.lock();
 
-        // First entry: initialization phase
         if is_bsp {
-            // BSP path: Initialize the supervisor
             assert!(self.set_instance(), "MM Supervisor Core instance was already set!");
             assert!(!hob_list.is_null(), "MM Supervisor Core requires a non-null HOB list pointer.");
 
@@ -175,14 +174,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
             self.cpu_manager.register_cpu(cpu_id, cpu_index, true)?;
 
-            // Perform BSP-only one-time initialization.
-            // SAFETY: `hob_list` is provided by the MM IPL and is guaranteed to
-            // be a valid HOB list (the caller asserts it is non-null before
-            // dispatching).
+            // SAFETY: `hob_list` was checked non-null above, and the caller guarantees it points
+            // to a valid HOB list during the BSP's first entry.
             let hob_hand_off_table = unsafe { hob_list.cast::<PhaseHandoffInformationTable>().as_ref_unchecked() };
             let user_hob_list = self.bsp_init(hob_hand_off_table)?;
 
-            // Dispatch to the user level entry point discovered from the HOB list (if found)
+            // Demote to the user core entry point found in the HOB list.
             let user_entry = init_state()
                 .user_entry_point()
                 .filter(|&entry| entry != 0)
@@ -190,9 +187,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
             let cpl3_stack = self.syscall_interface.get_cpl3_stack(cpu_index)?;
 
-            // SAFETY: We are transitioning from the supervisor (CPL0) to the user module (CPL3) for the first time.
-            // The entry point and stack have been validated and set up during initialization, and the user module is
-            // responsible for validating any further inputs.
+            // SAFETY: this is the first transition from the supervisor (CPL0) to the user core
+            // (CPL3). Initialization set up and validated the entry point and stack, and the user
+            // core validates any further inputs.
             let ret = unsafe {
                 invoke_demoted_routine(
                     cpu_index,
@@ -206,16 +203,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             };
             log::info!("Returned from user entry point with value: 0x{ret:016x}");
 
-            // Mark BSP init as complete so APs can proceed
+            // Let the waiting APs proceed.
             self.initialized.store(true, Ordering::Release);
             init_state().mark_bsp_init_complete();
 
             log::info!("BSP initialization complete.");
         } else {
-            // AP path: Wait for BSP to complete one-time initialization
             log::info!("AP (CPU {cpu_id}, index {cpu_index}) waiting for BSP initialization...");
 
-            // Spin until BSP completes initialization
             while !init_state().is_bsp_init_complete() {
                 core::hint::spin_loop();
             }
@@ -223,17 +218,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             self.cpu_manager.register_cpu(cpu_id, cpu_index, false)?;
         }
 
-        // All cores perform per-core initialization
         self.per_core_init(cpu_id, is_bsp)?;
 
-        // Mark this core as initialized in the per-core buffer
         mark_core_initialized(cpu_index)?;
 
-        // Track that this core has completed per-core init
         let init_count = init_state().inc_per_core_init_count();
         log::info!("CPU {cpu_id} (index {cpu_index}) completed per-core init ({init_count} cores initialized)");
 
-        // BSP waits for all registered CPUs to complete per-core init before returning
+        // The BSP returns only after every registered CPU has finished per-core init.
         if is_bsp {
             let expected_cpus = self.cpu_manager.registered_count();
             while init_state().per_core_init_count() < expected_cpus as u32 {
@@ -243,12 +235,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             log::info!("All {expected_cpus} cores completed initialization, returning to caller.");
         }
 
-        // First entry returns to caller after init is complete
-        // (Each core has already marked itself as initialized via mark_core_initialized)
         Ok(())
     }
 
-    /// Get the CPU manager.
+    /// Returns the CPU manager.
     pub fn cpu_manager(&self) -> &CpuManager<MAX_CPUS> {
         &self.cpu_manager
     }
@@ -258,7 +248,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         Self::instance().cpu_manager.get_cpu_id_by_index(cpu_index).map(u64::from)
     }
 
-    /// Get the mailbox manager.
+    /// Returns the mailbox manager.
     pub fn mailbox_manager(&self) -> &MailboxManager<MAX_CPUS> {
         &self.mailbox_manager
     }

@@ -1,30 +1,28 @@
-//! Syscall Interface Setup
+//! Syscall interface setup.
 //!
-//! This module handles the initialization of the syscall interface used for privilege level
-//! transitions. It records the CPL3 stack array base, the per-CPU stack size and the configured
-//! CPU count, and hands out each CPU's CPL3 stack top for Ring 3 demotion.
+//! Records the CPL3 stack array base, the per-CPU stack size and the CPU count, and returns
+//! each CPU's CPL3 stack top for Ring 3 demotion.
 //!
 //! ## MSR Configuration
 //!
-//! `invoke_demoted_routine` programs these MSRs in situ before each demotion and restores them on
-//! return.
+//! `invoke_demoted_routine` programs these MSRs before each demotion and restores them on
+//! return:
 //!
-//! - `MSR_IA32_STAR`: Contains segment selectors for syscall/sysret
-//!   - Bits 63:48 = SYSRET CS and SS base (`LONG_CS_R3_PH`)
-//!   - Bits 47:32 = SYSCALL CS and SS base (`LONG_CS_R0`)
+//! - `MSR_IA32_STAR`: segment selectors for syscall/sysret
+//!   - Bits 63:48 = sysret CS and SS base (`LONG_CS_R3_PH`)
+//!   - Bits 47:32 = syscall CS and SS base (`LONG_CS_R0`)
 //!
-//! - `MSR_IA32_LSTAR`: Contains the 64-bit RIP for syscall entry (`syscall_center`)
+//! - `MSR_IA32_LSTAR`: 64-bit RIP of the syscall entry (`syscall_center`)
 //!
-//! - `MSR_IA32_FMASK`: RFLAGS bits the CPU clears on `syscall` entry. `syscall` performs
-//!   no other flag sanitization, so this is the only thing preventing Ring 3 from choosing the
-//!   flags Ring 0 executes under - most importantly DF, which reverses compiler-emitted
-//!   `rep movs`, and AC, which suppresses SMAP.
+//! - `MSR_IA32_FMASK`: RFLAGS bits the CPU clears on `syscall` entry. `syscall` does no
+//!   other flag sanitization, so this is the only thing that stops Ring 3 from choosing the
+//!   flags Ring 0 runs under, in particular DF, which reverses compiler-emitted `rep movs`,
+//!   and AC, which disables SMAP.
 //!
-//! - `MSR_IA32_EFER`: Extended Feature Enable Register
-//!   - Bit 0 (SCE) must be set to enable syscall/sysret
+//! - `MSR_IA32_EFER`: bit 0 (SCE) enables syscall/sysret
 //!
-//! - `MSR_IA32_KERNEL_GS_BASE`: Used with swapgs to switch between user and kernel
-//!   GS base addresses, allowing access to per-CPU data in the syscall handler.
+//! - `MSR_IA32_KERNEL_GS_BASE`: after swapgs, GS points at the slots holding the supervisor
+//!   stack pointer and the saved Ring 3 stack pointer for the syscall entry stub.
 //!
 //! ## License
 //!
@@ -59,11 +57,7 @@ impl fmt::Display for SyscallSetupError {
     }
 }
 
-/// Internal state for the syscall interface.
-///
-/// ## Const Generic Parameters
-///
-/// - `MAX_CPUS` - The maximum number of CPUs that can be supported.
+/// Internal state for the syscall interface. `MAX_CPUS` is the maximum supported CPU count.
 struct SyscallInterfaceState<const MAX_CPUS: usize> {
     /// Number of CPUs configured.
     num_cpus: usize,
@@ -74,25 +68,20 @@ struct SyscallInterfaceState<const MAX_CPUS: usize> {
 }
 
 impl<const MAX_CPUS: usize> SyscallInterfaceState<MAX_CPUS> {
-    /// Creates the state every field zeroed, before [`SyscallInterface::init`] fills it in.
+    /// Creates zeroed state; [`SyscallInterface::init`] fills it in.
     const fn new() -> Self {
         Self { num_cpus: 0, cpl3_stack_base: 0, stack_size: 0 }
     }
 }
 
-/// Syscall interface manager.
+/// Syscall interface state shared by all CPUs.
 ///
-/// Manages the syscall/sysret MSR configuration for all CPUs and provides
-/// the infrastructure for Ring 0 ↔ Ring 3 transitions.
-///
-/// ## Const Generic Parameters
-///
-/// - `MAX_CPUS` - The maximum number of CPUs that can be supported.
-///   This should match the `MAX_CPUS` const generic of `MmSupervisorCore`.
+/// Holds the CPL3 stack layout used for transitions between Ring 0 and Ring 3. `MAX_CPUS` is
+/// the maximum supported CPU count and should match the `MAX_CPUS` of `MmSupervisorCore`.
 pub struct SyscallInterface<const MAX_CPUS: usize> {
     /// Whether the interface has been initialized.
     initialized: AtomicBool,
-    /// Internal state protected by mutex.
+    /// Internal state.
     state: Mutex<SyscallInterfaceState<MAX_CPUS>>,
 }
 
@@ -102,12 +91,13 @@ impl<const MAX_CPUS: usize> SyscallInterface<MAX_CPUS> {
         Self { initialized: AtomicBool::new(false), state: Mutex::new(SyscallInterfaceState::new()) }
     }
 
-    /// Initializes the syscall interface.
+    /// Initializes the syscall interface. Call once during BSP initialization.
     ///
-    /// This should be called once during BSP initialization. `num_cpus` must be less than or
-    /// equal to `MAX_CPUS`.
+    /// ## Errors
+    ///
+    /// Returns `AlreadyInitialized` on a second call, and `InvalidCpuIndex` if `num_cpus` is 0
+    /// or greater than `MAX_CPUS`. A rejected call leaves the interface uninitialized.
     pub fn init(&self, num_cpus: usize, cpl3_stack_base: u64, stack_size: usize) -> Result<(), SyscallSetupError> {
-        // Check if already initialized
         if self.initialized.swap(true, Ordering::SeqCst) {
             log::error!("Syscall interface init rejected: already initialized");
             return Err(SyscallSetupError::AlreadyInitialized);
@@ -131,19 +121,17 @@ impl<const MAX_CPUS: usize> SyscallInterface<MAX_CPUS> {
         Ok(())
     }
 
-    /// Checks if the syscall interface is initialized.
+    /// Returns whether the syscall interface is initialized.
     pub fn is_initialized(&self) -> bool {
         self.initialized.load(Ordering::Acquire)
     }
 
-    /// Gets the CPL3 stack pointer for a specific CPU.
+    /// Returns the top of the CPL3 stack for `cpu_index` (stacks grow down):
+    /// `cpl3_stack_base + stack_size * (cpu_index + 1) - sizeof(usize)`. The calculation wraps
+    /// instead of panicking on overflow.
     ///
-    /// The stack pointer is calculated as:
-    /// `cpl3_stack_base + stack_size * (cpu_index + 1) - sizeof(usize)`
-    ///
-    /// This gives the top of the stack for the CPU (stacks grow downward).
-    /// TODO: Might just want to allocate a page on the fly before demotion and free the pointer
-    /// upon returning instead of messing with the pre-allocated stack array.
+    /// TODO: Consider allocating a page before demotion and freeing it on return instead of
+    /// using the pre-allocated stack array.
     pub fn get_cpl3_stack(&self, cpu_index: usize) -> Result<u64, SyscallSetupError> {
         if !self.is_initialized() {
             log::error!("SyscallInterface not initialized");
@@ -156,7 +144,6 @@ impl<const MAX_CPUS: usize> SyscallInterface<MAX_CPUS> {
             return Err(SyscallSetupError::InvalidCpuIndex);
         }
 
-        // Calculate stack top: base + size * (index + 1) - sizeof(usize)
         let stack_top = state
             .cpl3_stack_base
             .wrapping_add((state.stack_size as u64) * ((cpu_index as u64) + 1))
@@ -260,7 +247,6 @@ mod tests {
     #[test]
     fn test_max_cpus_exceeded() {
         let interface: SyscallInterface<4> = SyscallInterface::new();
-        // Try to init with more CPUs than the const generic allows
         assert_eq!(interface.init(8, 0x10000, 0x4000), Err(SyscallSetupError::InvalidCpuIndex));
         // A rejected count must leave the interface uninitialized rather than half-configured.
         assert!(!interface.is_initialized());

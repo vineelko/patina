@@ -1,6 +1,6 @@
-//! Hob related module used by the Supervisor
+//! HOB Handling for the MM Supervisor
 //!
-//! - [`validation`] - is what the HOBs describe safe to act on
+//! - [`validation`] - checks that what the HOBs describe is safe to act on
 //! - [`pass_down`] - the MM Supervisor `PassDown` payload, and parsing it from raw bytes
 //!
 //! ## License

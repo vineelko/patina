@@ -1,7 +1,7 @@
-//! Supervisor Request Dispatcher
+//! Supervisor request dispatcher.
 //!
-//! Handles structured requests from the non-MM environment via the
-//! `MM_SUPERVISOR_REQUEST_HANDLER_GUID` protocol.
+//! Handles structured requests the non-MM environment sends with
+//! `MM_SUPERVISOR_REQUEST_HANDLER_GUID`.
 //!
 //! ## License
 //!
@@ -20,17 +20,16 @@ use patina::management_mode::protocol::mm_supervisor_request::{
     MmSupervisorRequestHeader, REVISION, RequestType, SIGNATURE,
 };
 
-/// MM Supervisor request handler implementation.
+/// Handles MM Supervisor requests from the non-MM environment:
+/// - [`RequestType::UnblockMem`]: unblock memory regions
+/// - [`RequestType::FetchPolicy`]: fetch the security policy
+/// - [`RequestType::VersionInfo`]: query supervisor version information
+/// - [`RequestType::CommUpdate`]: update the communication buffer configuration
 ///
-/// Handles structured requests from the non-MM environment, such as:
-/// - [`RequestType::UnblockMem`]: Unblock memory regions
-/// - [`RequestType::FetchPolicy`]: Fetch security policy
-/// - [`RequestType::VersionInfo`]: Query supervisor version information
-/// - [`RequestType::CommUpdate`]: Update communication buffer configuration
-///
-/// The buffer is expected to contain an [`MmSupervisorRequestHeader`] at the start.
-/// On return, the header's `result` field is set and any response payload follows
-/// immediately after the header.
+/// The buffer starts with an [`MmSupervisorRequestHeader`]. The request status is written to
+/// the header `result` field, and any response payload follows the header. The return value
+/// reports only communication-level errors: a malformed header is rejected, and any request that
+/// reaches dispatch returns `SUCCESS`.
 pub(crate) fn mm_supv_request_handler(comm_buffer: *mut u8, comm_buffer_size: &mut usize) -> efi::Status {
     if comm_buffer.is_null() || *comm_buffer_size < MmSupervisorRequestHeader::SIZE {
         log::error!(
@@ -41,24 +40,21 @@ pub(crate) fn mm_supv_request_handler(comm_buffer: *mut u8, comm_buffer_size: &m
         return efi::Status::INVALID_PARAMETER;
     }
 
-    // SAFETY: The caller provides a readable communication buffer and the checks above establish
-    // that it contains a complete header. `read_unaligned` also accepts firmware buffers that are
-    // not naturally aligned for `MmSupervisorRequestHeader`.
+    // SAFETY: the caller provides a readable communication buffer, and the checks above show it
+    // holds a complete header. `read_unaligned` accepts buffers that are not aligned for
+    // `MmSupervisorRequestHeader`.
     let header = unsafe { comm_buffer.cast::<MmSupervisorRequestHeader>().read_unaligned() };
 
-    // Validate signature
     if header.signature != SIGNATURE {
         log::error!("MmSupvRequestHandler: invalid signature 0x{:08X}, expected 0x{:08X}", header.signature, SIGNATURE);
         return efi::Status::INVALID_PARAMETER;
     }
 
-    // Validate revision
     if header.revision > REVISION {
         log::error!("MmSupvRequestHandler: unsupported revision {}, max supported {}", header.revision, REVISION);
         return efi::Status::UNSUPPORTED;
     }
 
-    // Dispatch by request type
     let status = match RequestType::try_from(header.request) {
         Ok(RequestType::VersionInfo) => {
             log::debug!("Processing VERSION_INFO request");
@@ -83,25 +79,20 @@ pub(crate) fn mm_supv_request_handler(comm_buffer: *mut u8, comm_buffer_size: &m
         }
     };
 
-    // Write the final status into the request header's result field.
     write_request_result(comm_buffer, status);
 
-    // The handler's return value is only for indicating communication-level errors
-    // (e.g., interrupt is being handled or not), in this case we handled the request successfully.
+    // The return value reports communication-level errors only; the request status is in the
+    // header.
     efi::Status::SUCCESS
 }
 
-/// Write an [`efi::Status`] into the request header's `result` field.
+/// Writes `status` into the request header `result` field, as its raw value widened to `u64`
+/// like the C `MM_SUPERVISOR_REQUEST_HEADER.Result`.
 ///
-/// The status is stored as its raw `usize` representation cast to `u64`,
-/// matching the C `MM_SUPERVISOR_REQUEST_HEADER.Result` convention.
-///
-/// ## Requirements
-///
-/// `comm_buffer` must point to at least `MmSupervisorRequestHeader::SIZE` bytes of writable memory.
+/// `comm_buffer` must point to at least `MmSupervisorRequestHeader::SIZE` writable bytes.
 fn write_request_result(comm_buffer: *mut u8, status: efi::Status) {
-    // SAFETY: The dispatcher validated that the buffer contains a writable header. Unaligned
-    // reads and writes avoid imposing an alignment requirement on the communication buffer.
+    // SAFETY: the dispatcher checked that the buffer holds a writable header. Unaligned reads and
+    // writes avoid an alignment requirement on the communication buffer.
     unsafe {
         let mut header = comm_buffer.cast::<MmSupervisorRequestHeader>().read_unaligned();
         header.result = status.as_usize() as u64;

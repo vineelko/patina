@@ -1,4 +1,4 @@
-//! `FETCH_POLICY` Request Handler
+//! `FETCH_POLICY` request handler.
 //!
 //! ## License
 //!
@@ -24,10 +24,10 @@ use crate::{
 
 /// The state a `FETCH_POLICY` request reads and the effects it has.
 trait FetchPolicyContext {
-    /// The policy gate type this context supplies.
+    /// The policy gate type.
     type Gate;
 
-    /// Returns the policy gate, or `None` when none was installed.
+    /// Returns the policy gate, or `None` if none was installed.
     fn policy_gate(&self) -> Option<&Self::Gate>;
     /// Returns whether the gate is locked, which selects verify over snapshot.
     fn is_locked(&self, gate: &Self::Gate) -> bool;
@@ -41,11 +41,11 @@ trait FetchPolicyContext {
     fn fetch_policy(&self, gate: &Self::Gate, destination: &mut [u8]) -> MmSupervisorResult<usize>;
 }
 
-/// The live [`FetchPolicyContext`], reading the supervisor's own global state.
+/// The [`FetchPolicyContext`] backed by the supervisor's global state.
 struct SupervisorFetchPolicyContext<'a> {
-    /// The installed policy gate, if initialization got far enough to install one.
+    /// The installed policy gate, if initialization installed one.
     gate: Option<&'a PolicyGate>,
-    /// The tracker that stops accepting unblock requests once the gate locks.
+    /// Tracker that stops accepting unblock requests once the gate locks.
     unblocked_tracker: &'a UnblockedMemoryTracker,
 }
 
@@ -61,8 +61,8 @@ impl FetchPolicyContext for SupervisorFetchPolicyContext<'_> {
     }
 
     fn take_snapshot(&self, gate: &Self::Gate) -> MmSupervisorResult<()> {
-        // SAFETY: CR3 points to the active root page table inside MM, and the
-        // memory policy buffer was configured during initialization.
+        // SAFETY: CR3 points to the active page table in MM, and initialization configured the
+        // memory policy buffer.
         unsafe { gate.take_snapshot(read_cr3(), is_range_inside_mmram) }.map(|_| ())
     }
 
@@ -75,24 +75,24 @@ impl FetchPolicyContext for SupervisorFetchPolicyContext<'_> {
     }
 
     fn fetch_policy(&self, gate: &Self::Gate, destination: &mut [u8]) -> MmSupervisorResult<usize> {
-        // SAFETY: `destination` is a live mutable slice and therefore writable for its full length.
+        // SAFETY: `destination` is a mutable slice, so it is writable for its full length.
         unsafe { gate.fetch_and_update_policy(destination.as_mut_ptr(), destination.len()) }
     }
 }
 
 /// The scratch allocation and comparison a snapshot verification needs.
 trait SnapshotVerificationContext {
-    /// Returns how many descriptors the recorded baseline holds, or `None` when there is none.
+    /// Returns the number of descriptors in the recorded baseline, or `None` if there is none.
     fn snapshot_count(&self) -> Option<usize>;
     /// Allocates `pages` of scratch for a fresh page table walk.
     fn allocate_scratch(&self, pages: usize) -> Result<u64, ()>;
     /// Walks the page table into `scratch` and compares it against the baseline.
     fn verify_snapshot(&self, scratch: *mut MemDescriptorV1_0, max_count: usize) -> MmSupervisorResult<()>;
-    /// Returns the scratch pages, which runs whether or not the comparison passed.
+    /// Frees the scratch pages. Runs whether or not the comparison passed.
     fn free_scratch(&self, base: u64, pages: usize) -> Result<(), ()>;
 }
 
-/// The live [`SnapshotVerificationContext`], allocating from the supervisor's page allocator.
+/// The [`SnapshotVerificationContext`] backed by the supervisor's page allocator.
 struct SupervisorSnapshotVerificationContext<'a> {
     /// The gate holding the baseline to compare against.
     gate: &'a PolicyGate,
@@ -124,22 +124,13 @@ impl SnapshotVerificationContext for SupervisorSnapshotVerificationContext<'_> {
     }
 }
 
-/// Handle a `FETCH_POLICY` request.
+/// Handles a `FETCH_POLICY` request by returning the merged firmware and memory policy.
 ///
-/// Returns the merged memory + firmware policy to the caller.
-///
-/// ## Behaviour
-///
-/// 1. **First-time call (before lock):** takes a memory policy snapshot, saves it,
-///    and closes the unblock-memory channel (whichever of `MmReadyToLock` or
-///    `FETCH_POLICY` fires first performs this transition).
-/// 2. **Subsequent calls (after lock):** re-walks the page table and compares the
-///    fresh result against the saved snapshot. Any discrepancy is a security
-///    violation.
-/// 3. **Merges** the memory policy snapshot with the static firmware policy blob
-///    from the policy gate and writes the combined result into `comm_buffer`.
-///
-/// ## Response layout
+/// 1. Before lock, the call takes the memory policy snapshot and closes the unblock memory
+///    channel. Whichever of `MmReadyToLock` and `FETCH_POLICY` comes first does this.
+/// 2. After lock, the call walks the page table again and compares it with the snapshot. Any
+///    difference is a security violation.
+/// 3. The snapshot is merged with the firmware policy blob and written to `comm_buffer`:
 ///
 /// ```text
 /// |----------------------------------|
@@ -157,8 +148,8 @@ pub(super) fn handle_fetch_policy(comm_buffer: *mut u8, comm_buffer_size: &mut u
         return efi::Status::INVALID_PARAMETER;
     }
 
-    // SAFETY: The communication handler contract guarantees that `comm_buffer` is writable for
-    // `comm_buffer_size` bytes. The null check above satisfies `from_raw_parts_mut` for all lengths.
+    // SAFETY: the communication handler contract makes `comm_buffer` writable for
+    // `comm_buffer_size` bytes, and it is non-null (checked above).
     let buffer = unsafe { core::slice::from_raw_parts_mut(comm_buffer, *comm_buffer_size) };
     let context = SupervisorFetchPolicyContext {
         gate: security_state().policy_gate(),
@@ -184,14 +175,12 @@ fn process_fetch_policy<C: FetchPolicyContext>(comm_buffer: &mut [u8], context: 
         return (efi::Status::NOT_READY, MmSupervisorRequestHeader::SIZE);
     };
 
-    // -- 1. Ensure we have a snapshot (lock if not yet locked) ------------
+    // Steps 1 and 2: after lock, verify against the snapshot; before lock, take it and lock.
     if context.is_locked(gate) {
-        // -- 2. Already locked - verify that current page table matches snapshot
         if let Err(status) = context.verify_snapshot(gate) {
             return (status, MmSupervisorRequestHeader::SIZE);
         }
     } else {
-        // Policy requested prior to ready to lock - enforce lock now.
         log::info!("FETCH_POLICY: not yet locked - taking snapshot and locking now");
         if let Err(err) = context.take_snapshot(gate) {
             log::error!("FETCH_POLICY: take_snapshot failed: {err:?}");
@@ -200,11 +189,11 @@ fn process_fetch_policy<C: FetchPolicyContext>(comm_buffer: &mut [u8], context: 
         context.lock_unblocked_memory();
     }
 
-    // -- 3. Write the merged policy into the comm buffer (after the header) -
+    // Step 3: write the merged policy after the header.
     let payload_written = match context.fetch_policy(gate, payload) {
         Ok(written) => written,
         Err(MmSupervisorError::PolicyGate(PolicyGateError::InternalError)) => {
-            // Could be buffer-too-small, size overflow, or missing snapshot.
+            // Buffer too small, size overflow, or missing snapshot.
             log::error!("FETCH_POLICY: fetch_and_update_policy failed");
             return (efi::Status::BUFFER_TOO_SMALL, MmSupervisorRequestHeader::SIZE);
         }
@@ -233,16 +222,18 @@ fn process_fetch_policy<C: FetchPolicyContext>(comm_buffer: &mut [u8], context: 
     (efi::Status::SUCCESS, total_response)
 }
 
-/// Walks the page table and compares the result against the saved snapshot
-/// inside `PolicyGate`. Allocates a temporary scratch buffer from `context`
-/// for the fresh walk.
+/// Walks the page table into a scratch buffer from `context` and compares it with the saved
+/// snapshot in the `PolicyGate`.
 ///
-/// Returns `Ok(())` if the tables match, or an `efi::Status` error on mismatch
-/// or allocation failure.
+/// ## Errors
+///
+/// Returns `SECURITY_VIOLATION` if there is no snapshot or the tables differ,
+/// `OUT_OF_RESOURCES` if the scratch buffer cannot be allocated, and `DEVICE_ERROR` if a size
+/// overflows or the scratch buffer cannot be freed.
 fn verify_policy_snapshot<C: SnapshotVerificationContext>(context: &C) -> Result<(), efi::Status> {
     let Some(saved_count) = context.snapshot_count() else {
-        // Reaching here means the gate reported itself locked without a snapshot behind it.
-        // Nothing to compare against is not a pass.
+        // The gate reported itself locked without a snapshot. Nothing to compare against is not
+        // a pass.
         log::error!("verify_policy_snapshot: no snapshot to verify against");
         return Err(efi::Status::SECURITY_VIOLATION);
     };

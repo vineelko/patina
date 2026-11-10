@@ -22,7 +22,8 @@
 .endef
 
 .align 8
-# Shim layer that redefines the contract between runtime module and init.
+# efi_main jumps to rust_main, which the platform binary provides. The jump leaves the
+# argument registers and the stack untouched.
 efi_main:
 
     jmp     rust_main

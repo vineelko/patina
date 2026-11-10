@@ -1,5 +1,8 @@
 //! Architectural Intrinsics for the MM Supervisor Core
 //!
+//! Wrappers for the MSR, CPUID, control register, descriptor table and SMAP instructions the
+//! supervisor uses.
+//!
 //! ## License
 //!
 //! Copyright (c) Microsoft Corporation.
@@ -9,11 +12,11 @@
 
 use core::arch::x86_64::{__cpuid, CpuidResult};
 
-/// Pointer structure used by the `SIDT` / `LIDT` (and `SGDT` / `LGDT`) instructions.
+/// Pointer structure used by the SIDT and LIDT (and SGDT and LGDT) instructions.
 ///
 /// Layout matches the Intel SDM: a 16-bit limit followed by a 64-bit base.
-/// `packed(2)` produces the expected 10-byte on-the-wire representation with no
-/// internal padding between `limit` and `base`.
+/// `packed(2)` gives the expected 10-byte in-memory layout with no padding between `limit` and
+/// `base`.
 #[repr(C, packed(2))]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DescriptorTablePointer {
@@ -42,10 +45,9 @@ const IA32_APIC_BSP: u64 = 1 << 8;
 pub unsafe fn read_msr(msr: u32) -> u64 {
     let lo: u32;
     let hi: u32;
-    // SAFETY: Reading the MSR is memory safe as long as the caller ensures the
-    //         MSR index is valid. But this could also reveal the contents of
-    //         the MSR, which is why we should guard this behind the syscall
-    //         gate and only allow access to certain MSRs.
+    // SAFETY: the caller guarantees the MSR index is valid and readable, and `rdmsr` touches no
+    //         memory. Reading can still disclose the MSR's contents, so Ring 3 access should stay
+    //         behind the syscall gate and be limited to specific MSRs.
     unsafe {
         core::arch::asm!(
             "rdmsr",
@@ -68,10 +70,9 @@ pub unsafe fn read_msr(msr: u32) -> u64 {
 pub unsafe fn write_msr(msr: u32, value: u64) {
     let lo = value as u32;
     let hi = (value >> 32) as u32;
-    // SAFETY: Writing the MSR is memory safe as long as the caller ensures the
-    //         MSR index is valid and writable (guaranteed by this function's
-    //         `unsafe` contract). `wrmsr` writes only the selected MSR from
-    //         EDX:EAX and touches no memory (nomem, nostack).
+    // SAFETY: the caller guarantees the MSR index is valid and writable (this function's
+    //         `unsafe` contract). `wrmsr` writes only the selected MSR from EDX:EAX and
+    //         touches no memory (nomem, nostack).
     unsafe {
         core::arch::asm!(
             "wrmsr",
@@ -85,38 +86,34 @@ pub unsafe fn write_msr(msr: u32, value: u64) {
 
 /// Returns the raw CPUID leaf 1 (version information) result for the current CPU.
 ///
-/// The initial APIC ID is in `EBX[31:24]` of the returned [`CpuidResult`]; callers extract it.
+/// The initial APIC ID is in EBX[31:24] of the returned [`CpuidResult`]; callers extract it.
 /// Depends on the running processor's `cpuid` state, which cannot be exercised
 /// deterministically in a host-based unit test.
 pub fn get_current_cpu_id() -> CpuidResult {
-    // Use CPUID to get the initial APIC ID
-    // CPUID function 0x01
-
-    // CPUID is always available on x86_64 and `__cpuid` is a safe intrinsic.
+    // CPUID is always available on x86_64, and `__cpuid` is a safe intrinsic.
     __cpuid(CPUID_VERSION_INFO)
 }
 
 /// Returns the APIC ID of the processor executing this call.
 ///
-/// The initial APIC ID is `EBX[31:24]` of CPUID leaf 1.
+/// The initial APIC ID is EBX[31:24] of CPUID leaf 1.
 pub fn current_apic_id() -> u32 {
     (get_current_cpu_id().ebx >> 24) & 0xff
 }
 
-/// Checks if the current processor is the Bootstrap Processor (BSP).
+/// Returns whether the current processor is the Bootstrap Processor (BSP).
 ///
-/// This reads the `IA32_APIC_BASE` MSR and checks the BSP flag (bit 8).
-/// The BSP flag is set by hardware during reset and indicates which
-/// processor is the bootstrap processor.
-/// Reads the `IA32_APIC_BASE` MSR via the privileged `rdmsr` instruction, which
-/// faults outside ring 0 and cannot run in a host-based unit test.
+/// Reads the BSP flag (bit 8) of the `IA32_APIC_BASE` MSR, which hardware sets at reset on the
+/// bootstrap processor. `rdmsr` faults outside ring 0, so this cannot run in a host-based unit
+/// test.
 pub fn is_bsp() -> bool {
-    // SAFETY: The IA32_APIC_BASE MSR is safe to read on x86_64.
+    // SAFETY: IA32_APIC_BASE is an architectural MSR on every x86_64 CPU, and reading it has no
+    // side effects.
     let apic_base = unsafe { read_msr(IA32_APIC_BASE_MSR_INDEX) };
     (apic_base & IA32_APIC_BSP) != 0
 }
 
-/// Read CR3 register.
+/// Reads the CR3 register. Returns 0 in unit tests.
 pub(crate) fn read_cr3() -> u64 {
     let value: u64;
 
@@ -127,8 +124,7 @@ pub(crate) fn read_cr3() -> u64 {
 
     #[cfg(not(test))]
     {
-        // SAFETY: inline asm is inherently unsafe because Rust can't reason about it.
-        // In this case we are reading the CR3 register, which is a safe operation.
+        // SAFETY: reading CR3 has no side effects and touches no memory.
         unsafe {
             core::arch::asm!("mov {}, cr3", out(reg) value, options(nostack, preserves_flags));
         }
@@ -137,20 +133,19 @@ pub(crate) fn read_cr3() -> u64 {
     value
 }
 
-/// Read the current IDT Register (IDTR) via the `SIDT` instruction.
+/// Reads the IDT register (IDTR) with SIDT.
 ///
-/// Returns a [`DescriptorTablePointer`] containing the IDT base and limit.
+/// Returns a zeroed [`DescriptorTablePointer`] in unit tests.
 pub(crate) fn read_idtr() -> DescriptorTablePointer {
     let rt_descriptor = DescriptorTablePointer { limit: 0, base: 0 };
 
-    // On the real firmware target, populate it via `SIDT`. The asm-free builds
-    // (tests / non-x86_64) keep the zero-initialized value, so no mutable binding
-    // is introduced where it would go unused.
+    // Outside unit tests, fill it with SIDT. Test builds keep the zeroed value, so no mutable
+    // binding is left unused there.
     #[cfg(not(test))]
     let rt_descriptor = {
         let mut descriptor = rt_descriptor;
-        // SAFETY: SIDT stores the 10-byte IDTR pseudo-descriptor to the specified
-        // memory location. This is a read-only operation on CPU state.
+        // SAFETY: SIDT writes the 10-byte IDTR pseudo-descriptor to `descriptor`, a local with
+        // exactly that layout, and only reads CPU state.
         unsafe {
             core::arch::asm!(
                 "sidt [{}]",
@@ -164,7 +159,7 @@ pub(crate) fn read_idtr() -> DescriptorTablePointer {
     rt_descriptor
 }
 
-/// Helper function to disable the SMAP bit in EFLAGS to allow supervisor code to access user memory when needed.
+/// Sets EFLAGS.AC with `stac`, which lets supervisor code access user pages despite SMAP.
 ///
 /// ## Safety
 ///
@@ -186,7 +181,7 @@ pub(crate) unsafe fn disable_smap() {
     }
 }
 
-/// Helper function to re-enable the SMAP bit in EFLAGS after accessing user memory.
+/// Clears EFLAGS.AC with `clac`, restoring SMAP protection after a user-memory access.
 ///
 /// ## Safety
 ///

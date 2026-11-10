@@ -1,8 +1,8 @@
 //! `MmSupervisorCore` Runtime Phase
 //!
 //! The dispatch loop the BSP runs and the holding pen the APs wait in, entered
-//! on every MMI after the first. Nothing here returns to the caller: a core
-//! either serves requests until the next `RSM` or waits for work from the BSP.
+//! on every MMI after the first. Each core returns to its caller once the BSP has
+//! served the request and every AP has left the holding pen.
 //!
 //! ## License
 //!
@@ -44,7 +44,7 @@ const AP_EXIT_TIMEOUT_US: u64 = 1_000_000;
 const AP_TIMEOUT_US: u64 = 10_000_000;
 
 impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
-    /// Enter runtime mode (called on subsequent entries after init is complete).
+    /// Serves one MMI on a core that has finished initialization.
     ///
     /// `cpu_id` is the APIC ID; `cpu_index` is the dense, 0-based UEFI processor index that
     /// selects this CPU's per-core resources (Ring 3 stack, mailbox).
@@ -65,7 +65,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             // Wait for all registered APs to check in (set state to InHoldingPen).
             self.wait_for_ap_arrival(expected_aps);
 
-            // Every registered AP is now in MM - service the request.
+            // Every registered AP is in MM, so the request can be served.
             log::trace!("BSP (CPU {cpu_id}) entering request serving routine...");
             self.bsp_request_loop(cpu_index);
 
@@ -86,14 +86,18 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             log::trace!("AP (CPU {cpu_id}) checked in, entering holding pen...");
             self.ap_holding_pen(cpu_id);
 
-            // Check out: clear the InHoldingPen state now that this AP has left the pen and let BSP know we are out.
+            // Check out: clear the InHoldingPen state and acknowledge the BSP.
             self.cpu_manager.set_ap_state(cpu_id, ApState::NotPresent);
             self.cpu_manager.ack_exit_to_bsp();
         }
     }
 
-    /// Waits for all registered APs to rendezvous in the holding pen, enforcing the
-    /// all APs arrival guarantee.
+    /// Waits for every registered AP to check in to the holding pen.
+    ///
+    /// ## Panics
+    ///
+    /// Panics if any AP misses the arrival window. Serving a request with only some of the cores
+    /// in MM is not safe.
     fn wait_for_ap_arrival(&self, expected_aps: usize) {
         if expected_aps == 0 {
             return;
@@ -106,8 +110,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         if all_arrived {
             log::trace!("All {expected_aps} AP(s) arrived");
         } else {
-            // All cores have to rendezvous in the holding pen before the BSP services a request. If any core
-            // fails to arrive within the window, this is a security-fatal condition.
+            // Every core must be in the holding pen before the BSP serves a request, so a core that
+            // misses the window is a security-fatal condition.
             let arrived = self.cpu_manager.count_aps_in_state(ApState::InHoldingPen);
             panic!(
                 "MM Supervisor fail-secure: only {arrived}/{expected_aps} APs rendezvoused within the arrival window; \
@@ -116,26 +120,21 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         }
     }
 
-    /// The main request serving loop for the BSP.
-    /// It manages other CPUs and processes pending requests from the communication buffer.
+    /// Serves the pending request, if any, on the BSP.
     ///
-    /// Two parallel `MmCommBufferStatus` mailboxes are consulted - one for the
-    /// user channel and one for the supervisor channel. The user mailbox is
-    /// checked first; if neither mailbox is valid the request is treated as
-    /// an asynchronous MMI and dispatched through the user path so the
-    /// user-core's async handler chain still runs.
+    /// Reads the user and supervisor `MmCommBufferStatus` mailboxes and lets
+    /// [`RequestTarget::select`] pick the target. A user request is handled by demoting to the
+    /// user entry point, with a synchronous request's buffer copied into the user internal buffer
+    /// first. A supervisor request goes
+    /// to the supervisor handlers. When neither mailbox is valid the MMI is asynchronous and still
+    /// takes the user path, so the user core's async handlers run.
     ///
-    /// - If targeting User: copies user comm buffer to internal, then demotes to user entry point
-    /// - If targeting Supervisor: dispatches to the request dispatcher
-    ///
-    /// Returns the target that was serviced, or [`RequestTarget::None`] when there was
-    /// nothing to do.
+    /// Returns the target that was served, or [`RequestTarget::None`] when the communication
+    /// buffers are not set up yet.
     fn bsp_request_loop(&self, cpu_index: usize) -> RequestTarget {
-        // Get communication buffer configuration
         let config = match security_state().comm_buffer_config() {
             Some(config) => config,
             None => {
-                // Not yet initialized, nothing to process
                 return RequestTarget::None;
             }
         };
@@ -145,8 +144,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             return RequestTarget::None;
         }
 
-        // Read both status mailboxes. A buffer that hasn't been published yet
-        // is treated as an all-zero (idle) status.
+        // A mailbox that is not published reads as an all-zero (idle) status.
         let user_status = if config.user.status != 0 {
             // SAFETY: `config.user.status` is non-zero here and, provided by the MM IPL, references
             // an MMRAM-resident `MmCommBufferStatus`, so the volatile read is valid.
@@ -172,15 +170,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         );
 
         match target {
-            RequestTarget::None => {
-                // No pending request
-            }
+            RequestTarget::None => {}
             RequestTarget::User => {
-                // Request targets the User module (sync user MMI or async dispatch)
+                // A synchronous user MMI or an async dispatch.
                 self.process_user_request(config, &user_status, cpu_index);
             }
             RequestTarget::Supervisor => {
-                // Request targets the Supervisor
                 self.process_supervisor_request(config, &supv_status, cpu_index);
             }
         }
@@ -188,19 +183,18 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         target
     }
 
-    /// Process a request targeting the User module.
+    /// Handles a request for the user core.
     ///
-    /// This function implements the user-mode MMI dispatch pathway:
     /// 1. Builds a fresh `EfiMmEntryContext` with the current CPU index and CPU count
     /// 2. Copies the `EfiMmEntryContext` into the supervisor-to-user data buffer
     /// 3. Appends the `MmCommBufferStatus` immediately after the context
     /// 4. For synchronous MMIs, copies the user comm buffer to the internal copy
     /// 5. Demotes to the user entry point via `invoke_demoted_routine`
     /// 6. On return, copies back the user comm buffer and reads the updated status
+    /// 7. Writes the status to the user mailbox, rejecting a response larger than the buffer
     fn process_user_request(&self, config: &CommBufferConfig, status: &MmCommBufferStatus, cpu_index: usize) {
         log::trace!("Processing User request on CPU {cpu_index} (synchronous: {})", status.is_comm_buffer_valid != 0);
 
-        // Validate buffers
         if config.user.external == 0 || config.user.internal == 0 {
             log::error!("User communication buffer not configured");
             return;
@@ -211,7 +205,6 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             return;
         }
 
-        // Get user entry point
         let user_entry = match init_state().user_entry_point() {
             Some(entry) if entry != 0 => entry,
             _ => {
@@ -220,7 +213,6 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             }
         };
 
-        // Demote to user entry point to process the request
         let cpl3_stack = match self.syscall_interface.get_cpl3_stack(cpu_index) {
             Ok(stack) => stack,
             Err(err) => {
@@ -229,10 +221,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             }
         };
 
-        // Build a fresh EfiMmEntryContext with only the fields the user actually needs.
-        // The legacy C structure carried pointers (mm_startup_this_ap, cpu_save_state,
-        // cpu_save_state_size) that are meaningless in the Rust supervisor model - the
-        // user module accesses those services through syscalls instead.
+        // Only the CPU fields are filled in. The C structure's pointers (mm_startup_this_ap,
+        // cpu_save_state, cpu_save_state_size) have no meaning here: the user core reaches those
+        // services through syscalls.
         let entry_context = EfiMmEntryContext {
             mm_startup_this_ap: 0,
             currently_executing_cpu: cpu_index as u64,
@@ -241,12 +232,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             cpu_save_state: 0,
         };
 
-        // Copy the EfiMmEntryContext + MmCommBufferStatus into the supervisor-to-user
-        // data buffer so the user can read processor information after demotion.
+        // The user core reads the context and status from the supervisor-to-user buffer after
+        // demotion.
         let context_size = core::mem::size_of::<EfiMmEntryContext>();
         let status_size = core::mem::size_of::<MmCommBufferStatus>();
 
-        // Validate the supervisor-to-user buffer is large enough for context + status
         if (config.supv_to_user_buffer_size as usize) < context_size + status_size {
             log::error!(
                 "Supervisor-to-user buffer too small: {} < {} (context) + {} (status)",
@@ -257,20 +247,18 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             return;
         }
 
-        // Copy the context + status into the supervisor-to-user buffer with SMAP lifted.
         // SAFETY: `supv_to_user_buffer` is the user-owned buffer published by MM IPL and was
         // verified above to hold `context_size + status_size` bytes, so both copies stay inside
         // it and every access made while SMAP is lifted targets that user range.
         unsafe {
             with_user_access(|| {
-                // Copy the EfiMmEntryContext to the start of the supervisor-to-user buffer
                 core::ptr::copy_nonoverlapping(
                     (&raw const entry_context).cast::<u8>(),
                     config.supv_to_user_buffer as *mut u8,
                     context_size,
                 );
 
-                // Copy the MmCommBufferStatus right after the context
+                // The status follows the context.
                 core::ptr::copy_nonoverlapping(
                     core::ptr::from_ref::<MmCommBufferStatus>(status).cast::<u8>(),
                     (config.supv_to_user_buffer as *mut u8).add(context_size),
@@ -279,11 +267,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             });
         }
 
-        // Determine whether this is synchronous or asynchronous request
+        // A valid user comm buffer marks a synchronous request. Otherwise the MMI is asynchronous.
         let sync_mmi = status.is_comm_buffer_valid;
 
         if sync_mmi != 0 {
-            // Copy user buffer to user internal buffer for processing in Ring 3
+            // Ring 3 works on the internal copy of the user buffer.
             // SAFETY: both buffers are the user-owned communication buffers published by MM IPL,
             // and both are `config.user.size` bytes, so the copy made while SMAP is lifted
             // stays inside those user ranges.
@@ -304,10 +292,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             );
         }
 
-        // Invoke the demoted user entry point with:
-        //   arg1: UserCommandType::UserRequest (command type)
-        //   arg2: supv_to_user_buffer (pointer to EfiMmEntryContext + MmCommBufferStatus)
-        //   arg3: sizeof(EfiMmEntryContext) (size of the context portion)
+        // Arguments to the user entry point: the command type, the supervisor-to-user buffer
+        // (context followed by status), and the size of the context.
         // SAFETY: `user_entry` was validated to be non-zero above and points to the user
         // module entry published by MM IPL. `cpl3_stack` is the per-CPU Ring 3 stack returned
         // by `get_cpl3_stack`. The arg count (3) matches the three argument values passed.
@@ -324,7 +310,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         };
         log::trace!("Returned from user request on CPU {cpu_index} with value: 0x{ret:016x}");
 
-        // Copy the response from the internal buffer back to the user buffer
+        // Copy the response back out to the caller's buffer.
         if sync_mmi != 0 {
             // SAFETY: as for the copy in, both buffers are the user-owned communication buffers
             // published by MM IPL and both are `config.user.size` bytes.
@@ -339,8 +325,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             }
         }
 
-        // Read the updated MmCommBufferStatus back from the supervisor-to-user buffer
-        // (the user may have modified return_status and return_buffer_size)
+        // The user core may have updated return_status and return_buffer_size.
         // SAFETY: `supv_to_user_buffer` is the user-owned buffer verified above to hold
         // `context_size + status_size` bytes, so the status read while SMAP is lifted stays
         // inside that user range.
@@ -352,16 +337,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             })
         };
 
-        // Write the returned status back to the user status mailbox, clearing
-        // is_comm_buffer_valid to indicate processing is complete
+        // Clearing is_comm_buffer_valid marks the request as complete.
         let mut final_status = returned_status;
         final_status.is_comm_buffer_valid = 0;
 
         // Ring 3 filled in `return_buffer_size`, and the non-MM caller uses it to read the
-        // response out of the communication buffer. A value past the end of that buffer is not a
-        // response the caller can be given any part of: the supervisor cannot tell which bytes
-        // the user module meant, so truncating would hand back a prefix of something it never
-        // agreed to send. Report the failure instead and return nothing.
+        // response out of the communication buffer. If it runs past the end of that buffer, the
+        // supervisor cannot tell which bytes the user core meant, and truncating would return
+        // part of a response it never agreed to send. Report the failure and return nothing.
         if final_status.return_buffer_size > config.user.size {
             log::error!(
                 "User module reported a 0x{:x}-byte response for a 0x{:x}-byte communication buffer; rejecting",
@@ -372,26 +355,23 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             final_status.return_buffer_size = 0;
         }
 
-        // SAFETY: `config.user.status` is valid and writable
+        // SAFETY: `config.user.status` is the user status mailbox from the comm buffer HOB, which
+        // is valid and writable.
         unsafe {
             let status_ptr = config.user.status as *mut MmCommBufferStatus;
             core::ptr::write_volatile(status_ptr, final_status);
         }
     }
 
-    /// Process a request targeting the Supervisor.
+    /// Handles a request for the supervisor.
     ///
-    /// Parses the [`EfiMmCommunicateHeader`] from the supervisor communication buffer,
-    /// matches the header GUID against the core's built-in handlers followed by the
-    /// platform handlers from [`PlatformInfo::mmi_handlers`], and invokes the first
-    /// matching handler. This lets platforms link in additional handlers without
-    /// modifying the core.
-    ///
-    /// ## Dispatch Flow
+    /// Matches the GUID in the [`EfiMmCommunicateHeader`] against the core's built-in handlers
+    /// and then the platform handlers from [`PlatformInfo::mmi_handlers`], and invokes the first
+    /// match. Steps:
     ///
     /// 0. Reject the request with `ACCESS_DENIED` if `ExitBootServices` has already been signaled
     /// 1. Zero the internal buffer and copy the external supervisor buffer into it
-    /// 2. Parse the `EfiMmCommunicateHeader` (GUID + message length) from the internal buffer
+    /// 2. Parse the `EfiMmCommunicateHeader` (GUID and message length) from the internal buffer
     /// 3. Validate message length does not exceed the buffer size
     /// 4. Iterate the default handlers then [`PlatformInfo::mmi_handlers`] to find a handler
     ///    matching the header GUID
@@ -402,14 +382,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     fn process_supervisor_request(&self, config: &CommBufferConfig, status: &MmCommBufferStatus, cpu_index: usize) {
         log::trace!("Processing Supervisor request on CPU {cpu_index}...");
 
-        // Deny any request here after ExitBootServices.
         if init_state().is_at_runtime() {
             log::error!("Supervisor buffer cannot be used for communication after ExitBootServices is signaled!!");
             self.write_supv_status(config, status, efi::Status::ACCESS_DENIED, 0);
             return;
         }
 
-        // Validate buffers
         if config.supervisor.external == 0 || config.supervisor.internal == 0 {
             log::error!("Supervisor communication buffer not configured");
             return;
@@ -417,8 +395,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         let buffer_size = config.supervisor.size as usize;
 
-        // Zero the internal buffer then copy the external supervisor buffer into it
-        // SAFETY: Buffers are provided by MM IPL and are guaranteed valid and non-overlapping
+        // SAFETY: both supervisor buffers come from the comm region HOB set up during init. Each
+        // is `buffer_size` bytes and they do not overlap.
         unsafe {
             core::ptr::write_bytes(config.supervisor.internal as *mut u8, 0, buffer_size);
             core::ptr::copy_nonoverlapping(
@@ -439,8 +417,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             return;
         }
 
-        // SAFETY: We verified the buffer is large enough for the header.
-        // The header is packed so we use read_unaligned.
+        // SAFETY: the buffer holds at least a header, checked above. The header is packed, so it
+        // is read unaligned.
         let header = unsafe { core::ptr::read_unaligned(config.supervisor.internal as *const EfiMmCommunicateHeader) };
 
         let message_length = header.message_length();
@@ -456,14 +434,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             return;
         }
 
-        // Compute pointer to the data payload (after the header)
-        // SAFETY: `config.supervisor.internal` is a valid buffer of `buffer_size` bytes, and we
-        // verified above that `buffer_size >= EfiMmCommunicateHeader::size()`, so offsetting by
+        // The payload follows the header.
+        // SAFETY: `config.supervisor.internal` is a valid buffer of `buffer_size` bytes, and
+        // `buffer_size >= EfiMmCommunicateHeader::size()` was checked above, so offsetting by
         // the header size stays within the same allocation.
         let data_ptr = unsafe { (config.supervisor.internal as *mut u8).add(EfiMmCommunicateHeader::size()) };
         let mut data_size = message_length;
 
-        // Dispatch: iterate the default handlers followed by the platform handlers to find a match
         let handler_guid = header.header_guid();
         let mut dispatch_status = efi::Status::NOT_FOUND;
 
@@ -497,10 +474,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             return;
         }
 
-        // Compute the total response size (header + data) for the copy-back
         let total_response_size = data_size + EfiMmCommunicateHeader::size();
 
-        // Copy the (possibly modified) internal buffer back to the external buffer
         // SAFETY: both buffers are `buffer_size` bytes and an oversized `data_size` returned
         // above, so `total_response_size` is at most `buffer_size` and the copy stays inside
         // both allocations.
@@ -518,16 +493,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             config.supervisor.external
         );
 
-        // Update the status buffer with return status and response size
+        // Any handler failure is reported to the caller as NOT_FOUND.
         let return_status =
             if dispatch_status == efi::Status::SUCCESS { efi::Status::SUCCESS } else { efi::Status::NOT_FOUND };
         self.write_supv_status(config, status, return_status, total_response_size as u64);
     }
 
-    /// Write the supervisor status buffer after processing a supervisor request.
-    ///
-    /// Clears `is_comm_buffer_valid`, sets return status and size on the
-    /// supervisor mailbox.
+    /// Writes the supervisor status mailbox: clears `is_comm_buffer_valid` and records the
+    /// return status and response size.
     fn write_supv_status(
         &self,
         config: &CommBufferConfig,
@@ -535,7 +508,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         return_status: efi::Status,
         return_buffer_size: u64,
     ) {
-        // SAFETY: `config.supervisor.status` is valid and writable, set up by MM IPL
+        // SAFETY: `config.supervisor.status` is the supervisor status mailbox from the comm region
+        // HOB, which is valid and writable.
         unsafe {
             let status_ptr = config.supervisor.status as *mut MmCommBufferStatus;
             let updated = MmCommBufferStatus {
@@ -548,12 +522,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         }
     }
 
-    /// The holding pen for APs.
-    ///
-    /// APs wait here servicing `RunProcedure` commands from the BSP. The pen exits when
-    /// BSP releases this AP via its rendezvous semaphore.
+    /// Runs `RunProcedure` commands from the BSP until the BSP releases this AP through its
+    /// rendezvous semaphore.
     fn ap_holding_pen(&'static self, cpu_id: u32) {
-        // Each CPU owns the mailbox at its dense slot index; resolve it once.
+        // Each CPU owns the mailbox at its dense slot index.
         let cpu_index = if let Some(idx) = self.cpu_manager.find_cpu_index(cpu_id) {
             idx
         } else {
@@ -563,16 +535,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         log::trace!("AP (CPU {cpu_id}) in holding pen, polling mailbox...");
 
         loop {
-            // Service any pending point-to-point command for this AP.
             if let Some(command) = self.mailbox_manager.check_mailbox(cpu_index) {
                 log::trace!("AP (CPU {cpu_id}) received command: {command:?}");
 
-                // Execute the command and post the response.
                 let response = self.execute_ap_command(cpu_id, &command);
                 self.mailbox_manager.post_response(cpu_index, response);
             }
 
-            // Exit when the BSP releases us from the barrier.
             if self.cpu_manager.take_release_by_index(cpu_index) {
                 break;
             }
@@ -582,7 +551,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         log::trace!("AP (CPU {cpu_id}) exiting holding pen");
     }
 
-    /// Execute a command received by an AP.
+    /// Runs a command received by an AP, marking the AP busy while it runs.
     fn execute_ap_command(&self, cpu_id: u32, command: &ApCommand) -> ApResponse {
         let ApCommand::RunProcedure { procedure, argument } = *command;
         self.cpu_manager.set_ap_state(cpu_id, ApState::Busy);
@@ -591,13 +560,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         response
     }
 
-    /// Run a procedure on an AP, demoting to user mode if the procedure is in user-owned range.
+    /// Runs a procedure on an AP, demoting to Ring 3 if the procedure is user-owned.
     ///
-    /// This is the AP-side handler for `ApCommand::RunProcedure`. It mirrors the C
-    /// `ProcedureWrapper` logic: inspects the procedure pointer ownership and either
-    /// calls it directly (supervisor-owned) or demotes to Ring 3 (user-owned).
+    /// This is the AP side of `ApCommand::RunProcedure` and mirrors the C `ProcedureWrapper`: it
+    /// checks who owns the procedure's page and either calls it directly (supervisor-owned) or
+    /// demotes to Ring 3 (user-owned).
     ///
-    /// Choosing the ring from the address is only sound because `handle_start_ap_proc` refuses a
+    /// Choosing the ring from the address is sound only because `handle_start_ap_proc` refuses a
     /// procedure that is not user-owned, so nothing Ring 3 named can reach the supervisor branch.
     fn run_procedure_on_ap(&self, cpu_id: u32, procedure: u64, argument: u64) -> ApResponse {
         log::trace!("AP (CPU {cpu_id}) running procedure 0x{procedure:x} with arg 0x{argument:x}");
@@ -607,8 +576,6 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             return ApResponse::Error(efi::Status::INVALID_PARAMETER.as_usize() as u32);
         }
 
-        // Determine if the procedure is in user-owned (Ring 3) range by querying the
-        // page table via the centralized helper.
         let procedure_range = MemoryRange::new(procedure, core::mem::size_of::<usize>() as u64).ok();
         let is_user_range = match procedure_range.and_then(|range| query_address_ownership(&range)) {
             Some(PageOwnership::User) => true,
@@ -622,7 +589,6 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         };
 
         if is_user_range {
-            // Resolve the cpu_index (slot index) for this APIC ID
             let cpu_index = if let Some(idx) = self.cpu_manager.find_cpu_index(cpu_id) {
                 idx
             } else {
@@ -630,7 +596,6 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 return ApResponse::Error(efi::Status::DEVICE_ERROR.as_usize() as u32);
             };
 
-            // Get the CPL3 stack for this CPU
             let cpl3_stack = match self.syscall_interface.get_cpl3_stack(cpu_index) {
                 Ok(stack) => stack,
                 Err(err) => {
@@ -647,8 +612,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 }
             };
 
-            // Demote to user mode and call the procedure
-            // The procedure signature is: void (EFIAPI *)(void *ProcedureArgument)
+            // The user core calls the procedure as void (EFIAPI *)(void *ProcedureArgument).
             log::trace!(
                 "AP (CPU {cpu_id}) demoting to user: proc=0x{procedure:x}, stack=0x{cpl3_stack:x}, arg=0x{argument:x}"
             );
@@ -672,7 +636,6 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             log::trace!("AP (CPU {cpu_id}) returned from demoted procedure: 0x{ret:x}");
             ApResponse::Success
         } else {
-            // Supervisor-owned: call directly in Ring 0
             log::trace!("AP (CPU {cpu_id}) calling supervisor procedure directly at 0x{procedure:x}");
 
             type EfiApProcedure = unsafe extern "efiapi" fn(*mut core::ffi::c_void);
@@ -689,7 +652,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
     /// Type-erased trampoline for AP startup, called from the syscall dispatcher.
     ///
-    /// This function is conformed for the concrete `P: PlatformInfo` type and stored as a
+    /// It is instantiated for the concrete `P: PlatformInfo` type and stored as a
     /// `fn(u64, u64, u64) -> u64` through
     /// [`InitState::set_ap_startup_fn`](crate::state::InitState::set_ap_startup_fn), which is how
     /// the dispatcher reaches the supervisor without naming its generic parameters.
@@ -698,15 +661,17 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         core.start_ap_procedure(cpu_index, procedure, argument)
     }
 
-    /// Validate and dispatch a procedure to a specific AP.
+    /// Validates a procedure and runs it on one AP, waiting for it to finish.
     ///
-    /// Performs validation checks similar to the C `InternalSmmStartupThisAp`:
+    /// Follows the C `InternalSmmStartupThisAp`:
     /// 1. CPU index is within range of registered CPUs
     /// 2. CPU at that index is present (registered)
     /// 3. CPU is not the BSP
     /// 4. Procedure pointer is non-null
     /// 5. Sends the command via the mailbox (fails if AP is busy)
     /// 6. Waits for the AP to complete (blocking)
+    ///
+    /// Returns the EFI status as a `u64`.
     pub(crate) fn start_ap_procedure(&self, cpu_index: u64, procedure: u64, argument: u64) -> u64 {
         let cpu_index = cpu_index as usize;
 
@@ -747,8 +712,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         log::trace!("START_AP: Dispatched proc=0x{procedure:x} arg=0x{argument:x} to CPU {cpu_id} (index {cpu_index})");
 
-        // 6. Wait for the AP to complete (blocking mode)
-        //    Use a generous timeout (10 seconds = 10_000_000 microseconds)
+        // 6. Wait for the AP to finish, up to AP_TIMEOUT_US.
         match self.mailbox_manager.wait_response(cpu_index, AP_TIMEOUT_US) {
             Some(ApResponse::Success) => {
                 log::trace!("START_AP: AP (CPU {cpu_id}) completed successfully");
@@ -1220,7 +1184,7 @@ mod tests {
         let supv_to_user = config.supv_to_user_buffer;
         let context_size = core::mem::size_of::<EfiMmEntryContext>();
 
-        // The mock stands in for the Ring 0 -> Ring 3 transition: it verifies the arguments,
+        // The mock stands in for the transition from Ring 0 to Ring 3: it verifies the arguments,
         // edits the internal buffer, and reports a status through the shared window.
         mock::set_handler(move |_cpu, entry, _stack, arg_count, command, buffer, size| {
             assert_eq!(entry, 0x4000);
@@ -1266,8 +1230,8 @@ mod tests {
         let supv_to_user = config.supv_to_user_buffer;
         let context_size = core::mem::size_of::<EfiMmEntryContext>();
 
-        // A user module that reports more than the communication buffer holds would otherwise
-        // send the non-MM caller reading past the end of it.
+        // Without the check, a user module that reports more than the communication buffer holds
+        // would send the non-MM caller reading past the end of it.
         mock::set_handler(move |_cpu, _entry, _stack, _arg_count, _command, _buffer, _size| {
             // SAFETY: the supervisor placed an `MmCommBufferStatus` right after the context.
             unsafe {

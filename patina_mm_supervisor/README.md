@@ -1,21 +1,15 @@
 # Patina MM Supervisor Core
 
-A pure Rust implementation of the MM Supervisor Core for standalone MM mode environments.
+A Rust implementation of the MM (Management Mode) Supervisor Core for standalone MM on x64. It expects:
 
-## Overview
-
-This crate provides the core functionality for the MM (Management Mode) Supervisor in a standalone MM environment. It is
-designed to run on x64 systems where:
-
-- Page tables are already set up by the pre-MM phase
-- All images are loaded and ready to execute
-- The BSP (Bootstrap Processor) orchestrates incoming requests
-- APs (Application Processors) wait in a holding pen, checking a mailbox for work
+- Page tables already set up by the pre-MM phase
+- All images loaded and ready to execute
+- The BSP (Bootstrap Processor) to serve incoming requests
+- The APs (Application Processors) to wait in a holding pen, checking a mailbox for work
 
 ## Memory Model
 
-**This is a core component that does not use heap allocation.** All data structures use fixed-size arrays with compile-time
-constants provided via const generics:
+The supervisor does not use heap allocation. Its data structures are fixed-size arrays sized by a const generic:
 
 - `MAX_CPUS` - Maximum number of CPUs supported, supplied as a const generic argument to `MmSupervisorCore`
 
@@ -56,7 +50,7 @@ pub extern "efiapi" fn mm_supervisor_main(cpu_index: usize, hob_list: *const c_v
 }
 ```
 
-The MM IPL (Initial Program Loader) calls this entry point on **all processors** after:
+The MM IPL (Initial Program Loader) calls this entry point on every processor after:
 
 1. Loading the supervisor image into MMRAM
 2. Setting up page tables
@@ -66,24 +60,27 @@ The MM IPL (Initial Program Loader) calls this entry point on **all processors**
 
 ### Entry Point Model
 
-The entry point is executed on all cores simultaneously:
+Every core runs the entry point on each MMI.
 
-1. **BSP (Bootstrap Processor)**:
-   - First CPU to arrive (determined by atomic counter)
-   - Performs one-time initialization
-   - Sets up the request handling infrastructure
-   - Enters the main request serving loop
+On the first entry:
 
-2. **APs (Application Processors)**:
+1. BSP (Bootstrap Processor):
+   - Identified by the BSP flag in the `IA32_APIC_BASE` MSR
+   - Validates the HOB list and performs one-time initialization
+   - Starts the user core in Ring 3
+   - Returns once every registered core has finished per-core initialization
+
+2. APs (Application Processors):
    - All other CPUs
-   - Wait for BSP initialization to complete
-   - Enter a holding pen and poll mailboxes for commands
+   - Wait for BSP initialization to complete, then run per-core initialization and return
 
-On the first post-initialization SMI, before entering runtime dispatch, the BSP finds the MM Init image in the incoming
-HOB list and frees its pages.
-Before freeing, the BSP checks that Init lies inside MMRAM, does not overlap the Core, and that its executable pages
-are supervisor-only and read-only.
-The HOB list must remain valid through this first runtime entry.
+On later entries the BSP serves the pending request while the APs wait in the holding pen and poll their mailboxes for
+commands. Each core returns once the BSP releases the APs.
+
+During initialization the BSP validates the MM Init image allocation from the HOB list (inside MMRAM, page-aligned, and
+not overlapping the Core) and records it. On the first SMI after initialization, before serving the request, it checks
+again that the image lies inside MMRAM and that its executable pages are supervisor-only and read-only, then frees its
+pages. The HOB list is not read again after initialization.
 
 ### Mailbox System
 
@@ -92,7 +89,7 @@ The mailbox system provides inter-processor communication:
 - Each AP has a dedicated mailbox (cache-line aligned to avoid false sharing)
 - BSP sends commands to APs via mailboxes
 - APs respond with results through the same mailbox
-- Supports synchronization primitives for coordinated operations
+- At the end of each MMI the BSP releases the APs through per-CPU semaphores and waits for each to acknowledge
 
 ## Usage
 
@@ -181,8 +178,11 @@ V2 descriptors only.
 The MM IPL (from EDK2/MmSupervisorPkg) loads this binary and calls the entry point. The HOB list passed contains:
 
 - `gEfiMmPeiMmramMemoryReserveGuid` - MMRAM ranges
-- `gMmCommBufferHobGuid` - Communication buffer information
-- `gMmCommonRegionHobGuid` - Common memory regions
+- `gMmCommBufferHobGuid` - User communication buffer
+- `gMmCommonRegionHobGuid` - Supervisor communication buffer
+- `gMpInformationHobGuid` - Processor count and APIC IDs
+- The MM Supervisor `PassDown` HOB - Ring 3 stacks, SMBASE array, firmware policy, and per-core state
+- Memory allocation module HOBs for the MM Supervisor Core, User, and Init images
 - FV HOBs for MM driver firmware volumes
 
 ## License

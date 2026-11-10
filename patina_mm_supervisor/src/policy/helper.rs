@@ -1,4 +1,4 @@
-//! Firmware Policy Dump Helpers
+//! Firmware policy dump helpers.
 //!
 //! ## License
 //!
@@ -14,7 +14,7 @@ use super::{
 };
 use core::mem::size_of;
 
-/// Dumps a single memory policy entry for debugging.
+/// Logs one memory policy entry for debugging.
 pub fn dump_mem_policy_entry(desc: &MemDescriptorV1_0) {
     let readable = if (desc.mem_attributes & RESOURCE_ATTR_READ) != 0 { "R" } else { "." };
     let writable = if (desc.mem_attributes & RESOURCE_ATTR_WRITE) != 0 { "W" } else { "." };
@@ -30,19 +30,23 @@ pub fn dump_mem_policy_entry(desc: &MemDescriptorV1_0) {
     );
 }
 
-/// Dumps policy data for debugging (like `DumpSmmPolicyData`).
+/// Logs a policy for debugging, like the C `DumpSmmPolicyData`.
 ///
 /// ## Safety
 ///
-/// The caller must ensure that `policy_ptr` points to a valid policy buffer.
+/// `policy_ptr` must be null or point to a valid policy buffer.
+///
+/// ## Panics
+///
+/// Panics if a policy root's descriptors extend past the header `size`.
 pub unsafe fn dump_policy(policy_ptr: *const u8) {
     if policy_ptr.is_null() {
         log::error!("dump_policy: null pointer");
         return;
     }
 
-    // SAFETY: `policy_ptr` is non-null (checked above) and, per this function's contract, points
-    // to a valid policy buffer, so the header can be reborrowed for reading.
+    // SAFETY: `policy_ptr` is non-null (checked above), so by the function contract it points to
+    // a valid policy buffer and the header can be read.
     let policy = unsafe { &*policy_ptr.cast::<SecurePolicyDataV1_0>() };
 
     let len = policy.size as usize;
@@ -61,8 +65,8 @@ pub unsafe fn dump_policy(policy_ptr: *const u8) {
     log::info!("  PolicyRootOffset: 0x{:x}", policy.policy_root_offset);
     log::info!("  PolicyRootCount: 0x{:x}", policy.policy_root_count);
 
-    // SAFETY: `policy` is the validated header of a valid policy buffer, so its policy-root array
-    // (root pointer + count) is in-bounds.
+    // SAFETY: `policy` is the header of a valid policy buffer, so its policy root array is in
+    // bounds.
     let policy_roots = unsafe { policy.get_policy_roots() };
 
     for (index, root) in policy_roots.iter().enumerate() {
@@ -84,8 +88,8 @@ pub unsafe fn dump_policy(policy_ptr: *const u8) {
                     root.count,
                     len
                 );
-                // SAFETY: `root` came from the validated policy buffer and `policy_ptr` points to
-                // that same buffer, so the descriptor array is in-bounds.
+                // SAFETY: `root` comes from the buffer at `policy_ptr`, and the assert above keeps
+                // its descriptor array within the buffer.
                 let descriptors = unsafe { root.get_mem_descriptors(policy_ptr) };
                 for desc in descriptors {
                     dump_mem_policy_entry(desc);
@@ -100,8 +104,8 @@ pub unsafe fn dump_policy(policy_ptr: *const u8) {
                     root.count,
                     len
                 );
-                // SAFETY: `root` came from the validated policy buffer and `policy_ptr` points to
-                // that same buffer, so the descriptor array is in-bounds.
+                // SAFETY: `root` comes from the buffer at `policy_ptr`, and the assert above keeps
+                // its descriptor array within the buffer.
                 let descriptors = unsafe { root.get_io_descriptors(policy_ptr) };
                 for desc in descriptors {
                     let readable = if (u32::from(desc.attributes) & RESOURCE_ATTR_READ) != 0 { "R" } else { "." };
@@ -124,8 +128,8 @@ pub unsafe fn dump_policy(policy_ptr: *const u8) {
                     root.count,
                     len
                 );
-                // SAFETY: `root` came from the validated policy buffer and `policy_ptr` points to
-                // that same buffer, so the descriptor array is in-bounds.
+                // SAFETY: `root` comes from the buffer at `policy_ptr`, and the assert above keeps
+                // its descriptor array within the buffer.
                 let descriptors = unsafe { root.get_msr_descriptors(policy_ptr) };
                 for desc in descriptors {
                     let readable = if (u32::from(desc.attributes) & RESOURCE_ATTR_READ) != 0 { "R" } else { "." };
@@ -148,8 +152,8 @@ pub unsafe fn dump_policy(policy_ptr: *const u8) {
                     root.count,
                     len
                 );
-                // SAFETY: `root` came from the validated policy buffer and `policy_ptr` points to
-                // that same buffer, so the descriptor array is in-bounds.
+                // SAFETY: `root` comes from the buffer at `policy_ptr`, and the assert above keeps
+                // its descriptor array within the buffer.
                 let descriptors = unsafe { root.get_instruction_descriptors(policy_ptr) };
                 for desc in descriptors {
                     let name = match desc.instruction_index {
@@ -171,8 +175,8 @@ pub unsafe fn dump_policy(policy_ptr: *const u8) {
                     root.count,
                     len
                 );
-                // SAFETY: `root` came from the validated policy buffer and `policy_ptr` points to
-                // that same buffer, so the descriptor array is in-bounds.
+                // SAFETY: `root` comes from the buffer at `policy_ptr`, and the assert above keeps
+                // its descriptor array within the buffer.
                 let descriptors = unsafe { root.get_save_state_descriptors(policy_ptr) };
                 for desc in descriptors {
                     let field = match desc.map_field {
@@ -206,7 +210,7 @@ mod tests {
 
     #[test]
     fn test_dump_mem_policy_entry() {
-        // Just verify it doesn't panic
+        // Only checks that logging does not panic.
         let desc = MemDescriptorV1_0 {
             base_address: 0x1000,
             size: 0x1000,

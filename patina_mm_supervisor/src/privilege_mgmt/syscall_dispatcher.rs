@@ -1,32 +1,28 @@
-//! Syscall Dispatcher
+//! Syscall dispatcher.
 //!
-//! This module handles syscall requests from Ring 3 code. When Ring 3 code
-//! executes the `syscall` instruction, the CPU jumps to the address in
-//! `MSR_IA32_LSTAR` (our `syscall_center` assembly stub), which then calls into
-//! this dispatcher.
+//! Handles syscalls from Ring 3. The `syscall` instruction jumps to the address in
+//! `MSR_IA32_LSTAR` (the `syscall_center` assembly stub), which calls this dispatcher.
 //!
 //! ## Syscall Interface
 //!
 //! The syscall uses a custom calling convention:
-//! - RAX: Call index (`SyscallIndex`)
-//! - RDX: Argument 1
-//! - R8:  Argument 2
-//! - R9:  Argument 3
-//! - RCX: Caller return address (set by syscall instruction)
-//! - R11: RFLAGS (set by syscall instruction)
-//!
-//! The dispatcher validates the request and dispatches to the appropriate handler.
+//! - RAX: call index (`SyscallIndex`)
+//! - RDX: argument 1
+//! - R8:  argument 2
+//! - R9:  argument 3
+//! - RCX: caller return address (set by the syscall instruction)
+//! - R11: RFLAGS (set by the syscall instruction)
 //!
 //! ## Security
 //!
-//! All syscall handlers must validate their arguments and check that any
-//! memory pointers are within valid user-accessible regions.
+//! Every handler must validate its arguments and check that any memory pointer lies in a
+//! user-accessible region.
 //!
 //! ## Side Effects
 //!
-//! Handlers never touch hardware or supervisor-global state directly: once a request has been
-//! validated they delegate to the [`SyscallOps`] implementation the dispatcher was built with.
-//! The supervisor uses [`FirmwareOps`]; tests substitute their own implementation.
+//! Handlers never touch hardware or supervisor-global state directly. After validating a
+//! request they call the [`SyscallOps`] implementation the dispatcher was built with. The
+//! supervisor uses [`FirmwareOps`]; tests substitute their own implementation.
 //!
 //! ## License
 //!
@@ -48,21 +44,19 @@ use super::{
     syscall_ops::{FirmwareOps, PolicyDecision, SyscallOps},
 };
 
-// Firmware-only syscall-entry assembly; included only for the UEFI target so host builds
-// (tests, doctests) can link.
+// The syscall entry assembly is built only for the UEFI target so host builds (tests, doctests)
+// link.
 #[cfg(target_os = "uefi")]
 core::arch::global_asm!(include_str!("syscall_entry.asm"));
 
-/// `MM_IO_UINT8` - 8-bit I/O access width.
+/// `EFI_MM_IO_WIDTH` value for an 8-bit I/O access.
 const MM_IO_UINT8: u64 = 0;
-/// `MM_IO_UINT16` - 16-bit I/O access width.
+/// `EFI_MM_IO_WIDTH` value for a 16-bit I/O access.
 const MM_IO_UINT16: u64 = 1;
-/// `MM_IO_UINT32` - 32-bit I/O access width.
+/// `EFI_MM_IO_WIDTH` value for a 32-bit I/O access.
 const MM_IO_UINT32: u64 = 2;
 
-/// Converts an `EFI_MM_IO_WIDTH` enum value to our [`IoWidth`] type.
-///
-/// The EFI spec defines: `MM_IO_UINT8=0`, `MM_IO_UINT16=1`, `MM_IO_UINT32=2`.
+/// Converts an `EFI_MM_IO_WIDTH` value to an [`IoWidth`]. Other widths return `None`.
 fn efi_io_width_to_io_width(width: u64) -> Option<IoWidth> {
     match width {
         MM_IO_UINT8 => Some(IoWidth::Byte),
@@ -74,15 +68,14 @@ fn efi_io_width_to_io_width(width: u64) -> Option<IoWidth> {
 
 /// Converts a raw syscall argument into an I/O port address.
 ///
-/// The x86 I/O space is 16 bits wide, so anything larger is a malformed request. Rejecting it
-/// here keeps a truncated port from being validated by the policy gate.
+/// The x86 I/O space is 16 bits wide, so a larger value is a malformed request. Rejecting it
+/// here keeps the policy gate from validating a truncated port.
 fn io_port_from_arg(port: u64) -> Option<u16> {
     u16::try_from(port).ok()
 }
 
 /// Converts a firmware policy decision into a syscall result, logging why a request was refused.
-///
-/// `operation` names the syscall for the log message.
+/// `operation` names the syscall in the log message.
 fn check_policy(operation: &str, decision: PolicyDecision) -> Result<(), Status> {
     match decision {
         PolicyDecision::Allowed => Ok(()),
@@ -117,24 +110,24 @@ pub struct SyscallContext {
     pub arg2: u64,
     /// Third argument (from R9).
     pub arg3: u64,
-    /// Caller return address (from RCX, set by syscall instruction).
+    /// Caller return address (from RCX, set by the syscall instruction).
     pub caller_addr: u64,
     /// Ring 3 stack pointer at syscall entry.
     pub ring3_stack_ptr: u64,
 }
 
-/// The syscall dispatcher handles incoming syscalls from Ring 3.
+/// Dispatches syscalls from Ring 3.
 ///
-/// The dispatcher owns the [`SyscallOps`] implementation used to carry out validated requests.
-/// The supervisor uses [`FirmwareOps`]; unit tests substitute a test implementation to exercise
-/// the validation logic without executing privileged instructions.
+/// Owns the [`SyscallOps`] implementation that carries out validated requests. The supervisor
+/// uses [`FirmwareOps`]; unit tests substitute a test implementation to run the validation logic
+/// without privileged instructions.
 pub struct SyscallDispatcher<O: SyscallOps = FirmwareOps> {
-    /// Performs the privileged work a validated syscall asks for.
+    /// Performs the privileged work of a validated syscall.
     ops: O,
 }
 
 impl SyscallDispatcher<FirmwareOps> {
-    /// Creates a new syscall dispatcher that operates on real hardware and supervisor state.
+    /// Creates a syscall dispatcher that operates on real hardware and supervisor state.
     pub const fn new() -> Self {
         Self::with_ops(FirmwareOps)
     }
@@ -146,13 +139,20 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         Self { ops }
     }
 
-    /// Dispatches a syscall.
+    /// Validates the syscall index and runs its handler. The result is returned to Ring 3 in
+    /// RAX.
     ///
-    /// This is the main entry point called from the assembly syscall handler.
-    /// It validates the syscall index and dispatches to the appropriate handler. The result
-    /// is returned to Ring 3 in RAX.
+    /// Save-state read failures are returned as `Ok` with the EFI status as the value.
+    ///
+    /// ## Errors
+    ///
+    /// Returns `UNSUPPORTED` for an unknown syscall index.
+    ///
+    /// ## Panics
+    ///
+    /// Panics if any other handler fails, or for the `LegacyMax` index, so Ring 3 cannot
+    /// continue after a rejected privileged request.
     pub fn dispatch(&self, ctx: &SyscallContext) -> SyscallResult {
-        // Parse the syscall index
         let index = if let Some(index) = SyscallIndex::from_u64(ctx.call_index) {
             index
         } else {
@@ -171,7 +171,6 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
             ctx.ring3_stack_ptr
         );
 
-        // Dispatch to the appropriate handler
         let result = match index {
             SyscallIndex::RdMsr => self.handle_rdmsr(ctx),
             SyscallIndex::WrMsr => self.handle_wrmsr(ctx),
@@ -198,15 +197,14 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
                 Ok(err.as_usize() as u64)
             }
             Err(err) => {
-                panic!("Syscall: {index:?} failed with error: {err:?}"); // Panic for other syscalls
+                panic!("Syscall: {index:?} failed with error: {err:?}");
             }
             _ => result,
         }
     }
 
-    /// Handles MSR read syscall.
+    /// Handles the MSR read syscall: checks the read against firmware policy, then runs rdmsr.
     ///
-    /// Validates the MSR read against firmware policy, then executes `rdmsr`.
     /// - Arg1: MSR index
     /// - Returns: MSR value (RAX)
     fn handle_rdmsr(&self, ctx: &SyscallContext) -> SyscallResult {
@@ -215,16 +213,14 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
 
         check_policy("RDMSR", self.ops.check_msr(msr_index, AccessType::Read))?;
 
-        // SAFETY: the policy gate authorized reading this MSR above, which is the contract of
-        // `SyscallOps::read_msr`.
+        // SAFETY: the policy gate authorized reading this MSR, as `SyscallOps::read_msr` requires.
         let value = unsafe { self.ops.read_msr(msr_index) };
         log::debug!("RDMSR: MSR 0x{msr_index:x} = 0x{value:x}");
         Ok(value)
     }
 
-    /// Handles MSR write syscall.
+    /// Handles the MSR write syscall: checks the write against firmware policy, then runs wrmsr.
     ///
-    /// Validates the MSR write against firmware policy, then executes `wrmsr`.
     /// - Arg1: MSR index
     /// - Arg2: Value to write
     fn handle_wrmsr(&self, ctx: &SyscallContext) -> SyscallResult {
@@ -234,32 +230,29 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
 
         check_policy("WRMSR", self.ops.check_msr(msr_index, AccessType::Write))?;
 
-        // SAFETY: the policy gate authorized writing this MSR above, which is the contract of
-        // `SyscallOps::write_msr`.
+        // SAFETY: the policy gate authorized writing this MSR, as `SyscallOps::write_msr` requires.
         unsafe { self.ops.write_msr(msr_index, value) };
         log::debug!("WRMSR: MSR 0x{msr_index:x} written with 0x{value:x}");
         Ok(0)
     }
 
-    /// Handles the syscalls that ask the supervisor to execute a privileged instruction
-    /// (`CLI`, `WBINVD` or `HLT`) on behalf of Ring 3.
-    ///
-    /// Validates the instruction against firmware policy before executing it.
+    /// Handles the syscalls that run a privileged instruction (CLI, WBINVD or HLT) for Ring 3,
+    /// after checking it against firmware policy.
     fn handle_instruction(&self, instruction: Instruction) -> SyscallResult {
         log::trace!("{instruction:?}");
 
         check_policy(instruction_name(instruction), self.ops.check_instruction(instruction))?;
 
-        // SAFETY: the policy gate authorized this instruction above, which is the contract of
-        // `SyscallOps::execute_instruction`.
+        // SAFETY: the policy gate authorized this instruction, as
+        // `SyscallOps::execute_instruction` requires.
         unsafe { self.ops.execute_instruction(instruction) };
         log::debug!("{instruction:?}: Executed");
         Ok(0)
     }
 
-    /// Handles I/O port read syscall.
+    /// Handles the I/O port read syscall: checks the read against firmware policy, then runs
+    /// the in instruction.
     ///
-    /// Validates the I/O read against firmware policy, then executes the `in` instruction.
     /// - Arg1: I/O port address
     /// - Arg2: `EFI_MM_IO_WIDTH` (0=UINT8, 1=UINT16, 2=UINT32)
     /// - Returns: Value read from the port (RAX)
@@ -271,7 +264,6 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         let efi_width = ctx.arg2;
         log::trace!("IO_READ: port=0x{port:x}, width={efi_width}");
 
-        // Convert EFI_MM_IO_WIDTH to IoWidth
         let io_width = if let Some(io_width) = efi_io_width_to_io_width(efi_width) {
             io_width
         } else {
@@ -289,17 +281,17 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
 
         check_policy("IO_READ", self.ops.check_io(port_addr, io_width, AccessType::Read))?;
 
-        // SAFETY: the policy gate authorized reading this port and width above, which is the
-        // contract of `SyscallOps::io_read`.
+        // SAFETY: the policy gate authorized reading this port and width, as
+        // `SyscallOps::io_read` requires.
         let value = unsafe { self.ops.io_read(port_addr, io_width) };
 
         log::trace!("IO_READ: port=0x{port:x} => 0x{value:x}");
         Ok(value)
     }
 
-    /// Handles I/O port write syscall.
+    /// Handles the I/O port write syscall: checks the write against firmware policy, then runs
+    /// the out instruction.
     ///
-    /// Validates the I/O write against firmware policy, then executes the `out` instruction.
     /// - Arg1: I/O port address
     /// - Arg2: `EFI_MM_IO_WIDTH` (0=UINT8, 1=UINT16, 2=UINT32)
     /// - Arg3: Value to write
@@ -312,7 +304,6 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         let value = ctx.arg3;
         log::trace!("IO_WRITE: port=0x{port:x}, width={efi_width}, value=0x{value:x}");
 
-        // Convert EFI_MM_IO_WIDTH to IoWidth
         let io_width = if let Some(io_width) = efi_io_width_to_io_width(efi_width) {
             io_width
         } else {
@@ -330,15 +321,15 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
 
         check_policy("IO_WRITE", self.ops.check_io(port_addr, io_width, AccessType::Write))?;
 
-        // SAFETY: the policy gate authorized writing this port and width above, which is the
-        // contract of `SyscallOps::io_write`.
+        // SAFETY: the policy gate authorized writing this port and width, as
+        // `SyscallOps::io_write` requires.
         unsafe { self.ops.io_write(port_addr, io_width, value) };
 
         log::trace!("IO_WRITE: port=0x{port:x} <= 0x{value:x}");
         Ok(0)
     }
 
-    /// Handles save state read syscall (legacy).
+    /// Handles the legacy save state read syscall (phase 1 of the two-phase read).
     ///
     /// - Arg1: User MM CPU protocol pointer
     /// - Arg2: Register to be read (`EFI_MM_SAVE_STATE_REGISTER`)
@@ -346,17 +337,15 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
     fn handle_save_state_read(&self, ctx: &SyscallContext) -> SyscallResult {
         log::trace!("SAVE_STATE_READ: protocol=0x{:x}, register={}, cpu={}", ctx.arg1, ctx.arg2, ctx.arg3);
 
-        // Validate parameters
         if ctx.arg1 == 0 {
             log::error!("SAVE_STATE_READ: Null protocol pointer");
             return Err(Status::INVALID_PARAMETER);
         }
 
-        // Delegate to save state module Phase 1
         self.ops.save_state_read_phase1(ctx.arg1, ctx.arg2, ctx.arg3)
     }
 
-    /// Handles page allocation syscall.
+    /// Handles the page allocation syscall.
     ///
     /// - Arg1: Allocate type (`EFI_ALLOCATE_TYPE`)
     /// - Arg2: Memory type (must be `EfiRuntimeServicesData`)
@@ -368,7 +357,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         let page_count = ctx.arg3;
         log::trace!("ALLOC_PAGE: alloc_type={alloc_type}, mem_type={mem_type}, count={page_count}");
 
-        // Only BSP can allocate pages (AP allocating involves page table updates)
+        // Only the BSP may allocate pages, because allocation updates the page table.
         if !self.ops.is_bsp() {
             log::error!("ALLOC_PAGE: AP cannot allocate pages");
             return Err(Status::ACCESS_DENIED);
@@ -379,7 +368,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
             return Err(Status::INVALID_PARAMETER);
         }
 
-        // Currently only AllocateAnyPages is supported by our page allocator
+        // The page allocator supports only AllocateAnyPages.
         if alloc_type != ALLOCATE_ANY_PAGES {
             log::error!("ALLOC_PAGE: Only AllocateAnyPages (0) is supported, got {alloc_type}");
             return Err(Status::UNSUPPORTED);
@@ -390,7 +379,6 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
             return Err(Status::INVALID_PARAMETER);
         }
 
-        // Allocate pages as User type (Ring 3 driver request)
         match self.ops.allocate_user_pages(page_count as usize) {
             Ok(addr) => {
                 log::trace!("ALLOC_PAGE: Allocated {page_count} page(s) at 0x{addr:x}");
@@ -403,9 +391,8 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         }
     }
 
-    /// Handles page free syscall.
+    /// Handles the page free syscall, matching the `SMM_FREE_PAGE` case of the C implementation.
     ///
-    /// Mirrors the C implementation's `SMM_FREE_PAGE` case.
     /// - Arg1: Physical address to free
     /// - Arg2: Number of pages
     fn handle_free_page(&self, ctx: &SyscallContext) -> SyscallResult {
@@ -418,18 +405,14 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
             return Err(Status::INVALID_PARAMETER);
         };
 
-        // Validate the address is page-aligned
         if !addr.is_multiple_of(UEFI_PAGE_SIZE as u64) {
             log::error!("FREE_PAGE: Address 0x{addr:x} is not page-aligned");
             return Err(Status::INVALID_PARAMETER);
         }
 
-        // Verify the range was allocated as User type (Ring 3 code should only free its own memory)
-        // This prevents user code from freeing supervisor-internal allocations.
+        // Ring 3 may free only its own (User) allocations, never supervisor allocations.
         match self.ops.allocation_type(addr) {
-            Some(crate::memory::AllocationType::User) => {
-                // Good - this is user-owned memory
-            }
+            Some(crate::memory::AllocationType::User) => {}
             Some(crate::memory::AllocationType::Supervisor) => {
                 log::error!("FREE_PAGE: Address 0x{addr:x} is a supervisor allocation - access denied");
                 return Err(Status::SECURITY_VIOLATION);
@@ -440,7 +423,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
             }
         }
 
-        // Free the pages, verifying they are all User allocations
+        // The checked free fails if any page in the range is not a User allocation.
         match self.ops.free_user_pages(addr, page_count as usize) {
             Ok(()) => {
                 log::debug!("FREE_PAGE: Freed {range}");
@@ -453,19 +436,16 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         }
     }
 
-    /// Handles start AP procedure syscall.
+    /// Handles the start AP procedure syscall.
     ///
-    /// Validates the request and delegates to the platform-specific AP startup
-    /// function registered during [`MmSupervisorCore`](crate::MmSupervisorCore) initialization.
-    ///
-    /// Checks performed before dispatch:
+    /// Validates the request and calls the platform AP startup function registered during
+    /// [`MmSupervisorCore`](crate::MmSupervisorCore) initialization. Checks done here:
     /// - Caller is the BSP
     /// - Procedure pointer is non-null and user-owned
-    /// - Argument pointer (if non-null) is user-owned
+    /// - Argument pointer, if non-null, is user-owned
     ///
-    /// The remaining validation (CPU index range, BSP check, AP busy check) and
-    /// the actual dispatch are handled by the registered AP startup function,
-    /// which has access to the CPU manager and mailbox manager.
+    /// The registered function, which has the CPU and mailbox managers, does the rest of the
+    /// validation (CPU index range, BSP target, AP busy) and the dispatch.
     ///
     /// - Arg1: Procedure function pointer
     /// - Arg2: CPU index
@@ -477,24 +457,24 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
 
         log::debug!("START_AP_PROC: proc=0x{procedure:x}, cpu={cpu_index}, arg=0x{argument:x}");
 
-        // 1. Caller is the BSP. APs poll their mailbox for work the BSP dispatches, so an AP
-        //    reaching here is running a procedure already dispatched to it. Letting it dispatch
-        //    in turn would nest the MP state machine: it could contend for a mailbox the BSP is
-        //    filling, target itself and then spin the full AP timeout waiting for a response it
-        //    cannot post, or leave a second AP busy while the BSP believes every AP is penned.
+        // 1. Caller is the BSP. An AP reaching here is already running a procedure the BSP
+        //    dispatched to it. Letting it dispatch in turn would nest the MP state machine: it
+        //    could contend for a mailbox the BSP is filling, target itself and spin the full AP
+        //    timeout waiting for a response it cannot post, or leave a second AP busy while the
+        //    BSP believes every AP is parked.
         if !self.ops.is_bsp() {
             log::error!("START_AP_PROC: only the BSP may dispatch a procedure to an AP");
             return Err(Status::ACCESS_DENIED);
         }
 
-        // 2. Validate procedure pointer is non-null
+        // 2. Procedure pointer is non-null.
         if procedure == 0 {
             log::error!("START_AP_PROC: Null procedure pointer");
             return Err(Status::INVALID_PARAMETER);
         }
 
-        // 3. The procedure runs demoted on the target AP, so it has to be user-owned. Accepting
-        //    any mapped address would let Ring 3 name a supervisor address to be run for it.
+        // 3. The procedure runs demoted on the target AP, so it must be user-owned. Accepting any
+        //    mapped address would let Ring 3 name a supervisor address to run.
         let procedure_size = core::mem::size_of::<usize>() as u64;
         let pointer_owner = |address| {
             MemoryRange::new(address, procedure_size).ok().and_then(|range| self.ops.query_address_ownership(&range))
@@ -527,7 +507,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
             }
         }
 
-        // 5. Delegate to the registered AP startup function
+        // 5. Call the registered AP startup function.
         match self.ops.start_ap_procedure(cpu_index, procedure, argument) {
             Some(0) => Ok(0),
             Some(status) => Err(Status::from_usize(status as usize)),
@@ -538,26 +518,23 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         }
     }
 
-    /// Handles extended save state read syscall.
+    /// Handles the extended save state read syscall (phase 2 of the two-phase read).
     ///
     /// - Arg1: User MM CPU protocol pointer
     /// - Arg2: Width of buffer to read in bytes
     /// - Arg3: User buffer to hold return data
     fn handle_save_state_read2(&self, ctx: &SyscallContext) -> SyscallResult {
-        // Validate parameters
         if ctx.arg1 == 0 {
             log::error!("SAVE_STATE_READ2: Null protocol pointer");
             return Err(Status::INVALID_PARAMETER);
         }
 
-        // Delegate to save state module Phase 2
         self.ops.save_state_read_phase2(ctx.arg1, ctx.arg2, ctx.arg3)
     }
 
-    /// Handles MM memory unblocked check syscall.
+    /// Handles the MM memory unblocked syscall: reports whether a range lies in an unblocked
+    /// region and in user-owned memory.
     ///
-    /// Checks if a memory range is outside MMRAM and valid (unblocked), AND
-    /// is within user-owned space.
     /// - Arg1: Physical address
     /// - Arg2: Size in bytes
     /// - Returns: 1 (TRUE) if valid, 0 (FALSE) otherwise
@@ -571,7 +548,6 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
             return Ok(0); // FALSE
         };
 
-        // Check if the buffer is within an unblocked memory region
         let is_valid = self.ops.is_within_unblocked_region(&range);
 
         if !is_valid {
@@ -579,7 +555,7 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
             return Ok(0); // FALSE
         }
 
-        // Additional check - verify buffer is in user-owned space
+        // The buffer must also be user-owned.
         if let Some(owner) = self.ops.query_address_ownership(&range) {
             if owner != PageOwnership::User {
                 log::trace!("MM_MEMORY_UNBLOCKED: {range} owned by {owner:?} - not valid");
@@ -594,9 +570,9 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         Ok(1) // TRUE
     }
 
-    /// Handles MM is communication buffer check syscall.
+    /// Handles the MM is-communication-buffer syscall: reports whether a range lies entirely
+    /// inside the user communication buffer.
     ///
-    /// Verifies that a given memory range is a valid communication buffer.
     /// - Arg1: Buffer address
     /// - Arg2: Buffer size
     /// - Returns: 1 (TRUE) if valid comm buffer, 0 (FALSE) otherwise
@@ -628,9 +604,12 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
 
 /// C-compatible syscall dispatcher entry point.
 ///
-/// This function is called from the assembly syscall entry stub (`syscall_center`). Its parameters
-/// carry the syscall registers described by the module-level calling convention, and its return
-/// value is the result placed in RAX for the Ring 3 caller.
+/// Called from the assembly syscall entry stub (`syscall_center`). The parameters carry the
+/// syscall registers described in the module docs, and the return value goes to Ring 3 in RAX.
+///
+/// ## Panics
+///
+/// Panics when [`SyscallDispatcher::dispatch`] fails or panics.
 #[unsafe(no_mangle)]
 pub extern "efiapi" fn syscall_dispatcher(
     call_index: u64,
@@ -1255,7 +1234,7 @@ mod tests {
         let any = u64::from(ALLOCATE_ANY_PAGES);
         let data = u64::from(RUNTIME_SERVICES_DATA);
 
-        // Every rejected request must be refused with the documented status *and* must never
+        // Every rejected request must be refused with the documented status and must never
         // reach the page allocator, so each case checks the recorded effects of its own mock.
         let cases: [(&str, MockOps, u64, u64, u64, Status); 4] = [
             // Only the BSP may allocate, since allocation updates the page table.
@@ -1301,7 +1280,7 @@ mod tests {
 
     #[test]
     fn test_free_page_rejects_invalid_requests() {
-        // Every rejected request must be refused with the documented status *and* must never
+        // Every rejected request must be refused with the documented status and must never
         // reach the page allocator, so each case checks the recorded effects of its own mock.
         let cases: [(&str, MockOps, u64, u64, Status); 5] = [
             ("zero pages", MockOps::default(), 0x2000, 0, Status::INVALID_PARAMETER),
@@ -1365,7 +1344,7 @@ mod tests {
 
     #[test]
     fn test_start_ap_proc_rejects_invalid_pointers() {
-        // Every rejected request must be refused with the documented status *and* must never be
+        // Every rejected request must be refused with the documented status and must never be
         // dispatched to an AP, so each case checks the recorded effects of its own mock.
         let cases: [(&str, MockOps, u64, u64); 3] = [
             ("null procedure", MockOps::default(), 0, 0),
@@ -1406,7 +1385,7 @@ mod tests {
     #[test]
     fn test_start_ap_proc_refuses_a_supervisor_owned_procedure() {
         // The procedure runs demoted on the target AP. Accepting a supervisor-owned address here
-        // is what let Ring 3 pick code for the supervisor to run in Ring 0.
+        // would let Ring 3 pick code for the supervisor to run.
         let dispatcher =
             new_dispatcher(MockOps { mapped: vec![(0x1000, PageOwnership::Supervisor)], ..Default::default() });
 

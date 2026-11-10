@@ -1,7 +1,7 @@
 //! CPU Management Module
 //!
-//! This module provides CPU identification and management for the MM Supervisor
-//! Core. It handles BSP/AP detection, CPU registration, and state tracking.
+//! Tracks the CPUs registered with the MM Supervisor Core: each CPU's APIC ID, which one is
+//! the BSP, the state of each AP, and the per-CPU semaphores of the SMI exit barrier.
 //!
 //! ## License
 //!
@@ -83,13 +83,9 @@ impl CpuSlot {
 
 /// Manager for CPU-related operations.
 ///
-/// Tracks registered CPUs and their states using fixed-size arrays.
-///
-/// ## Const Generic Parameters
-///
-/// * `MAX_CPUS` - The maximum number of CPUs that can be registered.
+/// Tracks registered CPUs and their states in a fixed array of `MAX_CPUS` slots.
 pub struct CpuManager<const MAX_CPUS: usize> {
-    /// CPU slots - fixed size array.
+    /// One slot per dense CPU index.
     slots: [CpuSlot; MAX_CPUS],
     /// Number of CPUs currently registered.
     registered_count: AtomicU32,
@@ -98,9 +94,7 @@ pub struct CpuManager<const MAX_CPUS: usize> {
 }
 
 impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
-    /// Creates a new CPU manager.
-    ///
-    /// This is a const fn and performs no heap allocation.
+    /// Creates a CPU manager with no CPUs registered.
     pub const fn new() -> Self {
         Self {
             slots: [const { CpuSlot::new() }; MAX_CPUS],
@@ -214,6 +208,8 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
     }
 
     /// Sets the state of an AP.
+    ///
+    /// Returns `false` without changing anything if `cpu_id` is not registered or is the BSP.
     pub fn set_ap_state(&self, cpu_id: u32, state: ApState) -> bool {
         let index = match self.find_slot(cpu_id) {
             Some(idx) => idx,
@@ -234,9 +230,7 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
         true
     }
 
-    /// Iterates over all registered AP IDs.
-    ///
-    /// Calls the provided closure for each registered AP.
+    /// Calls `f` with the APIC ID of each registered AP.
     pub fn for_each_ap<F: FnMut(u32)>(&self, mut f: F) {
         for slot in &self.slots {
             if let Some(cpu_id) = slot.get_cpu_id()
@@ -262,7 +256,7 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
     }
 
     /// Releases every registered AP from the exit barrier by signaling each AP's
-    /// rendezvous semaphore. (Called by the BSP)
+    /// rendezvous semaphore. Called by the BSP.
     pub fn release_all_aps(&self) {
         for slot in &self.slots {
             if slot.is_used() && slot.is_bsp.load(Ordering::Acquire) == 0 {
@@ -284,7 +278,6 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
 
     /// Acknowledges to the BSP that this AP has left the holding pen by signaling the
     /// BSP's rendezvous semaphore.
-    ///
     pub fn ack_exit_to_bsp(&self) {
         if let Some(bsp_id) = self.bsp_id()
             && let Some(index) = self.find_slot(bsp_id)
@@ -424,12 +417,12 @@ mod tests {
         assert_eq!(manager.register_cpu(0x00, 0, true), Ok(0));
         assert_eq!(manager.register_cpu(0x10, 1, false), Ok(1));
 
-        // cpu_index -> APIC ID
+        // Each index maps to the APIC ID registered there.
         assert_eq!(manager.get_cpu_id_by_index(0), Some(0x00));
         assert_eq!(manager.get_cpu_id_by_index(1), Some(0x10));
         assert_eq!(manager.get_cpu_id_by_index(2), Some(0x20));
 
-        // APIC ID -> cpu_index
+        // Each APIC ID maps back to its index.
         assert_eq!(manager.find_cpu_index(0x00), Some(0));
         assert_eq!(manager.find_cpu_index(0x10), Some(1));
         assert_eq!(manager.find_cpu_index(0x20), Some(2));
@@ -490,7 +483,7 @@ mod tests {
         manager.register_cpu(0x20, 0, true).unwrap();
 
         // An AP polling with an index outside the array must not take a release token from
-        // another slot; it simply sees nothing to take.
+        // another slot; it sees nothing to take.
         assert!(!manager.take_release_by_index(4));
         assert!(!manager.take_release_by_index(usize::MAX));
 

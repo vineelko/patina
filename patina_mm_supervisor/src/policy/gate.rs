@@ -1,9 +1,8 @@
-//! Firmware Policy Gate
+//! Firmware policy gate.
 //!
-//! Wraps the validated firmware policy blob and answers whether a given
-//! operation is permitted: reading or writing an MSR or I/O port, executing a
-//! privileged instruction, reading a save-state field, or touching a memory
-//! range.
+//! Wraps the validated firmware policy blob and answers whether an operation is permitted:
+//! reading or writing an MSR or I/O port, running a privileged instruction, reading a
+//! save-state field, or accessing a memory range.
 //!
 //! ## License
 //!
@@ -70,9 +69,9 @@ impl core::fmt::Display for PolicyGateError {
 /// Checks that every offset and count inside the policy blob describes a structure lying wholly
 /// within `buffer_size` bytes.
 ///
-/// The blob is firmware-supplied data whose fields are otherwise taken at face value by the
-/// descriptor accessors, the per-syscall lookups and the `FETCH_POLICY` copy-out. Validating the
-/// layout once here is what makes those unchecked `slice::from_raw_parts` calls sound.
+/// The blob comes from firmware, and the descriptor accessors, per-syscall lookups and the
+/// `FETCH_POLICY` copy-out trust its fields. Validating the layout once here is what makes their
+/// unchecked `slice::from_raw_parts` calls sound.
 ///
 /// ## Safety
 ///
@@ -84,7 +83,7 @@ unsafe fn validate_policy_layout(policy_ptr: *const u8, buffer_size: usize) -> M
         return Err(PolicyGateError::MalformedPolicy.into());
     }
 
-    // SAFETY: the buffer was just verified to hold a complete header, and the caller guarantees
+    // SAFETY: the buffer holds a complete header (checked above), and the caller guarantees
     // `policy_ptr` is readable for `buffer_size` bytes.
     let policy = unsafe { &*policy_ptr.cast::<SecurePolicyDataV1_0>() };
 
@@ -97,8 +96,8 @@ unsafe fn validate_policy_layout(policy_ptr: *const u8, buffer_size: usize) -> M
         return Err(PolicyGateError::InvalidVersion.into());
     }
 
-    // Every offset below is bounded against the blob's own declared size, so that has to fit the
-    // allocation first. `fetch_and_update_policy` also copies exactly this many bytes out.
+    // Every offset below is checked against the declared size, so the declared size must first
+    // fit the buffer. `fetch_and_update_policy` also copies exactly this many bytes out.
     let declared = policy.size as usize;
     if declared < header_size || declared > buffer_size {
         log::error!("policy blob declares {declared} bytes in a {buffer_size}-byte buffer");
@@ -118,7 +117,7 @@ unsafe fn validate_policy_layout(policy_ptr: *const u8, buffer_size: usize) -> M
         return Err(PolicyGateError::MalformedPolicy.into());
     }
 
-    // SAFETY: the roots array was just verified to lie wholly inside the blob.
+    // SAFETY: the roots array lies wholly inside the blob (checked above).
     let roots = unsafe { policy.get_policy_roots() };
     for root in roots {
         // A type the supervisor does not recognize is never looked up, so its descriptors are
@@ -143,10 +142,10 @@ unsafe fn validate_policy_layout(policy_ptr: *const u8, buffer_size: usize) -> M
     Ok(())
 }
 
-/// Policy gate for runtime access validation.
+/// Runtime access checks against the firmware policy.
 ///
-/// This struct wraps a policy buffer and provides methods to check if
-/// various operations (I/O, MSR, instruction, save state) are allowed.
+/// Wraps a policy buffer and checks whether I/O, MSR, instruction and save state accesses are
+/// allowed. It also holds the memory policy snapshot taken at ready-to-lock.
 pub struct PolicyGate {
     /// Pointer to the firmware policy data (static, read-only).
     policy_ptr: *const u8,
@@ -154,10 +153,8 @@ pub struct PolicyGate {
     memory_policy_buffer: *mut MemDescriptorV1_0,
     /// Maximum number of `MemDescriptorV1_0` entries the memory policy buffer can hold.
     memory_policy_max_count: usize,
-    /// Number of descriptors stored in the snapshot buffer.
-    ///
-    /// `None` means the ready-to-lock event has **not** occurred.
-    /// `Some(count)` means a snapshot was taken with `count` entries.
+    /// Number of descriptors in the snapshot buffer: `None` before ready-to-lock, `Some(count)`
+    /// once the snapshot is taken.
     snapshot_count: Once<usize>,
 }
 
@@ -171,14 +168,19 @@ unsafe impl Sync for PolicyGate {}
 impl PolicyGate {
     /// Creates a new policy gate from a policy buffer pointer.
     ///
-    /// `buffer_size` is the size of the allocation `policy_ptr` names, as reported by the
-    /// `PassDown` HOB. The blob's internal offsets are validated against it, which is what lets
-    /// the descriptor accessors and the `FETCH_POLICY` copy-out trust those offsets later.
+    /// `buffer_size` is the size of the allocation at `policy_ptr`, as reported by the `PassDown`
+    /// HOB. The blob's internal offsets are validated against it, so the descriptor accessors and
+    /// the `FETCH_POLICY` copy-out can trust them later.
+    ///
+    /// ## Errors
+    ///
+    /// Returns `NullPointer` for a null `policy_ptr`, `InvalidVersion` for a policy that is not
+    /// V1.0, and `MalformedPolicy` when an offset or count reaches past the buffer.
     ///
     /// ## Safety
     ///
-    /// The caller must ensure that `policy_ptr` points to `buffer_size` readable bytes that
-    /// remain valid for the lifetime of this `PolicyGate`.
+    /// `policy_ptr` must point to `buffer_size` readable bytes that stay valid for the lifetime
+    /// of this `PolicyGate`.
     pub unsafe fn new(policy_ptr: *const u8, buffer_size: usize) -> MmSupervisorResult<Self> {
         if policy_ptr.is_null() {
             log::error!("Policy gate creation failed: policy buffer pointer is null");
@@ -197,36 +199,31 @@ impl PolicyGate {
         })
     }
 
-    /// Sets the memory policy buffer for page-table-derived snapshots.
+    /// Sets the buffer that receives the page table snapshot. Call before
+    /// [`take_snapshot`](Self::take_snapshot); the address and size usually come from the
+    /// `PassDown` HOB.
     ///
-    /// Must be called before [`take_snapshot`](Self::take_snapshot). Typically
-    /// the buffer address and size come from the `PassDown` HOB.
-    ///
-    /// ## Requirements
-    ///
-    /// The caller must ensure that `buffer` points to a valid memory region
-    /// that can hold at least `max_count` `MemDescriptorV1_0` entries and that
-    /// this memory remains valid for the lifetime of the `PolicyGate`.
-    ///
-    /// Storing the pointer is safe; the contract is enforced when the buffer
-    /// is later dereferenced by [`Self::take_snapshot`], [`Self::verify_snapshot`], or
-    /// [`Self::fetch_and_update_policy`].
+    /// `buffer` must hold at least `max_count` `MemDescriptorV1_0` entries and stay valid for the
+    /// lifetime of the `PolicyGate`. Storing the pointer is safe; that contract is part of the
+    /// safety requirements of [`Self::take_snapshot`], [`Self::verify_snapshot`] and
+    /// [`Self::fetch_and_update_policy`], which dereference it.
     pub fn set_memory_policy_buffer(&mut self, buffer: *mut MemDescriptorV1_0, max_count: usize) {
         self.memory_policy_buffer = buffer;
         self.memory_policy_max_count = max_count;
     }
 
-    /// Gets a reference to the policy header.
+    /// Returns the policy header.
     pub(crate) fn policy(&self) -> &SecurePolicyDataV1_0 {
-        // SAFETY: Constructor validated the pointer
+        // SAFETY: `new` checked that the pointer is non-null and the buffer holds a full header,
+        // and the buffer outlives the gate.
         unsafe { &*self.policy_ptr.cast::<SecurePolicyDataV1_0>() }
     }
 
     /// Returns the policy roots the blob declares.
     ///
-    /// This is safe because [`PolicyGate::new`] proved that `policy_root_offset` and
-    /// `policy_root_count` describe an array lying wholly inside the blob, and the buffer
-    /// outlives the gate.
+    /// Safe because [`PolicyGate::new`] checked that `policy_root_offset` and
+    /// `policy_root_count` describe an array wholly inside the blob, and the buffer outlives the
+    /// gate.
     pub(crate) fn policy_roots(&self) -> &[PolicyRootV1] {
         // SAFETY: the layout check in `new` established that the root array is in bounds.
         unsafe { self.policy().get_policy_roots() }
@@ -237,11 +234,11 @@ impl PolicyGate {
         self.policy_roots().iter().find(|root| root.policy_type == policy_type)
     }
 
-    /// Checks if I/O access is allowed.
+    /// Returns `Ok` if the policy allows the I/O access.
     ///
-    /// `io_address` must be within the 16-bit I/O port space (`<= 0xFFFF`).
+    /// `io_address` must be in the 16-bit I/O port space (at most 0xFFFF).
     pub fn is_io_allowed(&self, io_address: u32, width: IoWidth, access_type: AccessType) -> MmSupervisorResult<()> {
-        // Validate access type (must be read or write, not execute)
+        // I/O access is read or write, never execute.
         if access_type == AccessType::Execute {
             log::error!("Rejecting IO access: port=0x{io_address:x} requested Execute access");
             return Err(PolicyGateError::InvalidAccessMask.into());
@@ -249,13 +246,12 @@ impl PolicyGate {
 
         let io_size = width.size();
 
-        // Validate I/O address range (16-bit port space)
         if io_address > u32::from(u16::MAX) {
             log::error!("Rejecting IO access: port 0x{io_address:x} is outside the 16-bit I/O space");
             return Err(PolicyGateError::InvalidIoAddress.into());
         }
 
-        // Check for overflow (MAX_UINT16 + 1 is valid for end address)
+        // The access may end exactly at 0x10000.
         if io_address.saturating_add(io_size) > u32::from(u16::MAX) + 1 {
             log::error!("Rejecting IO access: port 0x{io_address:x} with width {io_size} runs past the I/O space");
             return Err(PolicyGateError::InvalidIoRange.into());
@@ -268,7 +264,7 @@ impl PolicyGate {
             return Err(PolicyGateError::PolicyRootNotFound.into());
         };
 
-        // SAFETY: We validated the policy in the constructor
+        // SAFETY: `new` checked that this root's descriptor array lies inside the blob.
         let descriptors = unsafe { policy_root.get_io_descriptors(self.policy_ptr) };
         let access_mask = access_type.as_attr_mask();
 
@@ -280,21 +276,21 @@ impl PolicyGate {
             let is_strict_width = (u32::from(desc.attributes) & RESOURCE_ATTR_STRICT_WIDTH) != 0;
 
             if is_strict_width {
-                // Strict width: address and size must match exactly
+                // Strict width: address and size must match exactly.
                 if io_address == desc_start && io_size == desc_size {
-                    // Check if the access type matches
+                    // The descriptor must also grant the access type.
                     if (u32::from(desc.attributes) & access_mask) != 0 {
                         found_match = true;
                         break;
                     }
                 }
             } else {
-                // Non-strict: check if our range is covered by this descriptor
+                // Otherwise the descriptor must cover the whole access.
                 let desc_end = desc_start.saturating_add(desc_size);
                 let our_end = io_address.saturating_add(io_size);
 
                 if io_address >= desc_start && our_end <= desc_end {
-                    // Check if the access type matches
+                    // The descriptor must also grant the access type.
                     if (u32::from(desc.attributes) & access_mask) != 0 {
                         found_match = true;
                         break;
@@ -324,9 +320,9 @@ impl PolicyGate {
         Ok(())
     }
 
-    /// Checks if MSR access is allowed.
+    /// Returns `Ok` if the policy allows the MSR access.
     pub fn is_msr_allowed(&self, msr_address: u32, access_type: AccessType) -> MmSupervisorResult<()> {
-        // Validate access type
+        // MSR access is read or write, never execute.
         if access_type == AccessType::Execute {
             log::error!("Rejecting MSR access: address=0x{msr_address:x} requested Execute access");
             return Err(PolicyGateError::InvalidAccessMask.into());
@@ -339,7 +335,7 @@ impl PolicyGate {
             return Err(PolicyGateError::PolicyRootNotFound.into());
         };
 
-        // SAFETY: We validated the policy in the constructor
+        // SAFETY: `new` checked that this root's descriptor array lies inside the blob.
         let descriptors = unsafe { policy_root.get_msr_descriptors(self.policy_ptr) };
         let access_mask = access_type.as_attr_mask();
 
@@ -376,7 +372,7 @@ impl PolicyGate {
         Ok(())
     }
 
-    /// Checks if instruction execution is allowed.
+    /// Returns `Ok` if the policy allows running the instruction.
     pub fn is_instruction_allowed(&self, instruction: Instruction) -> MmSupervisorResult<()> {
         let instruction_index = instruction.as_index();
 
@@ -395,7 +391,7 @@ impl PolicyGate {
             return Err(PolicyGateError::PolicyRootNotFound.into());
         };
 
-        // SAFETY: We validated the policy in the constructor
+        // SAFETY: `new` checked that this root's descriptor array lies inside the blob.
         let descriptors = unsafe { policy_root.get_instruction_descriptors(self.policy_ptr) };
 
         let mut found_match = false;
@@ -429,7 +425,9 @@ impl PolicyGate {
         Ok(())
     }
 
-    /// Checks if save state read access is allowed.
+    /// Returns `Ok` if the policy allows the save state read.
+    ///
+    /// With no save state policy root (a level 20 policy) every read is allowed.
     ///
     /// `field` is `None` for a register that has no policy field. No descriptor can name
     /// such a register, so the policy root's access attribute alone decides the result:
@@ -447,12 +445,12 @@ impl PolicyGate {
         let policy_root = if let Some(root) = self.find_policy_root(TYPE_SAVE_STATE) {
             root
         } else {
-            // No save state policy = level 20, allow all reads
+            // No save state root means a level 20 policy, which allows all reads.
             log::warn!("No save state policy root found, allowing read (level 20 policy).");
             return Ok(());
         };
 
-        // SAFETY: We validated the policy in the constructor
+        // SAFETY: `new` checked that this root's descriptor array lies inside the blob.
         let descriptors = unsafe { policy_root.get_save_state_descriptors(self.policy_ptr) };
 
         let mut found_match = false;
@@ -461,12 +459,11 @@ impl PolicyGate {
         // `field == None` and therefore matches no descriptor.
         for desc in descriptors {
             if field.is_some_and(|field| desc.map_field == field.as_index()) {
-                // Check if this is a read-allowed policy
                 let is_read = (desc.attributes & RESOURCE_ATTR_READ) != 0;
                 let is_cond_read = (desc.attributes & RESOURCE_ATTR_COND_READ) != 0;
 
                 if is_read || is_cond_read {
-                    // Check condition if this is conditional read
+                    // A conditional read matches only under the same trap condition.
                     if is_cond_read {
                         if let Some(current) = current_condition
                             && desc.access_condition == current as u32
@@ -474,7 +471,7 @@ impl PolicyGate {
                             found_match = true;
                             break;
                         }
-                        // Condition doesn't match, continue looking
+                        // Condition does not match; keep looking.
                     } else {
                         // Unconditional read
                         if desc.access_condition == SaveStateCondition::Unconditional as u32 {
@@ -509,7 +506,7 @@ impl PolicyGate {
         Ok(())
     }
 
-    /// Gets the raw policy pointer.
+    /// Returns the raw policy pointer.
     pub fn as_ptr(&self) -> *const u8 {
         self.policy_ptr
     }
@@ -529,23 +526,20 @@ impl PolicyGate {
         self.policy().size as usize
     }
 
-    /// Takes a page-table memory policy snapshot and transitions to the locked
-    /// state.
+    /// Takes the memory policy snapshot from the page table and locks the gate.
     ///
-    /// Walks the active page table, writes the resulting descriptors into the
-    /// memory policy buffer, and atomically saves the descriptor count. After
-    /// this call, [`is_locked`](Self::is_locked) returns `true`.
-    ///
-    /// If the gate is already locked, the snapshot is **not** re-taken and the
-    /// existing descriptor count is returned.
+    /// Walks the active page table, writes the descriptors into the memory policy buffer, and
+    /// records the descriptor count. Afterwards [`is_locked`](Self::is_locked) returns `true`.
+    /// If the gate is already locked, the snapshot is not taken again and the existing count is
+    /// returned.
     ///
     /// ## Safety
     ///
     /// - `cr3` must point to a valid, stable PML4 table.
-    /// - The memory policy buffer (set via [`Self::set_memory_policy_buffer`])
-    ///   must still be valid and large enough.
+    /// - The memory policy buffer (set with [`Self::set_memory_policy_buffer`]) must still be
+    ///   valid and large enough.
     pub unsafe fn take_snapshot(&self, cr3: u64, is_inside_mmram: IsInsideMmramFn) -> MmSupervisorResult<usize> {
-        // Idempotent: if already locked, return the saved count.
+        // Already locked: return the saved count.
         if let Some(&count) = self.snapshot_count.get() {
             return Ok(count);
         }
@@ -555,9 +549,8 @@ impl PolicyGate {
             return Err(PolicyGateError::InternalError.into());
         }
 
-        // SAFETY: The caller guarantees that `cr3` points to a valid PML4 and
-        // that the memory policy buffer (set via `set_memory_policy_buffer`) is
-        // valid and can hold `memory_policy_max_count` descriptors.
+        // SAFETY: the caller guarantees `cr3` points to a valid PML4 and the memory policy buffer
+        // can hold `memory_policy_max_count` descriptors.
         let count =
             unsafe { walk_page_table(cr3, self.memory_policy_buffer, self.memory_policy_max_count, is_inside_mmram) }
                 .map_err(|err| {
@@ -568,8 +561,7 @@ impl PolicyGate {
         Ok(self.record_snapshot(count))
     }
 
-    /// Records that the memory policy buffer now holds `count` descriptors and
-    /// transitions the gate to the locked state.
+    /// Records that the memory policy buffer holds `count` descriptors and locks the gate.
     fn record_snapshot(&self, count: usize) -> usize {
         let count = *self.snapshot_count.call_once(|| count);
         log::info!("Policy snapshot taken: {count} descriptors, ready-to-lock is now TRUE");
@@ -578,14 +570,13 @@ impl PolicyGate {
 
     /// Verifies that the current page table still matches the saved snapshot.
     ///
-    /// The caller must provide a scratch buffer (typically allocated from the
-    /// page allocator) large enough to hold the walk results. This avoids
-    /// overwriting the saved snapshot during comparison.
+    /// The fresh walk goes into `scratch` so the saved snapshot is not overwritten.
     ///
-    /// Returns `Ok(())` only when a snapshot exists and the tables match it.
-    /// Returns `Err(PolicyGateError::AccessDenied.into())` if they differ ("security violation"), and
-    /// `Err(PolicyGateError::InternalError.into())` if there is no snapshot to verify against - this
-    /// routine is what detects tampering, so "nothing to compare" must never read as a pass.
+    /// ## Errors
+    ///
+    /// Returns `AccessDenied` if the page table differs from the snapshot, and `InternalError`
+    /// if there is no snapshot or the walk fails. This routine detects tampering, so "nothing to
+    /// compare" must never pass.
     ///
     /// ## Safety
     ///
@@ -604,8 +595,8 @@ impl PolicyGate {
             return Err(PolicyGateError::InternalError.into());
         };
 
-        // SAFETY: The caller guarantees that `cr3` points to a valid PML4 and
-        // that `scratch` can hold `scratch_max_count` descriptors.
+        // SAFETY: the caller guarantees `cr3` points to a valid PML4 and `scratch` can hold
+        // `scratch_max_count` descriptors.
         let fresh_count =
             unsafe { walk_page_table(cr3, scratch, scratch_max_count, is_inside_mmram) }.map_err(|err| {
                 log::error!("verify_snapshot: walk_page_table failed: {err:?}");
@@ -614,8 +605,8 @@ impl PolicyGate {
 
         // View both buffers as slices so the comparison runs in safe code.
         //
-        // SAFETY: `walk_page_table` populated `scratch` with `fresh_count` descriptors; the saved
-        // snapshot buffer was populated by a prior `take_snapshot` call with `saved_count` entries.
+        // SAFETY: `walk_page_table` filled `scratch` with `fresh_count` descriptors, and the earlier
+        // `take_snapshot` filled the snapshot buffer with `saved_count` descriptors.
         let (saved, fresh) = unsafe {
             (
                 core::slice::from_raw_parts(self.memory_policy_buffer.cast_const(), saved_count),
@@ -626,14 +617,11 @@ impl PolicyGate {
         compare_snapshot(saved, fresh)
     }
 
-    /// Writes the merged firmware + memory policy into `dest` and returns the total
-    /// number of bytes written.
+    /// Writes the merged firmware and memory policy into `dest` and returns the number of bytes
+    /// written.
     ///
-    /// Mirrors the C `FetchNUpdateSecurityPolicy` function. The caller is
-    /// responsible for ensuring the snapshot has been taken first (via
-    /// [`take_snapshot`](Self::take_snapshot)).
-    ///
-    /// ## Layout written to `dest`
+    /// Matches the C `FetchNUpdateSecurityPolicy`. The snapshot must already be taken with
+    /// [`take_snapshot`](Self::take_snapshot). Layout written to `dest`:
     ///
     /// ```text
     /// |--------------------------------------|
@@ -643,18 +631,23 @@ impl PolicyGate {
     /// |--------------------------------------|
     /// ```
     ///
-    /// After the copy the function patches the header in-place:
+    /// After the copy the header is patched in place:
     ///
-    /// * The `TYPE_MEM` policy root's `offset` -> `fw_size` and `count` -> snapshot count
-    /// * The header's `size` -> `fw_size + mem_policy_bytes`
-    /// * The legacy `memory_policy_count` field is zeroed (unused with root-based layout)
+    /// * The `TYPE_MEM` root gets `offset` set to `fw_size`, `count` set to the snapshot count,
+    ///   and `access_attr` set to `ACCESS_ATTR_ALLOW`.
+    /// * The header `size` becomes `fw_size + mem_policy_bytes`.
+    /// * The legacy `memory_policy_count` is zeroed (unused with the root-based layout).
     ///
-    /// Note: the caller is responsible for writing/reserving any request header
-    /// *before* the region pointed to by `dest`.
+    /// Any request header must be written or reserved by the caller before `dest`.
+    ///
+    /// ## Errors
+    ///
+    /// Returns `InternalError` when there is no snapshot, a size overflows, or `dest_size` is too
+    /// small, and `PolicyRootNotFound` when the firmware policy has no `TYPE_MEM` root.
     ///
     /// ## Safety
     ///
-    /// * `dest` must point to a writable buffer of at least `dest_size` bytes.
+    /// `dest` must point to a writable buffer of at least `dest_size` bytes.
     pub unsafe fn fetch_and_update_policy(&self, dest: *mut u8, dest_size: usize) -> MmSupervisorResult<usize> {
         let count = self.snapshot_count.get().copied().ok_or_else(|| {
             log::error!("fetch_and_update_policy: no snapshot taken");
@@ -686,11 +679,10 @@ impl PolicyGate {
         // 1. Copy the firmware policy blob (header + payload), then append the
         //    memory policy descriptors after it.
         //
-        // SAFETY: The caller guarantees that `dest` is writable for at least
-        // `dest_size` bytes (verified >= `total_bytes` above). `self.policy_ptr` names a blob
-        // whose declared `size` was validated at construction to fit its own buffer, so reading
-        // `fw_size` bytes from it stays inside that buffer. The memory policy buffer holds
-        // `count` valid descriptors from a prior `take_snapshot` call.
+        // SAFETY: the caller guarantees `dest` is writable for `dest_size` bytes, which is at
+        // least `total_bytes` (checked above). `new` checked that the blob's declared `size` fits
+        // its buffer, so reading `fw_size` bytes stays inside it. The memory policy buffer holds
+        // `count` valid descriptors from the earlier `take_snapshot`.
         unsafe {
             core::ptr::copy_nonoverlapping(self.policy_ptr, dest, fw_size);
             if mem_policy_bytes > 0 {
@@ -699,7 +691,7 @@ impl PolicyGate {
             }
         }
 
-        // 2. Read the root table location from the freshly-copied header.
+        // 2. Read the root table location from the copied header.
         let (root_offset, root_count) = {
             // SAFETY: `dest` now holds a valid `SecurePolicyDataV1_0` header copied from the
             // validated firmware policy blob above.
@@ -707,16 +699,15 @@ impl PolicyGate {
             (header.policy_root_offset as usize, header.policy_root_count as usize)
         };
 
-        // 3. View the policy roots as a slice so the lookup/patch can be done in
-        //    safe code.
+        // 3. View the policy roots as a slice so the lookup and patch run in safe code.
         //
-        // SAFETY: `root_offset` and `root_count` came from the header just copied from the blob,
-        // and construction validated that the roots array they describe ends within the blob's
-        // declared size - which is `fw_size`, itself within the `total_bytes` copied above.
+        // SAFETY: `root_offset` and `root_count` come from the header copied from the blob, and
+        // `new` checked that the roots array they describe ends within the blob's declared size,
+        // which is `fw_size` and so within the `total_bytes` copied above.
         let roots =
             unsafe { core::slice::from_raw_parts_mut(dest.add(root_offset).cast::<PolicyRootV1>(), root_count) };
 
-        // Find the TYPE_MEM policy root and patch its offset/count.
+        // Point the TYPE_MEM root at the appended snapshot.
         let Some(mem_root) = roots.iter_mut().find(|root| root.policy_type == TYPE_MEM) else {
             log::error!("fetch_and_update_policy: firmware policy has no TYPE_MEM policy root");
             return Err(PolicyGateError::PolicyRootNotFound.into());
@@ -725,7 +716,7 @@ impl PolicyGate {
         mem_root.offset = fw_size as u32;
         mem_root.count = count as u32;
 
-        // 4. Update the total size and clear the legacy memory_policy_count.
+        // 4. Update the total size and clear the legacy `memory_policy_count`.
         //
         // SAFETY: `dest` holds a valid `SecurePolicyDataV1_0` header (see above).
         let header = unsafe { &mut *dest.cast::<SecurePolicyDataV1_0>() };

@@ -1,4 +1,4 @@
-//! `VERSION_INFO` Request Handler
+//! `VERSION_INFO` request handler.
 //!
 //! ## License
 //!
@@ -14,9 +14,10 @@ use patina::management_mode::protocol::mm_supervisor_request::{
 
 use crate::version::{PATCH_LEVEL, VERSION};
 
-/// Handle a `VERSION_INFO` request.
+/// Handles a `VERSION_INFO` request.
 ///
-/// Writes back the response header followed by [`MmSupervisorVersionInfo`].
+/// Writes [`MmSupervisorVersionInfo`] after the request header and sets `comm_buffer_size` to
+/// the response size.
 pub(super) fn handle_version_info(comm_buffer: *mut u8, comm_buffer_size: &mut usize) -> efi::Status {
     let response_size = MmSupervisorRequestHeader::SIZE + MmSupervisorVersionInfo::SIZE;
 
@@ -36,15 +37,14 @@ pub(super) fn handle_version_info(comm_buffer: *mut u8, comm_buffer_size: &mut u
         return efi::Status::BUFFER_TOO_SMALL;
     }
 
-    // Write version info payload after the header
     let version_info = MmSupervisorVersionInfo {
         version: VERSION,
         patch_level: PATCH_LEVEL,
         max_supervisor_request_level: RequestType::MAX_REQUEST_TYPE,
     };
 
-    // SAFETY: The buffer is non-null and large enough for the header and payload. The unaligned
-    // write supports communication buffers without natural `MmSupervisorVersionInfo` alignment.
+    // SAFETY: the buffer is non-null and large enough for the header and payload. The unaligned
+    // write accepts buffers that are not aligned for `MmSupervisorVersionInfo`.
     unsafe {
         let payload_ptr = comm_buffer.add(MmSupervisorRequestHeader::SIZE).cast::<MmSupervisorVersionInfo>();
         payload_ptr.write_unaligned(version_info);

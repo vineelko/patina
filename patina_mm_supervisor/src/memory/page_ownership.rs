@@ -1,8 +1,7 @@
 //! Page Table Ownership Queries for the MM Supervisor Core
 //!
-//! Provides helpers to determine whether a memory range is owned by the
-//! supervisor (CPL0) or the user module (CPL3), based on the page table's
-//! `Supervisor` attribute (the X64 U/S bit).
+//! Determines whether a memory range is owned by the supervisor (CPL0) or the user module
+//! (CPL3), from the page table's `Supervisor` attribute (the X64 U/S bit).
 //!
 //! ## License
 //!
@@ -25,13 +24,11 @@ pub(crate) enum PageOwnership {
     Supervisor,
 }
 
-/// Queries the page table to determine the ownership (user vs supervisor) of `range`.
+/// Returns which ring owns `range`, read from the page table.
 ///
-/// The range is widened to whole pages before querying.
-///
-/// Checks the `Supervisor` attribute which maps to the U/S bit on X64:
-///   - `Supervisor` set  => `PageOwnership::Supervisor` (U/S = 0)
-///   - `Supervisor` clear => `PageOwnership::User` (U/S = 1)
+/// The range is widened to whole pages before querying. A page with the `Supervisor` attribute
+/// set (U/S = 0 on X64) is [`PageOwnership::Supervisor`], and one with it clear (U/S = 1) is
+/// [`PageOwnership::User`].
 ///
 /// Returns `None` if the range cannot be widened to whole pages, the page table is not
 /// initialized, or the range is unmapped.

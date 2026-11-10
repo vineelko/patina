@@ -43,7 +43,7 @@ pub(crate) struct InitState {
     /// MSEG base address discovered from the MSEG SMRAM HOB, if the platform
     /// publishes one. Programmed into `IA32_SMM_MONITOR_CTL` during per-core init.
     mseg_base: Once<u64>,
-    /// Type-erased AP startup dispatch function (conformed for the platform).
+    /// Type-erased AP startup dispatch function, instantiated for the platform type.
     ap_startup_fn: Once<fn(u64, u64, u64) -> u64>,
     /// Set once `ExitBootServices` has been signaled.
     at_runtime: Once<()>,
@@ -174,6 +174,8 @@ impl InitState {
     }
 
     /// Marks the supervisor as having entered runtime (`ExitBootServices` signaled).
+    ///
+    /// Returns `true` only on the first call.
     pub(crate) fn mark_at_runtime(&self) -> bool {
         let first = !self.at_runtime.is_completed();
         self.at_runtime.call_once(|| ());

@@ -1,5 +1,8 @@
 //! MMRAM Regions
 //!
+//! The MMRAM regions the HOB list describes, the single range the SMRRs cover, and the checks
+//! that place an address range inside or outside MMRAM.
+//!
 //! ## License
 //!
 //! Copyright (c) Microsoft Corporation.
@@ -88,7 +91,7 @@ pub(crate) fn supervisor_image_anchor() -> u64 {
 /// cannot detect a description that is wrong as a whole. Requiring the description to contain an
 /// address the CPU independently proves is MMRAM is the one check that can, and combined with the
 /// contiguity requirement it confines a forged HOB list to extending the span the supervisor is
-/// genuinely running in.
+/// actually running in.
 ///
 /// The range is the single range the SMRRs will cover, as selected by [`coalesced_smrr_range`].
 pub(crate) fn establish_mmram_bound(scanned: &[MmramRegion], anchor: u64) -> MmSupervisorResult<MemoryRange> {
@@ -115,7 +118,7 @@ pub enum MmramPlacement {
 impl MmramPlacement {
     /// Resolves this placement of `range` to whether `range` may be treated as MM memory.
     ///
-    /// # Panics
+    /// ## Panics
     ///
     /// Panics when the placement is [`MmramPlacement::PartlyInside`].
     pub fn is_inside(self, range: &MemoryRange) -> bool {
@@ -142,7 +145,7 @@ impl From<Coverage> for MmramPlacement {
 /// Reports `false` before the regions are known, since nothing can be shown to be inside MMRAM
 /// until then.
 ///
-/// # Panics
+/// ## Panics
 ///
 /// Panics when `range` is only partly inside MMRAM, as [`MmramPlacement::is_inside`] does.
 pub(crate) fn is_range_inside_mmram(range: &MemoryRange) -> bool {
@@ -247,7 +250,7 @@ mod tests {
 
         assert!(regions.contains_address(0x1000));
         assert!(regions.contains_address(0x2fff));
-        // Pre-allocated regions still describe MMRAM, so they anchor just as well.
+        // Pre-allocated regions still describe MMRAM, so they anchor equally well.
         assert!(regions.contains_address(0x8000));
         assert!(!regions.contains_address(0x0fff));
         assert!(!regions.contains_address(0x3000));

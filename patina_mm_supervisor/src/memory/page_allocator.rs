@@ -1,6 +1,8 @@
 //! MM Supervisor Core Page Allocator
 //!
-//! Provides a page-granularity memory allocator for the MM Supervisor Core.
+//! A page-granularity allocator over the MMRAM regions the HOB list describes. Each page is
+//! tracked as allocated or free and as supervisor- or user-owned, in bookkeeping pages taken from
+//! the first free region.
 //!
 //! ## License
 //!
@@ -33,20 +35,17 @@ use crate::memory::locked_state::{AllocatorState, LockedState, StatePtr};
 use crate::memory::mmram::MmramPlacement;
 use crate::{error::MmSupervisorResult, user_access_guard::with_user_access};
 
-/// Type of memory allocation - distinguishes supervisor-internal vs user/driver allocations.
+/// Which ring owns an allocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AllocationType {
-    /// Supervisor-internal allocation (e.g., for core data structures).
-    /// These are typically never freed and may have stricter protections.
+    /// Supervisor-owned pages, mapped supervisor-only (for example, core data structures).
     Supervisor = 0,
-    /// User/driver allocation (e.g., for MM driver requests).
-    /// These can be allocated and freed by external code.
+    /// User-owned pages that Ring 3 can access (for example, MM driver allocations).
     User = 1,
 }
 
-/// Metadata for a single SMRAM region.
-/// This struct is stored in the bookkeeping pages, not statically.
+/// Metadata for one SMRAM region, stored in the bookkeeping pages.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RegionInfo {
@@ -254,7 +253,7 @@ impl PageAllocator {
         let (region_count, total_pages) = if state.is_null() {
             (0, 0)
         } else {
-            // SAFETY: when non-null, `state` is a valid initialized header and we hold the lock.
+            // SAFETY: when non-null, `state` is a valid initialized header, and the lock is held.
             unsafe { ((*state).region_count, (*state).total_pages) }
         };
         LockedState { state, region_count, total_pages, guard }
@@ -299,7 +298,7 @@ impl PageAllocator {
     ///
     /// Any region that passes the descriptor validation below must describe
     /// valid memory for its full declared size. Non-pre-allocated regions must
-    /// additionally be exclusively owned.
+    /// also be exclusively owned.
     pub(crate) unsafe fn init_from_regions(&self, scanned: &[MmramRegion]) -> MmSupervisorResult<()> {
         if scanned.is_empty() {
             log::error!("Page allocator init failed: no SMRAM regions were supplied");
@@ -342,10 +341,10 @@ impl PageAllocator {
         // Zero the bookkeeping region, write the state header, and publish the pointer.
         let state_ptr = bookkeeping_base as *mut AllocatorState;
 
-        // SAFETY: `bookkeeping_base` is a page-aligned region of `bookkeeping_pages` pages that
-        // we exclusively reserved for bookkeeping and hold the lock for. Zeroing it makes both
-        // the all-zero `AllocatorState` header and the trailing bitmaps valid, and we take the
-        // sole reference to the header at its start.
+        // SAFETY: `bookkeeping_base` is a page-aligned region of `bookkeeping_pages` pages reserved
+        // exclusively for bookkeeping, and the lock is held. Zeroing it makes both the all-zero
+        // `AllocatorState` header and the trailing bitmaps valid, and this is the only reference
+        // to the header at its start.
         let state = unsafe {
             ptr::write_bytes(bookkeeping_base as *mut u8, 0, uefi_pages_to_size!(bookkeeping_pages));
             &mut *state_ptr
@@ -361,7 +360,6 @@ impl PageAllocator {
 
         self.initialized.store(true, Ordering::Release);
 
-        // print page allocator statistics after init
         log::info!(
             "Page allocator initialized: {} region(s), {} total pages, {} free pages, {} allocated supervisor pages, {} allocated user pages",
             self.region_count(),
@@ -381,8 +379,8 @@ impl PageAllocator {
 
     /// Allocates contiguous pages from SMRAM with the specified allocation type.
     ///
-    /// For `Supervisor` allocations, the allocated region is marked as supervisor-owned
-    /// data pages (R/W, non-executable) in the page table.
+    /// The pages are mapped as R/W, non-executable data: supervisor-only for
+    /// [`AllocationType::Supervisor`], user-accessible for [`AllocationType::User`].
     pub fn allocate_pages_with_type(&self, num_pages: usize, alloc_type: AllocationType) -> MmSupervisorResult<u64> {
         if !self.is_initialized() {
             log::error!("Page allocation of {num_pages} page(s) rejected: allocator is not initialized");
@@ -401,32 +399,26 @@ impl PageAllocator {
             AllocError::OutOfMemory
         })?;
 
-        // For supervisor allocations, update page table attributes to mark as
-        // supervisor-owned data pages (R/W/NX/S), otherwise they would
-        // default to user data (R/W/NX/U).
         self.apply_data_page_attributes(addr, num_pages, alloc_type);
 
         Ok(addr)
     }
 
-    /// Applies data page table attributes to a newly allocated region.
+    /// Maps a newly allocated range as data: R/W and NX, and supervisor-only (U/S = 0) for
+    /// [`AllocationType::Supervisor`], so data pages are never executable (W^X).
     ///
-    /// Marks pages as data pages: Read/Write + Non-Executable (NX), and supervisor-only (U/S = 0)
-    /// for [`AllocationType::Supervisor`].
-    /// This ensures data cannot be executed, providing W^X enforcement.
-    ///
-    /// If the global page table is not yet initialized (e.g., during early boot),
-    /// this is a no-op with a warning.
+    /// Logs a warning and changes nothing if the page table is not initialized yet. A mapping
+    /// failure is logged, not returned.
     fn apply_data_page_attributes(&self, addr: u64, num_pages: usize, alloc_type: AllocationType) {
         let size = uefi_pages_to_size!(num_pages) as u64;
         let mut pt_guard = crate::state::security_state().lock_page_table();
         if let Some(ref mut pt) = *pt_guard {
-            // Data pages: R/W (no ReadOnly) + NX (ExecuteProtect)
+            // R/W (no ReadOnly) and NX (ExecuteProtect).
             let mut attributes = MemoryAttributes::ExecuteProtect;
 
             if alloc_type == AllocationType::Supervisor {
-                // For Supervisor allocations, we additionally want the U/S bit cleared (Supervisor-only).
-                attributes |= MemoryAttributes::Supervisor; // Ensure not writable by user code
+                // Clear the U/S bit so only the supervisor can reach the pages.
+                attributes |= MemoryAttributes::Supervisor;
             }
 
             if let Err(err) = pt.map_memory_region(addr, size, attributes) {
@@ -459,10 +451,7 @@ impl PageAllocator {
         }
     }
 
-    /// Applies restrictive page table attributes to freed pages.
-    ///
-    /// Unmaps the range so it is completely inaccessible. This prevents any read, write, or
-    /// execute access to freed memory, mitigating use-after-free vulnerabilities.
+    /// Unmaps a freed range so any later access to it faults.
     ///
     /// A failure is reported so the caller can leave the range allocated rather than hand a still
     /// reachable range back to the pool.
@@ -478,7 +467,6 @@ impl PageAllocator {
             return Ok(());
         };
 
-        // Freed pages are unmapped, which makes them completely inaccessible.
         if let Err(err) = pt.unmap_memory_region(addr, size) {
             log::error!("Failed to set freed page attributes for 0x{addr:016x} ({num_pages} pages): {err:?}");
             return Err(AllocError::UnmapFailed.into());

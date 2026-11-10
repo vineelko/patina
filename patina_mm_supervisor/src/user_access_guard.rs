@@ -39,17 +39,17 @@ impl Drop for UserAccessGuard {
     }
 }
 
-/// Runs `access` with SMAP temporarily disabled so the supervisor can read or
-/// write user-owned memory, restoring SMAP protection when the guard is dropped.
+/// Runs `access` with SMAP lifted so the supervisor can read or write user-owned memory, and
+/// restores SMAP when it returns.
 ///
 /// ## Safety
 ///
 /// Lifting SMAP removes the hardware barrier that stops Ring 0 from touching user-owned
 /// memory, so the caller must ensure that every access `access` performs targets a valid,
 /// correctly-owned user range that it has already validated (for example through
-/// [`query_address_ownership`](crate::memory::page_ownership::query_address_ownership)). Calls must not
-/// be nested, and `access` must not migrate
-/// to another CPU or return while a further access still depends on SMAP being lifted.
+/// [`query_address_ownership`](crate::memory::page_ownership::query_address_ownership)).
+/// Calls must not be nested, and `access` must not migrate to another CPU or return while a
+/// further access still depends on SMAP being lifted.
 pub(crate) unsafe fn with_user_access<R>(access: impl FnOnce() -> R) -> R {
     // SAFETY: the closure is scoped to the guard's lifetime, and the caller guarantees it only
     // accesses valid, correctly-owned user memory.

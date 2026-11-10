@@ -1,5 +1,8 @@
 //! SMI Handler IDT Patching
 //!
+//! Points every core's SMI entry at the IDT the supervisor loaded, by rewriting the IDT
+//! descriptor named in the fixup structure of that core's MMI entry.
+//!
 //! ## License
 //!
 //! Copyright (c) Microsoft Corporation.
@@ -209,14 +212,15 @@ fn parse_smi_handler_idt_descriptor(mmi_entry: &[u8]) -> MmSupervisorResult<u64>
     Ok(u64::from_ne_bytes(fixup64_entry.try_into().map_err(|_| SmiHandlerIdtPatchError::Fixup64EntryOutOfBounds)?))
 }
 
-/// Patches every core's SMI-handler IDT descriptor to point to the Rust IDT.
+/// Patches every core's SMI-handler IDT descriptor to point to the IDT loaded on this core.
 ///
 /// Each per-core MMI entry (copied to `sm_base_array[i] + 0x8000` during C relocation)
 /// carries a `Fixup64[FIXUP64_SMI_HANDLER_IDTR]` slot holding the address of the
 /// `IA32_DESCRIPTOR` that core's SMI entry `lidt`s.
 ///
 /// `sm_base_array` is the per-CPU SMBASE array (`u64[number_of_cpus]`) from the `PassDown`
-/// HOB; `number_of_cpus` is its length.
+/// HOB; `number_of_cpus` is its length. Failures are logged rather than returned: bad inputs
+/// skip the whole patch, and a bad MMI entry skips that core.
 pub(crate) fn patch_smi_handler_idt(sm_base_array: u64, number_of_cpus: usize, mmi_entry_size: u64) {
     let inputs = match validate_smi_handler_idt_patch_inputs(
         sm_base_array,

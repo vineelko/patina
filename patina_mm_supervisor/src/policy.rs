@@ -1,15 +1,13 @@
-//! MM Supervisor Secure Policy
+//! MM Supervisor secure policy.
 //!
-//! Holds the firmware policy data structures the MM IPL hands down, and the
-//! four modules that work on them.
+//! Defines the firmware policy structures the MM IPL passes down. The submodules:
 //!
-//! - [`validation`] decides once whether the blob is a policy the supervisor
-//!   will accept, and stops initialization when it is not.
-//! - [`gate`] decides, for every syscall that follows, whether it may read or
-//!   write an MSR or I/O port, execute a privileged instruction, read a
-//!   save-state field, or touch a memory range.
-//! - [`boundary_audit`] reports once whether the accepted policy leaves the
-//!   Ring 0 and Ring 3 boundary enforceable. It only logs.
+//! - [`validation`] decides once whether the supervisor accepts the blob, and stops
+//!   initialization if it does not.
+//! - [`gate`] decides, for every later syscall, whether it may read or write an MSR or I/O
+//!   port, run a privileged instruction, read a save-state field, or access a memory range.
+//! - [`boundary_audit`] reports once whether the accepted policy keeps the boundary between
+//!   Ring 0 and Ring 3 enforceable. It only logs.
 //! - [`helper`] prints a policy for debugging.
 //!
 //! ## License
@@ -43,26 +41,26 @@ pub const TYPE_INSTRUCTION: u32 = 4;
 /// Save state policy descriptor type.
 pub const TYPE_SAVE_STATE: u32 = 5;
 
-/// Access attribute: Allow access to resources described by this policy root.
+/// Access attribute: allow access to the resources this policy root describes.
 pub const ACCESS_ATTR_ALLOW: u8 = 0;
-/// Access attribute: Deny access to resources described by this policy root.
+/// Access attribute: deny access to the resources this policy root describes.
 pub const ACCESS_ATTR_DENY: u8 = 1;
 
-/// Resource attribute: Read access.
+/// Resource attribute: read access.
 pub const RESOURCE_ATTR_READ: u32 = 0x01;
-/// Resource attribute: Write access.
+/// Resource attribute: write access.
 pub const RESOURCE_ATTR_WRITE: u32 = 0x02;
-/// Resource attribute: Execute access.
+/// Resource attribute: execute access.
 pub const RESOURCE_ATTR_EXECUTE: u32 = 0x04;
-/// Resource attribute: Strict width (for I/O - must match exact width).
+/// Resource attribute: strict width (an I/O access must match the descriptor width exactly).
 pub const RESOURCE_ATTR_STRICT_WIDTH: u32 = 0x08;
-/// Resource attribute: Conditional read access.
+/// Resource attribute: conditional read access.
 pub const RESOURCE_ATTR_COND_READ: u32 = 0x10;
-/// Resource attribute: Conditional write access.
+/// Resource attribute: conditional write access.
 pub const RESOURCE_ATTR_COND_WRITE: u32 = 0x20;
 
-/// Byte size of one descriptor belonging to `policy_type`, or `None` if the type is not one the
-/// supervisor recognizes.
+/// Byte size of one descriptor of `policy_type`, or `None` if the supervisor does not recognize
+/// the type.
 pub fn descriptor_size(policy_type: u32) -> Option<usize> {
     match policy_type {
         TYPE_MEM => Some(core::mem::size_of::<MemDescriptorV1_0>()),
@@ -87,10 +85,10 @@ pub enum Instruction {
 }
 
 impl Instruction {
-    /// Total count of privileged instructions tracked.
+    /// Number of privileged instructions tracked.
     pub const COUNT: u16 = 3;
 
-    /// Convert to instruction index.
+    /// Returns the instruction index.
     pub fn as_index(self) -> u16 {
         self as u16
     }
@@ -107,7 +105,7 @@ pub enum SaveStateField {
 }
 
 impl SaveStateField {
-    /// Convert to field index.
+    /// Returns the field index.
     pub fn as_index(self) -> u32 {
         self as u32
     }
@@ -137,7 +135,7 @@ pub enum AccessType {
 }
 
 impl AccessType {
-    /// Convert to resource attribute mask.
+    /// Returns the matching `RESOURCE_ATTR_*` mask.
     pub fn as_attr_mask(self) -> u32 {
         match self {
             AccessType::Read => RESOURCE_ATTR_READ,
@@ -160,7 +158,7 @@ pub enum IoWidth {
 }
 
 impl IoWidth {
-    /// Get the size in bytes.
+    /// Returns the size in bytes.
     pub fn size(self) -> u32 {
         self as u32
     }
@@ -185,7 +183,7 @@ impl TryFrom<&MemDescriptorV1_0> for MemoryRange {
 
     /// Returns the region `desc` describes.
     ///
-    /// # Errors
+    /// ## Errors
     ///
     /// Fails as [`MemoryRange::new`] does when the size is zero or the end is past `u64::MAX`.
     fn try_from(desc: &MemDescriptorV1_0) -> Result<Self, Self::Error> {
@@ -297,26 +295,26 @@ impl SecurePolicyDataV1_0 {
         self.version_major == 1 && self.version_minor == 0
     }
 
-    /// Gets a pointer to the policy root array.
+    /// Returns a pointer to the policy root array.
     ///
     /// ## Safety
     ///
-    /// The caller must ensure that this structure is part of a valid policy buffer.
+    /// `self` must be the header of a valid policy buffer.
     pub unsafe fn get_policy_roots_ptr(&self) -> *const PolicyRootV1 {
         let base = core::ptr::from_ref::<Self>(self).cast::<u8>();
-        // SAFETY: per this function's contract `self` is part of a valid policy buffer, so
-        // `policy_root_offset` stays within that buffer. This only computes a pointer (no deref).
+        // SAFETY: `self` heads a valid policy buffer (function contract), so `policy_root_offset`
+        // stays within it. This only computes a pointer.
         unsafe { base.add(self.policy_root_offset as usize).cast::<PolicyRootV1>() }
     }
 
-    /// Gets a slice of policy roots.
+    /// Returns the policy roots as a slice.
     ///
     /// ## Safety
     ///
-    /// The caller must ensure that this structure is part of a valid policy buffer.
+    /// `self` must be the header of a valid policy buffer.
     pub unsafe fn get_policy_roots(&self) -> &[PolicyRootV1] {
-        // SAFETY: per this function's contract `self` is part of a valid policy buffer, so the
-        // roots pointer and `policy_root_count` describe an in-bounds, initialized array.
+        // SAFETY: `self` heads a valid policy buffer (function contract), so the roots pointer and
+        // `policy_root_count` describe an in-bounds, initialized array.
         unsafe { slice::from_raw_parts(self.get_policy_roots_ptr(), self.policy_root_count as usize) }
     }
 }
@@ -327,62 +325,62 @@ impl PolicyRootV1 {
         self.reserved == [0, 0, 0]
     }
 
-    /// Gets a pointer to the descriptors for this policy root.
+    /// Returns a pointer to the descriptors of this policy root.
     ///
     /// ## Safety
     ///
-    /// The caller must ensure that `policy_base` points to a valid policy buffer.
+    /// `policy_base` must point to the valid policy buffer that contains this root.
     pub unsafe fn get_descriptors_ptr<T>(&self, policy_base: *const u8) -> *const T {
-        // SAFETY: per this function's contract `policy_base` points to a valid policy buffer, so
-        // `offset` stays within it. This only computes a pointer (no deref).
+        // SAFETY: `policy_base` points to a valid policy buffer (function contract), so `offset`
+        // stays within it. This only computes a pointer.
         unsafe { policy_base.add(self.offset as usize).cast::<T>() }
     }
 
-    /// Gets memory descriptors from this policy root.
+    /// Returns the memory descriptors of this policy root.
     ///
     /// ## Safety
     ///
-    /// The caller must ensure that `policy_base` points to a valid policy buffer.
+    /// `policy_base` must point to the valid policy buffer that contains this root.
     pub unsafe fn get_mem_descriptors(&self, policy_base: *const u8) -> &[MemDescriptorV1_0] {
-        // SAFETY: per this function's contract `policy_base` points to a valid policy buffer, so
-        // the descriptor pointer and `count` describe an in-bounds, initialized array.
+        // SAFETY: `policy_base` points to a valid policy buffer (function contract), so the
+        // descriptor pointer and `count` describe an in-bounds, initialized array.
         unsafe {
             slice::from_raw_parts(self.get_descriptors_ptr::<MemDescriptorV1_0>(policy_base), self.count as usize)
         }
     }
 
-    /// Gets I/O descriptors from this policy root.
+    /// Returns the I/O descriptors of this policy root.
     ///
     /// ## Safety
     ///
-    /// The caller must ensure that `policy_base` points to a valid policy buffer.
+    /// `policy_base` must point to the valid policy buffer that contains this root.
     pub unsafe fn get_io_descriptors(&self, policy_base: *const u8) -> &[IoDescriptorV1_0] {
-        // SAFETY: per this function's contract `policy_base` points to a valid policy buffer, so
-        // the descriptor pointer and `count` describe an in-bounds, initialized array.
+        // SAFETY: `policy_base` points to a valid policy buffer (function contract), so the
+        // descriptor pointer and `count` describe an in-bounds, initialized array.
         unsafe { slice::from_raw_parts(self.get_descriptors_ptr::<IoDescriptorV1_0>(policy_base), self.count as usize) }
     }
 
-    /// Gets MSR descriptors from this policy root.
+    /// Returns the MSR descriptors of this policy root.
     ///
     /// ## Safety
     ///
-    /// The caller must ensure that `policy_base` points to a valid policy buffer.
+    /// `policy_base` must point to the valid policy buffer that contains this root.
     pub unsafe fn get_msr_descriptors(&self, policy_base: *const u8) -> &[MsrDescriptorV1_0] {
-        // SAFETY: per this function's contract `policy_base` points to a valid policy buffer, so
-        // the descriptor pointer and `count` describe an in-bounds, initialized array.
+        // SAFETY: `policy_base` points to a valid policy buffer (function contract), so the
+        // descriptor pointer and `count` describe an in-bounds, initialized array.
         unsafe {
             slice::from_raw_parts(self.get_descriptors_ptr::<MsrDescriptorV1_0>(policy_base), self.count as usize)
         }
     }
 
-    /// Gets instruction descriptors from this policy root.
+    /// Returns the instruction descriptors of this policy root.
     ///
     /// ## Safety
     ///
-    /// The caller must ensure that `policy_base` points to a valid policy buffer.
+    /// `policy_base` must point to the valid policy buffer that contains this root.
     pub unsafe fn get_instruction_descriptors(&self, policy_base: *const u8) -> &[InstructionDescriptorV1_0] {
-        // SAFETY: per this function's contract `policy_base` points to a valid policy buffer, so
-        // the descriptor pointer and `count` describe an in-bounds, initialized array.
+        // SAFETY: `policy_base` points to a valid policy buffer (function contract), so the
+        // descriptor pointer and `count` describe an in-bounds, initialized array.
         unsafe {
             slice::from_raw_parts(
                 self.get_descriptors_ptr::<InstructionDescriptorV1_0>(policy_base),
@@ -391,14 +389,14 @@ impl PolicyRootV1 {
         }
     }
 
-    /// Gets save state descriptors from this policy root.
+    /// Returns the save state descriptors of this policy root.
     ///
     /// ## Safety
     ///
-    /// The caller must ensure that `policy_base` points to a valid policy buffer.
+    /// `policy_base` must point to the valid policy buffer that contains this root.
     pub unsafe fn get_save_state_descriptors(&self, policy_base: *const u8) -> &[SaveStateDescriptorV1_0] {
-        // SAFETY: per this function's contract `policy_base` points to a valid policy buffer, so
-        // the descriptor pointer and `count` describe an in-bounds, initialized array.
+        // SAFETY: `policy_base` points to a valid policy buffer (function contract), so the
+        // descriptor pointer and `count` describe an in-bounds, initialized array.
         unsafe {
             slice::from_raw_parts(self.get_descriptors_ptr::<SaveStateDescriptorV1_0>(policy_base), self.count as usize)
         }

@@ -456,9 +456,9 @@ pub(crate) unsafe fn validate_hob_list_structure(handoff: &PhaseHandoffInformati
 
 /// Validates that the HOB list itself lies inside MMRAM.
 ///
-/// Every other check here reasons about regions the HOB list *describes*. The
+/// Every other check here reasons about regions the HOB list describes. The
 /// list is itself a buffer at an address the producer chose, and the supervisor
-/// later maps it readable to Ring 3, so it has to be inside MMRAM for the same
+/// reads it and copies it for Ring 3, so it has to be inside MMRAM for the same
 /// reason its contents do.
 ///
 /// `mmram` is the span returned by [`validate_mmram_contiguous`].
@@ -784,10 +784,9 @@ pub(crate) fn validate_incoming_hobs_post_paging_init(
 
 /// Verifies the page protections of the MM Supervisor Core and User modules.
 ///
-/// Iterates the module HOBs, selecting the MM Supervisor's own
-/// `MemoryAllocationModule` HOBs, dispatches on the module GUID to check
-/// supervisor/user page ownership in `page_table`, and confirms each module's
-/// entry point lies on a code page.
+/// For each of the MM Supervisor's own `MemoryAllocationModule` HOBs, checks in `page_table`
+/// that the Core module is supervisor-owned and the User module is user-accessible, and that
+/// each module's entry point lies on a code page.
 fn verify_module_page_protections<'a>(
     hobs: impl IntoIterator<Item = Hob<'a>>,
     page_table: &impl PageTable,
@@ -806,13 +805,13 @@ fn verify_module_page_protections<'a>(
         match module.module_name {
             name if name == MM_SUPERVISOR_CORE_GUID => {
                 log::info!("Verifying MM Supervisor Core module page protections: {range}");
-                // Supervisor core pages must be supervisor-owned (SP set).
+                // Supervisor core pages must be supervisor-owned (`Supervisor` set).
                 verify_page_attributes(page_table, &range, MemoryAttributes::Supervisor, MemoryAttributes::empty())?;
                 verify_entry_point_on_code_page(page_table, module.entry_point)?;
             }
             name if name == MM_SUPERVISOR_USER_GUID => {
                 log::info!("Verifying MM Supervisor User module page protections: {range}");
-                // User core pages must be user-accessible (SP clear).
+                // User core pages must be user-accessible (`Supervisor` clear).
                 verify_page_attributes(page_table, &range, MemoryAttributes::empty(), MemoryAttributes::Supervisor)?;
                 verify_entry_point_on_code_page(page_table, module.entry_point)?;
             }
@@ -833,7 +832,7 @@ fn with_active_page_table<R>(
 }
 
 /// Verifies that every page of the Ring 3 stack region is usable by a demoted
-/// routine: user-accessible (SP clear), present, writable, and non-executable.
+/// routine: user-accessible (`Supervisor` clear), present, writable, and non-executable.
 ///
 /// Unlike the checks above, this validates state the supervisor establishes
 /// itself, so it runs after the stacks have been mapped rather than as part of

@@ -1,19 +1,19 @@
-//! Save State Read Operations for the MM Supervisor Syscall Dispatcher
+//! Save state reads for the syscall dispatcher.
 //!
-//! Implements the two-phase save state read protocol used by the
-//! `EFI_MM_CPU_PROTOCOL.ReadSaveState()` user-space API.
+//! Implements the two-phase save state read behind the user-space
+//! `EFI_MM_CPU_PROTOCOL.ReadSaveState()` API.
 //!
-//! Phase 1 (`SyscallIndex::SaveStateRead`): stores the requested register
-//! and CPU index in a single hand-off slot shared by every core.
+//! Phase 1 (`SyscallIndex::SaveStateRead`) stores the requested register and CPU index in a
+//! single hand-off slot shared by every core.
 //!
-//! Phase 2 (`SyscallIndex::SaveStateRead2`): validates the request against
-//! the MM security policy, reads the register value from the CPU's SMRAM save
-//! state area, and copies the result into the caller-supplied buffer.
+//! Phase 2 (`SyscallIndex::SaveStateRead2`) checks the request against the MM security policy,
+//! reads the register from the CPU's SMRAM save state map, and copies it into the caller's
+//! buffer.
 //!
 //! ## Security Model
 //!
-//! - User buffer addresses are validated via page-table ownership queries.
-//! - Policy-gated registers (RAX, IO) are checked through
+//! - User buffers must be user-owned according to the page table.
+//! - RAX and IO reads are checked with
 //!   [`PolicyGate::is_save_state_read_allowed`](crate::policy::gate::PolicyGate::is_save_state_read_allowed).
 //! - `PROCESSOR_ID` is always allowed (informational, not security-sensitive).
 //! - Every other register has no policy field, so no descriptor can name it. An
@@ -23,20 +23,18 @@
 //!
 //! ## Save State Regions
 //!
-//! The MM IPL hands the supervisor the per-CPU SMBASE array in the `PassDown` HOB.
-//! [`SaveStateInfo`] records that array and the CPU count. During initialization,
-//! [`validate_save_state_regions`] proves once that the array and every CPU's save
-//! state map lie in supervisor-owned MMRAM, and [`log_save_state_map`] prints the
-//! resulting layout. Every later read goes through that validated [`SaveStateInfo`].
+//! The MM IPL passes the per-CPU SMBASE array in the `PassDown` HOB. [`SaveStateInfo`]
+//! records that array and the CPU count. During initialization
+//! [`validate_save_state_regions`] checks once that the array and every CPU's save state map
+//! lie in supervisor-owned MMRAM, and [`log_save_state_map`] logs the layout. Every later read
+//! goes through that validated [`SaveStateInfo`].
 //!
 //! ## Vendor Selection
 //!
-//! The SMRAM save state vendor (Intel vs AMD) is chosen at build time by the
-//! `save_state_amd` Cargo feature, and only that layout is compiled in. Each
-//! read copies the target CPU's map out of the [`SaveStateInfo`] that
-//! initialization validated, as a [`SaveState`], which does every offset lookup
-//! and field decode and reports failures as [`SaveStateError`]. This module
-//! applies the policy and turns those errors into the syscall's EFI status.
+//! The save state layout (Intel or AMD) is chosen at build time by the `save_state_amd` Cargo
+//! feature. Each read copies the target CPU's map into a [`SaveState`], which does the offset
+//! lookups and field decoding and reports failures as [`SaveStateError`]. This module applies
+//! the policy and maps those errors to the syscall's EFI status.
 //!
 //! ## License
 //!
@@ -235,19 +233,18 @@ impl SaveStateInfo {
     }
 }
 
-/// Requires every per-CPU save-state region the `PassDown` HOB describes to lie inside MMRAM and
-/// to be mapped supervisor-only.
+/// Requires the SMBASE array and every per-CPU save-state region the `PassDown` HOB describes
+/// to lie inside MMRAM and to be mapped supervisor-only.
 ///
-/// The save-state syscall turns `smbase_array[i] + SMRAM_SAVE_STATE_MAP_OFFSET` into a slice and hands
-/// selected bytes of it back to Ring 3. The MM IPL supplies those SMBASEs and sits outside the
-/// supervisor's trust boundary, so an entry that is never checked is an arbitrary read primitive:
-/// proving the array itself is in MMRAM says nothing about where its contents point. Checking all
-/// of them once, here, is what lets [`SaveStateInfo::get_save_state`] treat them as sound later.
+/// The save-state syscall reads `smbase_array[i] + SMRAM_SAVE_STATE_MAP_OFFSET` and returns
+/// selected bytes to Ring 3. The MM IPL supplies those SMBASEs and is outside the supervisor's
+/// trust boundary, so an unchecked entry is an arbitrary read primitive: an array inside MMRAM
+/// says nothing about where its entries point. Checking every entry once here lets
+/// [`SaveStateInfo::get_save_state`] trust them later.
 ///
-/// Being inside MMRAM is not on its own enough. A save-state map holds a CPU's saved context, and
-/// the syscall exists so Ring 3 can read parts of it under policy; a page Ring 3 can reach
-/// directly hands it the whole map and lets it rewrite what the supervisor is about to read.
-/// Supervisor-only mapping is what keeps the syscall the only way in.
+/// Being inside MMRAM is not enough. If Ring 3 could map a save-state map directly, it could
+/// read the whole saved context and rewrite what the supervisor is about to read. Requiring a
+/// supervisor-only mapping keeps the policy-checked syscall the only way in.
 pub(crate) fn validate_save_state_regions(
     info: &SaveStateInfo,
     is_inside_mmram: impl Fn(&MemoryRange) -> bool,
@@ -289,10 +286,10 @@ pub(crate) fn validate_save_state_regions(
     Ok(())
 }
 
-/// Logs the per-CPU SMBASE and the save-state window derived from it.
+/// Logs each CPU's SMBASE and save-state map at debug level.
 ///
-/// This mirrors the CPU relocation table the C `PiSmmCpuDxeSmm` driver emits and
-/// gives the same at-a-glance view when diagnosing save-state or SMBASE issues.
+/// Matches the CPU relocation table the C `PiSmmCpuDxeSmm` driver logs, for diagnosing
+/// save-state or SMBASE issues.
 pub(crate) fn log_save_state_map(info: SaveStateInfo) {
     if !log::log_enabled!(log::Level::Debug) {
         return;
@@ -343,11 +340,10 @@ fn policy_checks_for_register(reg: MmSaveStateRegister) -> Option<&'static [Save
     }
 }
 
-/// Processes Phase 1 of the save state read syscall.
+/// Runs Phase 1 of the save state read syscall.
 ///
-/// Validates and stores the register and CPU index for the subsequent Phase 2
-/// call. The `protocol` pointer is retained for a consistency check in Phase 2,
-/// and `register_raw` is the raw `EFI_MM_SAVE_STATE_REGISTER` value.
+/// Validates and stages the register and CPU index for Phase 2. `protocol` is kept so Phase 2
+/// can check it matches, and `register_raw` is the raw `EFI_MM_SAVE_STATE_REGISTER` value.
 pub fn save_state_read_phase1(protocol: u64, register_raw: u64, cpu_index: u64) -> SyscallResult {
     let num_cpus = save_state_info()
         .inspect_err(|status| log::error!("SAVE_STATE_READ: Unable to get number of CPUs: {:#x}", status.as_usize()))?
@@ -381,13 +377,13 @@ fn stage_read_request(caller: u32, protocol: u64, register_raw: u64, cpu_index: 
     Ok(0)
 }
 
-/// Processes Phase 2 of the save state read syscall.
+/// Runs Phase 2 of the save state read syscall.
 ///
-/// Validates the request against the MM security policy, reads the register
-/// from the CPU's SMRAM save state area, and copies the result into the user
-/// buffer. The `protocol` pointer must match the one supplied in Phase 1.
+/// Checks the request against the MM security policy, reads the register from the CPU's SMRAM
+/// save state map, and copies it into the user buffer. `protocol` must match the one given in
+/// Phase 1.
 pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> SyscallResult {
-    // Retrieve and consume the Phase 1 state
+    // Take the staged Phase 1 request; it is consumed even if this read fails.
     let holder = {
         let mut access = security_state().lock_save_state_access();
         if let Some(holder) = access.take() {
@@ -409,7 +405,7 @@ pub fn save_state_read_phase2(protocol: u64, width: u64, buffer: u64) -> Syscall
     })?;
 
     if holder.register == MmSaveStateRegister::ProcessorId {
-        // Special case: PROCESSOR_ID - always allowed, no policy check.
+        // PROCESSOR_ID is always allowed; there is no policy check.
         read_processor_id(holder.cpu_index, out)?;
     } else {
         let state = info.get_save_state(holder.cpu_index).map_err(|error| {
@@ -454,7 +450,6 @@ fn validate_read_request(
         return Err(Status::ACCESS_DENIED);
     }
 
-    // Verify protocol matches Phase 1
     if holder.user_protocol != protocol {
         log::error!("SAVE_STATE_READ2: Protocol mismatch: expected 0x{:x}, got 0x{:x}", holder.user_protocol, protocol);
         return Err(Status::INVALID_PARAMETER);
@@ -504,8 +499,8 @@ fn read_gated_register(
         Some(fields) => {
             let condition = inspect_io_condition(state);
 
-            // An IO read needs the trap condition; if it can't be determined the CPU did
-            // not trap an I/O instruction, which is NOT_FOUND rather than a policy denial.
+            // An IO read needs the trap condition. Without one the CPU did not trap an I/O
+            // instruction, which is NOT_FOUND rather than a policy denial.
             if register == MmSaveStateRegister::Io && condition.is_none() {
                 log::trace!("SAVE_STATE_READ2: Unable to determine I/O condition from save state");
                 return Err(Status::NOT_FOUND);
@@ -521,8 +516,7 @@ fn read_gated_register(
         None => check(None, None)?,
     }
 
-    // Dispatch to the matching reader. Each one decodes `state` and writes into
-    // the validated `out` buffer, reporting failures as `SaveStateError`.
+    // Each reader decodes `state` into the validated `out` buffer.
     let width = usize::try_from(width).map_err(|_| Status::INVALID_PARAMETER)?;
     let result = match register {
         MmSaveStateRegister::Io => state.read_io_register(out),
@@ -545,9 +539,8 @@ fn save_state_info() -> Result<SaveStateInfo, Status> {
     }
 }
 
-/// Determines the actual number of bytes that will be written to the user buffer.
-///
-/// Returns 0 if the width is not supported for the given register.
+/// Returns the number of bytes a read of `register` at `width` writes to the user buffer, or 0
+/// if the register does not support that width.
 fn actual_write_size(register: MmSaveStateRegister, width: u64) -> usize {
     match register {
         MmSaveStateRegister::Io => IO_INFO_SIZE,
@@ -577,9 +570,9 @@ fn actual_write_size(register: MmSaveStateRegister, width: u64) -> usize {
     }
 }
 
-/// Reads the `PROCESSOR_ID` for a given CPU and writes it to the user buffer.
+/// Writes the `PROCESSOR_ID` (APIC ID) of `cpu_index` into `out`.
 ///
-/// The `ProcessorId` (APIC ID) is read from the supervisor-owned [`CpuManager`](crate::mmcore::cpu::CpuManager).
+/// The value comes from the supervisor-owned [`CpuManager`](crate::mmcore::cpu::CpuManager).
 fn read_processor_id(cpu_index: u64, out: &mut [u8]) -> SyscallResult {
     let lookup = init_state().processor_id_lookup_fn().ok_or(Status::NOT_READY)?;
     let processor_id = lookup(cpu_index as usize).ok_or_else(|| {
@@ -587,7 +580,6 @@ fn read_processor_id(cpu_index: u64, out: &mut [u8]) -> SyscallResult {
         Status::NOT_FOUND
     })?;
 
-    // Write the 8-byte ProcessorId to the user buffer.
     let out_len = out.len();
     out.get_mut(..8)
         .ok_or_else(|| {
@@ -600,11 +592,11 @@ fn read_processor_id(cpu_index: u64, out: &mut [u8]) -> SyscallResult {
     Ok(0)
 }
 
-/// Returns the I/O condition (IN vs OUT) that caused the SMI, for policy checking.
+/// Returns the I/O direction (IN or OUT) that caused the SMI, for the policy check.
 ///
 /// Returns `None` when the SMI was not an I/O trap, or when the save state revision predates
-/// I/O trap information. Either way the policy check then runs without a trap condition, so
-/// only unconditional descriptors can allow the read.
+/// I/O trap information. The caller then refuses an IO read with `NOT_FOUND`, and checks a RAX
+/// read without a trap condition, so only unconditional descriptors can allow it.
 fn inspect_io_condition(state: &SaveState) -> Option<SaveStateCondition> {
     let io_info = match state.io_info() {
         Ok(io_info) => io_info?,
@@ -619,7 +611,7 @@ fn inspect_io_condition(state: &SaveState) -> Option<SaveStateCondition> {
     }
 }
 
-/// Maps a save state failure onto the status the syscall reports.
+/// Maps a save state failure to the status the syscall reports.
 fn save_state_error_status(error: SaveStateError) -> Status {
     match error {
         SaveStateError::InvalidParameter | SaveStateError::UnsupportedWidth { .. } => Status::INVALID_PARAMETER,
@@ -1510,7 +1502,7 @@ mod tests {
         let mut map = new_save_state_map();
         write_u32(&mut map[..], constants.io_info_offset as usize, io_trap_field(0xB2, true, 1));
 
-        // The descriptor only permits the read when an I/O *write* trapped.
+        // The descriptor only permits the read when an I/O write trapped.
         let policy = build_policy(
             ACCESS_ATTR_ALLOW,
             &[descriptor(SaveStateField::IoTrap, RESOURCE_ATTR_COND_READ, SaveStateCondition::IoWrite)],

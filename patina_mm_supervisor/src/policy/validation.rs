@@ -1,12 +1,12 @@
-//! Firmware Policy Validation
+//! Firmware policy validation.
 //!
-//! Decides whether the firmware policy blob the MM IPL hands down is one the
-//! supervisor will accept. The check runs once during initialization and
-//! rejects a blob that repeats a policy type, leaves a reserved field or header
-//! bit set, carries an attribute the supervisor does not implement, states a
-//! save-state condition that contradicts itself, still uses the legacy memory
-//! policy format, or whose declared size does not match the bytes actually
-//! scanned.
+//! Decides once, during initialization, whether the supervisor accepts the firmware policy blob
+//! from the MM IPL. It rejects a blob that repeats a policy type, sets a reserved field or header
+//! bit, uses an attribute the supervisor does not implement, has a contradictory save-state
+//! condition, uses the legacy memory policy format, or declares a size that does not match the
+//! bytes scanned.
+//!
+//! It also provides [`walk_page_table`], which builds the memory policy from the page table.
 //!
 //! ## License
 //!
@@ -79,19 +79,18 @@ impl core::fmt::Display for PolicyValidationError {
     }
 }
 
-/// Checks that the policy a [`PolicyGate`] was built over is one the supervisor will accept.
+/// Checks that the supervisor accepts the policy a [`PolicyGate`] was built over.
 ///
-/// Taking the gate rather than a raw pointer is what makes this safe and keeps it to one job.
-/// [`PolicyGate::new`] has already rejected a null pointer, an unsupported version, and any
-/// internal offset that falls outside the blob, so this reads the header and the roots through
-/// safe accessors and checks only what the layout rules do not cover.
+/// Taking the gate instead of a raw pointer keeps this safe. [`PolicyGate::new`] already
+/// rejected a null pointer, an unsupported version, and any internal offset outside the blob,
+/// so this reads the header and roots through safe accessors and checks only what the layout
+/// rules do not cover.
 pub(crate) fn security_policy_check(gate: &PolicyGate) -> MmSupervisorResult<()> {
     let policy = gate.policy();
     let policy_ptr = gate.as_ptr();
 
     log::info!("Security policy check entry...");
 
-    // Check for unrecognized header bits
     if policy.reserved != 0 || policy.flags != 0 || policy.capabilities != 0 {
         return Err(PolicyValidationError::UnrecognizedHeaderBits.into());
     }
@@ -116,8 +115,8 @@ pub(crate) fn security_policy_check(gate: &PolicyGate) -> MmSupervisorResult<()>
             );
         }
 
-        // Every arm below reads a descriptor array that `PolicyGate::new` already proved lies
-        // wholly inside the blob, so the bounds are not re-checked here.
+        // `PolicyGate::new` already checked that each descriptor array lies wholly inside the
+        // blob, so the bounds are not re-checked here.
         match root.policy_type {
             TYPE_IO => {
                 // SAFETY: `policy_ptr` is the gate's validated buffer and `root` came from it, so
@@ -168,18 +167,15 @@ pub(crate) fn security_policy_check(gate: &PolicyGate) -> MmSupervisorResult<()>
     Ok(())
 }
 
-// Validation helper functions
-
-/// Validates the I/O policy descriptors referenced by `root`.
+/// Validates the I/O policy descriptors of `root`.
 ///
 /// ## Safety
 ///
-/// The caller must ensure that `policy_base` points to a valid policy buffer
-/// and that `root` is a policy root from that same buffer, so its descriptor
-/// offset and count describe an in-bounds, properly aligned descriptor array.
+/// `policy_base` must point to a valid policy buffer and `root` must be a policy root from that
+/// buffer, so its descriptor offset and count describe an in-bounds, aligned array.
 unsafe fn validate_io_policy(policy_base: *const u8, root: &PolicyRootV1) -> MmSupervisorResult<()> {
-    // SAFETY: The caller guarantees `policy_base` is a valid policy buffer and
-    // that `root` belongs to it, so the descriptor slice is in bounds.
+    // SAFETY: the caller guarantees `root` belongs to the valid policy buffer at
+    // `policy_base`, so the descriptor slice is in bounds.
     let descriptors = unsafe { root.get_io_descriptors(policy_base) };
 
     for (index, desc) in descriptors.iter().enumerate() {
@@ -190,16 +186,15 @@ unsafe fn validate_io_policy(policy_base: *const u8, root: &PolicyRootV1) -> MmS
     Ok(())
 }
 
-/// Validates the memory policy descriptors referenced by `root`.
+/// Validates the memory policy descriptors of `root`.
 ///
 /// ## Safety
 ///
-/// The caller must ensure that `policy_base` points to a valid policy buffer
-/// and that `root` is a policy root from that same buffer, so its descriptor
-/// offset and count describe an in-bounds, properly aligned descriptor array.
+/// `policy_base` must point to a valid policy buffer and `root` must be a policy root from that
+/// buffer, so its descriptor offset and count describe an in-bounds, aligned array.
 unsafe fn validate_mem_policy(policy_base: *const u8, root: &PolicyRootV1) -> MmSupervisorResult<()> {
-    // SAFETY: The caller guarantees `policy_base` is a valid policy buffer and
-    // that `root` belongs to it, so the descriptor slice is in bounds.
+    // SAFETY: the caller guarantees `root` belongs to the valid policy buffer at
+    // `policy_base`, so the descriptor slice is in bounds.
     let descriptors = unsafe { root.get_mem_descriptors(policy_base) };
 
     for (index, desc) in descriptors.iter().enumerate() {
@@ -212,16 +207,15 @@ unsafe fn validate_mem_policy(policy_base: *const u8, root: &PolicyRootV1) -> Mm
     Ok(())
 }
 
-/// Validates the instruction policy descriptors referenced by `root`.
+/// Validates the instruction policy descriptors of `root`.
 ///
 /// ## Safety
 ///
-/// The caller must ensure that `policy_base` points to a valid policy buffer
-/// and that `root` is a policy root from that same buffer, so its descriptor
-/// offset and count describe an in-bounds, properly aligned descriptor array.
+/// `policy_base` must point to a valid policy buffer and `root` must be a policy root from that
+/// buffer, so its descriptor offset and count describe an in-bounds, aligned array.
 unsafe fn validate_instruction_policy(policy_base: *const u8, root: &PolicyRootV1) -> MmSupervisorResult<()> {
-    // SAFETY: The caller guarantees `policy_base` is a valid policy buffer and
-    // that `root` belongs to it, so the descriptor slice is in bounds.
+    // SAFETY: the caller guarantees `root` belongs to the valid policy buffer at
+    // `policy_base`, so the descriptor slice is in bounds.
     let descriptors = unsafe { root.get_instruction_descriptors(policy_base) };
 
     for (index, desc) in descriptors.iter().enumerate() {
@@ -236,20 +230,19 @@ unsafe fn validate_instruction_policy(policy_base: *const u8, root: &PolicyRootV
     Ok(())
 }
 
-/// Validates the save state policy descriptors referenced by `root`.
+/// Validates the save state policy descriptors of `root`.
 ///
 /// ## Safety
 ///
-/// The caller must ensure that `policy_base` points to a valid policy buffer
-/// and that `root` is a policy root from that same buffer, so its descriptor
-/// offset and count describe an in-bounds, properly aligned descriptor array.
+/// `policy_base` must point to a valid policy buffer and `root` must be a policy root from that
+/// buffer, so its descriptor offset and count describe an in-bounds, aligned array.
 unsafe fn validate_save_state_policy(policy_base: *const u8, root: &PolicyRootV1) -> MmSupervisorResult<()> {
-    // SAFETY: The caller guarantees `policy_base` is a valid policy buffer and
-    // that `root` belongs to it, so the descriptor slice is in bounds.
+    // SAFETY: the caller guarantees `root` belongs to the valid policy buffer at
+    // `policy_base`, so the descriptor slice is in bounds.
     let descriptors = unsafe { root.get_save_state_descriptors(policy_base) };
 
     for (index, desc) in descriptors.iter().enumerate() {
-        // Check for unsupported write attributes
+        // Save state access is read-only.
         if (desc.attributes & (RESOURCE_ATTR_WRITE | RESOURCE_ATTR_COND_WRITE)) != 0 {
             return Err(PolicyValidationError::UnsupportedAttribute {
                 policy_type: TYPE_SAVE_STATE,
@@ -259,7 +252,7 @@ unsafe fn validate_save_state_policy(policy_base: *const u8, root: &PolicyRootV1
             .into());
         }
 
-        // Check for conflicting conditions
+        // A condition requires the conditional-read attribute.
         if (desc.attributes & RESOURCE_ATTR_COND_READ) == 0
             && desc.access_condition != SaveStateCondition::Unconditional as u32
         {
@@ -277,27 +270,25 @@ unsafe fn validate_save_state_policy(policy_base: *const u8, root: &PolicyRootV1
     Ok(())
 }
 
-/// Memory policy builder for collecting memory descriptors from page table walking.
-///
-/// This is used to generate memory policy from page table entries.
+/// Collects memory policy descriptors while walking the page table.
 pub struct MemoryPolicyBuilder {
-    /// Region of the descriptor being built, and its attributes
+    /// Region of the descriptor being built, and its attributes.
     current: Option<(MemoryRange, u32)>,
-    /// Maximum number of descriptors we can store
+    /// Maximum number of descriptors the buffer holds.
     max_count: usize,
-    /// Buffer for descriptors
+    /// Descriptor buffer.
     buffer_ptr: *mut MemDescriptorV1_0,
-    /// Current count of descriptors
+    /// Number of descriptors written to the buffer.
     count: usize,
 }
 
 impl MemoryPolicyBuilder {
-    /// Creates a new memory policy builder.
+    /// Creates a memory policy builder that writes into `buffer_ptr`.
     ///
     /// ## Safety
     ///
-    /// The caller must ensure that `buffer_ptr` points to a valid buffer
-    /// with space for at least `max_count` descriptors.
+    /// `buffer_ptr` must point to a writable buffer with space for at least `max_count`
+    /// descriptors.
     pub unsafe fn new(buffer_ptr: *mut MemDescriptorV1_0, max_count: usize) -> Self {
         Self { current: None, max_count, buffer_ptr, count: 0 }
     }
@@ -321,7 +312,7 @@ impl MemoryPolicyBuilder {
         Ok(())
     }
 
-    /// Flushes the current descriptor to the buffer.
+    /// Writes the pending descriptor to the buffer. Returns `Err(())` if the buffer is full.
     fn flush_current(&mut self) -> Result<(), ()> {
         if let Some((range, mem_attributes)) = self.current.take() {
             if self.count >= self.max_count {
@@ -332,7 +323,8 @@ impl MemoryPolicyBuilder {
             let desc =
                 MemDescriptorV1_0 { base_address: range.base(), size: range.size(), mem_attributes, reserved: 0 };
 
-            // SAFETY: We checked bounds
+            // SAFETY: `count < max_count` (checked above), and `new` requires the buffer to hold
+            // `max_count` descriptors.
             unsafe {
                 *self.buffer_ptr.add(self.count) = desc;
             }
@@ -341,7 +333,8 @@ impl MemoryPolicyBuilder {
         Ok(())
     }
 
-    /// Finishes building and returns the count of descriptors.
+    /// Writes the pending descriptor and returns the descriptor count. Returns `Err(())` if the
+    /// buffer is full.
     pub fn finish(mut self) -> Result<usize, ()> {
         self.flush_current()?;
         Ok(self.count)
@@ -350,10 +343,9 @@ impl MemoryPolicyBuilder {
 
 /// Converts effective page-table memory attributes to policy R/W/X attributes.
 ///
-/// The iterator yields only present leaf mappings whose attributes already
-/// fold in restrictions inherited from parent table entries, so this is a
-/// direct translation: read is always granted, write unless read-only, and
-/// execute unless execute-protected.
+/// The iterator yields only present leaf mappings, with restrictions from parent entries
+/// already folded in, so this is a direct translation: read is always granted, write unless
+/// read-only, and execute unless execute-protected.
 #[inline]
 fn mem_attrs_to_policy_attrs(attributes: MemoryAttributes) -> u32 {
     let mut attrs = RESOURCE_ATTR_READ;
@@ -374,7 +366,7 @@ fn mem_attrs_to_policy_attrs(attributes: MemoryAttributes) -> u32 {
 pub enum PageTableWalkError {
     /// Buffer is full, cannot add more descriptors.
     BufferFull,
-    /// The CR3 value is invalid (null).
+    /// The CR3 value or the descriptor buffer is null.
     InvalidCr3,
     /// The page table reported a mapped region that is empty or runs past the end of the address
     /// space.
@@ -400,27 +392,26 @@ impl core::fmt::Display for PageTableWalkError {
     }
 }
 
-/// Callback type for checking if a range is inside MMRAM.
-///
-/// Returns `true` if the range is fully inside MMRAM.
+/// Callback that returns `true` if a range is fully inside MMRAM.
 pub type IsInsideMmramFn = fn(&MemoryRange) -> bool;
 
-/// Walks `x86_64` 4-level page tables and generates memory policy descriptors.
+/// Walks the `x86_64` 4-level page table at CR3 and writes memory policy descriptors with the
+/// effective R/W/X attributes of each mapped region.
 ///
-/// This function traverses the page table hierarchy starting from the PML4
-/// table (pointed to by CR3), and for each mapped page, generates a memory
-/// policy descriptor with the effective R/W/X attributes.
+/// Adjacent regions with the same attributes are merged into one descriptor, and regions fully
+/// inside MMRAM are skipped. Returns the number of descriptors written.
 ///
-/// Adjacent pages with the same attributes are coalesced into single descriptors.
-/// Regions that lie fully inside MMRAM are skipped. Returns the number of memory
-/// policy descriptors generated.
+/// ## Errors
+///
+/// Returns `InvalidCr3` for a null `cr3` or `buffer`, `InvalidRegion` for an invalid mapped
+/// region, and `BufferFull` when more than `max_count` descriptors are needed.
 ///
 /// ## Safety
 ///
 /// The caller must ensure that:
 /// - `cr3` points to a valid PML4 table
 /// - `buffer` has space for at least `max_count` descriptors
-/// - The page table memory is accessible and won't change during the walk
+/// - The page table memory is accessible and does not change during the walk
 pub unsafe fn walk_page_table(
     cr3: u64,
     buffer: *mut MemDescriptorV1_0,
@@ -431,25 +422,23 @@ pub unsafe fn walk_page_table(
         return Err(PageTableWalkError::InvalidCr3.into());
     }
 
-    // Construct a read-only view of the active page table rooted at CR3. Clear
-    // the low 12 flag bits to obtain the page-aligned PML4 base. The iterator
-    // only reads entries, so the allocator is stored but never invoked.
+    // Build a read-only view of the page table at CR3. Clearing the low 12 flag bits gives the
+    // PML4 base. The iterator only reads entries, so the allocator is never called.
     let base = cr3 & !0xFFF;
     let allocator = SharedPagingAllocator::new(security_state().paging_allocator());
-    // SAFETY: The caller guarantees `cr3` points to a valid PML4 table that
-    // remains stable for the duration of the walk.
+    // SAFETY: the caller guarantees `cr3` points to a valid PML4 table that stays stable for the
+    // walk.
     let page_table = unsafe { X64PageTable::from_existing(base, allocator, PagingType::Paging4Level) }
         .map_err(|_| PageTableWalkError::InvalidCr3)?;
 
-    // SAFETY: per this function's contract `buffer` has space for `max_count` `MemDescriptorV1_0`
-    // entries, satisfying `MemoryPolicyBuilder::new`'s requirement.
+    // SAFETY: the caller guarantees `buffer` has space for `max_count` descriptors, as
+    // `MemoryPolicyBuilder::new` requires.
     let mut builder = unsafe { MemoryPolicyBuilder::new(buffer, max_count) };
 
     for region in page_table.iter_mapped_regions(None) {
         let range = MemoryRange::new(region.pa, region.size)
             .map_err(|_| PageTableWalkError::InvalidRegion { base: region.pa, size: region.size })?;
 
-        // Skip regions that lie fully inside MMRAM.
         if is_inside_mmram(&range) {
             continue;
         }

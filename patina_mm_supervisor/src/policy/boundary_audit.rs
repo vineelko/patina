@@ -1,8 +1,7 @@
-//! Firmware Policy Boundary Audit
+//! Firmware policy boundary audit.
 //!
-//! Reports, once when the policy is installed, whether the platform policy
-//! grants Ring 3 write access to a register or port that defines the boundary
-//! between Ring 0 and Ring 3.
+//! Reports once, when the policy is installed, whether the platform policy grants Ring 3 write
+//! access to a register or port that defines the boundary between Ring 0 and Ring 3.
 //!
 //! ## License
 //!
@@ -13,11 +12,11 @@
 use super::{AccessType, IoWidth, gate::PolicyGate};
 
 /// Reports every boundary-defining MSR and I/O port the policy grants Ring 3 write access to,
-/// returning how many it found in total.
+/// and returns the total count.
 ///
-/// Both halves always run, so the log names every problem in the policy rather than only the
-/// first kind found. See [`audit_boundary_msr_grants`] and [`audit_boundary_io_grants`] for what
-/// each half covers and why those registers and ports were chosen.
+/// Both halves always run, so the log names every problem rather than only the first kind
+/// found. See [`audit_boundary_msr_grants`] and [`audit_boundary_io_grants`] for what each half
+/// covers and why.
 pub(crate) fn audit_boundary_grants(gate: &PolicyGate) -> usize {
     audit_boundary_msr_grants(gate) + audit_boundary_io_grants(gate)
 }
@@ -25,17 +24,15 @@ pub(crate) fn audit_boundary_grants(gate: &PolicyGate) -> usize {
 /// MSRs whose write access defines the boundary between Ring 0 and Ring 3, as inclusive
 /// `(first, last, description)` ranges.
 ///
-/// The list is used for reporting only. The platform policy remains the one place that decides
-/// what Ring 3 may access. Write access to any of these defeats Ring 3 isolation: `LSTAR` sets
-/// the syscall entry address the CPU calls in Ring 0, `KERNEL_GS_BASE` sets the Ring 0 stack the
-/// entry stub switches to, `IA32_PL0_SSP` relocates the supervisor shadow stack, `SMRR_PHYS*`
-/// unlock MMRAM, clearing `EFER.NXE` disables NX enforcement, the MTRR and `PAT` registers allow
-/// cache poisoning of MMRAM, and `IA32_DS_AREA` and `IA32_RTIT_CTL` direct trace stores to an
-/// arbitrary address.
+/// The list is for reporting only; the platform policy alone decides what Ring 3 may access.
+/// Write access to any of these defeats Ring 3 isolation: LSTAR sets the syscall entry address
+/// the CPU calls in Ring 0, `KERNEL_GS_BASE` sets the Ring 0 stack the entry stub switches to,
+/// `IA32_PL0_SSP` relocates the supervisor shadow stack, `SMRR_PHYS*` unlock MMRAM, clearing
+/// EFER.NXE disables NX enforcement, the MTRR and PAT registers allow cache poisoning of MMRAM,
+/// and `IA32_DS_AREA` and `IA32_RTIT_CTL` direct trace stores to an arbitrary address.
 ///
-/// Registers a platform has reason to write are left out even when they are security relevant,
-/// `IA32_APIC_BASE` and `IA32_FEATURE_CONTROL` among them, so that a normal policy reports
-/// nothing.
+/// Registers a platform has reason to write are left out even when security relevant (for
+/// example `IA32_APIC_BASE` and `IA32_FEATURE_CONTROL`), so a normal policy reports nothing.
 const BOUNDARY_MSRS: &[(u32, u32, &str)] = &[
     (0x0000_009E, 0x0000_009E, "IA32_SMBASE"),
     (0x0000_0174, 0x0000_0176, "IA32_SYSENTER_CS/ESP/EIP"),
@@ -58,17 +55,16 @@ const BOUNDARY_MSRS: &[(u32, u32, &str)] = &[
     (0xC000_0101, 0xC000_0102, "IA32_GS_BASE/KERNEL_GS_BASE"),
 ];
 
-/// Reports every [`BOUNDARY_MSRS`] register the policy grants Ring 3 write access to, returning
-/// how many it found.
+/// Reports every [`BOUNDARY_MSRS`] register the policy grants Ring 3 write access to, and
+/// returns how many it found.
 ///
 /// This is a diagnostic and denies nothing. It runs once, when the policy is installed, and
-/// queries the same gate the syscall path uses, so the policy stays the only place that decides
-/// what Ring 3 may access. Running it at initialization reports the result on every boot, rather
-/// than when some driver issues the `WRMSR`.
+/// queries the same gate the syscall path uses. Running at initialization reports the result
+/// on every boot rather than only when a driver issues the WRMSR.
 ///
-/// A non-zero result means the platform policy does not maintain the Ring 0 / Ring 3 boundary and
-/// needs to be corrected. The supervisor continues, because the platform policy, not this list,
-/// is the authority on what a platform needs.
+/// A non-zero result means the platform policy does not keep the boundary between Ring 0 and
+/// Ring 3 and must be fixed. The supervisor continues, because the platform policy, not this
+/// list, is the authority on what a platform needs.
 fn audit_boundary_msr_grants(gate: &PolicyGate) -> usize {
     let mut granted = 0;
 
@@ -97,23 +93,23 @@ fn audit_boundary_msr_grants(gate: &PolicyGate) -> usize {
 /// I/O ports whose write access defines the boundary between Ring 0 and Ring 3, as inclusive
 /// `(first, last, description)` ranges.
 ///
-/// Used for reporting only, as [`BOUNDARY_MSRS`] is. Write access to PCI configuration space
-/// reaches the chipset registers that lock MMRAM and program the DRAM remap windows, so it can
-/// unlock MMRAM or alias normal memory over it without any `WRMSR`. Write access to the ACPI
-/// software MMI command port lets a demoted driver supply the command value the MMI dispatchers
-/// match on, so handlers run as though the request came from outside MM.
+/// For reporting only, like [`BOUNDARY_MSRS`]. Write access to PCI configuration space reaches
+/// the chipset registers that lock MMRAM and program the DRAM remap windows, so it can unlock
+/// MMRAM or alias normal memory over it without any WRMSR. Write access to the ACPI software MMI
+/// command port lets a demoted driver supply the command value the MMI dispatchers match on, so
+/// handlers run as though the request came from outside MM.
 ///
-/// Ports a platform has reason to drive from MM are left out, the embedded controller, CMOS,
-/// GPIO and the ACPI PM block among them, so that a normal policy reports nothing.
+/// Ports a platform has reason to drive from MM are left out (for example the embedded
+/// controller, CMOS, GPIO and the ACPI PM block), so a normal policy reports nothing.
 const BOUNDARY_IO_PORTS: &[(u16, u16, &str)] =
     &[(0x00B2, 0x00B3, "ACPI software MMI command/data port"), (0x0CF8, 0x0CFF, "PCI configuration address/data")];
 
-/// Reports every [`BOUNDARY_IO_PORTS`] port the policy grants Ring 3 write access to, returning
-/// how many it found.
+/// Reports every [`BOUNDARY_IO_PORTS`] port the policy grants Ring 3 write access to, and
+/// returns how many it found.
 ///
-/// The I/O counterpart to [`audit_boundary_msr_grants`], with the same behavior: it runs once
-/// when the policy is installed, queries the gate, and changes nothing. Ports are checked one
-/// byte at a time, which is the granularity at which the policy describes them.
+/// The I/O counterpart of [`audit_boundary_msr_grants`]: it runs once when the policy is
+/// installed, queries the gate, and changes nothing. Ports are checked one byte at a time, the
+/// granularity at which the policy describes them.
 fn audit_boundary_io_grants(gate: &PolicyGate) -> usize {
     let mut granted = 0;
 
@@ -171,8 +167,8 @@ mod tests {
 
     #[test]
     fn test_boundary_msr_audit_reports_a_policy_that_grants_the_syscall_entry() {
-        // An allow range that starts at IA32_EFER and runs over the syscall MSRs - the shape of
-        // policy mistake the audit exists to surface.
+        // An allow range that starts at IA32_EFER and runs over the syscall MSRs: the kind of
+        // policy mistake the audit exists to report.
         let policy = PolicyBuilder::new()
             .root(ACCESS_ATTR_ALLOW, Descriptors::Msr(vec![msr(0xC000_0080, 5, READ_WRITE)]))
             .build();

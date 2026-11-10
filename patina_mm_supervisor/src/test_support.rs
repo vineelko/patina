@@ -118,7 +118,7 @@ impl RawHobList {
 
     /// Borrows the list's leading Phase Handoff Information Table.
     ///
-    /// The HOB list always begins with the PHIT, which is what the init helpers now take.
+    /// The HOB list always begins with the PHIT, which is what the init helpers take.
     pub(crate) fn handoff(&self) -> &PhaseHandoffInformationTable {
         // SAFETY: `new` pushes a PHIT first, and `storage` outlives the borrow.
         unsafe { &*self.as_ptr().cast::<PhaseHandoffInformationTable>() }

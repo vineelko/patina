@@ -1,7 +1,6 @@
 //! Performance Timer for the MM Supervisor Core
 //!
-//! Provides real-time, TSC-based timing helpers used by mailbox timeouts and
-//! AP-arrival polling.
+//! TSC-based timeouts for the mailbox, AP arrival, and AP exit polling.
 //!
 //! ## License
 //!
@@ -67,19 +66,16 @@ fn tsc_frequency(leaf: CpuidResult) -> Option<u64> {
 /// Derives the nominal base frequency in Hz from CPUID leaf 0x16, where it is reported
 /// in MHz in `EAX`.
 ///
-/// This is a nominal frequency and is less accurate for reflecting actual operating
-/// conditions. Returns 0 when the CPU does not enumerate the leaf.
+/// The nominal frequency can differ from the actual TSC rate. Returns 0 when the CPU does not
+/// enumerate the leaf.
 fn base_frequency(leaf: CpuidResult) -> u64 {
     u64::from(leaf.eax) * 1_000_000
 }
 
-/// Spins until `condition` returns true or `timeout_us` microseconds elapse.
+/// Spins until `condition` returns `true` or `timeout_us` microseconds pass.
 ///
-/// Returns `true` when the provided `condition` closure returns `true`
-/// before the deadline, or `false` on timeout.
-///
-/// If the performance frequency is unknown, falls back to a conservative
-/// iteration-count heuristic (`timeout_us * 10` loops).
+/// Returns `true` if the condition was met before the deadline and `false` on timeout. Without
+/// a known counter frequency it polls `timeout_us * 10` times instead.
 pub fn spin_until<F>(timeout_us: u64, mut condition: F) -> bool
 where
     F: FnMut() -> bool,

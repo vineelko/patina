@@ -1,5 +1,8 @@
 //! Locked View Over the Page Allocator State
 //!
+//! [`LockedState`] holds the page allocator's mutex and exposes the bookkeeping it guards: the
+//! region table and the allocation and type bitmaps.
+//!
 //! ## License
 //!
 //! Copyright (c) Microsoft Corporation.
@@ -42,10 +45,10 @@ unsafe impl Send for StatePtr {}
 /// A lock-held view over the allocator state.
 ///
 /// Obtaining a `LockedState` requires holding the state mutex (it owns the
-/// guard), so every method is guaranteed exclusive access to the SMRAM
-/// bookkeeping. Because the region/bitmap slices borrow from `&self` / `&mut
-/// self`, the borrow checker - not convention - prevents mutable and shared
-/// views from overlapping.
+/// guard), so every method has exclusive access to the SMRAM bookkeeping.
+/// Because the region and bitmap slices borrow from `&self` or `&mut self`,
+/// the borrow checker, not convention, prevents mutable and shared views from
+/// overlapping.
 pub(crate) struct LockedState<'a> {
     /// State pointer copied out of the guard. Null until the allocator is initialized.
     pub(crate) state: *mut AllocatorState,
@@ -76,7 +79,7 @@ impl LockedState<'_> {
 
         let regions_ptr = (self.state as *const u8).wrapping_add(size_of::<AllocatorState>()).cast::<RegionInfo>();
         // SAFETY: `regions_ptr` points to the `RegionInfo` array of `region_count` entries that
-        // immediately follows the header within the bookkeeping allocation; we hold the lock so
+        // immediately follows the header within the bookkeeping allocation. The lock is held, so
         // no other reference is live.
         unsafe { slice::from_raw_parts(regions_ptr, self.region_count) }
     }
@@ -88,8 +91,8 @@ impl LockedState<'_> {
         }
 
         let regions_ptr = self.state.cast::<u8>().wrapping_add(size_of::<AllocatorState>()).cast::<RegionInfo>();
-        // SAFETY: as `regions`, plus we hold `&mut self` and the lock, so this is the only live
-        // reference to the array.
+        // SAFETY: as `regions`, and `&mut self` plus the lock make this the only live reference
+        // to the array.
         unsafe { slice::from_raw_parts_mut(regions_ptr, self.region_count) }
     }
 
@@ -100,7 +103,7 @@ impl LockedState<'_> {
         (offset, bitmap_bytes)
     }
 
-    /// Allocation bitmap (1 bit per page; set == allocated).
+    /// Allocation bitmap, one bit per page. A set bit means allocated.
     pub(crate) fn alloc_bitmap(&self) -> &[u8] {
         if self.state.is_null() {
             return &[];
@@ -108,11 +111,11 @@ impl LockedState<'_> {
         let (offset, bitmap_bytes) = self.bitmap_offset_len();
         let ptr = (self.state as *const u8).wrapping_add(offset);
         // SAFETY: the allocation bitmap occupies `bitmap_bytes` bytes at `offset` within the
-        // bookkeeping allocation; we hold the lock.
+        // bookkeeping allocation, and the lock is held.
         unsafe { slice::from_raw_parts(ptr, bitmap_bytes) }
     }
 
-    /// Type bitmap (1 bit per page; set == user, clear == supervisor).
+    /// Type bitmap, one bit per page. A set bit means user, a clear bit supervisor.
     pub(crate) fn type_bitmap(&self) -> &[u8] {
         if self.state.is_null() {
             return &[];
@@ -120,7 +123,7 @@ impl LockedState<'_> {
         let (offset, bitmap_bytes) = self.bitmap_offset_len();
         let ptr = (self.state as *const u8).wrapping_add(offset + bitmap_bytes);
         // SAFETY: the type bitmap occupies `bitmap_bytes` bytes immediately after the allocation
-        // bitmap; we hold the lock.
+        // bitmap, and the lock is held.
         unsafe { slice::from_raw_parts(ptr, bitmap_bytes) }
     }
 
@@ -132,8 +135,8 @@ impl LockedState<'_> {
         let (offset, bitmap_bytes) = self.bitmap_offset_len();
         let ptr = self.state.cast::<u8>().wrapping_add(offset);
         // SAFETY: the allocation and type bitmaps are two contiguous `bitmap_bytes`-sized ranges
-        // within the bookkeeping allocation. Materialize both as one slice; we hold `&mut self`
-        // and the lock, so no other reference exists.
+        // within the bookkeeping allocation, taken here as one slice. `&mut self` and the lock
+        // mean no other reference exists.
         let both = unsafe { slice::from_raw_parts_mut(ptr, bitmap_bytes * 2) };
         // Safe split into the two disjoint halves.
         both.split_at_mut(bitmap_bytes)
@@ -263,7 +266,6 @@ impl LockedState<'_> {
     pub(crate) fn verify_allocated(&self, addr: u64, num_pages: usize) -> MmSupervisorResult<Range<usize>> {
         let bit_range = self.allocation_bit_range(addr, num_pages)?;
 
-        // Verify all pages are allocated
         for (page_offset, bit) in bit_range.clone().enumerate() {
             if !self.is_bit_allocated(bit) {
                 log::error!(
@@ -426,12 +428,11 @@ impl LockedState<'_> {
             };
 
             if scanned_region.pre_allocated {
-                // Mark the entire region as allocated.
                 for page in 0..pages {
                     self.set_bit_allocated(start_bit + page, AllocationType::Supervisor);
                 }
             } else if scanned_region.range.base() == bookkeeping_base {
-                // Mark just the bookkeeping pages at the start of this region.
+                // Only the bookkeeping pages at the start of this region.
                 for page in 0..bookkeeping_pages {
                     self.set_bit_allocated(start_bit + page, AllocationType::Supervisor);
                 }

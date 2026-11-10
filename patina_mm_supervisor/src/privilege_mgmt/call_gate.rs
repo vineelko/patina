@@ -1,8 +1,7 @@
-//! Call Gate and TSS Management
+//! Call gate and TSS management.
 //!
-//! This module manages call gates and Task State Segment (TSS) descriptors
-//! for privilege level transitions. Call gates provide an alternative mechanism
-//! (besides syscall/sysret) for Ring 3 code to transition back to Ring 0.
+//! Programs the call gate and Task State Segment (TSS) entries that a demoted Ring 3
+//! routine uses to return to Ring 0. This return path is separate from syscall/sysret.
 //!
 //! ## License
 //!
@@ -15,8 +14,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 use crate::error::MmSupervisorResult;
 
-// Firmware-only call-gate transfer assembly; included only for the UEFI target so host builds
-// (tests, doctests) can link.
+// The transfer assembly is built only for the UEFI target so host builds (tests, doctests) link.
 #[cfg(target_os = "uefi")]
 core::arch::global_asm!(include_str!("call_gate_transfer.asm"));
 
@@ -36,12 +34,11 @@ pub const TSS_DESC_OFFSET: u16 = 0x80;
 /// (DPL = 3) and of type 0xC (64-bit call gate).
 const CALL_GATE_TYPE_ATTR: u8 = 0xEC;
 
-/// Number of bytes of the GDT image that [`setup_call_gate`] programs: everything up to and
-/// including the Task State Segment that follows the descriptors.
+/// Number of bytes of the GDT image that [`setup_call_gate`] programs, up to and including the
+/// TSS that follows the descriptors.
 ///
-/// The platform lays the TSS out immediately after the GDT (see `SmiException.nasm`, where the
-/// TSS is emitted right after the last descriptor), so this window deliberately extends past the
-/// limit stored in the GDTR, which covers only the descriptors themselves.
+/// The platform places the TSS right after the last GDT descriptor (see `SmiException.nasm`),
+/// so this window intentionally extends past the GDTR limit, which covers only the descriptors.
 const GDT_PROGRAMMED_SIZE: usize = TSS_DESC_OFFSET as usize + core::mem::size_of::<TaskStateSegment>();
 
 /// Errors that can occur while programming the privilege transition entries of a GDT.
@@ -63,9 +60,9 @@ impl core::fmt::Display for CallGateError {
     }
 }
 
-/// 64-bit Call Gate Descriptor.
+/// 64-bit call gate descriptor.
 ///
-/// A call gate allows privilege level transitions through a far call instruction.
+/// A far call through a call gate changes privilege level.
 #[repr(C, packed)]
 #[derive(
     Debug,
@@ -118,7 +115,7 @@ impl CallGateDescriptor {
     }
 }
 
-/// 64-bit TSS Descriptor (16 bytes in 64-bit mode).
+/// 64-bit TSS descriptor (16 bytes in 64-bit mode).
 #[repr(C, packed)]
 #[derive(
     Debug,
@@ -169,7 +166,7 @@ impl TssDescriptor {
     }
 }
 
-/// GDTR (GDT Register) structure.
+/// In-memory image of the GDTR, as stored by sgdt.
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GdtRegister {
@@ -181,37 +178,34 @@ pub struct GdtRegister {
 
 /// 64-bit Task State Segment.
 ///
-/// In 64-bit mode the TSS holds information that is not directly related to the
-/// task-switch mechanism, but is used for stack switching when an interrupt or
-/// exception occurs. Layout matches the Intel SDM (total size 0x68 bytes).
+/// In 64-bit mode the TSS is not used for task switching; it holds the stack pointers the
+/// CPU loads on a privilege change, interrupt, or exception. Layout matches the Intel SDM
+/// (0x68 bytes).
 #[repr(C, packed(4))]
 #[derive(Debug, Clone, Copy, zerocopy_derive::FromBytes, zerocopy_derive::IntoBytes, zerocopy_derive::Immutable)]
 pub struct TaskStateSegment {
     reserved_1: u32,
-    /// 64-bit canonical RSP values for privilege levels 0-2. Loaded on
-    /// privilege escalation from a lower to a higher privilege level.
+    /// Canonical RSP values for privilege levels 0-2, loaded when moving to a more
+    /// privileged level.
     pub privilege_stack_table: [u64; 3],
     reserved_2: u64,
-    /// 64-bit canonical IST pointers. Loaded when an IDT entry has a non-zero
-    /// IST index.
+    /// Canonical IST pointers, loaded when an IDT entry has a non-zero IST index.
     pub interrupt_stack_table: [u64; 7],
     reserved_3: u64,
     reserved_4: u16,
-    /// 16-bit offset to the I/O permission bitmap from the TSS base.
+    /// Offset of the IO permission bitmap from the TSS base.
     pub io_map_base: u16,
 }
 
-/// Gets the current GDT base address by reading the GDTR register.
+/// Returns the base address of the current GDT, read from GDTR.
 ///
 /// ## Safety
-/// This function is safe to call as it only reads the GDTR register.
-// Reads the GDTR of the running processor, which cannot be exercised deterministically in a
-// host-based unit test.
+///
+/// Only reads GDTR; there are no caller preconditions.
+// Reads the running processor's GDTR, so it cannot be tested deterministically on the host.
 pub unsafe fn get_current_gdt_base() -> u64 {
-    // Get current GDT base
     let mut gdtr = GdtRegister::default();
-    // SAFETY: `sgdt` only stores the GDTR into the provided `gdtr` buffer and
-    // has no other side effects.
+    // SAFETY: sgdt only stores GDTR into `gdtr` and has no other side effects.
     unsafe {
         core::arch::asm!(
             "sgdt [{}]",
@@ -225,8 +219,8 @@ pub unsafe fn get_current_gdt_base() -> u64 {
 
 /// Reads the entry of type `T` at `offset` in `gdt`, hands it to `update`, and writes it back.
 ///
-/// The entry is read first so that fields the supervisor does not program (for example the call
-/// gate IST field) keep whatever the GDT was built with.
+/// Reading first keeps the fields the supervisor does not program (for example the call gate
+/// IST field) as the GDT was built.
 fn update_entry<T, F>(gdt: &mut [u8], offset: usize, update: F) -> MmSupervisorResult<()>
 where
     T: FromBytes + IntoBytes + Immutable,
@@ -257,9 +251,8 @@ where
 
 /// Programs the entries a Ring 3 routine needs to get back into Ring 0.
 ///
-/// `gdt` is the byte image of the GDT and `gdt_base` is the linear address that image is mapped
-/// at, which is needed because the TSS descriptor stores the linear address of the TSS. This
-/// programs:
+/// `gdt` is the byte image of the GDT and `gdt_base` is its linear address, which the TSS
+/// descriptor needs because it stores the linear address of the TSS. This programs:
 ///
 /// - the call gate at [`CALL_GATE_OFFSET`], targeting `return_pointer` in the Ring 0 code segment,
 /// - the TSS descriptor at [`TSS_SEL_OFFSET`], pointing at the TSS at [`TSS_DESC_OFFSET`], and
@@ -272,13 +265,10 @@ fn program_privilege_transition_entries(
 ) -> MmSupervisorResult<()> {
     let tss_addr = gdt_base.wrapping_add(u64::from(TSS_DESC_OFFSET));
 
-    // Program the call gate descriptor for the return address.
     update_entry::<CallGateDescriptor, _>(gdt, CALL_GATE_OFFSET as usize, |desc| desc.set_return_gate(return_pointer))?;
 
-    // Point the TSS descriptor at the TSS, which holds the Ring 0 stack pointer.
     update_entry::<TssDescriptor, _>(gdt, TSS_SEL_OFFSET as usize, |desc| desc.set_base(tss_addr))?;
 
-    // Update RSP0 in the TSS.
     update_entry::<TaskStateSegment, _>(gdt, TSS_DESC_OFFSET as usize, |tss| {
         tss.privilege_stack_table[0] = cpl0_stack_ptr;
     })?;
@@ -286,41 +276,41 @@ fn program_privilege_transition_entries(
     Ok(())
 }
 
-/// Sets up the call gate for returning from a demoted routine.
-/// This function is called from assembly code (`invoke_demoted_routine`).
+/// Sets up the call gate used to return from a demoted routine.
+///
+/// Called from the `invoke_demoted_routine` assembly. It reads the running processor's GDTR and
+/// CR0, so it is not unit tested on the host; the GDT programming is tested through
+/// `program_privilege_transition_entries`.
 ///
 /// ## Safety
 ///
-/// This modifies the GDT.
+/// Writes the live GDT and TSS with CR0.WP cleared. Must run in Ring 0.
 ///
-/// Reads the GDTR and CR0 of the running processor, which cannot be exercised in a host-based
-/// unit test; the programming it performs is covered through
-/// `program_privilege_transition_entries`.
+/// ## Panics
+///
+/// Panics if the GDT image does not contain the call gate, TSS descriptor and TSS.
 #[unsafe(no_mangle)]
 pub unsafe extern "efiapi" fn setup_call_gate(return_pointer: u64, cpl0_stack_ptr: u64) {
-    // Get current GDT base
-    // SAFETY: Reads the current GDTR register; see `get_current_gdt_base`.
+    // SAFETY: only reads GDTR; see `get_current_gdt_base`.
     let gdt_base = unsafe { get_current_gdt_base() };
 
-    // SAFETY: This is safe because we are temporarily disabling page protection
-    // on the GDT to update the call gate descriptor, which is necessary for the
-    // call gate setup. We will restore protections after updating.
+    // SAFETY: the GDT is mapped read-only. Write protection is cleared only for the update below
+    // and restored right after it.
     let cr0 = unsafe { disable_write_protection() };
 
-    // SAFETY: `gdt_base` is the base of the GDT the processor is currently running on. The
-    // platform emits the call gate, the TSS descriptor and the TSS itself within the first
-    // `GDT_PROGRAMMED_SIZE` bytes of that image, with the TSS placed immediately after the
-    // descriptors, so this region is allocated and writable even though it reaches past the GDTR
-    // limit. Write protection is masked above, and no other Rust reference to the GDT image
-    // exists while this one is alive.
+    // SAFETY: `gdt_base` is the base of the GDT the processor is running on. The platform places
+    // the call gate, the TSS descriptor and the TSS (right after the descriptors) within the
+    // first `GDT_PROGRAMMED_SIZE` bytes, so this region is allocated and writable even though it
+    // reaches past the GDTR limit. Write protection is cleared above, and no other Rust
+    // reference to the GDT image exists while this one is alive.
     let gdt = unsafe { core::slice::from_raw_parts_mut(gdt_base as *mut u8, GDT_PROGRAMMED_SIZE) };
 
     let result = program_privilege_transition_entries(gdt, gdt_base, return_pointer, cpl0_stack_ptr);
 
-    // Restore GDT read-only protection before reacting to any failure, so the write-enabled
-    // window is always closed.
-    // SAFETY: `cr0` is the exact value returned by the paired `disable_write_protection` above, so
-    // this restores CR0.WP to its prior state, closing the write-enabled window. Runs in Ring 0.
+    // Restore write protection before acting on a failure so the write-enabled window always
+    // closes.
+    // SAFETY: `cr0` is the value returned by the paired `disable_write_protection`, so this
+    // restores CR0.WP to its prior state. Runs in Ring 0.
     unsafe {
         enable_write_protection(cr0);
     }

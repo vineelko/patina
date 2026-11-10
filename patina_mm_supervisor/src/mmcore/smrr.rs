@@ -1,7 +1,7 @@
 //! System Management Range Register (SMRR) configuration.
 //!
-//! This module programs the SMRR base and mask MSRs to protect the SMRAM region
-//! from non SMM accesses, and enables the SMM Code Access Check feature.
+//! Programs the SMRR base and mask MSRs so SMRAM cannot be reached from outside SMM, and
+//! enables SMM Code Access Check.
 //!
 //! ## License
 //!
@@ -48,9 +48,8 @@ const MASK_VALID_BIT: u64 = 1 << 11;
 
 /// Errors produced while programming the SMRRs to protect MMRAM.
 ///
-/// Every one of these is fatal. The SMRRs are what keep MMRAM inaccessible from outside MM, so a
-/// range that cannot be programmed must never be treated as merely unprotected and carried on
-/// from.
+/// Every one of these is fatal. The SMRRs keep MMRAM inaccessible from outside MM, so a range
+/// that cannot be programmed must never be treated as merely unprotected and carried on from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SmrrError {
     /// The CPU does not report MTRR support.
@@ -111,12 +110,15 @@ const fn smm_feature_control_update(current: u64) -> Option<u64> {
     if updated == current { None } else { Some(updated) }
 }
 
-/// Enables the SMM Code Access Check feature.
+/// Enables and locks SMM Code Access Check.
 ///
-/// When enabled, the CPU raises a machine check if code is fetched from outside
-/// the SMRR protected region while in SMM. This also sets the lock bit in the
-/// SMM feature control MSR, after which the feature configuration cannot be
-/// modified until the next processor reset.
+/// When enabled, the CPU raises a machine check if code is fetched from outside the SMRR
+/// protected region while in SMM. The lock bit keeps the configuration fixed until the next
+/// processor reset.
+///
+/// ## Panics
+///
+/// Panics if the CPU does not report SMM Code Access Check support.
 #[cfg_attr(coverage, coverage(off))]
 pub(crate) fn configure_smm_code_access() {
     // SAFETY: MSR_SMM_MCA_CAP is a read-only architectural capability MSR that is
@@ -128,9 +130,9 @@ pub(crate) fn configure_smm_code_access() {
     // side effects.
     let current = unsafe { read_msr(MSR_SMM_FEATURE_CONTROL) };
     if let Some(updated) = smm_feature_control_update(current) {
-        // SAFETY: We only set the code check enable and lock bits, which is the
+        // SAFETY: only the code check enable and lock bits are set, which is the
         // architecturally defined way to enable SMM Code Access Check. The write
-        // is idempotent and performed only when the value actually changes.
+        // happens only when the value changes.
         unsafe { write_msr(MSR_SMM_FEATURE_CONTROL, updated) };
     }
 }
@@ -171,9 +173,9 @@ const fn smrr_ext_supported(mtrr_cap: u64) -> bool {
 /// [`smrr_enable`] to set the valid and bit-10 fields and activate the range.
 ///
 /// Returns without touching the registers when this processor's SMRR is already finalized, since
-/// a finalized range cannot be reprogrammed until the next reset. That makes the call idempotent
-/// for the BSP, which configures its own SMRR during one-time initialization and reaches
-/// per-core initialization with the range already locked.
+/// a finalized range cannot be reprogrammed until the next reset. Before then a repeated call
+/// writes the same values again: the BSP programs its SMRR in one-time initialization and again
+/// in per-core initialization.
 #[cfg_attr(coverage, coverage(off))]
 pub(crate) fn smrr_initialize(range: MemoryRange) -> MmSupervisorResult<()> {
     if !mtrr_supported(__cpuid(CPUID_VERSION_INFO).edx) {
@@ -199,8 +201,8 @@ pub(crate) fn smrr_initialize(range: MemoryRange) -> MmSupervisorResult<()> {
     }
 
     // SMRR_BASE and SMRR_MASK only describe addresses below 4 GiB. Truncating here would
-    // validate and program a completely different region than the one handed in, leaving the
-    // real MMRAM unprotected, so a region that does not fit is fatal rather than narrowed.
+    // validate and program a different region than the one handed in, leaving the real MMRAM
+    // unprotected, so a region that does not fit is fatal rather than narrowed.
     if range.end() > SMRR_MAX_ADDRESS {
         return Err(SmrrError::RangeNotAddressable { range }.into());
     }
@@ -238,8 +240,8 @@ const fn smrr_enable_mask(mask: u64) -> Option<u64> {
 /// Enables and finalizes the SMRR by setting the valid and bit-10 fields on the
 /// mask register.
 ///
-/// If bit 10 is already set, the function does nothing, since a finalized SMRR cannot be
-/// modified until the next processor reset.
+/// Does nothing if bit 10 is already set, since a finalized SMRR cannot be modified until the
+/// next processor reset.
 ///
 /// This runs on SMI entry rather than at the end of the first SMI. Finalizing the range while the
 /// supervisor still holds the CPU leaves it enforcing across the `RSM` back to the non-MM world,
@@ -250,8 +252,8 @@ const fn smrr_enable_mask(mask: u64) -> Option<u64> {
 #[cfg_attr(coverage, coverage(off))]
 pub(crate) fn smrr_enable() {
     // SAFETY: SMRR support was verified in `smrr_initialize` before this point,
-    // so MSR_SMRR_MASK is a valid architectural MSR. We only set the valid and
-    // bit-10 fields to enable and finalize the previously programmed range,
+    // so MSR_SMRR_MASK is a valid architectural MSR. Only the valid and bit-10
+    // fields are set, to enable and finalize the previously programmed range,
     // preserving all other bits. The write is skipped if the range is already
     // finalized.
     unsafe {
@@ -264,8 +266,8 @@ pub(crate) fn smrr_enable() {
 /// Selects the primary SMRR range from the scanned SMRAM regions and coalesces
 /// any physically adjacent regions into it.
 ///
-/// It picks the largest non pre-allocated region in `[1 MiB, 4 GiB]` that is at
-/// least `256 KiB - 4 KiB`, then extends it downward and upward across every
+/// It picks the largest non pre-allocated region in [1 MiB, 4 GiB] that is at
+/// least 256 KiB - 4 KiB, then extends it downward and upward across every
 /// region that is physically contiguous with it (regardless of allocation
 /// state), scanning repeatedly until no further adjacent region is found.
 ///

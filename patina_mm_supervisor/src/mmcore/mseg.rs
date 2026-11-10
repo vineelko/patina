@@ -1,5 +1,8 @@
 //! MSEG (SMM Transfer Monitor Range) Support
 //!
+//! Reads the MSEG region from the MSEG SMRAM HOB and programs its base into each core's
+//! `IA32_SMM_MONITOR_CTL`.
+//!
 //! ## License
 //!
 //! Copyright (c) Microsoft Corporation.
@@ -62,10 +65,11 @@ pub(crate) fn parse_mseg_smram_hob(data: &[u8]) -> Option<u64> {
 
 /// Programs this logical processor's `IA32_SMM_MONITOR_CTL` with the MSEG base.
 ///
-/// The MSEG base discovered from the MSEG SMRAM HOB is written along with the
-/// Valid bit so an STM can later be activated, and so software can read the region back.
+/// Writes the MSEG base from the MSEG SMRAM HOB together with the Valid bit, so an STM can be
+/// activated later and software can read the region back.
 ///
-/// No-op when the platform publishes no MSEG SMRAM HOB.
+/// Does nothing when the platform publishes no MSEG SMRAM HOB, and logs a warning without
+/// writing when the CPU does not report VMX.
 pub(crate) fn program_mseg_base(cpu_id: u32) {
     let Some(mseg_base) = init_state().mseg_base() else {
         return;

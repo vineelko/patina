@@ -64,7 +64,7 @@ pub enum CoreInitError {
     /// The CPU index is in range but its slot is already held by a different APIC ID.
     ///
     /// Distinct from [`CoreInitError::CpuIndexOutOfRange`]: the index is valid, but two cores
-    /// claim the same dense processor index. Re-registering the *same* APIC ID is idempotent and
+    /// claim the same dense processor index. Re-registering the same APIC ID is idempotent and
     /// is not an error.
     CpuIndexAlreadyRegistered {
         /// The contested CPU index.
@@ -219,24 +219,15 @@ impl fmt::Display for CoreInitError {
     }
 }
 
-/// The MM Supervisor Core responsible for managing the standalone MM environment.
+/// The MM Supervisor Core for a standalone MM environment.
 ///
-/// This struct is generic over the [`PlatformInfo`] trait, which provides platform-specific
-/// configuration including compile-time constants for array sizes.
+/// It initializes the BSP, dispatches requests, and drives the APs through the holding pen and
+/// mailboxes. [`PlatformInfo`] supplies the platform's extra MMI handlers, and `MAX_CPUS` sizes
+/// the fixed per-CPU arrays. Nothing is heap allocated, so the core can live in a `static`.
 ///
-/// The supervisor manages:
-/// - BSP initialization and request handling
-/// - AP management through the holding pen and mailbox system
-/// - Request dispatching and response handling
+/// ## Examples
 ///
-/// ## Memory Model
-///
-/// This struct does not perform heap allocation. All internal structures use fixed-size
-/// arrays sized by the `MAX_CPUS` const generic parameter.
-///
-/// ## Usage
-///
-/// Create a static instance of the supervisor and call `entry_point` from all cores:
+/// Create a static instance and call `entry_point` from every core:
 ///
 /// ```rust,no_run
 /// # #[cfg(target_arch = "x86_64")]
@@ -259,17 +250,17 @@ impl fmt::Display for CoreInitError {
 /// # }
 /// ```
 pub struct MmSupervisorCore<P: PlatformInfo, const MAX_CPUS: usize> {
-    /// Manager for CPU-related operations.
+    /// Registered CPUs and their states.
     pub(crate) cpu_manager: CpuManager<MAX_CPUS>,
-    /// Manager for AP mailboxes.
+    /// Per-AP command mailboxes.
     pub(crate) mailbox_manager: MailboxManager<MAX_CPUS>,
-    /// Syscall interface for privilege transitions.
+    /// Syscall interface and per-CPU Ring 3 stacks.
     pub(crate) syscall_interface: SyscallInterface<MAX_CPUS>,
-    /// Flag indicating if the core has been initialized.
+    /// Set once the BSP has finished its one-time initialization.
     pub(crate) initialized: AtomicBool,
     /// Serializes per-core initialization so only one core runs it at a time.
     pub(crate) init_lock: Mutex<()>,
-    /// Phantom data for the platform type.
+    /// Ties the instance to its platform type.
     pub(crate) _phantom: core::marker::PhantomData<fn() -> P>,
 }
 

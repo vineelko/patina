@@ -1,7 +1,7 @@
 //! Paging Page Allocator
 //!
-//! A dedicated page allocator for the paging subsystem that allocates pages for
-//! page table structures (PML4, PDPT, PD, PT entries).
+//! A bump allocator that hands out pages for page table structures (PML4, PDPT, PD and PT)
+//! from a pool reserved at initialization.
 //!
 //! ## License
 //!
@@ -18,19 +18,13 @@ use patina::{MemoryRange, UEFI_PAGE_SIZE, align_up};
 use patina_paging::{PtError, page_allocator::PageAllocator as PagingPageAllocator};
 use spin::Mutex;
 
-/// Default number of pages to reserve for page table allocations.
-/// This should be sufficient for most MM environments (128 pages = 512KB).
+/// Number of pages reserved for page table structures: 128 pages (512 KiB).
 pub const DEFAULT_PAGING_POOL_PAGES: usize = 128;
 
-/// A dedicated page allocator for the paging subsystem.
+/// A bump allocator over a reserved pool of pages, used for page table structures.
 ///
-/// This allocator uses a simple bump allocator from a reserved pool of pages.
-/// It implements the `patina_paging::PageAllocator` trait to be used directly
-/// by the paging crate for allocating page table structures.
-///
-/// ## Thread Safety
-///
-/// This allocator is thread-safe and can be used from multiple CPUs.
+/// It implements `patina_paging::PageAllocator` so the paging crate can allocate from it
+/// directly. One lock serializes every operation, so it can be shared across CPUs.
 pub struct PagingPoolAllocator {
     /// All mutable state, guarded by a single lock that serializes every operation.
     state: Mutex<PagingPoolState>,
@@ -69,9 +63,7 @@ impl PagingPoolAllocator {
         pages.checked_mul(UEFI_PAGE_SIZE)
     }
 
-    /// Initializes the paging allocator with a reserved memory region.
-    ///
-    /// `pool_base` must be page-aligned.
+    /// Initializes the allocator over a reserved, page-aligned region and zeroes it.
     ///
     /// ## Safety
     ///
@@ -105,11 +97,9 @@ impl PagingPoolAllocator {
             AllocError::PoolTooSmall
         })?;
 
-        // SAFETY: `init` is an `unsafe fn` whose contract (see `# Safety` above) requires the
-        // caller to provide `pool_base`/`pool_pages` describing a valid, exclusively-owned region
-        // of at least `pool_pages * UEFI_PAGE_SIZE` bytes (typically reserved SMRAM untouched by
-        // other code). `pool_base` was validated non-zero and page-aligned above to mitigate the
-        // risk of undefined behavior.
+        // SAFETY: the caller guarantees `pool_base` and `pool_pages` describe a valid, exclusively
+        // owned region of at least `pool_pages * UEFI_PAGE_SIZE` bytes, which is `pool_bytes`.
+        // `pool_base` was checked non-zero and page-aligned above.
         unsafe {
             core::ptr::write_bytes(pool_base as *mut u8, 0, pool_bytes);
         }
@@ -121,11 +111,10 @@ impl PagingPoolAllocator {
         Ok(())
     }
 
-    /// Allocates a page for page table structures.
+    /// Allocates pages for a page table structure.
     ///
-    /// `align` must be a power of 2 and at least `UEFI_PAGE_SIZE`, `size` must be
-    /// at least `UEFI_PAGE_SIZE`, and `is_root` indicates whether this is a root
-    /// page table (e.g., PML4).
+    /// `align` must be a power of 2 and at least `UEFI_PAGE_SIZE`, and `size` must be
+    /// at least `UEFI_PAGE_SIZE`. `_is_root` comes from the paging crate's trait and is unused.
     pub fn allocate_page_internal(&self, align: u64, size: u64, _is_root: bool) -> MmSupervisorResult<u64> {
         let mut state = self.state.lock();
         if !state.initialized {
@@ -152,7 +141,6 @@ impl PagingPoolAllocator {
         let new_offset = state.current_offset.checked_add(total_bytes).ok_or(AllocError::OutOfMemory)?;
         let pool_bytes = Self::page_bytes(state.pool_pages).ok_or(AllocError::OutOfMemory)?;
 
-        // Check if we have enough space
         if new_offset > pool_bytes {
             // `paging_error_to_pt` reports the failed request; this adds how much the pool
             // had left, which is what matters when sizing the pool.
@@ -196,9 +184,6 @@ impl PagingPoolAllocator {
 }
 
 impl PagingPageAllocator for PagingPoolAllocator {
-    /// Allocates a page for page table structures.
-    ///
-    /// This implements the `patina_paging::PageAllocator` trait.
     fn allocate_page(&mut self, align: u64, size: u64, is_root: bool) -> Result<u64, PtError> {
         self.allocate_page_internal(align, size, is_root).map_err(|error| paging_error_to_pt(error, align, size))
     }
@@ -207,14 +192,12 @@ impl PagingPageAllocator for PagingPoolAllocator {
 /// Maps an allocator failure onto the `PtError` the paging crate expects.
 ///
 /// Only [`AllocError::OutOfMemory`] becomes `OutOfResources`. Everything else describes a request
-/// the allocator could not honour, so it becomes `InvalidParameter`. The match is kept total
-/// rather than exhaustive over the reachable variants, because panicking here would take down MM
-/// if the error set grows.
+/// the allocator could not honour, so it becomes `InvalidParameter`. A wildcard arm covers those
+/// rather than listing them, so a new error variant cannot make this panic and take down MM.
 fn paging_error_to_pt(error: MmSupervisorError, align: u64, size: u64) -> PtError {
     log::error!("Paging allocator failed a request for 0x{size:x} bytes at align 0x{align:x}: {error}");
     match error {
         MmSupervisorError::Alloc(AllocError::OutOfMemory) => PtError::OutOfResources,
-        // Everything else the allocator can report is a malformed request rather than exhaustion.
         _ => PtError::InvalidParameter,
     }
 }

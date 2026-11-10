@@ -1,6 +1,6 @@
 //! Request Target Selection for the MM Supervisor Core
 //!
-//! Derives the dispatch target (user vs supervisor) for an incoming request
+//! Derives the dispatch target (user or supervisor) for an incoming request
 //! from the two parallel `MmCommBufferStatus` mailboxes.
 //!
 //! ## License
@@ -20,28 +20,25 @@ pub enum RequestTarget {
     /// [`RequestTarget::select`] never returns this; a request with neither mailbox valid is an
     /// asynchronous MMI routed to [`RequestTarget::User`].
     None,
-    /// Request targets the Supervisor.
+    /// The request is for the supervisor.
     Supervisor,
-    /// Request targets the User module.
+    /// The request is for the user core.
     User,
 }
 
 impl RequestTarget {
-    /// Selects the dispatch target based on the two parallel status mailboxes.
+    /// Selects the dispatch target from the two status mailboxes.
     ///
-    /// The user mailbox is checked first - if its `is_comm_buffer_valid` flag
-    /// is set, the request belongs to the user module. Otherwise the
-    /// supervisor mailbox is consulted. When neither mailbox is valid the
-    /// request is treated as an asynchronous MMI, which is still dispatched
-    /// through the user path so the user-core's async handler chain can run.
+    /// The user mailbox wins if its `is_comm_buffer_valid` flag is set. Otherwise the
+    /// supervisor mailbox is checked. When neither is valid the request is an asynchronous MMI,
+    /// which still goes through the user path so the user core's async handlers run.
     pub fn select(user_status: &MmCommBufferStatus, supv_status: &MmCommBufferStatus) -> Self {
         if user_status.is_comm_buffer_valid != 0 {
             RequestTarget::User
         } else if supv_status.is_comm_buffer_valid != 0 {
             RequestTarget::Supervisor
         } else {
-            // Async MMI - user-core's async dispatcher runs unconditionally
-            // once we demote, so route through the user path.
+            // The user core runs its async dispatcher on every demotion.
             RequestTarget::User
         }
     }
@@ -77,7 +74,7 @@ mod tests {
 
     #[test]
     fn test_request_target_async_routes_to_user_when_none_valid() {
-        // Neither mailbox valid => async MMI, dispatched through the user path.
+        // Neither mailbox is valid, so the async MMI goes through the user path.
         assert_eq!(RequestTarget::select(&status(false), &status(false)), RequestTarget::User);
     }
 }

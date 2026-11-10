@@ -48,11 +48,11 @@
 
 # RFLAGS bits the CPU clears on `syscall` entry (RFLAGS &= ~IA32_FMASK).
 #
-# `syscall` consults nothing but this MSR, so at its 0 reset value Ring 3 chooses the flags Ring 0
-# runs under - DF reverses the `rep movs` behind every memcpy, AC suppresses SMAP for the whole
-# handler. Every bit with a defined meaning is masked, which is a simpler invariant to audit than
-# a minimal mask that has to be re-derived whenever the Ring 0 code changes. What is left set is
-# VM, VIF and VIP, which have no meaning in long mode, and reserved bit 1, which is always set.
+# `syscall` consults only this MSR, so at its reset value of 0 Ring 3 chooses the flags Ring 0
+# runs under: DF reverses the `rep movs` behind every memcpy, and AC disables SMAP for the whole
+# handler. Every bit with a defined meaning is masked, which is easier to audit than a minimal
+# mask that must be re-derived whenever the Ring 0 code changes. The bits left set are VM, VIF
+# and VIP, which have no meaning in long mode, and reserved bit 1, which is always set.
 # CF|PF|AF|ZF|SF|TF|IF|DF|OF|IOPL|NT|RF|AC|ID
 .equ MSR_IA32_FMASK_VALUE,          0x00257FD5
 
@@ -71,14 +71,13 @@
 #   @param[in]      Cpl3Routine         Function pointer to demoted routine.
 #   @param[in]      Cpl3Stack           Top of the CPL3 stack the demoted routine runs on.
 #   @param[in]      ArgCount            Number of arguments needed by Cpl3Routine.
-#   @param          ...                 The variable argument list whose count is defined by
-#                                       ArgCount. Its contents will be accessed and populated
-#                                       to the registers and/or CPL3 stack areas per EFIAPI
+#   @param          ...                 ArgCount arguments for Cpl3Routine, placed in
+#                                       registers and on the CPL3 stack per the EFIAPI
 #                                       calling convention.
 #
-#   @retval EFI_SUCCESS                 The demoted routine returns successfully.
-#   @retval Others                      Errors caught by subroutines during ring transitioning
-#                                       or error code returned from demoted routine.
+#   @retval EFI_SUCCESS                 The demoted routine returned successfully.
+#   @retval Others                      An error from the ring transition or the status
+#                                       returned by the demoted routine.
 # **/
 # EFI_STATUS
 # EFIAPI
@@ -92,16 +91,16 @@
 # Calling convention: Arg0 in RCX, Arg1 in RDX, Arg2 in R8, Arg3 in R9, more on the stack
 #------------------------------------------------------------------------------
 invoke_demoted_routine:
-    #Preserve input parameters onto reg parameter stack area for later usage
+    # Save the register arguments to their home slots on the caller's stack.
     mov     [rsp + 0x20], r9
     mov     [rsp + 0x18], r8
     mov     [rsp + 0x10], rdx
     mov     [rsp + 0x08], rcx
 
-    #Preserve nonvolatile registers, in case demoted routines mess with them
+    # Save nonvolatile registers; the demoted routine may clobber them.
     push    rbp
     mov     rbp, rsp
-    #Clear the lowest 16 bit after saving rsp, to make sure the stack pointer 16byte aligned
+    # Align RSP down to 16 bytes; RBP keeps the unaligned value.
     and     rsp, -16
 
     push    rbx
@@ -112,13 +111,14 @@ invoke_demoted_routine:
     push    r14
     push    r15
 
-    #Preserve the updated rbp as we need them on return
+    # Save RBP again; the return path skips over this copy.
     push    rbp
 
     mov     r15, r8
     and     r15, -16
 
-    # Set up the MSR STAR, LSTAR, FMASK, EFER, GS_BASE and KERNEL_GS_BASE, in situ
+    # Save and program STAR, LSTAR, FMASK, EFER, GS_BASE and KERNEL_GS_BASE. The old values
+    # stay on the stack and are restored on return.
     mov     rcx, MSR_IA32_STAR
     rdmsr
     push    rdx
@@ -179,24 +179,25 @@ invoke_demoted_routine:
     shr     rdx, 32
     wrmsr
 
-    # This is to do the GS trick upon syscall entry
+    # SAVED_USER_RSP slot (gs:[8] after swapgs): syscall entry saves the Ring 3 RSP here.
     sub     rsp, 8
 
-    # This is to do the GS trick upon syscall entry
+    # MM_SUPV_RSP slot (gs:[0] after swapgs): the Ring 0 stack syscall entry switches to, which
+    # is the address of this slot. KERNEL_GS_BASE was programmed above to point here.
     mov     rdx, rsp
     sub     rdx, 8
     push    rdx
 
-    # Now the stack will look like
-    # Current RSP           <- Incoming calls will operate on top of this
-    # 0                     <- Will be used for user stack saving
+    # The stack now looks like this:
+    # Current RSP           <- MM_SUPV_RSP; syscalls run on the stack below this
+    # 0                     <- SAVED_USER_RSP
     # KERNEL_GS_BASE * 2    <- Will be restored on return
     # GS_BASE * 2           <- Will be restored on return
     # EFER * 2              <- Will be restored on return
     # FMASK * 2             <- Will be restored on return
     # LSTAR * 2             <- Will be restored on return
     # STAR * 2              <- Will be restored on return
-    # One version of RBP    <- Value after we pushed NV registers
+    # RBP                   <- Copy saved after the nonvolatile registers
     # r15
     # r14
     # r13
@@ -204,22 +205,22 @@ invoke_demoted_routine:
     # rsi
     # rdi
     # rbx
-    # ?                     <- Potential buffer for unaligned incoming caller
+    # ?                     <- Padding if the caller's RSP was not 16-byte aligned
     # Original RBP
-    # ---------------       <- RSP When the caller invokes this
+    # ---------------       <- RSP on entry
     # rcx
     # rdx
     # r8
     # r9
 
-    #Setup call gate for return
+    # Install the return call gate: RCX = return address (label 5), RDX = CPL0 stack pointer.
     lea     rcx, [rip + 5f]
     mov     rdx, rsp
     sub     rsp, 0x20
     call    setup_call_gate
     add     rsp, 0x20
 
-    #Same level far return to apply GDT change
+    # Same-privilege far return to reload CS after the GDT update.
     xor     rcx, rcx
     mov     rcx, cs
     push    rcx                 #prepare cs on the stack
@@ -228,7 +229,7 @@ invoke_demoted_routine:
     retfq
 
 2:
-    #Prepare for ds, es, fs, gs
+    # Load the Ring 3 data selector into DS, ES, FS and GS.
     xor     rax, rax
     mov     ax, LONG_DS_R3
     mov     ds, ax
@@ -251,13 +252,13 @@ invoke_demoted_routine:
     mov     r9, [rbp + 0x48]            #Fourth input argument for demoted routine
     dec     rax
     CHECK_RAX
-    #For further input arguments, they will be put on the stack
+    # Remaining arguments go on the CPL3 stack.
     xor     rbx, rbx                    #rbx=0
     mov     r14, rax
     shl     r14, 3                      #r14=8*rax
     sub     r15, r14                    #r15-=r14, offset the stack for remainder of input arguments
     sub     r15, 0x20                   #r15-=0x20, 4 stack parameters
-    and     r15, -16                    #finally we worry about the stack alignment in CPL3
+    and     r15, -16                    #align the CPL3 stack to 16 bytes
 3:
     mov     r14, [rbp + 0x50 + rbx]     #r14=*(rbp+0x50+rbx), starting at the fifth input argument
     mov     [r15 + 0x20 + rbx], r14     #*(r15+0x20+rbx)=r14
@@ -267,8 +268,7 @@ invoke_demoted_routine:
     jmp     3b
 
 4:
-    #Demote to CPL3 by far return, it will take care of cs and ss
-    #Note: we did more pushes on the way, so need to compensate the calculation when grabbing earlier pushed values
+    # Demote to CPL3 with a far return, which loads CS and SS.
     sub     r15, 0x08                   #dummy r15 displacement, to mimic the return pointer on the stack
     push    LONG_DS_R3                  #prepare ss on the stack
     mov     rax, r15                    #grab Cpl3StackPtr from r15
@@ -277,27 +277,27 @@ invoke_demoted_routine:
     mov     rax, [rbp + 0x18]           #grab routine pointer from stack
     push    rax                         #prepare routine pointer on the stack
 
-    mov     r15, CALL_GATE_OFFSET       #This is our way to come back, do not mess it up
-    shl     r15, 32                     #Call gate on call far stack should be CS:rIP
+    mov     r15, CALL_GATE_OFFSET       #call gate selector the demoted routine returns through
+    shl     r15, 32                     #selector in bits 63:32 for the far call through the gate
 
     retfq
 
 5:
-    # A call gate, unlike an interrupt gate, leaves RFLAGS untouched across the privilege
-    # change, and FMASK does not apply to it. Ring 3's DF and AC arrive here as-is, so they are
-    # cleared before any Rust runs.
+    # A call gate, unlike an interrupt gate, leaves RFLAGS unchanged across the privilege
+    # change, and FMASK does not apply to it. Ring 3's DF and AC arrive here as-is, so clear
+    # them before any Rust runs.
     cld
     clac
 
-    #First offset the return far related 4 pushes (we have 0 count of arguments):
+    # Drop the four values the call gate pushed (no parameters are copied):
     #PUSH.v old_SS // #SS on this or next pushes use SS.sel as error code
     #PUSH.v old_RSP
     #PUSH.v old_CS
     #PUSH.v next_RIP
     add     rsp, 0x20
 
-    #Demoted routine is responsible for returning to this point by invoking call gate
-    #Return status should still be in rax, save it before calling other functions
+    # The demoted routine returns here through the call gate with its status in RAX. Save it
+    # before RAX is reused.
     push    rax
 
     add     rsp, 24
@@ -332,9 +332,9 @@ invoke_demoted_routine:
     mov     rcx, MSR_IA32_STAR
     wrmsr
 
-    # Return status, stashed below RSP by the `push rax` above and stepped over since. The 15
-    # slots are the 6 saved MSR pairs plus the 2 scratch slots and the status itself; keep this
-    # in step with the push sequence at the top of this routine.
+    # Reload the return status saved by `push rax` above, now below RSP. The 15 slots are the
+    # 6 saved MSR pairs, the 2 syscall slots and the status itself; keep this in step with the
+    # push sequence at the top of this routine.
     mov     rax, [rsp - 15 * 8]
 
     xor     rcx, rcx
@@ -344,8 +344,8 @@ invoke_demoted_routine:
     mov     fs, cx
     mov     gs, cx
 
-    add     rsp, 0x08       #Unwind the rbp from the last net-push
-    #Unwind the rest of the pushes
+    add     rsp, 0x08       #skip the saved RBP copy
+    # Restore the nonvolatile registers.
     pop     r15
     pop     r14
     pop     r13

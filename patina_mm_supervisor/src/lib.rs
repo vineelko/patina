@@ -1,20 +1,11 @@
 //! MM Supervisor Core
 //!
-//! A pure Rust implementation of the MM Supervisor Core for standalone MM mode environments.
+//! A Rust implementation of the MM Supervisor Core for standalone MM.
 //!
-//! This crate provides the core functionality for running a supervisor in MM (Management Mode)
-//! that orchestrates incoming requests on the BSP while APs wait in a holding pen.
-//!
-//! ## Architecture
-//!
-//! The entry point is executed on all cores:
-//! - **BSP**: Performs one-time initialization and enters the request serving loop
-//! - **APs**: Enter a holding pen and poll mailboxes for commands from BSP
-//!
-//! ## Memory Model
-//!
-//! This is a core component that manages its own memory. It does **not** use heap allocation.
-//! All structures use fixed-size arrays with compile-time constants provided via const generics.
+//! Every core enters through [`MmSupervisorCore::entry_point`]. The BSP runs one-time
+//! initialization and then serves MMI requests, while the APs wait in a holding pen and poll
+//! their mailboxes for commands from the BSP. The supervisor does not use a heap: its structures
+//! are fixed-size arrays sized by const generics.
 //!
 //! ## Examples
 //!
@@ -57,13 +48,8 @@ mod test_support;
 mod user_access_guard;
 mod version;
 
-/// Re-export the MM Supervisor Core for external use. The actual implementation
-/// resides in the `mmcore` module.
 pub use mmcore::MmSupervisorCore;
 
-/// Re-export the MMI handler descriptor for external use. Platforms name it in the
-/// signatures of the handlers they register, and the actual definition resides in the
-/// `handlers` module.
 pub use handlers::SupervisorMmiHandler;
 
 // The entry-point shim references `rust_main`, which is provided by the platform binary, and is
@@ -72,8 +58,9 @@ pub use handlers::SupervisorMmiHandler;
 #[cfg(target_os = "uefi")]
 core::arch::global_asm!(include_str!("entry_point.asm"));
 
-/// A trait to be implemented by the platform to provide configuration values and types to be used
-/// by the MM Supervisor Core.
+/// Platform hooks for the MM Supervisor Core.
+///
+/// Implement it on a platform type and name that type in [`MmSupervisorCore`].
 ///
 /// ## Examples
 ///
@@ -90,11 +77,9 @@ core::arch::global_asm!(include_str!("entry_point.asm"));
 pub trait PlatformInfo: 'static {
     /// Returns the platform-specific supervisor MMI handlers.
     ///
-    /// The supervisor dispatch loop iterates the core's built-in handlers first and then
-    /// the handlers returned here, so platforms can register additional handlers (for
-    /// example platform-specific or test handlers) without modifying the core.
-    ///
-    /// The default implementation returns an empty slice.
+    /// The supervisor dispatches to the core's built-in handlers first and then to the handlers
+    /// returned here, so a platform can add handlers (for example platform-specific or test
+    /// handlers) without modifying the core. The default returns an empty slice.
     fn mmi_handlers() -> &'static [SupervisorMmiHandler] {
         &[]
     }

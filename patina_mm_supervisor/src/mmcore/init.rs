@@ -1,7 +1,7 @@
 //! `MmSupervisorCore` Initialization Phase
 //!
 //! The one-time setup every core runs on its first entry into MM. The BSP
-//! additionally performs the system-wide work in
+//! also performs the system-wide work in
 //! [`bsp_init`](MmSupervisorCore::bsp_init): validating the incoming HOB list,
 //! programming the SMRRs, committing the allocators and page table, and
 //! publishing a read-only copy of the HOB list for the demoted user core.
@@ -96,12 +96,12 @@ pub(crate) fn validate_init_code_page(address: u64, attributes: MemoryAttributes
 }
 
 impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
-    /// BSP-specific initialization.
+    /// BSP-only, one-time initialization.
     ///
-    /// This is called only on the BSP after basic setup is complete. It parses and validates the
-    /// incoming HOB list, programs the SMRR, initializes the page and paging allocators and the
-    /// global page table, discovers the user module entry point, initializes the security policy,
-    /// and remaps the HOB list so the demoted user core can read it.
+    /// Loads the IDT, parses and validates the incoming HOB list, programs the SMRR, initializes
+    /// the page and paging allocators and the global page table, discovers the user module entry
+    /// point, initializes the security policy, and publishes a copy of the HOB list the demoted
+    /// user core can read.
     ///
     /// Returns the address of the read-only HOB list copy to hand the user core.
     pub(crate) fn bsp_init(
@@ -148,9 +148,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         self.init_page_table();
 
-        // Validate the incoming HOBs that require an active page table, now
-        // that it is available (the remaining checks that only need the page
-        // allocator ran above).
+        // Validate the HOBs that need the page table, now that it exists. The checks that only
+        // need the page allocator ran above.
         validation::validate_incoming_hobs_post_paging_init(hob_hand_off_table)?;
 
         self.discover_and_store_user_entry(hob_hand_off_table, init_state())?;
@@ -221,12 +220,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         log::info!("Page table initialized from CR3=0x{cr3:016x}");
     }
 
-    /// Discovers the MM Supervisor User module entry point from the HOB list and
-    /// stores it for use during request processing.
+    /// Finds the MM Supervisor User module in the HOB list and stores its entry point for
+    /// request processing.
     ///
-    /// We look for `EFI_HOB_TYPE_MEMORY_ALLOCATION` HOBs whose
+    /// The module is the `EFI_HOB_TYPE_MEMORY_ALLOCATION` HOB whose
     /// `MemoryAllocationHeader.Name` is `gMmSupervisorHobMemoryAllocModuleGuid`
-    /// and whose `ModuleName` is `gMmSupervisorUserGuid`.
+    /// and whose `ModuleName` is `gMmSupervisorUserGuid`. Returns
+    /// [`CoreInitError::UserEntryPointMissing`] if there is none.
     fn discover_and_store_user_entry(
         &self,
         hob_hand_off_table: &PhaseHandoffInformationTable,
@@ -287,7 +287,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         };
         assert!(is_range_inside_mmram(&init_module), "MM Init module is outside MMRAM");
 
-        // Wrap in a block to drop the lock automatically
+        // Freeing takes the page table lock again, so this lock is dropped first.
         {
             let page_table = security_state().lock_page_table();
             let page_table = page_table.as_ref().expect("Page table required to validate MM Init module");
@@ -333,11 +333,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// allocation instead means the only bytes Ring 3 can reach are the HOB list itself and the
     /// zeroed tail of its last page.
     fn publish_hob_list_to_user(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<u64> {
-        // We need to convert back to *const c_void because
-        // `get_pi_hob_list_size()` does not accept a reference directly.
+        // `get_pi_hob_list_size` takes a raw pointer.
         let hob_list: *const c_void = core::ptr::from_ref(hob_hand_off_table).cast();
         let hob_base = hob_list as u64;
-        // SAFETY: `hob_list` is a valid HOB list per this function's contract.
+        // SAFETY: `hob_list` is the PHIT of the HOB list `bsp_init` validated, which ends in
+        // `END_OF_HOB_LIST`.
         let hob_list_size = unsafe { hob::get_pi_hob_list_size(hob_list) } as u64;
 
         // A zero-length walk means the list has no HOBs at all, which is not a list. The producer
@@ -452,10 +452,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         Ok(())
     }
 
-    /// Per-core initialization.
-    ///
-    /// This is called on every core (BSP and APs) during the first entry.
-    /// Use this for setting up per-CPU state like syscall MSRs, GS base, etc.
+    /// Programs the per-logical-processor MSRs on every core (BSP and APs) during its first
+    /// entry: the MSEG base, the SMRR, and SMM Code Access Check.
     pub(crate) fn per_core_init(&'static self, cpu_id: u32, is_bsp: bool) -> MmSupervisorResult<()> {
         let core_type = if is_bsp { "BSP" } else { "AP" };
         log::trace!("{core_type} (CPU {cpu_id}) performing per-core initialization...");
@@ -463,7 +461,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // IA32_SMM_MONITOR_CTL is per-logical-processor, so every core programs it.
         super::mseg::program_mseg_base(cpu_id);
 
-        // SMRR is per-logical-processor. The APs program theirs here; the BSP's was done in `bsp_init`.
+        // SMRR is per-logical-processor. The BSP already programmed the same range in `bsp_init`.
         let range =
             init_state().smrr_range().expect("SMRR range must be determined during BSP init before per-core init");
         smrr_initialize(range)?;
@@ -597,7 +595,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         self.discover_mseg_base(hob_hand_off_table);
 
         // The SMI entry blocks were already copied per SMBASE, so every core is patched here,
-        // not just the BSP.
+        // not only the BSP.
         patch_smi_handler_idt(save_state_info.smbase_array(), number_of_cpus, mmi_entry_size);
 
         self.init_comm_buffers(hob_hand_off_table)
@@ -1085,10 +1083,10 @@ mod tests {
         let memory = PageAlignedMemory::new(memory::DEFAULT_PAGING_POOL_PAGES + 8);
         init_global_state_over(&memory);
 
-        // A list the producer placed outside the regions it described is refused before it is read.
+        // A list placed outside the regions the producer described is refused before it is read,
+        // and reported as an error so the caller can see why.
         let outside = padded_hob_list(0);
 
-        // The refusal is now reported rather than panicked, so the caller can see why.
         let result = supervisor.publish_hob_list_to_user(outside.handoff());
 
         assert!(
@@ -1180,7 +1178,7 @@ mod tests {
         let state = InitState::new();
         let hob_list = RawHobList::new().finish();
 
-        // The discovery now reports the missing module rather than leaving the region unset.
+        // Discovery reports the missing module rather than leaving the region unset.
         let result = supervisor.discover_and_store_init_region(hob_list.handoff(), &state);
         assert_eq!(result, Err(CoreInitError::InitModuleRegionMissing.into()));
 
@@ -1320,7 +1318,7 @@ mod tests {
             allocator.get_allocation_type(mapped.core_module.alloc_descriptor.memory_base_address),
             Some(AllocationType::Supervisor)
         );
-        // SAFETY: the published user copy and source mapped are both still readable.
+        // SAFETY: the published user copy and `source` are both still readable.
         assert_eq!(unsafe { core::slice::from_raw_parts(user_copy as *const u8, size) }, unsafe {
             core::slice::from_raw_parts(source.as_ptr().cast::<u8>(), size)
         });
@@ -1339,7 +1337,7 @@ mod tests {
     fn test_init_policy_from_hob_list_reports_missing_hobs() {
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
 
-        // A null list is no longer representable: the handoff table is taken by reference.
+        // A null list is not representable: the handoff table is taken by reference.
         let hob_list = RawHobList::new().finish();
         let result = supervisor.init_policy_from_hob_list(hob_list.handoff());
         assert_eq!(result, Err(CoreInitError::MpInformationHobMissing.into()));

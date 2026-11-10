@@ -1,9 +1,8 @@
 //! Aggregate MM Supervisor error type.
 //!
-//! This module provides [`MmSupervisorError`], a single enum that groups the
-//! error types declared across the supervisor's subsystems. Each variant names
-//! a subsystem and carries that subsystem's existing error enum unchanged, so
-//! no detail is lost when an error is widened into the aggregate.
+//! [`MmSupervisorError`] groups the error types declared across the supervisor's subsystems.
+//! Each variant names a subsystem and carries that subsystem's error enum unchanged, so no detail
+//! is lost when an error is widened into the aggregate.
 //!
 //! ## License
 //!

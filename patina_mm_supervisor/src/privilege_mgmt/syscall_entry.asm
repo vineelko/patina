@@ -29,9 +29,9 @@
 .equ LONG_DS_R0,                      0x40
 .equ LONG_DS_R3,                      0x53
 
-# This should be OFFSET_OF (MM_SUPV_SYSCALL_CACHE, MmSupvRsp)
+# OFFSET_OF (MM_SUPV_SYSCALL_CACHE, MmSupvRsp)
 .equ MM_SUPV_RSP,                     0x00
-# This should be OFFSET_OF (MM_SUPV_SYSCALL_CACHE, SavedUserRsp)
+# OFFSET_OF (MM_SUPV_SYSCALL_CACHE, SavedUserRsp)
 .equ SAVED_USER_RSP,                  0x08
 
 #------------------------------------------------------------------------------
@@ -45,23 +45,14 @@
 #   UINTN Arg3
 #   );
 #
-# Backend Interface:
-# /// C-compatible syscall dispatcher entry point.
-# ///
-# /// This function is called from the assembly syscall entry stub (syscall_center).
-# ///
-# /// # Arguments
-# ///
-# /// * `call_index` - Syscall index (from RAX)
-# /// * `arg1` - First argument (from RDX)
-# /// * `arg2` - Second argument (from R8)
-# /// * `arg3` - Third argument (from R9)
-# /// * `caller_addr` - Caller return address (from RCX)
-# /// * `ring3_stack_ptr` - Ring 3 stack pointer
-# ///
-# /// # Returns
-# ///
-# /// The value to return in RAX.
+# Backend Interface (the return value goes back to Ring 3 in RAX):
+#   call_index      - syscall index (from RAX)
+#   arg1            - first argument (from RDX)
+#   arg2            - second argument (from R8)
+#   arg3            - third argument (from R9)
+#   caller_addr     - Ring 3 return address (from RCX)
+#   ring3_stack_ptr - Ring 3 stack pointer
+#
 # #[unsafe(no_mangle)]
 # pub extern "efiapi" fn syscall_dispatcher(
 #     call_index: u64,
@@ -74,19 +65,18 @@
 #------------------------------------------------------------------------------
 syscall_center:
 # Calling convention: CallIndex in RAX, Arg1 in RDX, Arg2 in R8, Arg3 in R9 from SysCallLib
-# Architectural definition: CallerAddr in RCX, rFLAGs in R11 from x64 syscall instruction
-# push CallIndex stored at top of stack
+# Architectural definition: CallerAddr in RCX, RFLAGS in R11 from the x64 syscall instruction
 
     # IA32_FMASK already clears DF and AC on entry; these repeat it so the stub does not depend
     # on an MSR programmed elsewhere. Neither touches a register or a flag anything here reads.
     cld
     clac
 
-    swapgs  # get kernel pointer, save user GSbase
-    mov gs:[SAVED_USER_RSP], rsp # save user's stack pointer
-    mov rsp, gs:[MM_SUPV_RSP] # set up kernel stack
+    swapgs  # load the supervisor GS base, saving the user one
+    mov gs:[SAVED_USER_RSP], rsp # save the Ring 3 stack pointer
+    mov rsp, gs:[MM_SUPV_RSP] # switch to the supervisor stack
 
-    #Preserve all registers in CPL3
+    # Save the Ring 3 registers.
     push    rax
     push    rcx
     push    rbp
@@ -106,31 +96,31 @@ syscall_center:
     mov     rbp, rsp
     and     rsp, -16
 
-    ## FX_SAVE_STATE_X64 FxSaveState#
+    # Save the FPU and SSE state (FX_SAVE_STATE_X64, 512 bytes).
     sub rsp, 512
     mov rdi, rsp
     .byte 0x0f, 0xae, 0x07 #fxsave [rdi]
 
-    #Prepare for ds, es, fs, gs
+    # Load the Ring 0 data selector into DS, ES and FS. GS is left alone to keep its base.
     xor     rbx, rbx
     mov     bx, LONG_DS_R0
     mov     ds, bx
     mov     es, bx
     mov     fs, bx
 
-    mov     rsi, gs:[SAVED_USER_RSP]     # Save Ring 3 stack to RSI
-    push    rsi                          # Push Ring 3 stack as Ring3Stack for syscall_dispatcher
-    push    rcx                          # Push return address on stack as CallerAddr for syscall_dispatcher
+    mov     rsi, gs:[SAVED_USER_RSP]     # Ring 3 stack pointer
+    push    rsi                          # 6th argument: ring3_stack_ptr
+    push    rcx                          # 5th argument: caller_addr
     mov     rcx, rax
     sub     rsp, 0x20
 
     call    syscall_dispatcher
 
     add     rsp, 0x20
-    pop     rcx                          # Restore SP to avoid stack overflow
-    pop     rsi                          # Restore SI to avoid stack overflow
+    pop     rcx                          # unwind caller_addr
+    pop     rsi                          # unwind ring3_stack_ptr
 
-    #Prepare for ds, es, fs, gs
+    # Load the Ring 3 data selector into DS, ES and FS.
     xor     rbx, rbx
     mov     bx, LONG_DS_R3
     mov     ds, bx
@@ -143,7 +133,7 @@ syscall_center:
 
     mov     rsp, rbp
 
-    #restore registers from CPL3 stack
+    # Restore the Ring 3 registers saved on the supervisor stack.
     pop     r15
     pop     r14
     pop     r13
@@ -157,10 +147,10 @@ syscall_center:
     pop     r8
     pop     rdx
     pop     rbp
-    pop     rcx           # return rcx from stack
+    pop     rcx           # Ring 3 return address for sysret
 
-    add     rsp, 8        # return rsp to original position
-    mov     rsp, gs:[SAVED_USER_RSP]  # restore user RSP
-    swapgs  # restore user GS, save kernel pointer
-    .byte   0x48          # return to the long mode
+    add     rsp, 8        # skip the saved RAX; RAX holds the return value
+    mov     rsp, gs:[SAVED_USER_RSP]  # restore the Ring 3 RSP
+    swapgs  # restore the user GS base
+    .byte   0x48          # REX.W prefix: sysretq returns to 64-bit mode
     sysret                # RAX contains return value

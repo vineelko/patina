@@ -1,4 +1,10 @@
-//! Memory Management sub module used by MM Supervisor Core
+//! Memory Management for the MM Supervisor Core
+//!
+//! - [`mmram`] - the MMRAM regions and the bound the SMRR covers
+//! - [`page_allocator`] - page allocation from MMRAM, with supervisor or user ownership
+//! - [`paging_allocator`] - the pool that backs page table structures
+//! - [`page_ownership`] - which ring owns a mapped range
+//! - [`locked_state`] - the page allocator's bookkeeping, behind its lock
 //!
 //! ## License
 //!
@@ -19,13 +25,9 @@ pub(crate) use paging_allocator::{DEFAULT_PAGING_POOL_PAGES, PagingPoolAllocator
 pub(crate) const PAGE_STEP: core::num::NonZeroU64 =
     core::num::NonZeroU64::new(patina::UEFI_PAGE_SIZE as u64).expect("the UEFI page size is not zero");
 
-/// Errors reported by the memory allocators.
+/// Errors reported by the page allocator and the paging pool allocator.
 ///
-/// Both allocators share this type. They differ in the backing structure, not in the ways a
-/// request can fail, and the overlapping half of two separate enums only forced callers to convert
-/// between spellings of the same condition.
-///
-/// Not every variant can arise from every allocator: `NotAllocated`, `InvalidAddress` and
+/// Not every variant can arise from both: `NotAllocated`, `InvalidAddress` and
 /// `UnmapFailed` come from the page allocator's free path, while `InvalidSize` and `PoolTooSmall`
 /// come from the paging pool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

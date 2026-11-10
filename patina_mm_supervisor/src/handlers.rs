@@ -1,25 +1,20 @@
-//! Supervisor MMI Handler Registry
+//! Supervisor MMI handler registry.
 //!
-//! This module provides the built-in supervisor MMI handlers for the MM
-//! Supervisor Core, along with the [`SupervisorMmiHandler`] type that platforms
-//! use to register their own handlers.
+//! Defines the built-in supervisor MMI handlers and the [`SupervisorMmiHandler`] type that
+//! platforms use to register their own.
 //!
 //! ## Architecture
 //!
-//! The core's built-in handlers are collected in the
-//! [`DEFAULT_SUPERVISOR_MMI_HANDLERS`] slice. During supervisor request
-//! processing, the core iterates these handlers followed by any
-//! platform-provided handlers (see
-//! [`PlatformInfo::mmi_handlers`](crate::PlatformInfo::mmi_handlers)) to find a
-//! handler matching the communicate header GUID. The first match is dispatched
-//! and the search stops, so a built-in handler takes precedence over a platform
-//! handler registered with the same GUID.
+//! The built-in handlers are in [`DEFAULT_SUPERVISOR_MMI_HANDLERS`]. For a supervisor request,
+//! the core searches these handlers and then the platform handlers (see
+//! [`PlatformInfo::mmi_handlers`](crate::PlatformInfo::mmi_handlers)) for one matching the
+//! communicate header GUID. Only the first match runs, so a built-in handler takes precedence
+//! over a platform handler with the same GUID.
 //!
 //! ## Adding Platform-Specific Handlers
 //!
-//! To register handlers from a platform crate, implement
-//! [`PlatformInfo::mmi_handlers`](crate::PlatformInfo::mmi_handlers) and return
-//! a static slice:
+//! Implement [`PlatformInfo::mmi_handlers`](crate::PlatformInfo::mmi_handlers) in the platform
+//! crate and return a static slice:
 //!
 //! ```rust,no_run
 //! # #[cfg(target_arch = "x86_64")]
@@ -71,20 +66,15 @@ use patina::{
     uefi::event::EXIT_BOOT_SERVICES_EVENT_GROUP_GUID,
 };
 
-/// A build-time registered supervisor MMI handler.
+/// A supervisor MMI handler registered at build time.
 ///
-/// Each entry represents a handler that the supervisor core will consider when dispatching
-/// supervisor-channel requests. Handlers are matched by comparing the
+/// The core considers each entry when dispatching supervisor-channel requests, matching the
 /// [`EfiMmCommunicateHeader::header_guid`](patina::pi::protocol::communication::EfiMmCommunicateHeader::header_guid)
 /// against [`handler_guid`](SupervisorMmiHandler::handler_guid).
 ///
-/// ## Handler Function Signature
-///
-/// The [`handle`](SupervisorMmiHandler::handle) function receives:
-/// - `comm_buffer`: Pointer to the data portion of the communicate buffer (after the header).
-/// - `comm_buffer_size`: On input, the message length. On output, the response data length.
-///
-/// The handler should return an [`efi::Status`] code.
+/// The [`handle`](SupervisorMmiHandler::handle) function receives `comm_buffer`, a pointer to
+/// the data after the communicate header, and `comm_buffer_size`, which holds the message length
+/// on input and the response length on output. It returns an [`efi::Status`].
 #[derive(Debug)]
 pub struct SupervisorMmiHandler {
     /// Human-readable name for logging and debugging.
@@ -97,16 +87,15 @@ pub struct SupervisorMmiHandler {
 
 /// The core's built-in supervisor MMI handlers.
 ///
-/// - **`MmReadyToLock`**: Triggered from the non-MM environment upon `DxeMmReadyToLock` event.
-///   After this handler runs, certain features (e.g., unblock memory) are no longer available.
-/// - **`MmSupvRequest`**: Handles general supervisor requests such as unblock memory, fetch
-///   policy, version info, and communication buffer updates.
-/// - **`MmExitBootServices`**: Triggered from the non-MM environment upon `ExitBootServices`. After
-///   this handler runs, the supervisor communication channel is closed and supervisor-targeted
-///   requests are rejected.
+/// - `MmReadyToLock`: triggered from the non-MM environment on the `DxeMmReadyToLock` event.
+///   Afterwards some features, such as unblock memory, are no longer available.
+/// - `MmSupvRequest`: handles supervisor requests such as unblock memory, fetch policy, version
+///   info, and communication buffer updates.
+/// - `MmExitBootServices`: triggered from the non-MM environment on `ExitBootServices`.
+///   Afterwards the supervisor communication channel is closed and supervisor requests are
+///   rejected.
 ///
-/// This is an immutable, compile-time dispatch table with no runtime state. Every entry names a
-/// handler this module defines, so the table stays beside the functions it points at.
+/// An immutable, compile-time dispatch table with no runtime state.
 pub(crate) static DEFAULT_SUPERVISOR_MMI_HANDLERS: &[SupervisorMmiHandler] = &[
     SupervisorMmiHandler {
         name: "MmReadyToLock",

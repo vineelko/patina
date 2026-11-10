@@ -1,4 +1,4 @@
-//! `COMM_UPDATE` Request Handler
+//! `COMM_UPDATE` request handler.
 //!
 //! ## License
 //!
@@ -10,13 +10,11 @@ use patina::standard::efi;
 
 use patina::management_mode::protocol::mm_supervisor_request::MmSupervisorRequestHeader;
 
-/// Handle a `COMM_UPDATE` request.
+/// Handles a `COMM_UPDATE` request by rejecting it with `ACCESS_DENIED`.
 ///
-/// Rejects dynamic communication buffer updates, which this implementation does not support,
-/// with `ACCESS_DENIED`.
+/// Dynamic communication buffer updates are not supported because a runtime allocation is
+/// expected to land in the PEI memory bin.
 pub(super) fn handle_comm_update(_comm_buffer: *mut u8, comm_buffer_size: &mut usize) -> efi::Status {
-    // We do not support dynamic communication buffer updates in this implementation, because
-    // we expect the runtime allocation will fall into PEI memory bin.
     *comm_buffer_size = MmSupervisorRequestHeader::SIZE;
 
     efi::Status::ACCESS_DENIED

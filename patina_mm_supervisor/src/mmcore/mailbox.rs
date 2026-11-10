@@ -1,16 +1,8 @@
 //! Mailbox Module
 //!
-//! This module provides the mailbox infrastructure for BSP-AP communication.
-//! Each AP has a dedicated mailbox that the BSP uses to send commands and
-//! receive responses.
-//!
-//! ## Architecture
-//!
-//! The mailbox system uses a simple producer-consumer model:
-//! - BSP writes commands to AP mailboxes
-//! - APs poll their mailboxes for commands
-//! - APs write responses back
-//! - BSP reads responses when ready
+//! Per-AP mailboxes the BSP uses to send commands to the APs and collect their responses.
+//! The BSP posts a command, the AP polls its mailbox and takes it, and the AP posts a response
+//! that the BSP reads.
 //!
 //! ## License
 //!
@@ -60,16 +52,15 @@ impl core::fmt::Display for MailboxError {
     }
 }
 
-/// Commands that can be sent from BSP to APs via the mailbox.
+/// Commands that can be sent from the BSP to an AP through its mailbox.
 ///
-/// APs sit in a holding pen polling for commands. When no command is pending
-/// the AP simply keeps spinning - there is no explicit "no-op" variant.
+/// An AP with no pending command keeps polling, so there is no no-op variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApCommand {
-    /// Run a procedure on the AP, with potential demotion to user mode.
+    /// Runs a procedure on the AP.
     ///
-    /// The AP checks buffer ownership and demotes to Ring 3 if the procedure
-    /// lives in user-owned memory, otherwise calls it directly in Ring 0.
+    /// The AP demotes to Ring 3 if the procedure lives in user-owned memory, and calls it
+    /// directly in Ring 0 otherwise.
     RunProcedure {
         /// The procedure function pointer.
         procedure: u64,
@@ -159,10 +150,9 @@ impl ApMailbox {
         }
     }
 
-    /// Gets the pending command (called by AP).
+    /// Takes the pending command and moves the mailbox to `Processing`. Called by the AP.
     ///
-    /// Returns `Some(command)` if a command is pending, `None` otherwise.
-    /// This also transitions the mailbox to the Processing state.
+    /// Returns `None` if no command is pending.
     pub fn take_command(&self) -> Option<ApCommand> {
         // Try to transition from CommandPending to Processing
         let result = self.state.compare_exchange(
@@ -209,22 +199,17 @@ impl ApMailbox {
             return false;
         }
 
-        // Write all payload fields before publishing.
-        // Relaxed is fine here - the Release store to `state` below
-        // will fence all prior writes.
+        // Relaxed is enough: the Release store to `state` below orders these writes before it.
         let ApCommand::RunProcedure { procedure, argument } = command;
         self.procedure.store(procedure, Ordering::Relaxed);
         self.argument.store(argument, Ordering::Relaxed);
 
-        // Publish: the AP polls on `state` with Acquire, so this
-        // Release ensures it sees the payload written above.
+        // Publish. The AP reads `state` with Acquire, so it sees the payload written above.
         self.state.store(MailboxState::CommandPending as u32, Ordering::Release);
         true
     }
 
-    /// Gets the response from this mailbox (called by BSP).
-    ///
-    /// Returns the response and clears the mailbox if a response is ready.
+    /// Takes the response and empties the mailbox, if a response is ready. Called by the BSP.
     pub fn get_response(&self) -> Option<ApResponse> {
         // Only read if response is ready
         let result = self.state.compare_exchange(
@@ -244,7 +229,6 @@ impl ApMailbox {
 
     /// Forcibly resets the mailbox to the [`MailboxState::Empty`] state,
     /// discarding any pending command, in-flight processing, or unread response.
-    ///
     pub fn reset(&self) {
         self.procedure.store(0, Ordering::Relaxed);
         self.argument.store(0, Ordering::Relaxed);
@@ -259,22 +243,14 @@ impl Default for ApMailbox {
     }
 }
 
-/// Manager for all AP mailboxes.
-///
-/// Uses fixed-size arrays with const generic for maximum AP count.
-///
-/// ## Const Generic Parameters
-///
-/// * `MAX_APS` - The maximum number of APs that can be managed.
+/// Holds one mailbox per CPU index, `MAX_APS` in total.
 pub struct MailboxManager<const MAX_APS: usize> {
-    /// Mailboxes - fixed size array.
+    /// One mailbox per CPU index.
     mailboxes: [ApMailbox; MAX_APS],
 }
 
 impl<const MAX_APS: usize> MailboxManager<MAX_APS> {
-    /// Creates a new mailbox manager.
-    ///
-    /// This is a const fn and performs no heap allocation.
+    /// Creates a manager with every mailbox empty.
     pub const fn new() -> Self {
         Self { mailboxes: [const { ApMailbox::new() }; MAX_APS] }
     }
@@ -315,9 +291,9 @@ impl<const MAX_APS: usize> MailboxManager<MAX_APS> {
         }
     }
 
-    /// Waits for a response from an AP with timeout.
+    /// Waits up to `timeout_us` microseconds for a response from an AP.
     ///
-    /// Returns the response, or `None` if timeout.
+    /// Returns `None` on timeout or if `cpu_index` has no mailbox.
     pub fn wait_response(&self, cpu_index: usize, timeout_us: u64) -> Option<ApResponse> {
         let mailbox = self.mailboxes.get(cpu_index)?;
         let mut result = None;
@@ -472,7 +448,7 @@ mod tests {
         // The slot already holds a command that the AP has not taken yet.
         assert_eq!(manager.send_command(2, command), Err(MailboxError::CommandAlreadyPending { index: 2 }.into()));
 
-        // A busy slot and a missing slot are no longer the same failure.
+        // A busy slot and a missing slot are different failures.
         assert_ne!(
             manager.send_command(2, command),
             manager.send_command(4, command),
@@ -524,7 +500,7 @@ mod tests {
         // A fresh command cannot be sent while stuck.
         assert!(!mailbox.send_command(ApCommand::RunProcedure { procedure: 0x2000, argument: 8 }));
 
-        // Reset forces the mailbox back to empty, so a new command now succeeds.
+        // Reset forces the mailbox back to empty, so a new command succeeds.
         mailbox.reset();
         assert!(mailbox.send_command(ApCommand::RunProcedure { procedure: 0x2000, argument: 8 }));
     }

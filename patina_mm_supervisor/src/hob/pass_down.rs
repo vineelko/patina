@@ -93,28 +93,27 @@ impl fmt::Display for PassDownHobError {
 
 /// MM Supervisor `PassDown` HOB Data Structure
 ///
-/// This structure contains various buffer pointers and sizes passed from
-/// the PEI phase to the MM Supervisor.
+/// The buffer pointers and sizes the PEI phase passes to the MM Supervisor.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, FromBytes, Immutable)]
 pub(crate) struct MmSupvPassDownHobData {
-    /// Revision of this HOB structure
+    /// Revision of this HOB structure.
     pub revision: u32,
-    /// Reserved for future use
+    /// Reserved.
     pub reserved: u32,
-    /// Base address of CPL3 stack for MM Supervisor
+    /// Base address of the per-CPU Ring 3 (CPL3) stacks.
     pub cpl3_stack_base: u64,
-    /// Per-CPU stack size for CPL3
+    /// Size of each CPU's Ring 3 stack.
     pub cpl3_stack_size: u64,
     /// Pointer to the per-CPU SMBASE array.
     pub sm_base_array: u64,
-    /// MM Initialized buffer base address
+    /// Base address of the per-core "MM initialized" bytes.
     pub mm_initialized_buffer: u64,
-    /// MM Supervisor firmware policy buffer base address
+    /// Base address of the firmware policy buffer.
     pub firmware_policy_buffer: u64,
-    /// Size of MM Supervisor firmware policy buffer
+    /// Size of the firmware policy buffer.
     pub firmware_policy_buffer_size: u64,
-    /// Size of the MMI entry point structure (for validating against expected size in supervisor)
+    /// Size of each core's MMI entry, which bounds the fixup structure the supervisor patches.
     pub mmi_entry_size: u64,
 }
 

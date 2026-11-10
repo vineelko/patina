@@ -113,9 +113,10 @@ pub struct CommBufferConfig {
     pub supervisor: CommChannel,
     /// The channel carrying user-targeted requests.
     pub user: CommChannel,
-    /// MM Supervisor to User buffer.
+    /// Address of the page the supervisor uses to pass the entry context and status to the user
+    /// core.
     pub supv_to_user_buffer: u64,
-    /// Size of Supervisor to User buffer.
+    /// Size of that page in bytes.
     pub supv_to_user_buffer_size: u64,
 }
 
@@ -266,17 +267,12 @@ impl CommChannel {
 
         // TODO: Remove the logic that overwrites the HOB's physical_start with the internal buffer address
         // so the user module sees it after demotion.
-        // SAFETY:
-        // - `data` points to the original writable HOB buffer and parsing above proved it contains
-        //   `MmCommonBufferHobData`, so `physical_start` lies within the allocation. `addr_of_mut!`
-        //   avoids forming a reference to the packed field, and `write_volatile` keeps the store from
-        //   being elided.
-        // - The HOB pages may be mapped read-only, so `disable_write_protection` clears `CR0.WP` to
-        //   permit the supervisor store. This runs in Ring 0 during single-threaded BSP init in the MM
-        //   (SMM) environment, where interrupts are masked, satisfying the privilege/atomicity
-        //   requirements of `disable_write_protection`. `enable_write_protection` is handed exactly the
-        //   value returned by `disable_write_protection`, restoring `CR0.WP` before this block returns
-        //   and bounding the unprotected window to the single field write.
+        // SAFETY: parsing above proved `data` holds an `MmCommonBufferHobData`, so `physical_start`
+        // lies inside the writable HOB buffer. `addr_of_mut!` avoids a reference to the packed
+        // field, and `write_volatile` keeps the store from being elided. The HOB pages may be
+        // mapped read-only, so `CR0.WP` is cleared for this one store. This runs in Ring 0 during
+        // single-threaded BSP init with interrupts masked, as `disable_write_protection` requires,
+        // and `enable_write_protection` restores the value it returned before the block ends.
         unsafe {
             let hob_ptr = data.cast::<MmCommonBufferHobData>();
             let original_cr0 = disable_write_protection();
@@ -293,10 +289,14 @@ impl CommChannel {
 ///
 /// The MM IPL names these buffers and sits outside the supervisor's trust boundary. The
 /// supervisor copies a response back into the buffer, so any part of it inside MMRAM turns that
-/// copy into an MMRAM write with a payload chosen outside MM - hence overlap rather than
-/// containment, since a partly-inside buffer carries the same primitive in its tail. Ring 3 works
+/// copy into an MMRAM write with a payload chosen outside MM. Overlap is checked rather than
+/// containment because a partly-inside buffer carries the same primitive in its tail. Ring 3 works
 /// on the internal copy, so direct access here would let a demoted driver rewrite a request, or
 /// its status mailbox, while it is being serviced.
+///
+/// ## Panics
+///
+/// Panics if `range` overlaps MMRAM or is not mapped supervisor-only.
 fn require_external_comm_buffer(range: &MemoryRange, description: &str) {
     assert!(!range_overlaps_mmram(range), "{description} at {range} overlaps MMRAM; it must lie entirely outside");
 

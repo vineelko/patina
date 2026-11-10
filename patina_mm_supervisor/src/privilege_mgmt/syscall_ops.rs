@@ -1,16 +1,16 @@
-//! Syscall Side Effects
+//! Syscall side effects.
 //!
-//! Every syscall handler in [`super::syscall_dispatcher`] follows the same shape: validate the
-//! request coming from Ring 3, ask the firmware policy whether it is permitted, and only then
-//! perform a privileged action - executing an instruction, touching an I/O port or MSR, or
-//! consulting supervisor-global state.
+//! Every syscall handler in [`super::syscall_dispatcher`] validates the Ring 3 request, asks the
+//! firmware policy whether it is permitted, and only then performs a privileged action: running
+//! an instruction, accessing an I/O port or MSR, or reading supervisor-global state.
 //!
-//! This module isolates that second half behind the [`SyscallOps`] trait so that:
+//! This module puts the policy queries and privileged actions behind the [`SyscallOps`] trait so
+//! that:
 //!
-//! - all privileged instructions and all supervisor-global state access live in a single
-//!   implementation ([`FirmwareOps`]), keeping `unsafe` out of the request validation logic, and
-//! - the dispatcher can be exercised on a host (where `rdmsr`, `cli`, `in`/`out` and friends
-//!   would fault) against a test implementation of the trait.
+//! - all privileged instructions and supervisor-global state access live in one implementation
+//!   ([`FirmwareOps`]), keeping `unsafe` out of the request validation logic, and
+//! - the dispatcher can be tested on a host (where `rdmsr`, `cli`, `in`/`out` and similar
+//!   instructions would fault) against a test implementation of the trait.
 //!
 //! ## License
 //!
@@ -54,9 +54,9 @@ impl From<MmSupervisorResult<()>> for PolicyDecision {
 
 /// The side effects a syscall handler may perform on behalf of Ring 3.
 ///
-/// The handlers themselves only validate and sequence requests; everything that touches
-/// hardware or supervisor-global state goes through this trait. [`FirmwareOps`] is the
-/// implementation used by the running supervisor.
+/// The handlers only validate and sequence requests; everything that touches hardware or
+/// supervisor-global state goes through this trait. [`FirmwareOps`] is the implementation used
+/// by the running supervisor.
 pub trait SyscallOps {
     /// Asks the firmware policy whether `msr` may be accessed with `access`.
     fn check_msr(&self, msr: u32, access: AccessType) -> PolicyDecision;
@@ -142,8 +142,8 @@ pub trait SyscallOps {
 
 /// The [`SyscallOps`] implementation used by the running supervisor.
 ///
-/// This is the only place where syscall handling executes privileged instructions or reaches
-/// into the supervisor's global state.
+/// The only place where syscall handling runs privileged instructions or accesses the
+/// supervisor's global state.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FirmwareOps;
 
@@ -169,28 +169,26 @@ impl SyscallOps for FirmwareOps {
         }
     }
 
-    // Executes the privileged `rdmsr` instruction, which faults outside ring 0 and cannot run in
-    // a host-based unit test.
+    // Runs rdmsr, which faults outside Ring 0, so it is not unit tested on the host.
     unsafe fn read_msr(&self, msr: u32) -> u64 {
-        // SAFETY: the caller validated this MSR against the firmware policy, as required by the
-        // contract of `SyscallOps::read_msr`.
+        // SAFETY: the caller validated this MSR against the firmware policy, per the contract of
+        // `SyscallOps::read_msr`.
         unsafe { crate::intrinsics::read_msr(msr) }
     }
 
-    // Executes the privileged `wrmsr` instruction, which faults outside ring 0 and cannot run in
-    // a host-based unit test.
+    // Runs wrmsr, which faults outside Ring 0, so it is not unit tested on the host.
     unsafe fn write_msr(&self, msr: u32, value: u64) {
-        // SAFETY: the caller validated this MSR against the firmware policy, as required by the
-        // contract of `SyscallOps::write_msr`.
+        // SAFETY: the caller validated this MSR against the firmware policy, per the contract of
+        // `SyscallOps::write_msr`.
         unsafe { crate::intrinsics::write_msr(msr, value) };
     }
 
-    // Executes `in`, which faults outside ring 0 and cannot run in a host-based unit test.
+    // Runs the in instruction, which faults outside Ring 0, so it is not unit tested on the host.
     unsafe fn io_read(&self, port: u16, width: IoWidth) -> u64 {
         let value: u64;
-        // SAFETY: the caller validated this port and width against the firmware policy, as
-        // required by the contract of `SyscallOps::io_read`. Each `in` reads only the requested
-        // port and touches no memory (nomem, nostack).
+        // SAFETY: the caller validated this port and width against the firmware policy, per the
+        // contract of `SyscallOps::io_read`. Each `in` reads only the requested port and touches
+        // no memory (nomem, nostack).
         unsafe {
             match width {
                 IoWidth::Byte => {
@@ -213,11 +211,11 @@ impl SyscallOps for FirmwareOps {
         value
     }
 
-    // Executes `out`, which faults outside ring 0 and cannot run in a host-based unit test.
+    // Runs the out instruction, which faults outside Ring 0, so it is not unit tested on the host.
     unsafe fn io_write(&self, port: u16, width: IoWidth, value: u64) {
-        // SAFETY: the caller validated this port and width against the firmware policy, as
-        // required by the contract of `SyscallOps::io_write`. Each `out` writes only the
-        // requested port and touches no memory (nomem, nostack).
+        // SAFETY: the caller validated this port and width against the firmware policy, per the
+        // contract of `SyscallOps::io_write`. Each `out` writes only the requested port and
+        // touches no memory (nomem, nostack).
         unsafe {
             match width {
                 IoWidth::Byte => asm!("out dx, al", in("dx") port, in("al") value as u8, options(nomem, nostack)),
@@ -227,12 +225,11 @@ impl SyscallOps for FirmwareOps {
         }
     }
 
-    // Executes privileged instructions that fault outside ring 0 and cannot run in a host-based
-    // unit test.
+    // Runs instructions that fault outside Ring 0, so it is not unit tested on the host.
     unsafe fn execute_instruction(&self, instruction: Instruction) {
-        // SAFETY: the caller validated the instruction against the firmware policy, as required by
-        // the contract of `SyscallOps::execute_instruction`. Each instruction only updates
-        // processor state (interrupt flag, caches, halt) and touches no memory (nomem, nostack).
+        // SAFETY: the caller validated the instruction against the firmware policy, per the
+        // contract of `SyscallOps::execute_instruction`. Each instruction only updates processor
+        // state (interrupt flag, caches, halt) and touches no memory (nomem, nostack).
         unsafe {
             match instruction {
                 Instruction::Cli => asm!("cli", options(nomem, nostack)),
@@ -242,8 +239,7 @@ impl SyscallOps for FirmwareOps {
         }
     }
 
-    // Reads the APIC base MSR, which faults outside ring 0 and cannot run in a host-based unit
-    // test.
+    // Reads the APIC base MSR, which faults outside Ring 0, so it is not unit tested on the host.
     fn is_bsp(&self) -> bool {
         crate::intrinsics::is_bsp()
     }
@@ -328,8 +324,8 @@ mod tests {
         // With no page table installed, ownership of an address is unknown rather than "user".
         assert_eq!(ops.query_address_ownership(&MemoryRange::new(0x1000, 0x1000).unwrap()), None);
 
-        // Nothing has been unblocked and no communication buffer has been published. Note the
-        // tracker is deliberately permissive until core initialization completes (see
+        // Nothing has been unblocked and no communication buffer has been published. The tracker
+        // is deliberately permissive until core initialization completes (see
         // `UnblockedMemoryTracker::is_memory_blocked`), so this reports the bootstrap answer.
         assert!(ops.is_within_unblocked_region(&MemoryRange::new(0x1000, 0x1000).unwrap()));
         assert!(ops.comm_buffer_config().is_none());
@@ -348,8 +344,8 @@ mod tests {
     const INSTRUCTION_DESC_OFFSET: u32 = IO_DESC_OFFSET + 8;
     const POLICY_SIZE: u32 = INSTRUCTION_DESC_OFFSET + 8;
 
-    /// MSR, I/O port and instruction the synthetic policy permits. Everything else is denied,
-    /// because each policy root uses allow-list semantics.
+    /// MSR and I/O port the synthetic policy permits (CLI is the permitted instruction).
+    /// Everything else is denied because each policy root is an allow list.
     const ALLOWED_MSR: u32 = 0x1B;
     const ALLOWED_PORT: u16 = 0xB2;
 
@@ -402,7 +398,7 @@ mod tests {
         );
         buf.extend_from_slice(&0u16.to_le_bytes()); // reserved
 
-        // `InstructionDescriptorV1_0`: execution of `CLI` only.
+        // `InstructionDescriptorV1_0`: execution of CLI only.
         buf.extend_from_slice(&Instruction::Cli.as_index().to_le_bytes());
         buf.extend_from_slice(&(crate::policy::RESOURCE_ATTR_EXECUTE as u16).to_le_bytes());
         buf.extend_from_slice(&0u32.to_le_bytes()); // reserved
