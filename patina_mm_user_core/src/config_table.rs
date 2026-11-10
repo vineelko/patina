@@ -1,31 +1,16 @@
 //! Configuration Table Management for MM System Table
 //!
-//! Implements `MmInstallConfigurationTable` - the ability to add, modify, or
-//! delete (GUID, pointer) pairs stored in the MM System Table's configuration
-//! table array.
+//! Implements `MmInstallConfigurationTable`, which adds, modifies, or deletes
+//! (GUID, pointer) pairs in the MM System Table's configuration table. Drivers use
+//! the table to publish well-known data (for example the HOB list) for other drivers.
 //!
-//! ## Semantics
-//!
-//! The configuration table is an array of `EFI_CONFIGURATION_TABLE` entries
-//! exposed through `EfiMmSystemTable.mm_configuration_table`. Drivers use
-//! this to publish well-known data (e.g. the HOB list) that other drivers
-//! can discover by iterating the table.
-//!
-//! Operations:
-//! - **Add**: GUID not present, table pointer non-null.
-//! - **Modify**: GUID already present, table pointer non-null → update pointer.
-//! - **Delete**: GUID already present, table pointer null → remove entry.
-//! - **Error**: GUID not present, table pointer null → `NOT_FOUND`.
-//!
-//! After every modification the MM System Table's `mm_configuration_table`
-//! pointer and `number_of_table_entries` count are updated so the change is
-//! immediately visible to all consumers.
+//! After every change the MM System Table's `mm_configuration_table` pointer and
+//! `number_of_table_entries` count are updated, so the change is visible at once.
 //!
 //! ## Thread Safety
 //!
-//! All access is serialized through a `spin::Mutex`. The previous configuration
-//! table array is freed before the new one is published to the system table, so
-//! readers must not access the table concurrently with an install.
+//! Access is serialized by a `spin::Mutex`. The previous table array is freed before
+//! the new one is published, so readers must not access the table during an install.
 //!
 //! ## License
 //!
@@ -46,9 +31,8 @@ use patina::pi::mm_cis::EfiMmSystemTable;
 
 /// Configuration table database for the MM System Table.
 ///
-/// Maintains the canonical list of `(GUID, Pointer)` pairs. After each
-/// mutation the MM System Table's pointer and count are updated so all
-/// consumers see the change immediately.
+/// Holds the list of (GUID, pointer) pairs and republishes it to the MM System Table
+/// after each change.
 pub struct MmConfigurationTableDb {
     inner: Mutex<ConfigTableInner>,
 }
@@ -56,10 +40,9 @@ pub struct MmConfigurationTableDb {
 struct ConfigTableInner {
     /// The authoritative list of entries.
     entries: Vec<efi::ConfigurationTable>,
-    /// Raw pointer to the most recently leaked boxed‐slice that the system
-    /// table currently points to. `null` when no allocation exists.
+    /// The leaked boxed slice the system table currently points to, or null if there is none.
     leaked_ptr: *mut efi::ConfigurationTable,
-    /// Length of the leaked allocation (for reclaim).
+    /// Length of the leaked slice, needed to reclaim it.
     leaked_len: usize,
 }
 
@@ -86,16 +69,18 @@ impl MmConfigurationTableDb {
         }
     }
 
-    /// Install, modify, or delete a configuration table entry.
+    /// Installs, modifies, or deletes a configuration table entry.
     ///
-    /// Semantics match the PI Specification `EFI_MM_INSTALL_CONFIGURATION_TABLE`:
+    /// Follows the PI Specification `EFI_MM_INSTALL_CONFIGURATION_TABLE`:
     ///
-    /// | Existing? | `table` | Action   |
-    /// |-----------|---------|----------|
-    /// | Yes       | non-null| Modify   |
-    /// | Yes       | null    | Delete   |
-    /// | No        | non-null| Add      |
-    /// | No        | null    | NOT_FOUND|
+    /// | Existing? | `table`  | Action        |
+    /// |-----------|----------|---------------|
+    /// | Yes       | non-null | Modify        |
+    /// | Yes       | null     | Delete        |
+    /// | No        | non-null | Add           |
+    /// | No        | null     | `NOT_FOUND`   |
+    ///
+    /// A null `mmst` updates only the database.
     pub fn install_configuration_table(
         &self,
         mmst: *mut EfiMmSystemTable,
@@ -108,7 +93,6 @@ impl MmConfigurationTableDb {
         let existing_idx = inner.entries.iter().position(|e| e.vendor_guid == *guid);
 
         match (existing_idx, table.is_null()) {
-            // Match found, table non-null → modify
             (Some(idx), false) => {
                 // `idx` came from `position`, so the entry is always present.
                 if let Some(entry) = inner.entries.get_mut(idx) {
@@ -116,51 +100,40 @@ impl MmConfigurationTableDb {
                 }
                 log::debug!("MmInstallConfigurationTable: modified {guid:?}");
             }
-            // Match found, table null → delete
             (Some(idx), true) => {
                 inner.entries.remove(idx);
                 log::debug!("MmInstallConfigurationTable: deleted {guid:?}");
             }
-            // No match, table non-null → add
             (None, false) => {
                 inner.entries.push(efi::ConfigurationTable { vendor_guid: *guid, vendor_table: table });
                 log::debug!("MmInstallConfigurationTable: added {guid:?}");
             }
-            // No match, table null → error
             (None, true) => {
                 log::error!("MmInstallConfigurationTable: cannot delete {guid:?}, it is not installed");
                 return efi::Status::NOT_FOUND;
             }
         }
 
-        // Publish the updated table to the MM System Table.
         Self::publish_to_system_table(&mut inner, mmst);
 
         efi::Status::SUCCESS
     }
 
-    /// Look up a configuration table entry by GUID.
-    ///
-    /// Returns the `vendor_table` pointer if found, or `None`.
+    /// Returns the `vendor_table` pointer installed for `guid`, if any.
     pub fn get_configuration_table(&self, guid: &efi::Guid) -> Option<*mut c_void> {
         let inner = self.inner.lock();
         inner.entries.iter().find(|e| e.vendor_guid == *guid).map(|e| e.vendor_table)
     }
 
-    // -------------------------------------------------------------------------
-    // Internal helpers
-    // -------------------------------------------------------------------------
-
-    /// Re‐publish the current entry list to the MM System Table.
+    /// Republishes the entry list to the MM System Table.
     ///
-    /// Reclaims the previous allocation, then allocates a new boxed slice and
-    /// updates the system table pointer and entry count.
+    /// Frees the previous array, then leaks a new boxed slice and points the system table
+    /// at it. Does nothing if `mmst` is null.
     fn publish_to_system_table(inner: &mut ConfigTableInner, mmst: *mut EfiMmSystemTable) {
         if mmst.is_null() {
             return;
         }
 
-        // --- Reclaim the previous allocation ---------------------------------
         if !inner.leaked_ptr.is_null() {
             // SAFETY: `leaked_ptr` / `leaked_len` were produced by
             // `Box::into_raw` in a prior call to this function.
@@ -171,9 +144,8 @@ impl MmConfigurationTableDb {
             inner.leaked_len = 0;
         }
 
-        // --- Produce the new allocation and patch the MMST -------------------
         if inner.entries.is_empty() {
-            // SAFETY: We hold the Mutex, and `mmst` was initialized by
+            // SAFETY: The mutex is held, and `mmst` points to the table built by
             // `init_mm_system_table`.
             unsafe {
                 (*mmst).number_of_table_entries = 0;

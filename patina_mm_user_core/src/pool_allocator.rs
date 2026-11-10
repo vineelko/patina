@@ -1,38 +1,27 @@
 //! Pool Allocator
 //!
-//! This module provides a trait-based page allocator abstraction and a generic pool
-//! allocator for the MM User Core.
+//! A page allocator abstraction and a generic pool allocator for the MM User Core.
 //!
-//! ## Design
-//!
-//! The [`PageAllocatorBackend`] trait abstracts the page allocation mechanism.
-//! The user core implements it by issuing `syscall` instructions that thunk
-//! into the supervisor for page allocation.
-//!
-//! The [`PoolAllocator`] is a bump-allocator built on top of any `PageAllocatorBackend`.
-//! It implements [`GlobalAlloc`] so it can be used as `#[global_allocator]`.
+//! [`PageAllocatorBackend`] abstracts page allocation; the user core implements it with
+//! supervisor syscalls. [`PoolAllocator`] is a bump allocator on top of any backend and
+//! implements [`GlobalAlloc`], so it can be the `#[global_allocator]`.
 //!
 //! ## Block Management
 //!
-//! Block metadata is stored **in-band** at the start of each page allocation, forming
-//! an intrusive linked list. This means there is no fixed cap on the number of blocks -
-//! the allocator grows dynamically as needed by requesting more pages from the backend.
-//! When all allocations within a block are freed, the block is unlinked from the list
-//! and the pages are returned to the backend.
+//! Each block of pages starts with an in-band header, and the headers form an intrusive
+//! linked list, so there is no fixed limit on the number of blocks. When every allocation
+//! in a block is freed, the block is unlinked and its pages go back to the backend.
 //!
 //! ## Safety
 //!
-//! The intrusive list is built from `NonNull<PoolBlockHeader>` pointers into
-//! pages we own but Rust does not track. A single `spin::Mutex` guards the
-//! head pointer and (by convention) the entire list - every traversal,
-//! insertion, and removal is performed while the lock is held, and no list
-//! pointer ever escapes this module.
+//! The list is built from `NonNull<PoolBlockHeader>` pointers into pages the allocator owns
+//! but Rust does not track. One `spin::Mutex` guards the head pointer and, by convention,
+//! the whole list: every traversal, insertion, and removal happens with the lock held, and
+//! no list pointer leaves this module.
 //!
-//! As a consequence of that discipline, while holding the head lock,
-//! dereferencing any `NonNull<PoolBlockHeader>` reachable from the head is
-//! sound: it points to a fully-initialized header that no other code can
-//! concurrently free or alias. Individual `SAFETY:` comments below refer back
-//! to this invariant rather than restating it in full.
+//! So while the head lock is held, any `NonNull<PoolBlockHeader>` reachable from the head
+//! points to a fully initialized header that no other code can free or alias. The
+//! `SAFETY:` comments below refer to this invariant.
 //!
 //! ## License
 //!
@@ -73,60 +62,55 @@ const MIN_POOL_ALLOC_SIZE: usize = 16;
 
 /// Trait for page-granularity memory allocation.
 ///
-/// Implementors provide the actual page allocation mechanism. The user core
-/// implements this by issuing syscalls to the supervisor.
+/// The user core implements it with supervisor syscalls.
 pub trait PageAllocatorBackend: Send + Sync {
-    /// Allocates `num_pages` contiguous pages.
-    ///
-    /// Returns the physical base address of the allocated region on success.
+    /// Allocates `num_pages` contiguous pages and returns their physical base address.
     fn allocate_pages(&self, num_pages: usize) -> Result<u64, PageAllocError>;
 
     /// Frees `num_pages` contiguous pages starting at `addr`.
     fn free_pages(&self, addr: u64, num_pages: usize) -> Result<(), PageAllocError>;
 
-    /// Returns whether the page allocator has been initialized and is ready for use.
+    /// Returns whether the page allocator is ready for use.
     fn is_initialized(&self) -> bool;
 }
 
-/// In-band header stored at the beginning of each pool page block.
+/// In-band header at the start of each pool block.
 ///
-/// By placing the metadata inside the allocated pages themselves, we avoid
-/// any fixed-size bookkeeping array. Blocks form a singly-linked list so
-/// traversal, insertion, and removal are straightforward.
+/// Blocks form a singly linked list.
 #[repr(C)]
 struct PoolBlockHeader {
-    /// Pointer to the next block in the linked list (`None` if this is the tail).
+    /// The next block in the list, or `None` at the tail.
     next: Option<NonNull<PoolBlockHeader>>,
-    /// Number of pages backing this block (includes the header).
+    /// Number of pages in this block, including the header.
     num_pages: usize,
-    /// Current bump offset (in bytes from the block base). Starts just past the header.
+    /// Bump offset in bytes from the block base. Starts right after the header.
     offset: usize,
-    /// Number of live allocations served from this block.
+    /// Number of live allocations in this block.
     alloc_count: usize,
 }
 
 impl PoolBlockHeader {
-    /// Base address of this block (== address of the header itself).
+    /// Base address of this block, which is the address of the header.
     fn base(&self) -> usize {
         ptr::from_ref::<Self>(self) as usize
     }
 
-    /// Total usable capacity of this block in bytes.
+    /// Size of this block in bytes, including the header.
     fn capacity(&self) -> usize {
         uefi_pages_to_size!(self.num_pages)
     }
 
-    /// Remaining bytes available for bump allocation.
+    /// Bytes left for bump allocation.
     fn remaining(&self) -> usize {
         self.capacity().saturating_sub(self.offset)
     }
 
-    /// Returns `true` if the given address falls within this block's page range.
+    /// Returns `true` if `addr` falls within this block.
     fn contains(&self, addr: usize) -> bool {
         addr >= self.base() && addr < self.base() + self.capacity()
     }
 
-    /// Try to bump-allocate `layout` from this block.
+    /// Bump-allocates `layout` from this block, or returns `None` if it does not fit.
     fn try_alloc(&mut self, layout: Layout) -> Option<*mut u8> {
         let current_ptr = self.base() + self.offset;
         let align = layout.align().max(MIN_POOL_ALLOC_SIZE);
@@ -145,23 +129,20 @@ impl PoolBlockHeader {
     }
 }
 
-/// Pool allocator built on top of a [`PageAllocatorBackend`].
+/// Pool allocator on top of a [`PageAllocatorBackend`].
 ///
-/// This allocator provides smaller-granularity allocations by requesting
-/// full pages from the backend and subdividing them via bump allocation.
+/// Requests whole pages from the backend and bump-allocates smaller pieces from them.
 pub struct PoolAllocator<P: PageAllocatorBackend + 'static> {
-    /// Reference to the underlying page allocator.
+    /// The underlying page allocator.
     page_allocator: &'static P,
-    /// Head of the intrusive linked list of pool blocks. The mutex guards
-    /// both the head pointer and (transitively) every node reachable from it
-    /// - see the module-level safety invariant.
+    /// Head of the block list. The mutex guards the head and every node reachable from it
+    /// (see the module-level safety invariant).
     head: Mutex<Option<NonNull<PoolBlockHeader>>>,
 }
 
-// SAFETY: `NonNull<PoolBlockHeader>` is `!Send`/`!Sync` only because raw
-// pointers are. The list it heads is guarded by `head`'s mutex and never
-// exposed outside this module, so transferring or sharing a `PoolAllocator`
-// across threads cannot create a data race.
+// SAFETY: `NonNull<PoolBlockHeader>` is `!Send` and `!Sync` only because raw pointers are.
+// The list is guarded by the `head` mutex and never exposed outside this module, so sending
+// or sharing a `PoolAllocator` across threads cannot cause a data race.
 unsafe impl<P: PageAllocatorBackend> Send for PoolAllocator<P> {}
 // SAFETY: As above.
 unsafe impl<P: PageAllocatorBackend> Sync for PoolAllocator<P> {}
@@ -172,11 +153,10 @@ impl<P: PageAllocatorBackend> PoolAllocator<P> {
         Self { page_allocator, head: Mutex::new(None) }
     }
 
-    /// Allocate a fresh page block large enough to satisfy `layout`, link it
-    /// at the head of the list, and bump-allocate `layout` from it.
+    /// Allocates a new block large enough for `layout`, links it at the head of the list,
+    /// and bump-allocates `layout` from it.
     ///
-    /// Returns the pointer to the new allocation, or `None` if either the
-    /// page allocation or the subsequent bump allocation fails.
+    /// Returns `None` if the page allocation or the bump allocation fails.
     fn allocate_in_new_block(&self, head: &mut Option<NonNull<PoolBlockHeader>>, layout: Layout) -> Option<*mut u8> {
         let header_size = mem::size_of::<PoolBlockHeader>();
         let needed = layout.size() + header_size;
@@ -193,12 +173,10 @@ impl<P: PageAllocatorBackend> PoolAllocator<P> {
         let mut header_ptr = NonNull::new(base as *mut PoolBlockHeader)?;
         let next = head.replace(header_ptr);
 
-        // SAFETY: `base` was returned by `allocate_pages`, so it points to
-        // `num_pages * UEFI_PAGE_SIZE` page-aligned, writable bytes that we own
-        // exclusively. `ptr::write` initializes the header without dropping
-        // the prior (uninitialized) contents. After that, the module-level
-        // invariant holds and `as_mut()` yields the unique `&mut` we use to
-        // perform the first bump allocation.
+        // SAFETY: `base` came from `allocate_pages`, so it points to `num_pages` writable,
+        // page-aligned pages owned only by this allocator. `ptr::write` initializes the header
+        // without dropping the old contents. The module-level invariant then holds, and
+        // `as_mut()` gives the only reference to the header.
         let header = unsafe {
             ptr::write(header_ptr.as_ptr(), PoolBlockHeader { next, num_pages, offset: header_size, alloc_count: 0 });
             header_ptr.as_mut()
@@ -210,17 +188,14 @@ impl<P: PageAllocatorBackend> PoolAllocator<P> {
     }
 }
 
-// SAFETY: Uphold the `GlobalAlloc` contract:
-// * `alloc` returns either a null pointer (on failure) or a pointer to a
-//   block of at least `layout.size()` bytes, aligned to `layout.align()`.
-//   `PoolBlockHeader::try_alloc` enforces this by aligning the bump pointer
-//   to `max(layout.align(), MIN_POOL_ALLOC_SIZE)` and checking the resulting
-//   region fits in the block.
-// * Returned pointers remain valid until passed back to `dealloc`: the page
-//   backing them is owned by a `PoolBlockHeader` whose `alloc_count` covers
-//   this allocation, so the block cannot be unlinked and freed while live.
-// * `dealloc` only frees the backing pages once `alloc_count` reaches zero,
-//   so it neither invalidates other live allocations nor double-frees pages.
+// SAFETY: The `GlobalAlloc` contract is upheld:
+// * `alloc` returns null or a pointer to at least `layout.size()` bytes aligned to
+//   `layout.align()`. `PoolBlockHeader::try_alloc` aligns the bump pointer to
+//   `max(layout.align(), MIN_POOL_ALLOC_SIZE)` and checks that the region fits the block.
+// * A returned pointer stays valid until it is passed to `dealloc`: its block counts it in
+//   `alloc_count`, so the block cannot be unlinked and freed while it is live.
+// * `dealloc` frees a block's pages only when `alloc_count` reaches zero, so it neither
+//   invalidates other live allocations nor frees pages twice.
 unsafe impl<P: PageAllocatorBackend> GlobalAlloc for PoolAllocator<P> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if !self.page_allocator.is_initialized() {
@@ -229,12 +204,11 @@ unsafe impl<P: PageAllocatorBackend> GlobalAlloc for PoolAllocator<P> {
 
         let mut head = self.head.lock();
 
-        // Walk the list and try to bump-allocate from an existing block.
+        // Try to bump-allocate from an existing block.
         let mut cursor = *head;
         while let Some(mut node) = cursor {
-            // SAFETY: `node` is reachable from the locked head, so by the
-            // module-level invariant it points to a live `PoolBlockHeader`
-            // we have exclusive access to for the duration of this borrow.
+            // SAFETY: `node` is reachable from the locked head, so by the module-level
+            // invariant it points to a live `PoolBlockHeader` with no other reference to it.
             let block = unsafe { node.as_mut() };
             if let Some(ptr) = block.try_alloc(layout) {
                 return ptr;
@@ -242,7 +216,7 @@ unsafe impl<P: PageAllocatorBackend> GlobalAlloc for PoolAllocator<P> {
             cursor = block.next;
         }
 
-        // No block had room; grow the pool and serve from a fresh block.
+        // No block had room, so grow the pool.
         self.allocate_in_new_block(&mut head, layout).unwrap_or(ptr::null_mut())
     }
 
@@ -257,9 +231,8 @@ unsafe impl<P: PageAllocatorBackend> GlobalAlloc for PoolAllocator<P> {
         let mut prev: Option<NonNull<PoolBlockHeader>> = None;
         let mut cursor = *head;
         while let Some(mut node) = cursor {
-            // SAFETY: `node` is reachable from the locked head, see module
-            // invariant. The borrow ends at the `if !contains` early-continue
-            // or at the field reads below.
+            // SAFETY: `node` is reachable from the locked head (module-level invariant). The
+            // borrow ends at the `continue` below or after the field reads.
             let block = unsafe { node.as_mut() };
             if !block.contains(addr) {
                 prev = Some(node);
@@ -272,18 +245,16 @@ unsafe impl<P: PageAllocatorBackend> GlobalAlloc for PoolAllocator<P> {
                 return;
             }
 
-            // Capture what we need before re-borrowing through `prev`.
+            // Read these before borrowing through `prev`.
             let base = block.base() as u64;
             let num_pages = block.num_pages;
             let next = block.next;
 
             match prev {
                 None => *head = next,
-                // SAFETY: `prev` was set on a previous iteration to a node we
-                // had just dereferenced safely; it is still linked (nothing
-                // in this walk has freed it) and we hold the head lock. The
-                // borrow of `block` ended after the field reads above, so
-                // this fresh `as_mut()` does not alias any live reference.
+                // SAFETY: `prev` is a node dereferenced earlier in this walk. It is still linked
+                // and the head lock is held. The borrow of `block` ended with the field reads
+                // above, so this `as_mut()` does not alias a live reference.
                 Some(mut p) => unsafe { p.as_mut().next = next },
             }
 

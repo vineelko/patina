@@ -9,8 +9,8 @@
 //! `VariableStandaloneMm.efi` alongside the GUID, matching the level of detail the
 //! C `StandaloneMmCore` emits.
 //!
-//! Debug metadata is optional: images built without it simply resolve to `None`
-//! and callers fall back to the GUID.
+//! Debug metadata is optional. Images built without it resolve to `None`, and callers
+//! fall back to the GUID.
 //!
 //! ## License
 //!
@@ -270,8 +270,8 @@ mod tests {
     fn test_loaded_image_name_accepts_a_size_that_fits() {
         let image = build_mapped_pe(b"Whatever.pdb\0");
 
-        // SAFETY: the size is rejected before any read when it cannot be a usize. On a
-        // 64-bit host this simply reads the live image and resolves normally.
+        // SAFETY: The size is rejected before any read when it cannot be a usize. On a
+        // 64-bit host this reads the live image and resolves normally.
         let name = unsafe { loaded_image_name(image.as_ptr() as u64, image.len() as u64) };
         assert_eq!(name.as_deref(), Some("Whatever.efi"));
     }

@@ -1,22 +1,18 @@
 //! MM User Core subsystem for the Patina component dispatcher.
 //!
-//! This subsystem brings the Patina component model (dependency-injected
-//! `#[component]` entry points) into the MM User Core, mirroring the DXE Core's
-//! `component_dispatcher` module. It lets a platform register components,
-//! configurations, and services that are then dispatched in dependency order
-//! during MM User Core startup.
+//! Brings the Patina component model (dependency-injected `#[component]` entry points)
+//! into the MM User Core, like the DXE Core's `component_dispatcher` module. A platform
+//! registers components, configurations, and services, which are dispatched in dependency
+//! order during MM User Core startup.
 //!
-//! The component [`Storage`], [`Component`](patina::component::Component), and
-//! parameter types are reused directly from the Patina SDK ([`patina::component`]);
-//! only the dispatcher and the platform-facing [`MmComponentInfo`] registration
-//! trait live here.
+//! The component [`Storage`], [`Component`](patina::component::Component), and parameter
+//! types come from the Patina SDK ([`patina::component`]); only the dispatcher and the
+//! platform-facing [`MmComponentInfo`] trait live here.
 //!
-//! ## Relationship to MM driver dispatch
-//!
-//! This is distinct from the FFS/HOB-based MM driver dispatch performed by
-//! [`MmDispatcher`](crate::mm_dispatcher::MmDispatcher). Both can coexist:
-//! components are Rust objects registered by the platform binary, while MM
-//! drivers are separate modules discovered from HOBs.
+//! This is separate from MM driver dispatch in
+//! [`MmDispatcher`](crate::mm_dispatcher::MmDispatcher), and the two coexist: components
+//! are Rust objects registered by the platform binary, while MM drivers are separate
+//! images discovered from HOBs.
 //!
 //! ## License
 //!
@@ -34,17 +30,15 @@ use patina::{
     pi::hob::Hob,
 };
 
-/// A trait implemented by the platform to register components, configurations,
-/// and services with the MM User Core.
+/// Implemented by the platform to register components, configurations, and services with
+/// the MM User Core.
 ///
-/// This is the MM analogue of the DXE Core's `ComponentInfo` trait. The platform
-/// MM binary implements it and passes the implementing type to
-/// [`MmUserCore::entry_point_worker`](crate::MmUserCore::entry_point_worker),
-/// which applies it during `StartUserCore`.
+/// The MM counterpart of the DXE Core's `ComponentInfo` trait. The platform MM binary
+/// passes its implementing type to
+/// [`MmUserCore::entry_point_worker`](crate::MmUserCore::entry_point_worker), which applies
+/// it during `StartUserCore`. The heap is available in these callbacks.
 ///
-/// Allocations are available when these callbacks are invoked.
-///
-/// ## Example
+/// ## Examples
 ///
 /// ```rust,ignore
 /// use patina_mm_user_core::component_dispatcher::{Add, Component, MmComponentInfo};
@@ -71,21 +65,21 @@ pub trait MmComponentInfo: Sized {
     fn services(_add: Add<'_, Service>) {}
 }
 
-/// A marker to limit [`Add`] methods to only adding [`Component`](patina::component::Component)s.
+/// Marker that limits [`Add`] to adding [`Component`](patina::component::Component)s.
 pub struct Component;
-/// A marker to limit [`Add`] methods to only adding configurations.
+/// Marker that limits [`Add`] to adding configurations.
 pub struct Config;
-/// A marker to limit [`Add`] methods to only adding [`Service`](patina::component::service::Service)s.
+/// Marker that limits [`Add`] to adding [`Service`](patina::component::service::Service)s.
 pub struct Service;
 
-/// A struct used to allow controlled access to the MM User Core's component storage.
+/// Controlled access to the MM User Core's component storage.
 ///
-/// The type parameter `L` limits which `add` methods are available, matching the
-/// callback in [`MmComponentInfo`] that produced it.
+/// The type parameter `L` selects which `add` method is available, matching the
+/// [`MmComponentInfo`] callback that received it.
 pub struct Add<'a, L> {
     /// The component dispatcher to add to.
     dispatcher: &'a mut MmComponentDispatcher,
-    /// Marker to limit what methods are available on this struct.
+    /// Selects which methods are available.
     _limiter: core::marker::PhantomData<L>,
 }
 
@@ -124,14 +118,14 @@ impl Add<'_, Service> {
 
 /// The MM User Core component dispatcher.
 ///
-/// Owns the registered components and the component [`Storage`] used for
-/// dependency injection, and drives dispatch to a fixed point.
+/// Owns the registered components and the [`Storage`] used for dependency injection, and
+/// dispatches components until no more can run.
 pub struct MmComponentDispatcher {
-    /// Components that successfully initialized and are ready for dispatch attempts.
+    /// Components that initialized and are waiting to be dispatched.
     components: Vec<Box<dyn patina::component::Component>>,
-    /// Components that failed to initialize and are not ready for dispatch attempts.
+    /// Components that failed to initialize and are never dispatched.
     rejected: Vec<Box<dyn patina::component::Component>>,
-    /// Storage for components to use during execution.
+    /// Storage the components draw their parameters from.
     storage: Storage,
 }
 
@@ -141,9 +135,8 @@ impl Default for MmComponentDispatcher {
     }
 }
 
-// SAFETY: The MmComponentDispatcher owns all data stored within it and does not
-// share it. It is only accessed by the BSP during single-threaded MM User Core
-// startup, guarded by the containing `spin::Mutex`.
+// SAFETY: The dispatcher owns everything stored in it and does not share it. Only the BSP
+// uses it, during single-threaded MM User Core startup, behind the containing `spin::Mutex`.
 unsafe impl Send for MmComponentDispatcher {}
 
 impl MmComponentDispatcher {
@@ -153,18 +146,17 @@ impl MmComponentDispatcher {
         Self { components: Vec::new(), rejected: Vec::new(), storage: Storage::new() }
     }
 
-    /// Applies the component information provided by the given type implementing
-    /// [`MmComponentInfo`].
+    /// Applies the configs, services, and components registered by `C`.
     pub fn apply_component_info<C: MmComponentInfo>(&mut self) {
         C::configs(Add::new(self));
         C::services(Add::new(self));
         C::components(Add::new(self));
     }
 
-    /// Inserts a component at the given index, initializing it against storage.
+    /// Initializes a component against storage and inserts it at `idx`.
     ///
-    /// Components that fail initialization are moved to the rejected list and
-    /// will not be dispatched.
+    /// A component that fails to initialize goes to the rejected list and is never
+    /// dispatched.
     pub fn insert_component(&mut self, idx: usize, mut component: Box<dyn patina::component::Component>) {
         if component.initialize(&mut self.storage) {
             self.components.insert(idx, component);
@@ -185,17 +177,17 @@ impl MmComponentDispatcher {
         self.storage.add_config::<C>(config);
     }
 
-    /// Locks the configurations in storage, preventing further modifications.
+    /// Locks the configurations in storage.
     ///
-    /// This enables components that request an immutable `Config<T>` to be
-    /// dispatched, and prevents further `ConfigMut<T>` components from running.
+    /// Components that take `Config<T>` can then run, and `ConfigMut<T>` components can no
+    /// longer run.
     #[inline(always)]
     pub fn lock_configs(&mut self) {
         self.storage.lock_configs();
     }
 
-    /// Parses the HOB list, producing a `Hob<T>` datum for each guided HOB that
-    /// has a registered parser.
+    /// Runs the registered parsers on each guided HOB, producing the `Hob<T>` values
+    /// components can request.
     pub fn insert_hobs(&mut self, hob: &Hob<'_>) {
         for entry in hob {
             if let Hob::GuidHob(guid, data) = entry {
@@ -210,19 +202,18 @@ impl MmComponentDispatcher {
         }
     }
 
-    /// Attempts to dispatch all pending components in a single pass.
+    /// Makes one dispatch pass over the pending components.
     ///
-    /// Returns `true` if at least one component was dispatched (successfully or
-    /// with an error), indicating progress and that another pass may dispatch
-    /// more.
+    /// Returns `true` if any component ran (successfully or not), meaning another pass may
+    /// dispatch more.
     pub fn dispatch(&mut self) -> bool {
         let len = self.components.len();
         self.components.retain_mut(|component| {
             let name = component.metadata().name();
             log::trace!("MM Dispatch Start: Id = [{name:?}]");
-            // Ok(true):  dispatchable and dispatched successfully -> remove.
-            // Ok(false): not dispatchable at this time -> retain.
-            // Err(e):    dispatchable and dispatched with failure -> remove.
+            // Ok(true): ran successfully, so drop it.
+            // Ok(false): not ready yet, so keep it.
+            // Err(e): ran and failed, so drop it.
             !match component.run(&mut self.storage) {
                 Ok(true) => true,
                 Ok(false) => false,
@@ -235,12 +226,12 @@ impl MmComponentDispatcher {
         len != self.components.len()
     }
 
-    /// Repeatedly dispatches components until no further progress is made.
+    /// Dispatches until a pass makes no progress.
     pub fn dispatch_to_completion(&mut self) {
         while self.dispatch() {}
     }
 
-    /// Logs all components that were not dispatched and why.
+    /// Logs every component that was not dispatched, with the reason when known.
     pub fn display_not_dispatched(&self) {
         if self.components.is_empty() && self.rejected.is_empty() {
             return;

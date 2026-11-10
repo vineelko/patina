@@ -1,28 +1,27 @@
 //! MM Driver Dispatcher
 //!
-//! This module is responsible for discovering MM drivers from HOBs and dispatching them
-//! in dependency order. It follows the same pattern as the C `StandaloneMmCore` dispatcher
-//! in `FwVol.c` and `Dispatcher.c`, and the Rust DXE Core's `pi_dispatcher.rs`.
+//! Discovers MM drivers from HOBs and dispatches them in dependency order. It follows the
+//! C `StandaloneMmCore` dispatcher (`FwVol.c` and `Dispatcher.c`) and the Rust DXE Core's
+//! `pi_dispatcher.rs`.
 //!
 //! ## Driver Discovery
 //!
-//! MM drivers are discovered from `MemoryAllocationModule` HOBs in the HOB list. Each driver
-//! HOB is identified by having `alloc_descriptor.name == MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID`.
-//! The HOB's `module_name` provides the driver GUID, and `entry_point` provides the address to call.
-//!
-//! Drivers that are the supervisor core or user core themselves are skipped.
+//! Drivers come from `MemoryAllocationModule` HOBs whose
+//! `alloc_descriptor.name` is `MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID`. The HOB's
+//! `module_name` is the driver GUID and `entry_point` is the address to call. The
+//! supervisor core and the user core are skipped.
 //!
 //! ## Depex Evaluation
 //!
-//! Each driver's `MemoryAllocationModule` HOB is followed by a `GuidHob` with
-//! `name == MM_SUPERVISOR_DEPEX_HOB_GUID` containing the raw dependency expression bytes.
-//! The depex is parsed and evaluated against the protocol database.
+//! A driver HOB may be followed by a `GuidHob` named `MM_SUPERVISOR_DEPEX_HOB_GUID` that holds
+//! the raw dependency expression. The depex is evaluated against the protocol database.
 //!
 //! ## Dispatch Order
 //!
-//! Drivers with satisfied dependencies (or `TRUE`/empty depex) are dispatched first.
-//! `BEFORE`/`AFTER` associations are respected: if driver A has `BEFORE(B)`, A is
-//! dispatched immediately before B.
+//! Drivers whose depex is satisfied (or absent) are dispatched first. `BEFORE` and `AFTER`
+//! associations are honored: a driver with `BEFORE(B)` runs immediately before B.
+//! Discovery happens during `StartUserCore`; dispatch waits for the
+//! `MM_DISPATCH_EVENT_GROUP_GUID` MMI.
 //!
 //! ## License
 //!
@@ -47,14 +46,14 @@ use spin::Mutex;
 
 use crate::{DepexHobData, MM_SUPERVISOR_DEPEX_HOB_GUID, image_name, protocol_db::ProtocolDatabase};
 
-/// Represents a discovered MM driver pending dispatch.
+/// A discovered MM driver waiting for dispatch.
 #[derive(Debug)]
 struct DriverEntry {
-    /// The GUID identifying this driver (from `MemoryAllocationModule.module_name`).
+    /// The driver GUID (`MemoryAllocationModule.module_name`).
     file_name: efi::Guid,
-    /// The module name recovered from the loaded image's debug metadata, if present.
+    /// The module name from the image's debug metadata, if present.
     module_name: Option<String>,
-    /// The entry point address of the driver.
+    /// The driver's entry point address.
     entry_point: u64,
     /// The base address of the driver image in memory.
     image_base: u64,
@@ -65,8 +64,8 @@ struct DriverEntry {
 }
 
 impl DriverEntry {
-    /// Formats the driver for logging as `<Name.efi> [<GUID>]`, falling back to
-    /// `[<GUID>]` when the image carries no debug metadata.
+    /// Formats the driver for logging as `<Name.efi> [<GUID>]`, or `[<GUID>]` when the image
+    /// has no debug metadata.
     fn describe(&self) -> String {
         let guid = patina::Guid::from_ref(&self.file_name);
         match self.module_name {
@@ -76,7 +75,7 @@ impl DriverEntry {
     }
 }
 
-/// Wrapper for `efi::Guid` that implements `Ord` for use in `BTreeMap`.
+/// Wraps `efi::Guid` with a byte-wise `Ord` so it can key a `BTreeMap`.
 #[derive(Debug, Eq, PartialEq)]
 struct OrdGuid(efi::Guid);
 
@@ -94,12 +93,12 @@ impl Ord for OrdGuid {
 
 /// The MM Driver Dispatcher.
 ///
-/// Discovers drivers from HOBs at initialization time, evaluates their dependency
-/// expressions, and dispatches them by calling their entry points.
+/// Discovers drivers from HOBs, evaluates their dependency expressions, and calls their
+/// entry points.
 pub struct MmDispatcher {
-    /// Tracks whether the dispatcher is currently executing (prevents re-entrance).
+    /// Set while a dispatch pass runs, to reject re-entry.
     executing: Mutex<bool>,
-    /// Drivers discovered from HOBs during `StartUserCore`, awaiting dispatch.
+    /// Drivers discovered during `StartUserCore` and not yet dispatched.
     pending: Mutex<Vec<DriverEntry>>,
 }
 
@@ -115,28 +114,30 @@ impl MmDispatcher {
         Self { executing: Mutex::new(false), pending: Mutex::new(Vec::new()) }
     }
 
-    /// Discover drivers from HOBs and record them for later dispatch.
+    /// Discovers the drivers in the HOB list and records them for [`dispatch`](Self::dispatch).
     ///
-    /// This is the main entry point called during `StartUserCore`. It:
-    /// 1. Walks the HOB list to find `MemoryAllocationModule` HOBs with the supervisor alloc GUID
-    /// 2. Skips the supervisor core and user core modules
-    /// 3. Reads the paired depex `GuidHob` that follows each driver HOB
-    /// 4. Records the discovered drivers as pending
+    /// Called during `StartUserCore`. Replaces any drivers recorded earlier. They are
+    /// dispatched when the `MM_DISPATCH_EVENT_GROUP_GUID` MMI arrives.
     ///
-    /// The discovered drivers are dispatched later by [`dispatch`](Self::dispatch)
-    /// when the `MM_DISPATCH_EVENT_GROUP_GUID` MMI is delivered.
+    /// ## Panics
+    ///
+    /// Panics if a depex HOB names a different driver than the module HOB before it.
     pub fn discover(&self, hob: &Hob<'_>) {
         let drivers = self.discover_drivers(hob);
         log::info!("Discovered {} MM driver(s) from HOBs.", drivers.len());
         *self.pending.lock() = drivers;
     }
 
-    /// Dispatch the drivers recorded by [`discover`](Self::discover) in dependency order.
+    /// Dispatches the drivers recorded by [`discover`](Self::discover) in dependency order.
     ///
-    /// Evaluates each pending driver's depex against `protocol_db` and calls the
-    /// entry points of drivers whose dependencies are satisfied.
+    /// Each pending driver's depex is evaluated against `protocol_db`, and the drivers whose
+    /// dependencies are met are called. Returns the number of drivers that returned success.
+    /// Drivers whose dependencies are never met are logged and dropped.
     ///
-    /// Returns the number of drivers successfully dispatched, or an error status.
+    /// ## Errors
+    ///
+    /// Returns `ALREADY_STARTED` if a dispatch pass is already running, for example when a
+    /// driver entry point calls back into this function.
     pub fn dispatch(
         &self,
         protocol_db: &ProtocolDatabase,
@@ -157,28 +158,25 @@ impl MmDispatcher {
         Ok(dispatched)
     }
 
-    /// Walk the HOB list and collect driver entries.
+    /// Walks the HOB list and collects the driver entries.
     ///
-    /// For each `MemoryAllocationModule` HOB with the supervisor allocation GUID:
-    /// - Skip if the module is the supervisor core or user core
-    /// - Look at the next HOB for a depex `GuidHob` with `MM_SUPERVISOR_DEPEX_HOB_GUID`
-    /// - Create a `DriverEntry` with the parsed depex
+    /// For each `MemoryAllocationModule` HOB with the supervisor allocation GUID, other than
+    /// the supervisor and user cores, the next HOB is read as the driver's depex if it is a
+    /// `GuidHob` named `MM_SUPERVISOR_DEPEX_HOB_GUID`.
     fn discover_drivers(&self, hob: &Hob<'_>) -> Vec<DriverEntry> {
         let mut drivers = Vec::new();
 
-        // Collect all HOBs into a vec for indexed access (we need to look ahead for depex)
+        // Collect the HOBs so the depex HOB after each driver can be read by index.
         let all_hobs: Vec<Hob<'_>> = hob.into_iter().collect();
 
         for (index, current_hob) in all_hobs.iter().enumerate() {
             if let Hob::MemoryAllocationModule(mem_alloc_mod) = current_hob {
-                // Check if this is an MM Supervisor module allocation
                 if mem_alloc_mod.alloc_descriptor.name != MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID {
                     continue;
                 }
 
                 let module_name = mem_alloc_mod.module_name;
 
-                // Skip the supervisor core and user core modules
                 if module_name == MM_SUPERVISOR_CORE_GUID || module_name == MM_SUPERVISOR_USER_GUID {
                     log::debug!("Skipping core module: {module_name}");
                     continue;
@@ -191,7 +189,6 @@ impl MmDispatcher {
                 // `image_size` bytes and keeps it mapped for the lifetime of MM.
                 let image_module_name = unsafe { image_name::loaded_image_name(image_base, image_size) };
 
-                // Look for a paired depex GuidHob in the next HOB
                 let depex: Option<Depex> = if let Some(next_hob) = all_hobs.get(index + 1) {
                     if let Hob::GuidHob(guid_hob, data) = next_hob {
                         if guid_hob.name == MM_SUPERVISOR_DEPEX_HOB_GUID {
@@ -199,10 +196,10 @@ impl MmDispatcher {
                             if data.is_empty() {
                                 None
                             } else {
-                                // Check the depex HOB belongs to this driver.
                                 let depex_hob_data = <[u8]>::as_ptr(data).cast::<DepexHobData>();
-                                // SAFETY: We trust that the supervisor correctly formats the depex HOB data
+                                // SAFETY: The supervisor formats the depex HOB payload as a `DepexHobData`.
                                 let depex_hob_data = unsafe { &*depex_hob_data };
+                                // The depex HOB must belong to this driver.
                                 assert!(
                                     depex_hob_data.name == module_name,
                                     "Depex HOB module name {} does not match driver module name {module_name}",
@@ -215,8 +212,8 @@ impl MmDispatcher {
                                     depex_hob_data.depex_expression.as_ptr(),
                                     depex_hob_data.depex_expression_size
                                 );
-                                // SAFETY: depex_expression is a zero-length array (flexible array member).
-                                // The actual bytes follow the struct in memory; use from_raw_parts with the real size.
+                                // SAFETY: `depex_expression` is a flexible array member. The
+                                // expression bytes follow the struct in the HOB payload.
                                 let depex_bytes = unsafe {
                                     core::slice::from_raw_parts(
                                         depex_hob_data.depex_expression.as_ptr(),
@@ -264,14 +261,12 @@ impl MmDispatcher {
         drivers
     }
 
-    /// Dispatch drivers in dependency order.
+    /// Dispatches drivers in dependency order.
     ///
-    /// This implements a multi-pass dispatch loop similar to the DXE Core's `PiDispatcher`:
-    /// 1. Evaluate each pending driver's depex against the current protocol database
-    /// 2. Drivers with satisfied (or absent) depexes are scheduled
-    /// 3. Before/After associations are handled by reordering the scheduled list
-    /// 4. Each scheduled driver's entry point is called
-    /// 5. Repeat until no more drivers can be dispatched
+    /// A multi-pass loop like the DXE Core's `PiDispatcher`. Each pass evaluates every
+    /// pending depex against the current protocol database, orders the ready drivers around
+    /// their `BEFORE` and `AFTER` associates, and calls their entry points. Passes repeat until
+    /// one dispatches nothing.
     fn dispatch_drivers(
         &self,
         mut pending: Vec<DriverEntry>,
@@ -281,8 +276,8 @@ impl MmDispatcher {
         let mut total_dispatched = 0;
 
         loop {
-            // The protocol DB is shared with the MM System Table thunks, so it already
-            // reflects every protocol installed by previously dispatched drivers.
+            // The protocol database is shared with the MM System Table thunks, so it reflects
+            // every protocol installed by drivers dispatched so far.
             let registered_protocols = protocol_db.registered_protocols();
             let mut scheduled = Vec::new();
             let mut still_pending = Vec::new();
@@ -292,14 +287,13 @@ impl MmDispatcher {
             for mut driver in pending.drain(..) {
                 let depex_satisfied = match driver.depex {
                     Some(ref mut depex) => depex.eval(&registered_protocols),
-                    // No depex means the driver can be dispatched immediately
+                    // No depex: the driver can run now.
                     None => true,
                 };
 
                 if depex_satisfied {
                     scheduled.push(driver);
                 } else {
-                    // Check for Before/After associations
                     match driver.depex.as_ref().map(patina_internal_core::depex::Depex::is_associated) {
                         Some(Some(AssociatedDependency::Before(guid))) => {
                             associated_before.entry(OrdGuid(guid)).or_default().push(driver);
@@ -315,12 +309,12 @@ impl MmDispatcher {
             }
 
             if scheduled.is_empty() {
-                // No more drivers can be dispatched; move remaining to pending for logging
+                // Nothing more can run. Keep the rest for the log below.
                 pending = still_pending;
                 break;
             }
 
-            // Build the final dispatch order respecting Before/After associations
+            // Place BEFORE drivers ahead of their target and AFTER drivers behind it.
             let ordered: Vec<DriverEntry> = scheduled
                 .into_iter()
                 .flat_map(|driver| {
@@ -333,20 +327,19 @@ impl MmDispatcher {
                 })
                 .collect();
 
-            // Dispatch each scheduled driver
             for driver in ordered {
                 let description = driver.describe();
                 log::info!("Dispatching MM driver {description} at entry 0x{:016x}", driver.entry_point);
 
-                // Call the driver's entry point.
-                // MM driver entry signature: EFI_STATUS EFIAPI DriverEntry(EFI_HANDLE ImageHandle, EFI_MM_SYSTEM_TABLE *MmSystemTable)
-                // We pass a null image handle and the system table pointer.
+                // MM driver entry point:
+                // EFI_STATUS EFIAPI DriverEntry(EFI_HANDLE ImageHandle, EFI_MM_SYSTEM_TABLE *MmSystemTable)
+                // The image handle is passed as null.
                 type MmDriverEntryPoint = unsafe extern "efiapi" fn(efi::Handle, *const c_void) -> efi::Status;
                 // SAFETY: The entry point address came from the driver's `MemoryAllocationModule`
                 // HOB, which the supervisor produced, and matches the MM driver ABI.
                 let entry_fn: MmDriverEntryPoint = unsafe { core::mem::transmute(driver.entry_point) };
 
-                // SAFETY: As above; the driver owns the contract for its own entry point.
+                // SAFETY: As above. The driver owns the contract for its own entry point.
                 let status = unsafe { entry_fn(core::ptr::null_mut(), mm_system_table) };
 
                 if status == efi::Status::SUCCESS {
@@ -357,7 +350,7 @@ impl MmDispatcher {
                 }
             }
 
-            // Remaining unmatched Before/After drivers go back to pending
+            // BEFORE and AFTER drivers whose target did not run go back to pending.
             for (_guid, drivers) in associated_before {
                 still_pending.extend(drivers);
             }
@@ -369,7 +362,6 @@ impl MmDispatcher {
             pending = still_pending;
         }
 
-        // Log any remaining drivers
         for driver in &pending {
             log::warn!(
                 "Driver {} discovered but not dispatched (unsatisfied depex: {:?}).",
@@ -449,7 +441,7 @@ mod tests {
         bytes
     }
 
-    /// Depex bytes for `BEFORE(guid)` (`0x00`) or `AFTER(guid)` (`0x01`).
+    /// Depex bytes for `BEFORE(guid)` (opcode 0x00) or `AFTER(guid)` (opcode 0x01).
     fn depex_association(opcode: u8, guid: patina::BinaryGuid) -> Vec<u8> {
         let mut bytes = vec![opcode];
         bytes.extend_from_slice(guid.into_inner().as_bytes());

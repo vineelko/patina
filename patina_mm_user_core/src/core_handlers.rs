@@ -1,23 +1,19 @@
 //! MM Core Internal MMI Handlers
 //!
-//! These are the MMI handlers registered by the MM Core itself to handle
-//! lifecycle events forwarded from the DXE phase. They mirror the C
-//! `mMmCoreMmiHandlers[]` table in `StandaloneMmCore.c`.
+//! MMI handlers the core registers for lifecycle events forwarded from DXE. They mirror
+//! the C `mMmCoreMmiHandlers[]` table in `StandaloneMmCore.c`.
 //!
 //! Each handler is registered with [`MmiDatabase::register_internal_handler`](crate::mmi::MmiDatabase::register_internal_handler)
-//! during startup and dispatched when the supervisor forwards the corresponding
-//! GUID-tagged MMI through the communication buffer.
-//!
-//! ## Lifecycle Events
+//! during startup and runs when the supervisor forwards an MMI for its GUID.
 //!
 //! | GUID | Handler | Description |
 //! |------|---------|-------------|
-//! | `MM_DISPATCH_EVENT_GROUP_GUID` | `mm_driver_dispatch_handler` | Dispatches discovered MM drivers |
-//! | `MM_DXE_READY_TO_LOCK_PROTOCOL_GUID` | `mm_ready_to_lock_handler` | Unregisters one-shot handlers, installs lock protocol |
-//! | `MM_END_OF_PEI_PROTOCOL_GUID` | `mm_end_of_pei_handler` | Installs end-of-PEI protocol |
-//! | `END_OF_DXE_EVENT_GROUP_GUID` | `mm_end_of_dxe_handler` | Installs end-of-DXE protocol |
-//! | `EXIT_BOOT_SERVICES_EVENT_GROUP_GUID` | `mm_exit_boot_service_handler` | Installs exit-boot-services protocol |
-//! | `READY_TO_BOOT_EVENT_GROUP_GUID` | `mm_ready_to_boot_handler` | Installs ready-to-boot protocol |
+//! | `MM_DISPATCH_EVENT_GROUP_GUID` | `mm_driver_dispatch_handler` | Dispatches the discovered MM drivers |
+//! | `MM_DXE_READY_TO_LOCK_PROTOCOL_GUID` | `mm_ready_to_lock_handler` | Unregisters one-shot handlers, installs the ready-to-lock protocol |
+//! | `MM_END_OF_PEI_PROTOCOL_GUID` | `mm_end_of_pei_handler` | Installs the end-of-PEI protocol |
+//! | `END_OF_DXE_EVENT_GROUP_GUID` | `mm_end_of_dxe_handler` | Installs the end-of-DXE protocol |
+//! | `EXIT_BOOT_SERVICES_EVENT_GROUP_GUID` | `mm_exit_boot_service_handler` | Installs the exit-boot-services protocol |
+//! | `READY_TO_BOOT_EVENT_GROUP_GUID` | `mm_ready_to_boot_handler` | Installs the ready-to-boot protocol |
 //!
 //! ## License
 //!
@@ -80,26 +76,22 @@ static CORE_MMI_HANDLERS: &[CoreMmiHandler] = &[
     },
 ];
 
-/// Dispatch handles returned from `register_internal_handler` for each core handler.
+/// Dispatch handles returned by `register_internal_handler`, indexed like `CORE_MMI_HANDLERS`.
 ///
-/// Index matches the `CORE_MMI_HANDLERS` table. Populated by [`register_core_mmi_handlers`].
+/// Filled in by [`register_core_mmi_handlers`].
 static DISPATCH_HANDLES: Mutex<[SendHandle; 6]> = Mutex::new([SendHandle::NULL; 6]);
 
-/// Description of a core MMI handler to be registered at startup.
+/// A core MMI handler to register at startup.
 struct CoreMmiHandler {
-    /// The handler function (native Rust signature).
+    /// The handler function.
     handler: InternalMmiHandler,
     /// The GUID that triggers this handler.
     handler_type: &'static BinaryGuid,
-    /// Whether this handler should be unregistered during ready-to-lock.
+    /// Whether the ready-to-lock handler unregisters this handler.
     unregister_on_lock: bool,
 }
 
-/// Newtype wrapper around `efi::Handle` so it can be stored in a `static Mutex`.
-///
-/// `efi::Handle` is `*mut c_void` which is `!Send`.  The dispatch handles are only
-/// written by the BSP during single-threaded init and read during the ready-to-lock
-/// handler (also on the BSP), so it is safe to share them.
+/// Wraps `efi::Handle`, a `!Send` raw pointer, so it can be stored in a `static Mutex`.
 #[derive(Clone, Copy)]
 struct SendHandle(efi::Handle);
 // SAFETY: The handles are only written by the BSP during single-threaded init and read back on
@@ -112,10 +104,10 @@ impl SendHandle {
     const NULL: Self = Self(core::ptr::null_mut());
 }
 
-/// Register all core MMI handlers with the global MMI database.
+/// Registers every core MMI handler with the MMI database.
 ///
-/// Registration installs the `MM_DISPATCH_EVENT_GROUP_GUID` handler that performs the
-/// deferred driver dispatch, so this runs before any drivers are dispatched.
+/// This includes the `MM_DISPATCH_EVENT_GROUP_GUID` handler that performs the deferred
+/// driver dispatch, so it must run before any driver is dispatched.
 pub fn register_core_mmi_handlers() {
     let mut handles = DISPATCH_HANDLES.lock();
 
@@ -136,15 +128,13 @@ pub fn register_core_mmi_handlers() {
     }
 }
 
-/// Install a protocol with a NULL interface on a new handle.
-///
-/// This mirrors the C pattern used in lifecycle handlers:
+/// Installs a protocol with a null interface on a new handle, following the C pattern:
 /// ```c
 /// MmHandle = NULL;
 /// Status = MmInstallProtocolInterface(&MmHandle, &guid, EFI_NATIVE_INTERFACE, NULL);
 /// ```
 fn install_lifecycle_protocol(guid: &efi::Guid) -> efi::Status {
-    // SAFETY: installs a marker protocol (null interface) on a freshly allocated handle.
+    // SAFETY: A null interface is a marker; there is nothing for the database to keep valid.
     match unsafe { MmUserCore::instance().install_protocol_interface(None, guid, core::ptr::null_mut()) } {
         Ok(handle) => {
             log::info!("Installed lifecycle protocol {} on handle {:p}", Guid::from_ref(guid), handle);
@@ -156,9 +146,7 @@ fn install_lifecycle_protocol(guid: &efi::Guid) -> efi::Status {
 
 /// MM Driver Dispatch Handler.
 ///
-/// Re-triggers driver dispatch for any previously discovered but not-yet-dispatched
-/// drivers. Once dispatch completes, the handler unregisters itself (it is a
-/// one-shot handler).
+/// Dispatches the drivers discovered during `StartUserCore`, then unregisters itself.
 ///
 /// Corresponds to the C `MmDriverDispatchHandler`.
 fn mm_driver_dispatch_handler(
@@ -168,13 +156,12 @@ fn mm_driver_dispatch_handler(
 ) -> efi::Status {
     log::info!("MM driver dispatch event received");
 
-    // Dispatch the MM drivers discovered during StartUserCore (single dependency-ordered pass).
     match MmUserCore::instance().dispatch_drivers() {
         Ok(count) => log::info!("Successfully dispatched {count} MM driver(s)."),
         Err(status) => log::error!("Driver dispatch failed: {:#x}", status.as_usize()),
     }
 
-    // Self-unregister (one-shot).
+    // One-shot: unregister this handler.
     let handles = DISPATCH_HANDLES.lock();
     let dispatch_handle = handles.first().map_or(core::ptr::null_mut(), |handle| handle.0);
     drop(handles);
@@ -188,9 +175,9 @@ fn mm_driver_dispatch_handler(
 
 /// MM Ready To Lock Handler.
 ///
-/// Called when `gEfiDxeMmReadyToLockProtocolGuid` MMI is received. This:
-/// 1. Unregisters handlers marked with `unregister_on_lock` (including itself).
-/// 2. Installs the `gEfiMmReadyToLockProtocolGuid` protocol to notify MM drivers.
+/// Runs on the `gEfiDxeMmReadyToLockProtocolGuid` MMI. Unregisters the handlers marked
+/// `unregister_on_lock` (including itself), then installs `gEfiMmReadyToLockProtocolGuid`
+/// to notify MM drivers.
 ///
 /// Corresponds to the C `MmReadyToLockHandler`.
 fn mm_ready_to_lock_handler(
@@ -200,7 +187,7 @@ fn mm_ready_to_lock_handler(
 ) -> efi::Status {
     log::info!("MM Ready To Lock event received");
 
-    // Unregister handlers that are no longer needed after MM lock.
+    // Unregister the handlers that are not needed after the lock.
     let handles = DISPATCH_HANDLES.lock();
     for (handle, entry) in handles.iter().zip(CORE_MMI_HANDLERS.iter()) {
         if entry.unregister_on_lock && !handle.0.is_null() {
@@ -209,7 +196,6 @@ fn mm_ready_to_lock_handler(
     }
     drop(handles);
 
-    // Install the MM Ready To Lock Protocol.
     let status = install_lifecycle_protocol(&MM_READY_TO_LOCK_PROTOCOL_GUID);
     if status != efi::Status::SUCCESS {
         log::error!("Failed to install MM Ready To Lock Protocol: {:#x}", status.as_usize());
@@ -250,7 +236,7 @@ fn mm_end_of_dxe_handler(
 
 /// MM Exit Boot Service Handler.
 ///
-/// Installs the `gEfiEventExitBootServicesGuid` protocol (once).
+/// Installs the `gEfiEventExitBootServicesGuid` protocol on the first call only.
 ///
 /// Corresponds to the C `MmExitBootServiceHandler`.
 fn mm_exit_boot_service_handler(
@@ -270,7 +256,7 @@ fn mm_exit_boot_service_handler(
 
 /// MM Ready To Boot Handler.
 ///
-/// Installs the `gEfiEventReadyToBootGuid` protocol (once).
+/// Installs the `gEfiEventReadyToBootGuid` protocol on the first call only.
 ///
 /// Corresponds to the C `MmReadyToBootHandler`.
 fn mm_ready_to_boot_handler(

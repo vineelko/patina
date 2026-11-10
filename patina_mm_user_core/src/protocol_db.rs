@@ -1,24 +1,19 @@
 //! Protocol / Handle Database
 //!
-//! Idiomatic Rust implementation of the MM handle-and-protocol database that
-//! backs the `EfiMmSystemTable` protocol services (`MmInstallProtocolInterface`,
-//! `MmLocateProtocol`, `MmHandleProtocol`, …).
+//! The MM handle and protocol database behind the `EfiMmSystemTable` protocol services
+//! (`MmInstallProtocolInterface`, `MmLocateProtocol`, `MmHandleProtocol`, and so on).
 //!
-//! The database is owned by the [`MmUserCore`](crate::MmUserCore) instance. The
-//! `extern "efiapi"` thunks in [`crate::mm_services`] simply locate that
-//! instance and call the safe Rust methods below - the table is a thin shim,
-//! this module is the implementation.
+//! The database belongs to the [`MmUserCore`](crate::MmUserCore) instance. The
+//! `extern "efiapi"` thunks in [`crate::mm_services`] reach these methods through the
+//! core's `MmServices` implementation.
 //!
 //! ## Model
 //!
-//! * Each *handle* is an opaque, non-zero id under which a list of installed
-//!   protocol interfaces lives.
-//! * Handles are stored in a [`BTreeMap`] keyed by id, so iteration order
-//!   matches creation order (the order EFI consumers expect from
-//!   `MmLocateHandle`) without any manual bookkeeping.
-//! * Across the MM ABI a handle is just its id reinterpreted as an
-//!   `efi::Handle` (`*mut c_void`). The pointer is never dereferenced - it is a
-//!   token - so the round trip is sound.
+//! * A handle is an opaque, non-zero id that owns a list of installed protocol interfaces.
+//! * Handles are kept in a [`BTreeMap`] keyed by id, so iteration follows creation order,
+//!   the order EFI consumers expect from `MmLocateHandle`.
+//! * Across the MM ABI a handle is its id cast to an `efi::Handle` (`*mut c_void`). The
+//!   pointer is never dereferenced, so the round trip is sound.
 //!
 //! ## License
 //!
@@ -33,11 +28,10 @@ use core::{ffi::c_void, num::NonZeroUsize};
 use patina::standard::efi;
 use spin::Mutex;
 
-/// The SDK [`ProtocolNotify`] callback type, shared with the `MmServices` trait
-/// so the user core and the trait agree on a single notify representation.
+/// The SDK [`ProtocolNotify`] callback type, shared with the `MmServices` trait.
 use patina::management_mode::mm_services::ProtocolNotify;
 
-/// A single protocol interface installed on a handle.
+/// A protocol interface installed on a handle.
 struct ProtocolInterface {
     /// Protocol GUID.
     guid: efi::Guid,
@@ -51,11 +45,11 @@ struct NotifyRegistration {
     guid: efi::Guid,
     /// The callback to invoke.
     notify: ProtocolNotify,
-    /// Unique token returned to the registrant (and used to unregister).
+    /// Token returned to the registrant and used to unregister.
     token: NonZeroUsize,
 }
 
-/// A notification captured while the lock is held, fired once it is released.
+/// A notification collected under the lock and fired after it is released.
 struct PendingNotify {
     notify: ProtocolNotify,
     guid: efi::Guid,
@@ -63,7 +57,7 @@ struct PendingNotify {
     handle: efi::Handle,
 }
 
-/// A stable address used to deduplicate identical `(GUID, callback)` registrations.
+/// The callback address, used to detect duplicate (GUID, callback) registrations.
 fn notify_identity(notify: &ProtocolNotify) -> usize {
     match notify {
         ProtocolNotify::Efi(callback) => *callback as usize,
@@ -71,18 +65,18 @@ fn notify_identity(notify: &ProtocolNotify) -> usize {
     }
 }
 
-/// Internal, lock-protected state of the [`ProtocolDatabase`].
+/// Lock-protected state of the [`ProtocolDatabase`].
 struct Inner {
-    /// Installed protocols grouped by handle id (id order == creation order).
+    /// Installed protocols by handle id. Id order is creation order.
     handles: BTreeMap<NonZeroUsize, Vec<ProtocolInterface>>,
     /// Registered protocol-install notifications.
     notifications: Vec<NotifyRegistration>,
-    /// Monotonic source of unique ids for both handles and notify tokens.
+    /// Next unique id, shared by handles and notify tokens.
     next_id: NonZeroUsize,
 }
 
 impl Inner {
-    /// Returns a fresh, never-before-used id.
+    /// Returns a new id that has never been used.
     fn next_id(&mut self) -> NonZeroUsize {
         let id = self.next_id;
         self.next_id = self.next_id.checked_add(1).expect("MM protocol id space exhausted");
@@ -95,10 +89,9 @@ pub struct ProtocolDatabase {
     inner: Mutex<Inner>,
 }
 
-// SAFETY: every interior value (including the raw interface and notify
-// pointers) is owned by the database and only accessed while the `Mutex` is
-// held. No interior reference escapes - only opaque id-tokens are handed across
-// the MM ABI - so sharing a `ProtocolDatabase` across threads cannot race.
+// SAFETY: Every value inside, including the raw interface and notify pointers, is owned by
+// the database and only accessed with the `Mutex` held. Only opaque id tokens cross the MM
+// ABI, so sharing a `ProtocolDatabase` across threads cannot race.
 unsafe impl Send for ProtocolDatabase {}
 // SAFETY: As above.
 unsafe impl Sync for ProtocolDatabase {}
@@ -121,22 +114,25 @@ impl ProtocolDatabase {
         }
     }
 
-    /// Reinterprets a handle id as an `efi::Handle` token.
+    /// Converts a handle id to an `efi::Handle` token.
     fn id_to_handle(id: NonZeroUsize) -> efi::Handle {
         id.get() as efi::Handle
     }
 
-    /// Reinterprets an `efi::Handle` token back into a handle id, or `None` if null.
+    /// Converts an `efi::Handle` token back to a handle id, or `None` if it is null.
     fn handle_to_id(handle: efi::Handle) -> Option<NonZeroUsize> {
         NonZeroUsize::new(handle as usize)
     }
 
-    /// Install a protocol interface onto a handle.
+    /// Installs a protocol interface on a handle and returns that handle.
     ///
-    /// A null `handle` allocates a fresh handle. Any matching protocol-install
-    /// notifications are fired after the internal lock is released (so the
-    /// callbacks may freely re-enter the database). Returns the handle the
-    /// interface was installed on.
+    /// A null `handle` allocates a new handle. Matching protocol-install notifications run
+    /// after the lock is released, so callbacks may re-enter the database.
+    ///
+    /// ## Errors
+    ///
+    /// Returns `INVALID_PARAMETER` if `handle` is not a known handle or already carries
+    /// `guid`.
     pub fn install_protocol(
         &self,
         handle: efi::Handle,
@@ -147,7 +143,7 @@ impl ProtocolDatabase {
             let mut inner = self.inner.lock();
 
             let id = if let Some(id) = Self::handle_to_id(handle) {
-                // Existing handle: it must exist and must not already carry this protocol.
+                // An existing handle must be known and must not already carry this protocol.
                 let Some(protocols) = inner.handles.get(&id) else {
                     log::error!("MmInstallProtocolInterface: handle {handle:p} is not a known handle");
                     return Err(efi::Status::INVALID_PARAMETER);
@@ -158,7 +154,6 @@ impl ProtocolDatabase {
                 }
                 id
             } else {
-                // Null handle: allocate a new one.
                 let id = inner.next_id();
                 inner.handles.insert(id, Vec::new());
                 id
@@ -178,8 +173,8 @@ impl ProtocolDatabase {
         };
 
         for event in pending {
-            // SAFETY: the callback was previously registered by a driver. The GUID reference is to a
-            // local that outlives the call, and the interface/handle are passed through unchanged.
+            // SAFETY: The callback was registered by a driver. The GUID reference points to a
+            // local that outlives the call, and the interface and handle are passed unchanged.
             unsafe {
                 event.notify.invoke(&event.guid, event.interface, event.handle);
             }
@@ -189,10 +184,15 @@ impl ProtocolDatabase {
         Ok(installed_handle)
     }
 
-    /// Uninstall a protocol interface from a handle.
+    /// Uninstalls a protocol interface from a handle.
     ///
-    /// When the handle has no remaining protocols it is removed entirely
-    /// (matching the C `MmUninstallProtocolInterface` behaviour).
+    /// A handle left with no protocols is removed, as in the C
+    /// `MmUninstallProtocolInterface`.
+    ///
+    /// ## Errors
+    ///
+    /// Returns `INVALID_PARAMETER` if `handle` is null or unknown, and `NOT_FOUND` if the
+    /// handle does not carry `guid` with this `interface`.
     pub fn uninstall_protocol(
         &self,
         handle: efi::Handle,
@@ -229,20 +229,20 @@ impl ProtocolDatabase {
         Ok(())
     }
 
-    /// Look up a specific protocol on a specific handle (`MmHandleProtocol`).
+    /// Returns the interface for `guid` on `handle` (`MmHandleProtocol`).
     pub fn handle_protocol(&self, handle: efi::Handle, guid: &efi::Guid) -> Option<*mut c_void> {
         let id = Self::handle_to_id(handle)?;
         let inner = self.inner.lock();
         inner.handles.get(&id)?.iter().find(|p| p.guid == *guid).map(|p| p.interface)
     }
 
-    /// Locate the first installed interface for a GUID across all handles.
+    /// Returns the first installed interface for `guid` across all handles.
     pub fn locate_protocol(&self, guid: &efi::Guid) -> Option<*mut c_void> {
         let inner = self.inner.lock();
         inner.handles.values().flatten().find(|p| p.guid == *guid).map(|p| p.interface)
     }
 
-    /// Return every handle that carries a given protocol.
+    /// Returns every handle that carries `guid`.
     pub fn locate_handle_by_protocol(&self, guid: &efi::Guid) -> Vec<efi::Handle> {
         let inner = self.inner.lock();
         inner
@@ -253,16 +253,16 @@ impl ProtocolDatabase {
             .collect()
     }
 
-    /// Return every handle in the database.
+    /// Returns every handle in the database.
     pub fn all_handles(&self) -> Vec<efi::Handle> {
         let inner = self.inner.lock();
         inner.handles.keys().map(|id| Self::id_to_handle(*id)).collect()
     }
 
-    /// Register a notification callback for a protocol GUID.
+    /// Registers a notification callback for `guid` and returns its token.
     ///
-    /// Registering the same `(GUID, function)` pair twice returns the existing
-    /// token rather than creating a duplicate (matching the C implementation).
+    /// Registering the same (GUID, callback) pair again returns the existing token, as the
+    /// C implementation does.
     pub fn register_protocol_notify(&self, guid: &efi::Guid, notify: ProtocolNotify) -> *mut c_void {
         let mut inner = self.inner.lock();
         let identity = notify_identity(&notify);
@@ -278,7 +278,12 @@ impl ProtocolDatabase {
         token.get() as *mut c_void
     }
 
-    /// Unregister a notification by its registration token.
+    /// Unregisters a notification by its registration token.
+    ///
+    /// ## Errors
+    ///
+    /// Returns `INVALID_PARAMETER` for a null token and `NOT_FOUND` if no notification for
+    /// `guid` has this token.
     pub fn unregister_protocol_notify(&self, guid: &efi::Guid, registration: *mut c_void) -> Result<(), efi::Status> {
         let token = NonZeroUsize::new(registration as usize).ok_or_else(|| {
             log::error!("MmRegisterProtocolNotify: registration token for {guid:?} is null");
@@ -293,13 +298,13 @@ impl ProtocolDatabase {
         Ok(())
     }
 
-    /// Check whether a protocol GUID is installed on any handle.
+    /// Returns whether `guid` is installed on any handle.
     pub fn is_protocol_installed(&self, guid: &efi::Guid) -> bool {
         let inner = self.inner.lock();
         inner.handles.values().flatten().any(|p| p.guid == *guid)
     }
 
-    /// Return all unique installed protocol GUIDs (used for depex evaluation).
+    /// Returns each installed protocol GUID once, for depex evaluation.
     pub fn registered_protocols(&self) -> Vec<efi::Guid> {
         let inner = self.inner.lock();
         let mut guids = Vec::new();

@@ -13,21 +13,20 @@
 
 
 .align 8
-# Shim layer that redefines the contract between runtime module and init.
+# Image entry point. The supervisor enters here in Ring 3. Calls user_core_main and returns
+# its status to Ring 0 through the call gate.
 efi_main:
 
-    #By the time we are here, it should be everything CPL3 already
     sub     rsp, 0x28
 
-    #To boot strap this driver, we directly call the entry point worker
     call    user_core_main
 
-    #Restore the stack pointer
+    # Restore the stack pointer.
     add     rsp, 0x28
 
-    # Once returned, we will get returned status in rax, don't touch it, if you can help
-    # r15 contains call gate selector that was planned ahead
-    push    r15                         # New selector to be used, which is set to call gate by the supervisor
-    .byte   0xff, 0x1c, 0x24            # call    far qword [rsp]# return to ring 0 via call gate m16:32
+    # RAX holds the returned status and must be preserved.
+    # The supervisor put the call gate far pointer in R15 (selector in bits 32-47).
+    push    r15                         # Far pointer to the call gate
+    .byte   0xff, 0x1c, 0x24            # call far [rsp] (m16:32): return to Ring 0 through the call gate
 1:
-    jmp     1b                           # Code should not reach here
+    jmp     1b                           # Not reached

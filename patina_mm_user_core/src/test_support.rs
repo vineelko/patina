@@ -11,19 +11,16 @@
 
 /// Installs a silent logger for the current test process.
 ///
-/// The logger reports every record as enabled and then discards it. It produces no output,
-/// but it causes `log::log_enabled!()` to return `true`, so the formatting and dispatch
-/// branch inside each `log::*!` macro still runs during tests and is counted by coverage
-/// instrumentation. Without it, a reporting path can execute while the message it builds
-/// stays unreached.
+/// The logger reports every level as enabled and discards every record. Because
+/// `log::log_enabled!()` then returns `true`, the formatting branch inside each `log::*!`
+/// macro runs during tests and counts toward coverage.
 ///
-/// Calling this more than once, from any number of tests, is safe.
+/// Safe to call any number of times, from any test.
 pub(crate) fn init_test_logger() {
     use std::sync::OnceLock;
     static INIT: OnceLock<()> = OnceLock::new();
 
-    /// Logger that reports every record as enabled but discards them. Used in tests so
-    /// `log::log_enabled!()` returns `true` without producing any output.
+    /// Reports every record as enabled and discards it.
     struct AlwaysEnabledSilentLogger;
 
     impl log::Log for AlwaysEnabledSilentLogger {
@@ -40,8 +37,8 @@ pub(crate) fn init_test_logger() {
         let _ = log::set_logger(&SILENT_LOGGER);
         log::set_max_level(log::LevelFilter::Trace);
 
-        // Exercise the logger once so a logger that failed to install shows up here rather
-        // than as messages quietly missing from every test that relies on one.
+        // Log once so a logger that failed to install shows up here, not as missing
+        // messages in every test that relies on it.
         assert!(log::log_enabled!(log::Level::Trace), "the test logger reports every level as enabled");
         log::trace!("test logger installed");
         log::logger().flush();

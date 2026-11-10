@@ -1,33 +1,24 @@
 //! MMI (Management Mode Interrupt) Handler Database
 //!
-//! This module manages the registration and dispatch of MMI handlers, following the
-//! same patterns as the C `Mmi.c` in `StandaloneMmPkg/Core`.
+//! Registers and dispatches MMI handlers, following the C `Mmi.c` in
+//! `StandaloneMmPkg/Core`.
 //!
-//! ## Handler Types
+//! Root handlers are registered with `handler_type = None` and run on every MMI, whatever
+//! the communication buffer holds. They serve hardware interrupt sources. GUID handlers
+//! run only when an MMI targets their GUID.
 //!
-//! - **Root handlers**: Registered with `handler_type = None`. Called on every MMI regardless
-//!   of the communication buffer contents. Used for hardware-level interrupt sources.
-//! - **GUID-specific handlers**: Registered with a specific GUID. Called only when an MMI
-//!   communication targets that GUID.
+//! Handlers come in two calling conventions:
+//! - External (`MmiHandlerEntryPoint`): an `unsafe extern "efiapi" fn` registered by a
+//!   driver through the MMST `MmiHandlerRegister` service.
+//! - Internal (`InternalMmiHandler`): a safe Rust `fn` registered by the core for its own
+//!   lifecycle events (ready-to-lock, end-of-DXE, and so on).
 //!
-//! ## External vs Internal Handlers
+//! [`MmiDatabase::mmi_manage`] dispatches either the root handlers (`handler_type` is
+//! `None`) or the handlers for one GUID. A GUID dispatch stops at the first handler that
+//! returns success or `INTERRUPT_PENDING`; a root dispatch runs every handler.
 //!
-//! The database supports two calling conventions:
-//! - **External** (`MmiHandlerEntryPoint`): `unsafe extern "efiapi" fn` - used by drivers
-//!   registering through the MMST `MmiHandlerRegister` service.
-//! - **Internal** (`InternalMmiHandler`): Safe Rust `fn` - used by the core's own lifecycle
-//!   handlers (ready-to-lock, end-of-DXE, etc.) without going through the C ABI.
-//!
-//! ## Dispatch Flow
-//!
-//! [`MmiDatabase::mmi_manage`] is the main dispatch entry point:
-//! 1. If `handler_type` is `None`, iterate root handlers
-//! 2. If `handler_type` is `Some(guid)`, find the `MmiEntry` for that GUID and iterate its handlers
-//! 3. Each handler returns a status that determines whether dispatch continues
-//!
-//! **Lock safety**: The database lock is released before calling handlers and
-//! re-acquired afterwards, so handlers may safely call `mmi_handler_register` or
-//! `mmi_handler_unregister` without deadlocking.
+//! The database lock is released while handlers run, so a handler may call
+//! `mmi_handler_register` or `mmi_handler_unregister` without deadlocking.
 //!
 //! ## License
 //!
@@ -51,29 +42,28 @@ const PI_STATUS_BIT: usize = 1 << (usize::BITS - 3);
 /// `MAX_BIT`, which marks a status as an error.
 const ERROR_BIT: usize = 1 << (usize::BITS - 1);
 
-/// `EFI_WARN_INTERRUPT_SOURCE_QUIESCED` - PI spec warning status code, `PI_ENCODE_WARNING (1)`.
-/// Indicates an interrupt source was quiesced.
+/// `EFI_WARN_INTERRUPT_SOURCE_QUIESCED`, `PI_ENCODE_WARNING (1)`: an interrupt source was
+/// quiesced.
 const WARN_INTERRUPT_SOURCE_QUIESCED: efi::Status = efi::Status::from_usize(PI_STATUS_BIT | 1);
 
-/// `EFI_WARN_INTERRUPT_SOURCE_PENDING` - PI spec warning status code, `PI_ENCODE_WARNING (0)`.
-/// Indicates an interrupt source was processed but not quiesced.
+/// `EFI_WARN_INTERRUPT_SOURCE_PENDING`, `PI_ENCODE_WARNING (0)`: an interrupt source was
+/// processed but not quiesced.
 const WARN_INTERRUPT_SOURCE_PENDING: efi::Status = efi::Status::from_usize(PI_STATUS_BIT);
 
-/// `EFI_INTERRUPT_PENDING` - PI spec status for pending interrupts, `PI_ENCODE_ERROR (0)`.
+/// `EFI_INTERRUPT_PENDING`, `PI_ENCODE_ERROR (0)`.
 const INTERRUPT_PENDING: efi::Status = efi::Status::from_usize(ERROR_BIT | PI_STATUS_BIT);
 
-/// Signature for internal (Rust-native) MMI handlers.
+/// Signature of an internal (Rust) MMI handler.
 ///
-/// These are registered by the core itself for lifecycle events and do not go
-/// through the `unsafe extern "efiapi"` calling convention. `handler_type` is the GUID that
-/// triggered the handler (the same GUID used at registration), `comm_buffer` points to the
-/// communication data (may be null for async MMIs), and `comm_buffer_size` is a mutable pointer
-/// to the communication buffer size. The handler returns an [`efi::Status`] following the
-/// standard `MmiManage` return protocol.
+/// The core registers these for lifecycle events; they do not use the `efiapi` ABI.
+/// `handler_type` is the GUID the handler was registered for (a zero GUID for root
+/// handlers), `comm_buffer` is the communication data (may be null), and
+/// `comm_buffer_size` points to its size. The return value follows the `MmiManage`
+/// status rules.
 pub type InternalMmiHandler =
     fn(handler_type: &efi::Guid, comm_buffer: *mut c_void, comm_buffer_size: *mut usize) -> efi::Status;
 
-/// An MMI handler callback - either an external (C ABI) or internal (Rust) function.
+/// An MMI handler callback: an external (C ABI) or internal (Rust) function.
 #[derive(Clone, Copy)]
 enum HandlerKind {
     /// External handler registered by a driver through the MMST.
@@ -84,8 +74,7 @@ enum HandlerKind {
 
 impl core::fmt::Debug for HandlerKind {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // Print only the variant; the wrapped function pointers are not meaningfully
-        // formattable and their ABI does not guarantee a `Debug` impl.
+        // Print only the variant; function pointers have no useful `Debug` output.
         match self {
             HandlerKind::External(_) => f.write_str("External"),
             HandlerKind::Internal(_) => f.write_str("Internal"),
@@ -107,29 +96,27 @@ struct MmiEntry {
 struct MmiHandler {
     /// The handler callback.
     kind: HandlerKind,
-    /// Monotonic ID used as the dispatch handle for unregistering.
+    /// Monotonic ID, also used as the dispatch handle.
     id: usize,
-    /// Whether this handler is marked for removal (deferred removal during dispatch).
+    /// Set when the handler is unregistered during a dispatch; removal is deferred.
     to_remove: bool,
 }
 
 /// The MMI handler database.
 ///
-/// Manages root handlers (called for all MMIs) and GUID-specific handlers.
-/// Thread-safe via internal `Mutex`.
+/// Holds the root handlers and the GUID handlers behind an internal `Mutex`.
 pub struct MmiDatabase {
-    /// Internal state protected by a mutex.
     inner: Mutex<MmiDatabaseInner>,
 }
 
 struct MmiDatabaseInner {
-    /// Root MMI handlers (called for every MMI, regardless of GUID).
+    /// Root MMI handlers, run for every MMI.
     root_handlers: Vec<MmiHandler>,
     /// GUID-specific MMI entries.
     entries: Vec<MmiEntry>,
-    /// Re-entrance depth counter for `mmi_manage`.
+    /// Nesting depth of `mmi_manage` calls.
     manage_calling_depth: usize,
-    /// Monotonic ID counter for handler dispatch handles.
+    /// Next dispatch handle ID.
     next_id: usize,
 }
 
@@ -152,13 +139,10 @@ impl MmiDatabase {
         }
     }
 
-    /// Register an external (C ABI) MMI handler.
+    /// Registers an external (C ABI) MMI handler.
     ///
-    /// If `handler_type` is `None`, the handler is registered as a root handler.
-    /// If `handler_type` is `Some(guid)`, the handler is registered for that specific GUID.
-    ///
-    /// Returns `Ok(dispatch_handle)` on success, where `dispatch_handle` is an opaque handle
-    /// that can be used to unregister the handler.
+    /// A `handler_type` of `None` registers a root handler; `Some(guid)` registers a handler
+    /// for that GUID. Returns an opaque dispatch handle for unregistering the handler.
     pub fn mmi_handler_register(
         &self,
         handler: MmiHandlerEntryPoint,
@@ -177,12 +161,10 @@ impl MmiDatabase {
         Ok(handle)
     }
 
-    /// Register an internal (Rust-native) MMI handler.
+    /// Registers an internal (Rust) MMI handler.
     ///
     /// Works like [`mmi_handler_register`](Self::mmi_handler_register) but takes a safe
     /// Rust function pointer instead of an `unsafe extern "efiapi" fn`.
-    ///
-    /// Returns the dispatch handle (an opaque `usize`-based ID) on success.
     pub fn register_internal_handler(
         &self,
         handler: InternalMmiHandler,
@@ -201,7 +183,7 @@ impl MmiDatabase {
         Ok(handle)
     }
 
-    /// Insert a handler into the appropriate list (root or GUID-specific).
+    /// Inserts a handler into the root list or its GUID entry.
     fn insert_handler(inner: &mut MmiDatabaseInner, handler_type: Option<&efi::Guid>, handler: MmiHandler) {
         match handler_type {
             None => {
@@ -217,15 +199,18 @@ impl MmiDatabase {
         }
     }
 
-    /// Unregister an MMI handler by its dispatch handle.
+    /// Unregisters an MMI handler by its dispatch handle.
     ///
-    /// If we are inside a dispatch (`manage_calling_depth > 0`) the handler is
-    /// marked for deferred removal. Otherwise it is removed immediately.
+    /// During a dispatch (`manage_calling_depth > 0`) the handler is only marked, and it is
+    /// removed when the outermost dispatch finishes. Otherwise it is removed at once.
+    ///
+    /// ## Errors
+    ///
+    /// Returns `NOT_FOUND` if no handler has this dispatch handle.
     pub fn mmi_handler_unregister(&self, dispatch_handle: efi::Handle) -> Result<(), efi::Status> {
         let target_id = dispatch_handle as usize;
         let mut inner = self.inner.lock();
 
-        // Search root handlers
         for handler in &mut inner.root_handlers {
             if handler.id == target_id {
                 handler.to_remove = true;
@@ -237,7 +222,6 @@ impl MmiDatabase {
             }
         }
 
-        // Search GUID-specific handlers
         for entry in &mut inner.entries {
             for handler in &mut entry.handlers {
                 if handler.id == target_id {
@@ -258,24 +242,20 @@ impl MmiDatabase {
         Err(efi::Status::NOT_FOUND)
     }
 
-    /// Manage (dispatch) an MMI.
+    /// Dispatches an MMI, like the C `MmiManage`.
     ///
-    /// This is the main dispatch function, equivalent to the C `MmiManage`.
-    ///
-    /// - If `handler_type` is `None`, root handlers are dispatched.
-    /// - If `handler_type` is `Some(guid)`, the handlers for that GUID are dispatched.
-    ///
-    /// **Lock safety**: The database lock is released before calling any handler
-    /// and re-acquired afterwards, so handlers may call `mmi_handler_register` /
-    /// `mmi_handler_unregister` without deadlocking.
+    /// A `handler_type` of `None` dispatches the root handlers; `Some(guid)` dispatches the
+    /// handlers for that GUID. The database lock is released while handlers run, so they
+    /// may register or unregister handlers.
     ///
     /// Returns:
-    /// - `EFI_SUCCESS` if at least one handler returned success, or a source was quiesced
-    ///   (`EFI_WARN_INTERRUPT_SOURCE_QUIESCED` is reported as `EFI_SUCCESS`)
-    /// - `EFI_INTERRUPT_PENDING` if a handler indicated the interrupt is still pending
-    /// - `EFI_WARN_INTERRUPT_SOURCE_PENDING` if a source was processed but not quiesced and no
-    ///   handler succeeded
-    /// - `EFI_NOT_FOUND` if no handlers are registered for the given type
+    /// - `EFI_SUCCESS` if a handler succeeded or quiesced its source
+    ///   (`EFI_WARN_INTERRUPT_SOURCE_QUIESCED` is reported as `EFI_SUCCESS`).
+    /// - `EFI_INTERRUPT_PENDING` if a handler reported the interrupt still pending and no
+    ///   handler succeeded.
+    /// - `EFI_WARN_INTERRUPT_SOURCE_PENDING` if a source was processed but not quiesced and
+    ///   no handler succeeded.
+    /// - `EFI_NOT_FOUND` if no handler is registered for the type or none claimed the MMI.
     pub fn mmi_manage(
         &self,
         handler_type: Option<&efi::Guid>,
@@ -321,7 +301,7 @@ impl MmiDatabase {
         return_status
     }
 
-    /// Dispatch a snapshot of handlers. The database lock is NOT held.
+    /// Runs a snapshot of handlers. Called without the database lock held.
     fn dispatch_handler_snapshot(
         handlers: &[MmiHandler],
         handler_type: Option<&efi::Guid>,
@@ -338,7 +318,7 @@ impl MmiDatabase {
 
         let mut return_status = efi::Status::NOT_FOUND;
 
-        // Provide a dummy GUID for root dispatch (handlers don't use it).
+        // Root dispatch passes internal handlers a zero GUID.
         let null_guid = efi::Guid::from_fields(0, 0, 0, 0, 0, &[0; 6]);
         let guid_ref = handler_type.unwrap_or(&null_guid);
 
@@ -377,7 +357,7 @@ impl MmiDatabase {
                     return_status = status;
                 }
                 _ => {
-                    // Other statuses are ignored per PI spec
+                    // The PI spec ignores other statuses.
                 }
             }
         }
@@ -385,7 +365,7 @@ impl MmiDatabase {
         return_status
     }
 
-    /// Remove handlers marked with `to_remove` and clean up empty entries.
+    /// Removes the handlers marked `to_remove` and drops empty GUID entries.
     fn cleanup_removed_handlers(inner: &mut MmiDatabaseInner) {
         inner.root_handlers.retain(|h| !h.to_remove);
 

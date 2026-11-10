@@ -1,15 +1,13 @@
-//! MM System Table (MMST) Construction - User Core Implementation
+//! MM System Table (MMST) Construction
 //!
-//! This module builds the concrete `EfiMmSystemTable` handed to dispatched MM
-//! drivers. The table itself contains **no logic**: every function pointer is a
-//! thin `extern "efiapi"` thunk that locates the singleton
-//! [`MmUserCore`] instance and forwards to the safe Rust implementation living
-//! in its databases ([`ProtocolDatabase`], [`MmiDatabase`],
-//! [`MmConfigurationTableDb`]). In other words the table is the *interface* and
-//! the user core instance is the *implementation* - not the other way around.
+//! Builds the `EfiMmSystemTable` handed to dispatched MM drivers. The table holds no
+//! logic: each function pointer is an `extern "efiapi"` thunk that checks its C arguments
+//! and forwards through the `MM_SERVICES` bridge to the [`MmServices`] implementation on
+//! [`MmUserCore`], which in turn uses the core's databases ([`ProtocolDatabase`],
+//! [`MmiDatabase`], [`MmConfigurationTableDb`]).
 //!
-//! The *type definitions* (`EfiMmSystemTable`, `MmServices`,
-//! `StandardMmServices`, …) live in the Patina SDK at [`patina::management_mode::mm_services`].
+//! The type definitions (`EfiMmSystemTable`, `MmServices`, `StandardMmServices`, and so on)
+//! live in the Patina SDK at [`patina::management_mode::mm_services`].
 //!
 //! [`ProtocolDatabase`]: crate::protocol_db::ProtocolDatabase
 //! [`MmiDatabase`]: crate::mmi::MmiDatabase
@@ -38,30 +36,27 @@ use patina::{
     },
 };
 
-/// The bridge the `EfiMmSystemTable` thunks dispatch through.
+/// The bridge the `EfiMmSystemTable` thunks forward through.
 ///
-/// Initialized once in [`init_mm_services`] with the user core's [`MmServices`]
-/// provider ([`MmUserCore`]). Every thunk forwards into this bridge, which in
-/// turn calls the provider - so no Rust ever calls the table's function pointers.
+/// [`init_mm_services`] points it at the [`MmUserCore`] provider. Rust code calls the
+/// provider directly and never goes through the table's function pointers.
 static MM_SERVICES: StandardMmServices = StandardMmServices::new_uninit();
 
-/// Register the [`MmServices`] provider the `EfiMmSystemTable` thunks forward to.
+/// Registers the [`MmServices`] provider the `EfiMmSystemTable` thunks forward to.
 ///
-/// Must be called once during startup, before any driver can invoke the table.
+/// Must be called once during startup, before any driver can call the table.
 pub(crate) fn init_mm_services(provider: &'static dyn MmServices) {
     MM_SERVICES.init(provider);
 }
 
-/// Records a failure that a thunk itself detected, before any service ran.
+/// Logs a failure that a thunk detected in its own argument checks, then returns `status`.
 ///
-/// Only the thunk's own argument checks report through here, and they only do so on a
-/// failure. A status produced deeper in the core is passed back untouched, because the
-/// layer that detected it already logged the reason and named the service.
+/// Statuses from deeper in the core are returned without this, because the layer that
+/// produced them already logged the reason.
 ///
-/// `NOT_FOUND`, `UNSUPPORTED` and `BUFFER_TOO_SMALL` are how drivers probe for
-/// optional protocols and size their buffers, so they are recorded at debug
-/// level. Every other status points at a caller defect and is recorded at error
-/// level so it stands out in a boot log.
+/// `NOT_FOUND`, `UNSUPPORTED` and `BUFFER_TOO_SMALL` are how drivers probe for optional
+/// protocols and size their buffers, so they are logged at debug level. Any other failure
+/// points at a caller defect and is logged as an error.
 fn report(service: &str, status: efi::Status) -> efi::Status {
     if status == efi::Status::SUCCESS {
         return status;
@@ -77,12 +72,11 @@ fn report(service: &str, status: efi::Status) -> efi::Status {
     status
 }
 
-/// Build the MM System Table value.
+/// Builds the MM System Table value.
 ///
-/// Every field is a thunk that defers to [`MmUserCore::instance`]; the table
-/// carries no state of its own beyond the CPU/configuration fields the core
-/// updates in place. [`MmUserCore::init_mm_system_table`] boxes the returned
-/// value and hands the pointer to dispatched drivers.
+/// Every service is a thunk into `MM_SERVICES`; the only state in the table is the CPU
+/// and configuration table fields that the core updates in place.
+/// [`MmUserCore::init_mm_system_table`] boxes the value and hands the pointer to drivers.
 pub(crate) fn build_mm_system_table() -> EfiMmSystemTable {
     EfiMmSystemTable {
         hdr: efi::TableHeader {
@@ -130,13 +124,12 @@ pub(crate) fn build_mm_system_table() -> EfiMmSystemTable {
     }
 }
 
-/// CPU I/O access stub that always reports the service as unavailable.
+/// CPU I/O stub that always returns `UNSUPPORTED`.
 ///
-/// # Safety
+/// ## Safety
 ///
-/// Part of the C ABI surface invoked through the system table. It dereferences
-/// none of its pointer arguments, so it performs no memory accesses; it remains
-/// `unsafe` only to match the `MmCpuIoFn` signature.
+/// Dereferences none of its arguments. It is `unsafe` only to match the `MmCpuIoFn`
+/// signature.
 unsafe extern "efiapi" fn mm_io_not_available(
     _this: *const MmCpuIoAccess,
     _width: usize,
@@ -149,12 +142,10 @@ unsafe extern "efiapi" fn mm_io_not_available(
 
 /// Installs, updates, or removes a configuration table entry.
 ///
-/// # Safety
+/// ## Safety
 ///
-/// Invoked through the system table by (potentially untrusted) C callers. The
-/// `guid` pointer is null-checked before being dereferenced, but a non-null
-/// pointer is dereferenced on trust because its validity cannot be verified
-/// here - this is intrinsically unsafe as it handles inputs from C code.
+/// `guid` must be null or point to a valid `efi::Guid`. A non-null `table` must stay valid
+/// while the entry is installed.
 unsafe extern "efiapi" fn mm_install_configuration_table_impl(
     _system_table: *const EfiMmSystemTable,
     guid: *const efi::Guid,
@@ -165,11 +156,10 @@ unsafe extern "efiapi" fn mm_install_configuration_table_impl(
         return report("MmInstallConfigurationTable", efi::Status::INVALID_PARAMETER);
     }
 
-    // SAFETY: `guid` was null-checked above; the C caller guarantees a non-null pointer references a
-    // valid `efi::Guid`. Dereferenced once into a reference; all further use is safe Rust.
+    // SAFETY: `guid` was null-checked above, and the caller guarantees a non-null pointer
+    // references a valid `efi::Guid`.
     let guid = unsafe { &*guid };
-    // SAFETY: `table` is forwarded as provided by the C caller; the `MmServices` contract makes the
-    // caller responsible for its validity and lifetime.
+    // SAFETY: `table` is forwarded unchanged; the caller owns its validity and lifetime.
     match unsafe { MM_SERVICES.install_configuration_table(guid, table, table_size) } {
         Ok(()) => efi::Status::SUCCESS,
         Err(status) => status,
@@ -187,8 +177,7 @@ extern "efiapi" fn mm_allocate_pool_impl(
 
     match MM_SERVICES.allocate_pool(pool_type, size) {
         Ok(ptr) => {
-            // SAFETY: `buffer` was null-checked above; the C caller guarantees it references a writable
-            // `*mut c_void` out-parameter. Written exactly once.
+            // SAFETY: `buffer` was null-checked above and is a writable out-parameter.
             unsafe { *buffer = ptr.cast::<c_void>() };
             efi::Status::SUCCESS
         }
@@ -215,8 +204,7 @@ extern "efiapi" fn mm_allocate_pages_impl(
 
     match MM_SERVICES.allocate_pages(alloc_type, memory_type, pages) {
         Ok(addr) => {
-            // SAFETY: `memory` was null-checked above; the C caller guarantees it references a
-            // writable `efi::PhysicalAddress` out-parameter. Written exactly once.
+            // SAFETY: `memory` was null-checked above and is a writable out-parameter.
             unsafe { *memory = addr };
             efi::Status::SUCCESS
         }
@@ -231,13 +219,12 @@ extern "efiapi" fn mm_free_pages_impl(memory: efi::PhysicalAddress, pages: usize
     }
 }
 
-/// Starts a procedure on an application processor.
+/// AP startup stub that always returns `UNSUPPORTED`.
 ///
-/// # Safety
+/// ## Safety
 ///
-/// Part of the C ABI surface invoked through the system table. It dereferences
-/// none of its arguments and is a not-available stub; it remains `unsafe` only
-/// to match the `MmStartupThisApFn` signature.
+/// Dereferences none of its arguments. It is `unsafe` only to match the
+/// `MmStartupThisApFn` signature.
 unsafe extern "efiapi" fn mm_startup_this_ap_not_available(
     _procedure: usize,
     _cpu_number: usize,
@@ -256,17 +243,17 @@ extern "efiapi" fn mm_install_protocol_interface_impl(
         return report("MmInstallProtocolInterface", efi::Status::INVALID_PARAMETER);
     }
 
-    // SAFETY: `protocol` was null-checked above; the C caller guarantees it references a valid
-    // `efi::Guid`. Dereferenced once into a reference.
+    // SAFETY: `protocol` was null-checked above, and the caller guarantees it references a valid
+    // `efi::Guid`.
     let guid = unsafe { &*protocol };
-    // SAFETY: `handle` was null-checked above; the C caller guarantees a readable in/out pointer.
+    // SAFETY: `handle` was null-checked above and is a readable in/out parameter.
     let caller_handle = unsafe { *handle };
     let in_handle = (!caller_handle.is_null()).then_some(caller_handle);
 
-    // SAFETY: `interface` is forwarded unchanged; the C caller owns its validity and lifetime.
+    // SAFETY: `interface` is forwarded unchanged; the caller owns its validity and lifetime.
     match unsafe { MM_SERVICES.install_protocol_interface(in_handle, guid, interface) } {
         Ok(new_handle) => {
-            // SAFETY: `handle` was null-checked above; it is a writable out-parameter. Written once.
+            // SAFETY: `handle` was null-checked above and is a writable out-parameter.
             unsafe { *handle = new_handle };
             efi::Status::SUCCESS
         }
@@ -283,8 +270,8 @@ extern "efiapi" fn mm_uninstall_protocol_interface_impl(
         return report("MmUninstallProtocolInterface", efi::Status::INVALID_PARAMETER);
     }
 
-    // SAFETY: `protocol` was null-checked above; the C caller guarantees it references a valid
-    // `efi::Guid`. Dereferenced once into a reference.
+    // SAFETY: `protocol` was null-checked above, and the caller guarantees it references a valid
+    // `efi::Guid`.
     let guid = unsafe { &*protocol };
 
     // SAFETY: `interface` is forwarded as the pointer the caller previously installed.
@@ -306,17 +293,16 @@ extern "efiapi" fn mm_handle_protocol_impl(
     if interface.is_null() {
         return report("MmHandleProtocol", efi::Status::INVALID_PARAMETER);
     }
-    // C reference: *Interface = NULL before lookup.
-    // SAFETY: `interface` was null-checked above; the C caller guarantees it references a writable
-    // `*mut c_void` out-parameter. Written once.
+    // Clear the out-parameter before the lookup, as the C core does.
+    // SAFETY: `interface` was null-checked above and is a writable out-parameter.
     unsafe { *interface = core::ptr::null_mut() };
 
     if handle.is_null() {
         return report("MmHandleProtocol", efi::Status::INVALID_PARAMETER);
     }
 
-    // SAFETY: `protocol` was null-checked above; the C caller guarantees it references a valid
-    // `efi::Guid`. Dereferenced once into a reference.
+    // SAFETY: `protocol` was null-checked above, and the caller guarantees it references a valid
+    // `efi::Guid`.
     let guid = unsafe { &*protocol };
 
     // SAFETY: `handle` was null-checked above.
@@ -339,14 +325,13 @@ extern "efiapi" fn mm_register_protocol_notify_impl(
         return report("MmRegisterProtocolNotify", efi::Status::INVALID_PARAMETER);
     }
 
-    // SAFETY: `protocol` was null-checked above; the C caller guarantees it references a valid
-    // `efi::Guid`. Dereferenced once into a reference.
+    // SAFETY: `protocol` was null-checked above, and the caller guarantees it references a valid
+    // `efi::Guid`.
     let guid = unsafe { &*protocol };
 
     if function == 0 {
-        // Function is NULL → unregister the notification identified by *Registration.
-        // SAFETY: `registration` was null-checked above; the C caller guarantees it references a
-        // readable `*mut c_void`. Read once.
+        // A null function unregisters the notification identified by `*registration`.
+        // SAFETY: `registration` was null-checked above and is readable.
         let reg = unsafe { *registration };
         match NonNull::new(reg).map(Registration::new) {
             Some(reg_token) => match MM_SERVICES.unregister_protocol_notify(guid, reg_token) {
@@ -356,9 +341,8 @@ extern "efiapi" fn mm_register_protocol_notify_impl(
             None => report("MmRegisterProtocolNotify", efi::Status::INVALID_PARAMETER),
         }
     } else {
-        // Register a new notification.
-        // SAFETY: `function` is a non-null `EFI_MM_NOTIFY_FN` function pointer passed as a usize by
-        // the C caller; transmuting it back to the matching ABI function pointer type is sound.
+        // SAFETY: `function` is a non-null `EFI_MM_NOTIFY_FN` pointer passed as a `usize`;
+        // transmuting it back to the matching function pointer type is sound.
         let notify_fn: MmNotifyFn = unsafe { core::mem::transmute(function) };
         match MM_SERVICES.register_protocol_notify(guid, ProtocolNotify::efi(notify_fn)) {
             Ok(token) => {
@@ -395,10 +379,10 @@ extern "efiapi" fn mm_locate_handle_impl(
     }
 
     let required_size = handles.len() * core::mem::size_of::<efi::Handle>();
-    // SAFETY: `buffer_size` was null-checked at the top of the function; the C caller guarantees it
-    // references a readable/writable `usize`. Read once, then written once.
+    // SAFETY: `buffer_size` was null-checked at the top of the function and is a readable and
+    // writable `usize`.
     let caller_size = unsafe { *buffer_size };
-    // SAFETY: see above - `buffer_size` is a valid writable out-parameter.
+    // SAFETY: As above.
     unsafe { *buffer_size = required_size };
 
     if caller_size < required_size {
@@ -409,8 +393,8 @@ extern "efiapi" fn mm_locate_handle_impl(
         return report("MmLocateHandle", efi::Status::INVALID_PARAMETER);
     }
 
-    // SAFETY: `buffer` was null-checked above and `caller_size >= required_size`, so the destination
-    // holds at least `handles.len()` `efi::Handle` entries. Source and destination do not overlap.
+    // SAFETY: `buffer` was null-checked above and `caller_size >= required_size`, so it holds at
+    // least `handles.len()` handles. The source is a local `Vec`, so they do not overlap.
     unsafe {
         core::ptr::copy_nonoverlapping(handles.as_ptr(), buffer, handles.len());
     }
@@ -426,8 +410,8 @@ extern "efiapi" fn mm_locate_protocol_impl(
         return report("MmLocateProtocol", efi::Status::INVALID_PARAMETER);
     }
 
-    // SAFETY: `protocol` was null-checked above; the C caller guarantees it references a valid
-    // `efi::Guid`. Dereferenced once into a reference.
+    // SAFETY: `protocol` was null-checked above, and the caller guarantees it references a valid
+    // `efi::Guid`.
     let guid = unsafe { &*protocol };
 
     // SAFETY: locating a protocol performs only database lookups.
@@ -443,36 +427,30 @@ extern "efiapi" fn mm_locate_protocol_impl(
 
 /// Dispatches an MMI of a particular type to the registered handlers.
 ///
-/// # Safety
+/// ## Safety
 ///
-/// Invoked through the system table by (potentially untrusted) C callers. The
-/// `handler_type` pointer is null-checked before being dereferenced, but a
-/// non-null pointer is dereferenced on trust; `context`/`comm_buffer` are passed
-/// through to the handlers. This is intrinsically unsafe as it handles inputs
-/// from C code.
+/// `handler_type` must be null or point to a valid `efi::Guid`. `context`, `comm_buffer`
+/// and `comm_buffer_size` are passed to the handlers unchanged and must be valid for them.
 unsafe extern "efiapi" fn mmi_manage_impl(
     handler_type: *const efi::Guid,
     context: *const c_void,
     comm_buffer: *mut c_void,
     comm_buffer_size: *mut usize,
 ) -> efi::Status {
-    // SAFETY: `handler_type` is null-checked here; when non-null the C caller guarantees it
-    // references a valid `efi::Guid`, dereferenced once into a reference.
+    // SAFETY: `handler_type` is null-checked here; when non-null the caller guarantees it
+    // references a valid `efi::Guid`.
     let guid = if handler_type.is_null() { None } else { Some(unsafe { &*handler_type }) };
 
-    // SAFETY: `context`/`comm_buffer`/`comm_buffer_size` are forwarded unchanged to the handlers.
-    // The MMI database logs when no handler matches.
+    // SAFETY: `context`, `comm_buffer` and `comm_buffer_size` are forwarded unchanged to the handlers.
     unsafe { MM_SERVICES.mmi_manage(guid, context, comm_buffer, comm_buffer_size) }
 }
 
 /// Registers an MMI handler entry point for a particular handler type.
 ///
-/// # Safety
+/// ## Safety
 ///
-/// Invoked through the system table by (potentially untrusted) C callers. A null `handler` and
-/// the `dispatch_handle` and `handler_type` pointers are checked before use, but non-null
-/// pointers are dereferenced on trust. This is intrinsically unsafe as it handles inputs from C
-/// code.
+/// `handler_type` must be null or point to a valid `efi::Guid`, and a non-null
+/// `dispatch_handle` must be writable.
 unsafe extern "efiapi" fn mmi_handler_register_impl(
     handler: Option<MmiHandlerEntryPoint>,
     handler_type: *const efi::Guid,
@@ -485,8 +463,8 @@ unsafe extern "efiapi" fn mmi_handler_register_impl(
         return report("MmiHandlerRegister", efi::Status::INVALID_PARAMETER);
     }
 
-    // SAFETY: `handler_type` is null-checked here; when non-null the C caller guarantees it
-    // references a valid `efi::Guid`, dereferenced once into a reference.
+    // SAFETY: `handler_type` is null-checked here; when non-null the caller guarantees it
+    // references a valid `efi::Guid`.
     let guid = if handler_type.is_null() { None } else { Some(unsafe { &*handler_type }) };
 
     match MM_SERVICES.mmi_handler_register(handler, guid) {
@@ -501,10 +479,9 @@ unsafe extern "efiapi" fn mmi_handler_register_impl(
 
 /// Unregisters a previously registered MMI handler.
 ///
-/// # Safety
+/// ## Safety
 ///
-/// Part of the C ABI surface invoked through the system table. It dereferences
-/// none of its arguments; it remains `unsafe` only to match the
+/// Dereferences none of its arguments. It is `unsafe` only to match the
 /// `MmiHandlerUnregisterFn` signature.
 unsafe extern "efiapi" fn mmi_handler_unregister_impl(dispatch_handle: efi::Handle) -> efi::Status {
     match MM_SERVICES.mmi_handler_unregister(dispatch_handle) {
@@ -513,25 +490,24 @@ unsafe extern "efiapi" fn mmi_handler_unregister_impl(dispatch_handle: efi::Hand
     }
 }
 
-/// Free a pool allocation previously produced by [`MmServices::allocate_pool`].
+/// Frees a pool allocation made by [`MmServices::allocate_pool`].
 ///
-/// Kept as a private helper so the public `free_pool` method stays a safe wrapper
-/// around the single raw-pointer deallocation.
+/// Keeps the one raw deallocation out of the safe `free_pool` method.
 fn dealloc_pool(buffer: *mut u8) {
-    // SAFETY: `Layout::from_size_align_unchecked` is sound for size/alignment of 1. The MM free ABI
-    // provides no size, so the original layout cannot be reconstructed; `buffer` is trusted to be a
-    // pointer previously returned by `allocate_pool` and is freed exactly once.
+    // SAFETY: A size and alignment of 1 form a valid layout. The MM free ABI carries no size,
+    // so the original layout cannot be rebuilt; `PoolAllocator`, the UEFI global allocator,
+    // ignores the layout.
+    // `buffer` is trusted to come from `allocate_pool` and to be freed only once.
     unsafe {
         let layout = core::alloc::Layout::from_size_align_unchecked(1, 1);
         alloc::alloc::dealloc(buffer, layout);
     }
 }
 
-/// Native [`MmServices`] implementation, backed directly by the user core's databases.
+/// The [`MmServices`] implementation, backed by the user core's databases.
 ///
-/// This is *the* MM services implementation. Both the `EfiMmSystemTable` thunks
-/// above and the core's own Rust code drive MM services through this trait, so
-/// neither path calls back out through the C function-pointer table.
+/// Both the `EfiMmSystemTable` thunks and the core's own Rust code use this trait, so
+/// neither calls through the C function-pointer table.
 impl MmServices for MmUserCore {
     /// Allocate pool memory.
     ///
@@ -600,7 +576,7 @@ impl MmServices for MmUserCore {
     ///
     /// PI Spec: `EFI_MM_SYSTEM_TABLE.MmInstallProtocolInterface`
     ///
-    /// # Safety
+    /// ## Safety
     ///
     /// `interface` must be a valid pointer to the protocol structure or null, and
     /// must remain valid for as long as the interface is installed.
@@ -610,7 +586,7 @@ impl MmServices for MmUserCore {
         protocol: &efi::Guid,
         interface: *mut c_void,
     ) -> Result<efi::Handle, efi::Status> {
-        // A `None` handle maps to a null handle, which the database treats as "allocate a new one".
+        // `None` becomes a null handle, for which the database allocates a new handle.
         self.protocol_db.install_protocol(handle.unwrap_or(core::ptr::null_mut()), protocol, interface)
     }
 
@@ -618,7 +594,7 @@ impl MmServices for MmUserCore {
     ///
     /// PI Spec: `EFI_MM_SYSTEM_TABLE.MmUninstallProtocolInterface`
     ///
-    /// # Safety
+    /// ## Safety
     ///
     /// `interface` must match the pointer that was installed.
     unsafe fn uninstall_protocol_interface(
@@ -634,7 +610,7 @@ impl MmServices for MmUserCore {
     ///
     /// PI Spec: `EFI_MM_SYSTEM_TABLE.MmHandleProtocol`
     ///
-    /// # Safety
+    /// ## Safety
     ///
     /// The returned pointer must be used carefully to avoid aliasing violations.
     unsafe fn handle_protocol(&self, handle: efi::Handle, protocol: &efi::Guid) -> Result<*mut c_void, efi::Status> {
@@ -648,7 +624,7 @@ impl MmServices for MmUserCore {
     ///
     /// PI Spec: `EFI_MM_SYSTEM_TABLE.MmLocateProtocol`
     ///
-    /// # Safety
+    /// ## Safety
     ///
     /// The returned pointer must be used carefully to avoid aliasing violations.
     unsafe fn locate_protocol(&self, protocol: &efi::Guid) -> Result<*mut c_void, efi::Status> {
@@ -662,10 +638,10 @@ impl MmServices for MmUserCore {
     ///
     /// PI Spec: `EFI_MM_SYSTEM_TABLE.MmiManage`
     ///
-    /// # Safety
+    /// ## Safety
     ///
-    /// `context`, `comm_buffer`, and `comm_buffer_size` are all optional pointers.
-    /// But they must be valid if provided.
+    /// `context`, `comm_buffer`, and `comm_buffer_size` are optional, but each must be valid when
+    /// non-null.
     unsafe fn mmi_manage(
         &self,
         handler_type: Option<&efi::Guid>,
@@ -698,7 +674,7 @@ impl MmServices for MmUserCore {
     ///
     /// PI Spec: `EFI_MM_SYSTEM_TABLE.MmInstallConfigurationTable`
     ///
-    /// # Safety
+    /// ## Safety
     ///
     /// `table` must remain valid for as long as the entry is installed, or be
     /// null to remove an existing entry.
