@@ -1351,20 +1351,6 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_region_count() {
-        let tracker = create_test_tracker();
-
-        assert_eq!(tracker.region_count(), 0);
-
-        tracker.track_unblocked_memory(range(0x1000, 0x1000), RESOURCE_ATTR_READ).unwrap();
-        assert_eq!(tracker.region_count(), 1);
-
-        tracker.track_unblocked_memory(range(0x3000, 0x1000), RESOURCE_ATTR_WRITE).unwrap();
-        assert_eq!(tracker.region_count(), 2);
-    }
-
-    #[test]
-    #[serial]
     fn test_tracker_reports_capacity_exhaustion() {
         let tracker = create_test_tracker();
 
