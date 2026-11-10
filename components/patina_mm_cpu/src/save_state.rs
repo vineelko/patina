@@ -1,23 +1,25 @@
-//! MM save-state read syscalls (Ring 3 user MM → MM Supervisor).
+//! MM save-state read syscalls from Ring 3 user MM to the MM Supervisor.
 //!
 //! The MM save state lives in supervisor-only SMRAM, so the CPU protocol's
-//! `ReadSaveState` cannot read it directly; it issues these syscalls to have the
+//! `ReadSaveState` cannot read it directly. It issues these syscalls to have the
 //! MM Supervisor perform the read (and its security-policy check) in Ring 0.
 //!
 //! ## ABI
 //!
-//! The read is a two-phase syscall (mirroring the historical `SysCallLib.h`
-//! interface consumed by the C `MmSupervisedCpu` driver):
+//! The read is a two-phase syscall, mirroring the historical `SysCallLib.h`
+//! interface used by the C `MmSupervisedCpu` driver:
 //!
-//! 1. [`SyscallIndex::SaveStateRead`] — arg1 = `this` token, arg2 = register,
-//!    arg3 = CPU index. Validates the request and records it.
-//! 2. [`SyscallIndex::SaveStateRead2`] — arg1 = `this` token, arg2 = width,
-//!    arg3 = output buffer. Applies the MM security policy, reads the register
-//!    (assembling the composite `EFI_MM_SAVE_STATE_IO_INFO` for the `IO`
-//!    pseudo-register), and copies the result into the caller's buffer.
+//! 1. [`SyscallIndex::SaveStateRead`] takes the `this` token in arg1, the
+//!    register in arg2, and the CPU index in arg3. The supervisor validates the
+//!    request and records it.
+//! 2. [`SyscallIndex::SaveStateRead2`] takes the `this` token in arg1, the width
+//!    in arg2, and the output buffer in arg3. The supervisor applies the MM
+//!    security policy, reads the register (building the composite
+//!    `EFI_MM_SAVE_STATE_IO_INFO` for the IO pseudo-register), and copies the
+//!    result into the caller's buffer.
 //!
-//! The supervisor returns the `EFI_STATUS` for each phase in `RAX`, and the
-//! `this` token is echoed across both phases for a consistency check.
+//! The supervisor returns the `EFI_STATUS` for each phase in RAX. The `this`
+//! token is passed in both phases so the supervisor can check they match.
 //!
 //! ## License
 //!
@@ -31,15 +33,15 @@ use patina::{
     standard::efi,
 };
 
-/// Read `width` bytes of the given save-state `register` from the specified
-/// CPU's MM save state into `buffer`, via the MM Supervisor.
+/// Reads `width` bytes of save-state `register` for CPU `cpu_index` into
+/// `buffer` through the MM Supervisor.
 ///
 /// `register` is a raw `EFI_MM_SAVE_STATE_REGISTER` value. `this` is an opaque
-/// token echoed across the two syscall phases for a consistency check (the CPU
-/// protocol producer passes its protocol interface pointer).
+/// token passed in both syscall phases so the supervisor can check they match.
+/// The CPU protocol producer passes its protocol interface pointer.
 ///
-/// Returns `EFI_SUCCESS` on success, or the supervisor's error status
-/// (`EFI_NOT_FOUND`, `EFI_ACCESS_DENIED`, `EFI_INVALID_PARAMETER`, …).
+/// Returns `EFI_SUCCESS`, or the supervisor's error status such as
+/// `EFI_NOT_FOUND`, `EFI_ACCESS_DENIED`, or `EFI_INVALID_PARAMETER`.
 ///
 /// ## Safety
 ///
@@ -65,9 +67,9 @@ pub(crate) unsafe fn read_save_state_register(
     }
 
     // Phase 2: apply policy, read, and copy into the caller's buffer.
-    // SAFETY: `SaveStateRead2` writes up to `width` bytes into `buffer`; the caller
-    // guarantees (per this function's contract) that `buffer` is valid for `width`
-    // bytes, and the supervisor additionally validates user ownership before writing.
+    // SAFETY: `SaveStateRead2` writes up to `width` bytes into `buffer`, which the
+    // caller guarantees is valid for `width` bytes. The supervisor also checks user
+    // ownership before writing.
     let phase2 =
         unsafe { raw_syscall(SyscallIndex::SaveStateRead2.as_u64(), this as u64, width as u64, buffer as u64) };
     efi::Status::from_usize(phase2 as usize)

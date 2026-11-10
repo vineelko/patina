@@ -70,7 +70,7 @@ impl MmCpuComponent {
 ///
 /// Every register is forwarded to the MM Supervisor, which reads SMRAM,
 /// enforces the save-state policy, and assembles the composite
-/// `EFI_MM_SAVE_STATE_IO_INFO` for the `IO` pseudo-register.
+/// `EFI_MM_SAVE_STATE_IO_INFO` for the IO pseudo-register.
 extern "efiapi" fn mm_cpu_read_save_state(
     this: *const MmCpuProtocol,
     width: usize,
@@ -83,7 +83,7 @@ extern "efiapi" fn mm_cpu_read_save_state(
     }
 
     // SAFETY: `buffer` is a caller-provided output buffer of at least `width`
-    // bytes (for `IO`, at least `size_of::<EFI_MM_SAVE_STATE_IO_INFO>()`). The
+    // bytes (for IO, at least `size_of::<EFI_MM_SAVE_STATE_IO_INFO>()`). The
     // supervisor validates that the buffer is user-owned before writing to it.
     unsafe {
         crate::save_state::read_save_state_register(this as usize, width, register, cpu_index, buffer.cast::<u8>())

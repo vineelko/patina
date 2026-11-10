@@ -20,7 +20,7 @@
 //!
 //! ## License
 //!
-//! Copyright (C) Microsoft Corporation.
+//! Copyright (c) Microsoft Corporation.
 //!
 //! SPDX-License-Identifier: Apache-2.0
 //!
@@ -302,7 +302,7 @@ impl MemoryRange {
     /// [a[d]] [b]    - Err(Disjoint)
     /// ```
     ///
-    /// Runs in O(n²) time without allocating.
+    /// Runs in O(n^2) time without allocating.
     ///
     /// # Errors
     ///
@@ -334,7 +334,7 @@ impl MemoryRange {
     /// [a]  [b[c]]   - Some((b, c))
     /// ```
     ///
-    /// Runs in O(n²) time without allocating.
+    /// Runs in O(n^2) time without allocating.
     pub fn find_overlap<I>(ranges: I) -> Option<(MemoryRange, MemoryRange)>
     where
         I: IntoIterator,
@@ -364,7 +364,7 @@ impl MemoryRange {
     /// [r] [s]       - Disjoint
     /// ```
     ///
-    /// Runs in O(n²) time without allocating.
+    /// Runs in O(n^2) time without allocating.
     pub fn coverage<I>(&self, ranges: I) -> Coverage
     where
         I: IntoIterator,

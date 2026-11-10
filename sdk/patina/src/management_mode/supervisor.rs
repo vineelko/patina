@@ -36,7 +36,7 @@ pub const MM_SUPERVISOR_INIT_GUID: crate::BinaryGuid =
 
 /// Command types passed from the supervisor to the user core via `invoke_demoted_routine`.
 ///
-/// Discriminant values are part of the supervisor↔user ABI and must not change.
+/// Discriminant values are part of the ABI between the supervisor and the user core and must not change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u64)]
 pub enum UserCommandType {
@@ -61,52 +61,52 @@ impl TryFrom<u64> for UserCommandType {
     }
 }
 
-/// Syscall indices for the MM Supervisor ↔ User Core syscall interface.
+/// Syscall indices for the syscall interface between the MM Supervisor and the User Core.
 ///
 /// These match the definitions in SysCallLib.h and define the ABI used when
 /// Ring 3 code issues a `syscall` instruction to the Ring 0 supervisor.
 ///
 /// ## ABI
 ///
-/// - RAX = call index ([`SyscallIndex`])
-/// - RDX = arg1
-/// - R8  = arg2
-/// - R9  = arg3
-///
-/// On return:
-/// - RAX = result value (the supervisor communicates only through RAX)
+/// RAX holds the call index ([`SyscallIndex`]), and RDX, R8, and R9 hold arg1, arg2,
+/// and arg3. On return, RAX holds the result value. The supervisor returns data only
+/// through RAX.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u64)]
 pub enum SyscallIndex {
-    /// Read MSR - Arg1: MSR index, Returns: MSR value
+    /// Reads an MSR. Arg1 is the MSR index. Returns the MSR value.
     RdMsr = 0x0000,
-    /// Write MSR - Arg1: MSR index, Arg2: value
+    /// Writes an MSR. Arg1 is the MSR index and arg2 is the value.
     WrMsr = 0x0001,
-    /// CLI - Clear interrupts
+    /// Clears interrupts (CLI).
     Cli = 0x0002,
-    /// IO Read - Arg1: port, Arg2: width
+    /// Reads an I/O port. Arg1 is the port and arg2 is the width.
     IoRead = 0x0003,
-    /// IO Write - Arg1: port, Arg2: width, Arg3: value
+    /// Writes an I/O port. Arg1 is the port, arg2 is the width, and arg3 is the value.
     IoWrite = 0x0004,
-    /// WBINVD - Write back and invalidate cache
+    /// Writes back and invalidates the cache (WBINVD).
     Wbinvd = 0x0005,
-    /// HLT - Halt processor
+    /// Halts the processor (HLT).
     Hlt = 0x0006,
-    /// Save State Read - Arg1: register, Arg2: CPU index
+    /// Starts a save-state read. Arg1 is the caller's protocol pointer, arg2 is the register, and
+    /// arg3 is the CPU index.
     SaveStateRead = 0x0007,
-    /// Maximum value for legacy syscall indices
+    /// Highest legacy syscall index.
     LegacyMax = 0xFFFF,
-    /// Allocate Pages - Arg1: `alloc_type`, Arg2: `mem_type`, Arg3: `page_count`
+    /// Allocates pages. Arg1 is the `alloc_type`, arg2 is the `mem_type`, and arg3 is the `page_count`.
     AllocPage = 0x10004,
-    /// Free Pages - Arg1: address, Arg2: `page_count`
+    /// Frees pages. Arg1 is the address and arg2 is the `page_count`.
     FreePage = 0x10005,
-    /// Start AP Procedure - Arg1: procedure, Arg2: CPU index, Arg3: argument
+    /// Starts a procedure on an AP. Arg1 is the procedure, arg2 is the CPU index, and arg3 is the
+    /// argument.
     StartApProc = 0x10006,
-    /// Save state read with extended support - Arg1: width, Arg2: buffer pointer
+    /// Completes a save-state read started by `SaveStateRead`. Arg1 is the caller's protocol
+    /// pointer, arg2 is the width, and arg3 is the output buffer pointer.
     SaveStateRead2 = 0x10021,
-    /// MM memory unblocked - Arg1: address, Arg2: size
+    /// Checks whether a memory range is unblocked for MM. Arg1 is the address and arg2 is the size.
     MmMemoryUnblocked = 0x10022,
-    /// MM is communication buffer - Arg1: address, Arg2: size
+    /// Checks whether a memory range is an MM communication buffer. Arg1 is the address and arg2
+    /// is the size.
     MmIsCommBuffer = 0x10023,
 }
 
@@ -139,23 +139,20 @@ impl SyscallIndex {
     }
 }
 
-/// Issue a raw `syscall` to the MM Supervisor from Ring 3 (user) MM.
+/// Issues a raw `syscall` to the MM Supervisor from Ring 3 (user) MM.
 ///
-/// This is the low-level primitive behind every user supervisor syscall (page
-/// allocation, save-state reads, comm-buffer validation). Higher-level typed
+/// This is the low-level primitive behind every user supervisor syscall, such as page
+/// allocation, save-state reads, and comm-buffer validation. Higher-level typed
 /// wrappers should build on it.
 ///
-/// ## ABI
-///
-/// - `RAX` = `call_index` ([`SyscallIndex`]), `RDX` = `arg1`, `R8` = `arg2`,
-///   `R9` = `arg3`.
-/// - On return, `RAX` holds the result value.
+/// RAX holds `call_index` ([`SyscallIndex`]), and RDX, R8, and R9 hold `arg1`, `arg2`,
+/// and `arg3`. On return, RAX holds the result value.
 ///
 /// ## Safety
 ///
-/// Transfers control to the supervisor; the arguments must be valid for the
-/// given syscall index. Only meaningful in Ring 3 user MM on x86-64; on any
-/// other target this is a stub reporting `EFI_UNSUPPORTED`.
+/// Transfers control to the supervisor. The arguments must be valid for the
+/// given syscall index. Only meaningful in Ring 3 user MM on x86-64. On any
+/// other target this is a stub that returns `EFI_UNSUPPORTED`.
 #[cfg(all(target_os = "uefi", target_arch = "x86_64"))]
 pub unsafe fn raw_syscall(call_index: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
     let value: u64;
@@ -180,13 +177,13 @@ pub unsafe fn raw_syscall(call_index: u64, arg1: u64, arg2: u64, arg3: u64) -> u
 
 /// Host/non-UEFI stub so the SDK links for tests and non-x86 UEFI targets.
 ///
-/// Supervisor syscalls are only meaningful in Ring 3 user MM on x86-64; anywhere
-/// else the operation is reported as unsupported.
+/// Supervisor syscalls are only meaningful in Ring 3 user MM on x86-64. Anywhere
+/// else this returns `EFI_UNSUPPORTED`.
 ///
 /// ## Safety
 ///
-/// This stub performs no operation and is always safe to call; the `unsafe`
-/// marker only keeps the signature identical to the real implementation.
+/// This stub does nothing and is always safe to call. The `unsafe` marker keeps the
+/// signature identical to the real implementation.
 #[cfg(not(all(target_os = "uefi", target_arch = "x86_64")))]
 pub unsafe fn raw_syscall(_call_index: u64, _arg1: u64, _arg2: u64, _arg3: u64) -> u64 {
     r_efi::efi::Status::UNSUPPORTED.as_usize() as u64

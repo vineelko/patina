@@ -6,20 +6,18 @@
 //! ## Vendor Selection
 //!
 //! The `intel` and `amd` modules hold each vendor's register-to-offset table
-//! and I/O field decoder. The vendor is selected at **build time** by the
-//! `save_state_amd` Cargo feature: with it the AMD64 layout is used, without it
-//! the Intel x64 layout is used.
+//! and I/O field decoder. The `save_state_amd` Cargo feature selects the vendor
+//! at build time. With it, the AMD64 layout is used. Without it, the Intel x64
+//! layout is used.
 //!
 //! [`SaveState`] is a copy of one CPU's save state map. [`SaveState::from_smbase`]
 //! copies it out of SMRAM given that CPU's SMBASE, and its methods do every read
 //! and decode, so callers never handle raw offsets or vendor field encodings.
 //! Where the SMBASE values come from is up to the caller.
 //!
-//! ## Overview
-//!
-//! The common types (`MmSaveStateRegister`, `RegisterInfo`, etc.) are always
-//! available.  The vendor modules contain only the register-to-offset lookup
-//! table and any vendor-specific constants (e.g. IO trap field layout).
+//! The common types (`MmSaveStateRegister`, `RegisterInfo`, and so on) are always
+//! available. The vendor modules contain only the register-to-offset lookup
+//! table and vendor-specific constants such as the I/O trap field layout.
 //!
 //! ## License
 //!

@@ -1,19 +1,19 @@
 //! AMD64 SMRAM Save State Map
 //!
 //! Register-to-offset lookup table for the AMD 64-bit SMRAM save state
-//! layout (`AMD_SMRAM_SAVE_STATE_MAP64`).  The save state area starts at
-//! `SMBASE + 0xFC00`.
-//! All offsets are relative to that base.
+//! layout (`AMD_SMRAM_SAVE_STATE_MAP64`). The save state area starts at
+//! `SMBASE + 0xFC00`, and all offsets are relative to that base.
 //!
-//! Reference: AMD64 Architecture Programmer's Manual Vol 2, Table 10-2;
-//! `MdePkg` `AmdSmramSaveStateMap.h`.
+//! See AMD64 Architecture Programmer's Manual Vol 2, Table 10-2, and
+//! `Register/Amd/SmramSaveStateMap.h` in `MdePkg`.
 //!
 //! ## Key Differences from Intel
 //!
-//! - Segment selectors are 2 bytes (UINT16) vs Intel's 4-byte fields.
-//! - GDT, IDT, and LDT limits **are** supported (Intel returns `None`).
-//! - CR4 is 8 bytes (Intel stores only 4 bytes).
-//! - All 8-byte registers are stored contiguously (Intel splits DT bases).
+//! - Segment selectors are 2 bytes. Intel uses 4-byte fields.
+//! - GDT, IDT, and LDT limits are recorded. Intel does not record them.
+//! - CR4 is 8 bytes. Intel stores only 4 bytes.
+//! - All 8-byte registers are stored contiguously. Intel splits the
+//!   descriptor-table bases.
 //! - IO information uses `IO_DWord` at offset 0x2C0 with a different bit
 //!   layout from Intel's `IOMisc`.
 //! - AMD64 always operates in 64-bit mode during SMM, so the LMA
@@ -32,15 +32,15 @@ use super::{
     RegisterInfo, VendorConstants,
 };
 
-/// `IO_DWord` bit 0: direction (0 = WRITE/OUT, 1 = READ/IN).
+/// `IO_DWord` bit 0, set for IN (read) and clear for OUT (write).
 const IO_DIRECTION_IN: u32 = bit!(0);
 
-/// `IO_DWord` bit 1: set when the field holds a valid I/O trap record.
+/// `IO_DWord` bit 1, set when the field holds a valid I/O trap record.
 const IO_TRAP_VALID: u32 = bit!(1);
 
-/// `IO_DWord` bit 4: SZ8 - 8-bit (byte) access.
+/// `IO_DWord` bit 4 (SZ8), set for an 8-bit access.
 const IO_SIZE_BYTE: u32 = bit!(4);
-/// `IO_DWord` bit 5: SZ16 - 16-bit (word) access.
+/// `IO_DWord` bit 5 (SZ16), set for a 16-bit access.
 const IO_SIZE_WORD: u32 = bit!(5);
 // IO_DWord bit 6 (SZ32, 32-bit) is the default when neither SZ8 nor SZ16 is
 // set, so it does not need a named constant in the decode path.
@@ -148,8 +148,8 @@ const CR4_HI: u16 = 0x034C;
 // `AMD_SMRAM_SAVE_STATE_MAP64` in the EDK II `Register/Amd/SmramSaveStateMap.h`:
 //
 //   +0x000 - 0x1FF: Reserved (padding).
-//   +0x200 - 0x25F: Segment descriptors (ES, CS, SS, DS, FS, GS) - 16 bytes each.
-//   +0x260 - 0x29F: System descriptors (GDTR, LDTR, IDTR, TR) - 16 bytes each.
+//   +0x200 - 0x25F: Segment descriptors (ES, CS, SS, DS, FS, GS), 16 bytes each.
+//   +0x260 - 0x29F: System descriptors (GDTR, LDTR, IDTR, TR), 16 bytes each.
 //   +0x2C0:         `IO_DWord` (4 bytes).
 //   +0x2D0:         EFER (8 bytes).
 //   +0x2FC:         `SMMRevId` (4 bytes).
@@ -175,15 +175,15 @@ pub(super) fn register_info(reg: MmSaveStateRegister) -> Option<RegisterInfo> {
         MmSaveStateRegister::IdtBase => {
             Some(RegisterInfo { lo_offset: IDTR_BASE_LO, hi_offset: IDTR_BASE_HI, native_width: 8 })
         }
-        // NOTE: The C reference code has a copy-paste bug where both lo and
-        // hi point to `_LDTRBaseLoDword` (0x288).  The correct hi offset is
-        // `_LDTRBaseHiDword` (0x28C).
+        // The C reference code has a copy-paste bug where both halves point to
+        // `_LDTRBaseLoDword` (0x278). The correct high offset is
+        // `_LDTRBaseHiDword` (0x27C).
         MmSaveStateRegister::LdtBase => {
             Some(RegisterInfo { lo_offset: LDTR_BASE_LO, hi_offset: LDTR_BASE_HI, native_width: 8 })
         }
 
         // GDT and IDT limits are architecturally 16-bit, stored in UINT32
-        // fields.  Only the lower 2 bytes are meaningful.
+        // fields. Only the lower 2 bytes are meaningful.
         MmSaveStateRegister::GdtLimit => Some(RegisterInfo { lo_offset: GDTR_LIMIT, hi_offset: 0, native_width: 2 }),
         MmSaveStateRegister::IdtLimit => Some(RegisterInfo { lo_offset: IDTR_LIMIT, hi_offset: 0, native_width: 2 }),
         // LDT limit is a system-segment limit (up to 32 bits in long mode).
@@ -228,24 +228,20 @@ pub(super) fn register_info(reg: MmSaveStateRegister) -> Option<RegisterInfo> {
         }
         MmSaveStateRegister::Cr0 => Some(RegisterInfo { lo_offset: CR0_LO, hi_offset: CR0_HI, native_width: 8 }),
         MmSaveStateRegister::Cr3 => Some(RegisterInfo { lo_offset: CR3_LO, hi_offset: CR3_HI, native_width: 8 }),
-        // CR4 is 8 bytes on AMD (vs 4 bytes on Intel).
+        // CR4 is 8 bytes on AMD and 4 bytes on Intel.
         MmSaveStateRegister::Cr4 => Some(RegisterInfo { lo_offset: CR4_LO, hi_offset: CR4_HI, native_width: 8 }),
     }
 }
 
 /// Parses AMD's `IO_DWord` field from the SMRAM save state.
 ///
-/// AMD `IO_DWord` bit layout:
-/// - Bit 0:      Direction - 0 = WRITE (OUT), 1 = READ (IN).
-/// - Bit 1:      Valid - set when the field holds a valid I/O trap record.
-/// - Bits \[3:2\]:  Reserved.
-/// - Bit 4:      SZ8 - 8-bit (byte) access.
-/// - Bit 5:      SZ16 - 16-bit (word) access.
-/// - Bit 6:      SZ32 - 32-bit (dword) access.
-/// - Bits \[15:7\]: Reserved.
-/// - Bits \[31:16\]: I/O port address.
+/// Bit 0 is set for IN (read) and clear for OUT (write). Bit 1 is set when the
+/// field holds a valid I/O trap record. Bits 4, 5, and 6 (SZ8, SZ16, SZ32) mark
+/// an 8-, 16-, or 32-bit access. Bits 31:16 hold the I/O port address. Bits 3:2
+/// and 15:7 are reserved.
 ///
-/// Returns `None` if the Valid bit (bit 1) is clear.
+/// Returns `None` if the valid bit (bit 1) is clear. When neither SZ8 nor SZ16
+/// is set, the access is treated as 32-bit.
 pub(super) fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
     if io_field & IO_TRAP_VALID == 0 {
         return None;
@@ -474,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_parse_io_field_defaults_to_dword() {
-        // No size bit set → dword (matches the AMD reference's `else` branch).
+        // With no size bit set the access is a dword, matching the AMD reference's `else` branch.
         let io_field: u32 = (0x0CF8 << 16) | IO_TRAP_VALID;
         let parsed = parse_io_field(io_field).unwrap();
         assert_eq!(parsed.io_width, IO_WIDTH_UINT32);
@@ -483,8 +479,8 @@ mod tests {
 
     #[test]
     fn test_parse_io_field_byte_takes_priority_over_word() {
-        // Both SZ8 and SZ16 set → byte wins (bit 4 checked first), matching the
-        // AMD reference if/else order.
+        // With both SZ8 and SZ16 set, byte wins because bit 4 is checked first,
+        // matching the AMD reference if/else order.
         let io_field: u32 = (0x0080 << 16) | IO_SIZE_BYTE | IO_SIZE_WORD | IO_TRAP_VALID;
         let parsed = parse_io_field(io_field).unwrap();
         assert_eq!(parsed.io_width, IO_WIDTH_UINT8);
@@ -493,8 +489,8 @@ mod tests {
 
     #[test]
     fn test_parse_io_field_valid_bit_clear() {
-        // Valid bit (bit 1) clear → SMI not caused by I/O → None, even though
-        // the direction and size encodings are otherwise well-formed.
+        // With the valid bit (bit 1) clear, the SMI was not caused by I/O and the
+        // result is None, even though the direction and size encodings are well-formed.
         let io_field: u32 = (0x0080 << 16) | IO_SIZE_BYTE | IO_DIRECTION_IN;
         assert!(parse_io_field(io_field).is_none());
     }

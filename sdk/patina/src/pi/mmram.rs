@@ -2,7 +2,7 @@
 //!
 //! Definitions describing the MMRAM regions that the HOB producer phase reports
 //! to the MM foundation: the per-region descriptor, the `RegionState` bits that
-//! qualify it, the ! GUID HOB payload that carries an array of descriptors, and
+//! qualify it, the GUID HOB payload that carries an array of descriptors, and
 //! the GUIDs that identify those HOBs.
 //!
 //! These correspond to `EFI_MMRAM_DESCRIPTOR` / `EFI_SMRAM_DESCRIPTOR` and
@@ -31,7 +31,7 @@ pub const EFI_ALLOCATED: u64 = 0x0000000000000010;
 /// Identifies a GUID HOB whose payload is a [`SmramReserveHobData`] header followed by an array
 /// of [`SmramDescriptor`] entries.
 ///
-/// (`6DADF1D1-D4CC-4910-BB6E-82B1FD80FF3D`)
+/// (6DADF1D1-D4CC-4910-BB6E-82B1FD80FF3D)
 /// ```
 /// # use patina::pi::mmram::SMM_SMRAM_MEMORY_GUID;
 /// # assert_eq!("6DADF1D1-D4CC-4910-BB6E-82B1FD80FF3D", format!("{}", SMM_SMRAM_MEMORY_GUID));
@@ -40,10 +40,10 @@ pub const SMM_SMRAM_MEMORY_GUID: BinaryGuid = BinaryGuid::from_string("6dadf1d1-
 
 /// `gEfiMmPeiMmramMemoryReserveGuid`
 ///
-/// The MM-era spelling of [`SMM_SMRAM_MEMORY_GUID`]; it identifies a HOB with the same payload
+/// The MM counterpart of [`SMM_SMRAM_MEMORY_GUID`]. It identifies a HOB with the same payload
 /// layout.
 ///
-/// (`0703F912-BF8D-4E2A-BE07-AB272525C592`)
+/// (0703F912-BF8D-4E2A-BE07-AB272525C592)
 /// ```
 /// # use patina::pi::mmram::MM_PEI_MMRAM_MEMORY_RESERVE_GUID;
 /// # assert_eq!("0703F912-BF8D-4E2A-BE07-AB272525C592", format!("{}", MM_PEI_MMRAM_MEMORY_RESERVE_GUID));
@@ -59,7 +59,7 @@ pub const MM_PEI_MMRAM_MEMORY_RESERVE_GUID: BinaryGuid =
 pub struct SmramDescriptor {
     /// Physical start address of the MMRAM region.
     pub physical_start: efi::PhysicalAddress,
-    /// CPU start address (may differ from physical for remapping).
+    /// CPU start address. May differ from the physical start if the region is remapped.
     pub cpu_start: efi::PhysicalAddress,
     /// Size of the MMRAM region in bytes.
     pub physical_size: u64,

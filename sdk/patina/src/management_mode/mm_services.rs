@@ -1,21 +1,19 @@
 //! MM (Management Mode) Services interface.
 //!
-//! This module defines the [`MmServices`] trait — the safe Rust interface to the
-//! PI `EFI_MM_SYSTEM_TABLE` services — and [`StandardMmServices`], a bridge that
+//! This module defines the [`MmServices`] trait, the safe Rust interface to the
+//! PI `EFI_MM_SYSTEM_TABLE` services, and [`StandardMmServices`], a bridge that
 //! attaches a concrete `MmServices` implementation to the C
 //! [`EfiMmSystemTable`](crate::pi::mm_cis::EfiMmSystemTable).
 //!
-//! ## Direction
-//!
-//! A core (e.g. `patina_mm_user_core`) implements [`MmServices`] backed by its
+//! A core (for example, `patina_mm_user_core`) implements [`MmServices`] backed by its
 //! own databases and registers that implementation with a [`StandardMmServices`]
 //! via [`StandardMmServices::init`]. The `EfiMmSystemTable` function-pointer
-//! thunks then resolve that bridge and forward each call **into** the registered
+//! thunks then resolve that bridge and forward each call into the registered
 //! implementation.
 //!
-//! As a result the C function pointers exist purely for C callers: Rust code uses
-//! the `MmServices` implementation directly and never dispatches through the
-//! shared `EfiMmSystemTable` function pointers.
+//! The C function pointers exist only for C callers. Rust code calls the
+//! `MmServices` implementation directly and never dispatches through the shared
+//! `EfiMmSystemTable` function pointers.
 //!
 //! ## License
 //!
@@ -83,21 +81,21 @@ pub enum ProtocolNotify {
 }
 
 impl ProtocolNotify {
-    /// Register a native Rust callback.
+    /// Wraps a native Rust callback.
     ///
     /// The callback receives a [`ProtocolInstalled`] event and must be `'static`
-    /// (e.g. a plain function or a reference to a `static` closure) so it can be
+    /// (for example, a plain function or a reference to a `static` closure) so it can be
     /// stored for the lifetime of MM.
     pub const fn native(callback: &'static (dyn Fn(ProtocolInstalled<'_>) -> efi::Status + Send + Sync)) -> Self {
         Self::Native(callback)
     }
 
-    /// Wrap a raw C `EFI_MM_NOTIFY_FN` callback.
+    /// Wraps a raw C `EFI_MM_NOTIFY_FN` callback.
     pub const fn efi(callback: MmNotifyFn) -> Self {
         Self::Efi(callback)
     }
 
-    /// Invoke the callback for a protocol-install event.
+    /// Invokes the callback for a protocol-install event.
     ///
     /// # Safety
     ///
@@ -128,7 +126,7 @@ impl core::fmt::Debug for ProtocolNotify {
 /// A core implements [`MmServices`] (backed by its own state) and registers that
 /// implementation here with [`init`](Self::init). The `EfiMmSystemTable` thunks
 /// then forward every call into the registered provider, so the implementation
-/// is reached directly — never through the C function pointers.
+/// is reached directly, never through the C function pointers.
 pub struct StandardMmServices {
     provider: Once<&'static dyn MmServices>,
 }
@@ -141,7 +139,7 @@ unsafe impl Sync for StandardMmServices {}
 unsafe impl Send for StandardMmServices {}
 
 impl StandardMmServices {
-    /// Create an uninitialized bridge.
+    /// Creates an uninitialized bridge.
     ///
     /// Register the backing implementation with [`init`](Self::init) before any
     /// service method (or `EfiMmSystemTable` thunk) is invoked.
@@ -149,7 +147,7 @@ impl StandardMmServices {
         Self { provider: Once::new() }
     }
 
-    /// Register the [`MmServices`] implementation to forward calls to.
+    /// Registers the [`MmServices`] implementation to forward calls to.
     ///
     /// The first registration wins; subsequent calls are ignored.
     pub fn init(&self, provider: &'static dyn MmServices) {
@@ -186,7 +184,7 @@ impl core::fmt::Debug for StandardMmServices {
 ///
 /// This is the MM analogue of
 /// [`BootServices`](crate::uefi::boot_services::BootServices).
-/// Each method maps 1:1 to a function pointer in
+/// Each method corresponds to a function pointer in
 /// [`EfiMmSystemTable`](crate::pi::mm_cis::EfiMmSystemTable).
 pub trait MmServices {
     // ---- Memory services ------------------------------------------------
@@ -273,8 +271,8 @@ pub trait MmServices {
     ///
     /// # Safety
     ///
-    /// `context`, `comm_buffer`, and `comm_buffer_size` are all optional pointers.
-    /// But they must be valid if provided.
+    /// `context`, `comm_buffer`, and `comm_buffer_size` may be null, but each must be
+    /// valid if it is not null.
     unsafe fn mmi_manage(
         &self,
         handler_type: Option<&efi::Guid>,
@@ -461,7 +459,7 @@ impl MmServices for StandardMmServices {
 /// system-table plumbing.
 static COMPONENT_MM_SERVICES: StandardMmServices = StandardMmServices::new_uninit();
 
-/// Register the [`MmServices`] provider that [`MmServiceProvider`] resolves to.
+/// Registers the [`MmServices`] provider that [`MmServiceProvider`] resolves to.
 ///
 /// Called once by the MM User Core during startup. The first registration wins.
 pub fn register_component_mm_services(provider: &'static dyn MmServices) {

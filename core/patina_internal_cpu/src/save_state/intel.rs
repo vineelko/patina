@@ -1,10 +1,10 @@
 //! Intel x64 SMRAM Save State Map
 //!
 //! Register-to-offset lookup table for the Intel 64-bit SMRAM save state
-//! layout (`SMRAM_SAVE_STATE_MAP64`).  The save state area starts at
+//! layout (`SMRAM_SAVE_STATE_MAP64`). The save state area starts at
 //! `SMBASE + 0xFC00`.
 //!
-//! Reference: Intel SDM Vol 3C, Table 31-3; `MdePkg` `SmramSaveStateMap.h`.
+//! See Intel SDM Vol 3C, Table 31-3, and `SmramSaveStateMap.h` in `MdePkg`.
 //!
 //! ## License
 //!
@@ -46,7 +46,7 @@ pub(super) const VENDOR_CONSTANTS: VendorConstants = VendorConstants {
 // the descriptor-table bases non-contiguously, so `_HI` is not `_LO + 4` there.
 // ---------------------------------------------------------------------------
 
-// Descriptor table bases (split hi/lo u32 - non-contiguous on Intel).
+// Descriptor table bases, stored as separate low and high u32 halves on Intel.
 const GDTR_BASE_LO: u16 = 0x028C;
 const GDTR_BASE_HI: u16 = 0x01D0;
 const IDTR_BASE_LO: u16 = 0x0294;
@@ -119,16 +119,17 @@ const CR4: u16 = 0x0240;
 
 /// Looks up the Intel x64 save state register info for a PI register.
 ///
-/// Returns `None` for pseudo-registers (IO, LMA, `ProcessorId`) - those are
-/// handled separately - and for unsupported registers (limits, `LdtInfo`).
+/// Returns `None` for pseudo-registers (IO, LMA, `ProcessorId`), which are
+/// handled separately, and for registers the map does not record (the limits
+/// and `LdtInfo`).
 pub(super) fn register_info(reg: MmSaveStateRegister) -> Option<RegisterInfo> {
     match reg {
-        // Descriptor table bases (split hi/lo u32 - non-contiguous on Intel)
+        // Descriptor table bases, stored as separate low and high u32 halves on Intel
         MmSaveStateRegister::GdtBase => Some(RegisterInfo { lo_offset: GDTR_BASE_LO, hi_offset: GDTR_BASE_HI, native_width: 8 }),
         MmSaveStateRegister::IdtBase => Some(RegisterInfo { lo_offset: IDTR_BASE_LO, hi_offset: IDTR_BASE_HI, native_width: 8 }),
         MmSaveStateRegister::LdtBase => Some(RegisterInfo { lo_offset: LDTR_BASE_LO, hi_offset: LDTR_BASE_HI, native_width: 8 }),
 
-        // Limits / LdtInfo - not supported in Intel 64-bit save state map.
+        // The Intel 64-bit map does not record the limits or LdtInfo.
         MmSaveStateRegister::GdtLimit
         | MmSaveStateRegister::IdtLimit
         | MmSaveStateRegister::LdtLimit
@@ -185,18 +186,16 @@ pub(super) fn register_info(reg: MmSaveStateRegister) -> Option<RegisterInfo> {
 
 /// Parses Intel's `IOMisc` field from the SMRAM save state.
 ///
-/// Intel `IOMisc` bit layout:
-/// - Bit 0:      `SmiFlag` - 1 if the SMI was caused by an I/O instruction.
-/// - Bits \[3:1\]:  `Length` - I/O width in bytes (1, 2, or 4).
-/// - Bits \[7:4\]:  `Type` - 0/8 = OUT (DX/immediate), 1/9 = IN (DX/immediate).
-/// - Bits \[31:16\]: `Port` - I/O port address.
+/// Bit 0 (`SmiFlag`) is set when an I/O instruction caused the SMI. Bits 3:1
+/// (`Length`) hold the I/O width in bytes. Bits 7:4 (`Type`) are 0 for OUT and 1
+/// for IN with the port in DX, or 8 for OUT and 9 for IN with an immediate port.
+/// Bits 31:16 (`Port`) hold the I/O port address.
 ///
-/// Returns `None` if `SmiFlag` is 0 (SMI was not caused by I/O) or the I/O
-/// type is not a simple IN or OUT (e.g. string / REP I/O).
+/// Returns `None` if `SmiFlag` is 0, if the type is not a simple IN or OUT
+/// (such as string or REP I/O), or if the length is not 1, 2, or 4.
 pub(super) fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
     log::trace!("Parsing IOMisc field: 0x{io_field:08x}");
 
-    // Check SmiFlag.
     let smi_flag = io_field & 1;
     if smi_flag == 0 {
         return None;
@@ -213,7 +212,6 @@ pub(super) fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
         _ => return None,
     };
 
-    // Map length to IO width enum and byte count.
     let (io_width, byte_count) = match length {
         1 => (IO_WIDTH_UINT8, 1usize),
         2 => (IO_WIDTH_UINT16, 2usize),
@@ -345,14 +343,14 @@ mod tests {
 
     #[test]
     fn test_parse_io_field_no_smi_flag() {
-        // SmiFlag=0 → should return None
+        // SmiFlag=0, so the result is None.
         let io_field: u32 = (0x0080 << 16) | (1 << 4) | (1 << 1);
         assert!(parse_io_field(io_field).is_none());
     }
 
     #[test]
     fn test_parse_io_field_string_io() {
-        // SmiFlag=1, Length=1, Type=4 (reserved, not a plain IN/OUT) → None
+        // SmiFlag=1, Length=1, Type=4 (reserved, not a plain IN or OUT), so the result is None.
         let io_field: u32 = (0x0080 << 16) | (4 << 4) | (1 << 1) | 1;
         assert!(parse_io_field(io_field).is_none());
     }

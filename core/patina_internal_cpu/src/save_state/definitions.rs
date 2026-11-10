@@ -184,22 +184,22 @@ pub const IO_WIDTH_UINT32: u32 = 2;
 /// `IA32_EFER.LMA` bit (bit 10).
 pub const IA32_EFER_LMA: u64 = 1 << 10;
 
-/// LMA value: processor was in 32-bit mode.
+/// LMA value reported when the processor was in 32-bit mode.
 pub const LMA_32BIT: u64 = 32;
-/// LMA value: processor was in 64-bit mode.
+/// LMA value reported when the processor was in 64-bit mode.
 pub const LMA_64BIT: u64 = 64;
 
 /// Size of one `EFI_PROCESSOR_INFORMATION` entry (PI 1.7+).
 ///
-/// Layout: `ProcessorId`(8) + `StatusFlag`(4) + `CpuPhysicalLocation`(12) +
-/// `ExtendedProcessorInformation`(24) = 48 bytes.
+/// `ProcessorId` (8 bytes), `StatusFlag` (4), `CpuPhysicalLocation` (12), and
+/// `ExtendedProcessorInformation` (24) add up to 48 bytes.
 pub const PROCESSOR_INFO_ENTRY_SIZE: usize = 48;
 
 /// Layout descriptor for a register in the SMRAM save state map.
 ///
-/// For 8-byte registers the value may be stored as two u32 at potentially
-/// non-contiguous offsets (e.g. Intel GDT/IDT/LDT base).  `lo_offset` gives
-/// the low dword; `hi_offset` gives the high dword.
+/// An 8-byte register may be stored as two `u32` halves at separate offsets,
+/// as the Intel GDT, IDT, and LDT bases are. `lo_offset` gives the low dword
+/// and `hi_offset` gives the high dword.
 ///
 /// For registers narrower than 8 bytes, `hi_offset` is 0 and only the low
 /// dword location is used.
@@ -207,7 +207,7 @@ pub const PROCESSOR_INFO_ENTRY_SIZE: usize = 48;
 pub struct RegisterInfo {
     /// Offset of the low (or only) dword from the save state base.
     pub lo_offset: u16,
-    /// Offset of the high dword.  0 for registers < 8 bytes.
+    /// Offset of the high dword, or 0 for registers narrower than 8 bytes.
     pub hi_offset: u16,
     /// Native width in bytes as stored in the save state (1, 2, 4, or 8).
     pub native_width: u8,
@@ -218,7 +218,7 @@ pub struct RegisterInfo {
 /// The processor saves its state at the top of the 64 KiB SMRAM window that
 /// starts at SMBASE, so the map spans `SMBASE + 0xFC00 .. SMBASE + 0x10000` on
 /// both Intel and AMD (`SMRAM_SAVE_STATE_MAP_OFFSET` in `MdePkg`). The Intel SDM
-/// lists the same region as offsets `0x7C00 .. 0x8000` from `SMBASE + 0x8000`,
+/// lists the same region as offsets 0x7C00 to 0x8000 from `SMBASE + 0x8000`,
 /// the SMI handler entry point.
 pub const SMRAM_SAVE_STATE_MAP_OFFSET: u64 = 0xFC00;
 
@@ -242,7 +242,7 @@ pub struct VendorConstants {
     pub smmrevid_offset: u16,
     /// Offset of the IO information field (Intel `IOMisc`, AMD `IO_DWord`).
     pub io_info_offset: u16,
-    /// Offset of `IA32_EFER` / `EFER`.
+    /// Offset of `IA32_EFER` (EFER on AMD).
     pub efer_offset: u16,
     /// Offset of `_RAX` (used for IO data reads).
     pub rax_offset: u16,
@@ -268,7 +268,7 @@ pub(crate) struct ParsedIoInfo {
     pub(crate) io_port: u16,
 }
 
-/// `EFI_MM_SAVE_STATE_IO_INFO` - written to the user buffer when reading
+/// `EFI_MM_SAVE_STATE_IO_INFO`, written to the user buffer when reading
 /// the IO pseudo-register.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, IntoBytes, Immutable)]
