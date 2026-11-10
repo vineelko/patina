@@ -68,16 +68,16 @@ pub(super) const VENDOR_CONSTANTS: VendorConstants = VendorConstants {
 // System descriptor bases.
 const GDTR_BASE_LO: u16 = 0x0268;
 const GDTR_BASE_HI: u16 = 0x026C;
-const IDTR_BASE_LO: u16 = 0x0278;
-const IDTR_BASE_HI: u16 = 0x027C;
-const LDTR_BASE_LO: u16 = 0x0288;
-const LDTR_BASE_HI: u16 = 0x028C;
+const LDTR_BASE_LO: u16 = 0x0278;
+const LDTR_BASE_HI: u16 = 0x027C;
+const IDTR_BASE_LO: u16 = 0x0288;
+const IDTR_BASE_HI: u16 = 0x028C;
 
 // System descriptor limits. GDTR/IDTR limits are architecturally 16-bit but
 // occupy UINT32 fields; the LDTR limit is a full system-segment limit.
 const GDTR_LIMIT: u16 = 0x0264;
-const IDTR_LIMIT: u16 = 0x0274;
-const LDTR_LIMIT: u16 = 0x0284;
+const LDTR_LIMIT: u16 = 0x0274;
+const IDTR_LIMIT: u16 = 0x0284;
 
 // Segment selectors: the 2-byte `Selector` at the start of each 16-byte
 // segment descriptor.
@@ -87,14 +87,14 @@ const SS_SELECTOR: u16 = 0x0220;
 const DS_SELECTOR: u16 = 0x0230;
 const FS_SELECTOR: u16 = 0x0240;
 const GS_SELECTOR: u16 = 0x0250;
-const LDTR_SELECTOR: u16 = 0x0280;
+const LDTR_SELECTOR: u16 = 0x0270;
 const TR_SELECTOR: u16 = 0x0290;
 
 // Debug registers.
-const DR7_LO: u16 = 0x0338;
-const DR7_HI: u16 = 0x033C;
-const DR6_LO: u16 = 0x0340;
-const DR6_HI: u16 = 0x0344;
+const DR7_LO: u16 = 0x0360;
+const DR7_HI: u16 = 0x0364;
+const DR6_LO: u16 = 0x0368;
+const DR6_HI: u16 = 0x036C;
 
 // Extended general-purpose registers (stored at descending addresses).
 const R8_LO: u16 = 0x03B8;
@@ -117,20 +117,20 @@ const R15_HI: u16 = 0x0384;
 // General-purpose registers.
 const RAX_LO: u16 = 0x03F8;
 const RAX_HI: u16 = 0x03FC;
-const RBX_LO: u16 = 0x03D0;
-const RBX_HI: u16 = 0x03D4;
+const RBX_LO: u16 = 0x03E0;
+const RBX_HI: u16 = 0x03E4;
 const RCX_LO: u16 = 0x03F0;
 const RCX_HI: u16 = 0x03F4;
 const RDX_LO: u16 = 0x03E8;
 const RDX_HI: u16 = 0x03EC;
-const RSP_LO: u16 = 0x03C8;
-const RSP_HI: u16 = 0x03CC;
-const RBP_LO: u16 = 0x03C0;
-const RBP_HI: u16 = 0x03C4;
-const RSI_LO: u16 = 0x03E0;
-const RSI_HI: u16 = 0x03E4;
-const RDI_LO: u16 = 0x03D8;
-const RDI_HI: u16 = 0x03DC;
+const RSP_LO: u16 = 0x03D8;
+const RSP_HI: u16 = 0x03DC;
+const RBP_LO: u16 = 0x03D0;
+const RBP_HI: u16 = 0x03D4;
+const RSI_LO: u16 = 0x03C8;
+const RSI_HI: u16 = 0x03CC;
+const RDI_LO: u16 = 0x03C0;
+const RDI_HI: u16 = 0x03C4;
 const RIP_LO: u16 = 0x0378;
 const RIP_HI: u16 = 0x037C;
 
@@ -144,26 +144,25 @@ const CR3_HI: u16 = 0x0354;
 const CR4_LO: u16 = 0x0348;
 const CR4_HI: u16 = 0x034C;
 
-///
-/// AMD save state struct layout (from SMBASE + 0xFC00):
-///
-///   +0x000 - 0x1FF: Reserved (padding).
-///   +0x200 - 0x25F: Segment descriptors (ES, CS, SS, DS, FS, GS) - 16 bytes each.
-///   +0x260 - 0x29F: System descriptors (GDTR, IDTR, LDTR, TR) - 16 bytes each.
-///   +0x2A0 - 0x2BF: MSRs (`KernelGsBase`, STAR, LSTAR, CSTAR).
-///   +0x2C0:         `IO_DWord` (4 bytes).
-///   +0x2D0:         EFER (8 bytes).
-///   +0x2FC:         `SMMRevId` (4 bytes).
-///   +0x338 - 0x3FF: Registers (DR7, DR6, CR4, CR3, CR0, RFLAGS, RIP, R15..R8,
-///                               RBP, RSP, RBX, RDI, RSI, RDX, RCX, RAX).
-///
-/// Each segment descriptor is 16 bytes:
-///   +0: Selector (UINT16)
-///   +2: Attributes (UINT16)
-///   +4: Limit (UINT32)
-///   +8: `BaseLoDword` (UINT32)
-///   +C: `BaseHiDword` (UINT32)
-///
+// AMD save state struct layout (from SMBASE + 0xFC00), matching
+// `AMD_SMRAM_SAVE_STATE_MAP64` in the EDK II `Register/Amd/SmramSaveStateMap.h`:
+//
+//   +0x000 - 0x1FF: Reserved (padding).
+//   +0x200 - 0x25F: Segment descriptors (ES, CS, SS, DS, FS, GS) - 16 bytes each.
+//   +0x260 - 0x29F: System descriptors (GDTR, LDTR, IDTR, TR) - 16 bytes each.
+//   +0x2C0:         `IO_DWord` (4 bytes).
+//   +0x2D0:         EFER (8 bytes).
+//   +0x2FC:         `SMMRevId` (4 bytes).
+//   +0x348 - 0x3FF: Registers (CR4, CR3, CR0, DR7, DR6, RFLAGS, RIP, R15..R8,
+//                              RDI, RSI, RBP, RSP, RBX, RDX, RCX, RAX).
+//
+// Each segment descriptor is 16 bytes:
+//   +0: Selector (UINT16)
+//   +2: Attributes (UINT16)
+//   +4: Limit (UINT32)
+//   +8: `BaseLoDword` (UINT32)
+//   +C: `BaseHiDword` (UINT32)
+
 /// Looks up the AMD64 save state register info for a PI register.
 ///
 /// Returns `None` for pseudo-registers (IO, LMA, `ProcessorId`) and for
@@ -325,11 +324,47 @@ mod tests {
 
         let idt_limit = register_info(MmSaveStateRegister::IdtLimit).unwrap();
         assert_eq!(idt_limit.native_width, 2);
-        assert_eq!(idt_limit.lo_offset, 0x0274);
+        assert_eq!(idt_limit.lo_offset, 0x0284);
 
         let ldt_limit = register_info(MmSaveStateRegister::LdtLimit).unwrap();
         assert_eq!(ldt_limit.native_width, 4);
-        assert_eq!(ldt_limit.lo_offset, 0x0284);
+        assert_eq!(ldt_limit.lo_offset, 0x0274);
+    }
+
+    #[test]
+    fn test_offsets_match_the_edk2_amd_map() {
+        // Offsets from `AMD_SMRAM_SAVE_STATE_MAP64` in the EDK II
+        // `Register/Amd/SmramSaveStateMap.h`, less the 0xFC00 map base.
+        let expected = [
+            (MmSaveStateRegister::LdtrSel, 0x0270),
+            (MmSaveStateRegister::LdtBase, 0x0278),
+            (MmSaveStateRegister::IdtBase, 0x0288),
+            (MmSaveStateRegister::TrSel, 0x0290),
+            (MmSaveStateRegister::Dr7, 0x0360),
+            (MmSaveStateRegister::Dr6, 0x0368),
+            (MmSaveStateRegister::Rdi, 0x03C0),
+            (MmSaveStateRegister::Rsi, 0x03C8),
+            (MmSaveStateRegister::Rbp, 0x03D0),
+            (MmSaveStateRegister::Rsp, 0x03D8),
+            (MmSaveStateRegister::Rbx, 0x03E0),
+            (MmSaveStateRegister::Rdx, 0x03E8),
+        ];
+        for (register, offset) in expected {
+            assert_eq!(register_info(register).unwrap().lo_offset, offset, "{register:?}");
+        }
+    }
+
+    #[test]
+    fn test_no_two_registers_share_a_field() {
+        let registers = (0..=u64::from(u16::MAX))
+            .filter_map(MmSaveStateRegister::from_u64)
+            .filter_map(|register| register_info(register).map(|info| (register, info.lo_offset)))
+            .collect::<Vec<_>>();
+        for (index, (register, offset)) in registers.iter().enumerate() {
+            for (other, other_offset) in &registers[index + 1..] {
+                assert_ne!(offset, other_offset, "{register:?} and {other:?} share offset {offset:#x}");
+            }
+        }
     }
 
     #[test]
@@ -474,20 +509,19 @@ mod tests {
 
     #[test]
     fn test_idt_base_hi_is_correct() {
-        // Verify we use the correct hi offset (0x27C), not the buggy
-        // C code value (0x278 = lo offset repeated).
+        // The hi half follows the lo half; it must not repeat the lo offset.
         let idt = register_info(MmSaveStateRegister::IdtBase).unwrap();
-        assert_eq!(idt.lo_offset, 0x0278);
-        assert_eq!(idt.hi_offset, 0x027C);
+        assert_eq!(idt.lo_offset, 0x0288);
+        assert_eq!(idt.hi_offset, 0x028C);
         assert_ne!(idt.lo_offset, idt.hi_offset, "hi must differ from lo");
     }
 
     #[test]
     fn test_ldt_base_hi_is_correct() {
-        // Same bug fix for LdtBase: hi should be 0x28C, not 0x288.
+        // Same check for LdtBase.
         let ldt = register_info(MmSaveStateRegister::LdtBase).unwrap();
-        assert_eq!(ldt.lo_offset, 0x0288);
-        assert_eq!(ldt.hi_offset, 0x028C);
+        assert_eq!(ldt.lo_offset, 0x0278);
+        assert_eq!(ldt.hi_offset, 0x027C);
         assert_ne!(ldt.lo_offset, ldt.hi_offset, "hi must differ from lo");
     }
 }
