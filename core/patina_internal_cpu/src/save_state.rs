@@ -680,7 +680,7 @@ mod tests {
     }
 
     #[test]
-    fn test_save_state_data_debug_hides_the_register_contents() {
+    fn test_save_state_debug_hides_the_register_contents() {
         let mut map = new_map();
         write_u64(&mut map, vendor_constants().rax_offset, 0x5EC2_E7DA_7A00_0000);
         assert_eq!(format!("{:?}", SaveState::new(*map)), format!("SaveState({:?})", vendor_name()));

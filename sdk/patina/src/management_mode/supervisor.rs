@@ -154,7 +154,7 @@ impl SyscallIndex {
 /// ## Safety
 ///
 /// Transfers control to the supervisor; the arguments must be valid for the
-/// given syscall index. Only meaningful in Ring 3 user MM on x86-64” on any
+/// given syscall index. Only meaningful in Ring 3 user MM on x86-64; on any
 /// other target this is a stub reporting `EFI_UNSUPPORTED`.
 #[cfg(all(target_os = "uefi", target_arch = "x86_64"))]
 pub unsafe fn raw_syscall(call_index: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {

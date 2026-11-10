@@ -2,7 +2,7 @@
 //!
 //! Register-to-offset lookup table for the AMD 64-bit SMRAM save state
 //! layout (`AMD_SMRAM_SAVE_STATE_MAP64`).  The save state area starts at
-//! `SMBASE + 0xFC00` (the address stored in `CpuSaveState[CpuIndex]`).
+//! `SMBASE + 0xFC00`.
 //! All offsets are relative to that base.
 //!
 //! Reference: AMD64 Architecture Programmer's Manual Vol 2, Table 10-2;
@@ -245,7 +245,7 @@ pub(super) fn register_info(reg: MmSaveStateRegister) -> Option<RegisterInfo> {
 /// - Bits \[15:7\]: Reserved.
 /// - Bits \[31:16\]: I/O port address.
 ///
-/// Returns `None` if the data-size encoding is invalid (value 2 is reserved).
+/// Returns `None` if the Valid bit (bit 1) is clear.
 pub(super) fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
     if io_field & IO_TRAP_VALID == 0 {
         return None;
@@ -267,8 +267,8 @@ pub(super) fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
 
 /// Returns whether the AMD SMRAM save state map exposes I/O trap information
 /// for a save state with the given raw `SMMRevId`.
-/// Always return true because this is not really used.
 ///
+/// AMD always records `IO_DWord`, so this always returns `true`.
 pub(super) fn io_info_supported(_smm_rev_id: u32) -> bool {
     true
 }

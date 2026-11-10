@@ -2,7 +2,7 @@
 //!
 //! Register-to-offset lookup table for the Intel 64-bit SMRAM save state
 //! layout (`SMRAM_SAVE_STATE_MAP64`).  The save state area starts at
-//! `SMBASE + 0x7C00` (the address stored in `CpuSaveState[CpuIndex]`).
+//! `SMBASE + 0xFC00`.
 //!
 //! Reference: Intel SDM Vol 3C, Table 31-3; `MdePkg` `SmramSaveStateMap.h`.
 //!
@@ -40,7 +40,7 @@ pub(super) const VENDOR_CONSTANTS: VendorConstants = VendorConstants {
 };
 
 // ---------------------------------------------------------------------------
-// `SMRAM_SAVE_STATE_MAP64` field offsets, relative to `SMBASE + 0x7C00`.
+// `SMRAM_SAVE_STATE_MAP64` field offsets, relative to `SMBASE + 0xFC00`.
 //
 // `_LO` / `_HI` name the two halves of a 64-bit field. Unlike AMD, Intel stores
 // the descriptor-table bases non-contiguously, so `_HI` is not `_LO + 4` there.
@@ -229,9 +229,9 @@ pub(super) fn parse_io_field(io_field: u32) -> Option<ParsedIoInfo> {
 
 /// Returns whether the Intel SMRAM save state map exposes I/O trap information
 /// for a save state with the given raw `SMMRevId`.
-/// Must be above 0x30004
 ///
-/// older revisions do not carry I/O trap information.
+/// Returns `true` when `SMMRevId` is at least 0x30004; older revisions do not
+/// record I/O trap information.
 pub(super) fn io_info_supported(smm_rev_id: u32) -> bool {
     smm_rev_id >= VENDOR_CONSTANTS.min_rev_id_io
 }
@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn test_parse_io_field_string_io() {
-        // SmiFlag=1, Length=1, Type=4 (string, not IN/OUT) → None
+        // SmiFlag=1, Length=1, Type=4 (reserved, not a plain IN/OUT) → None
         let io_field: u32 = (0x0080 << 16) | (4 << 4) | (1 << 1) | 1;
         assert!(parse_io_field(io_field).is_none());
     }
