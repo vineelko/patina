@@ -17,9 +17,9 @@
 //! ## Entry Protocol
 //!
 //! The supervisor calls the user core entry point with three arguments:
-//! - `arg1` (`u64`): Command type (0 = `StartUserCore`, 1 = `UserRequest`, 2 = `UserApProcedure`)
-//! - `arg2` (`u64`): Command-specific data pointer
-//! - `arg3` (`u64`): Command-specific size or auxiliary data
+//! - `op_code` (`u64`): Command type (0 = `StartUserCore`, 1 = `UserRequest`, 2 = `UserApProcedure`)
+//! - `arg1` (`u64`): Command-specific data pointer (HOB list, request buffer, or AP procedure)
+//! - `arg2` (`u64`): Command-specific size or auxiliary data
 //!
 //! ## Memory Model
 //!
@@ -112,7 +112,7 @@ pub const MM_SUPERVISOR_DEPEX_HOB_GUID: patina::BinaryGuid =
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct DepexHobData {
-    /// Protocol GUID the dependency expression applies to.
+    /// File GUID of the driver the dependency expression belongs to.
     pub name: patina::BinaryGuid,
     /// Size in bytes of the dependency expression that follows.
     pub depex_expression_size: u64,
@@ -268,9 +268,9 @@ impl MmUserCore {
     /// This is called by the supervisor via `invoke_demoted_routine`. The arguments
     /// correspond to the three parameters passed by the supervisor:
     ///
-    /// - `arg1`: Command type ([`UserCommandType`])
-    /// - `arg2`: Command-specific data pointer
-    /// - `arg3`: Command-specific size or auxiliary data
+    /// - `op_code`: Command type ([`UserCommandType`])
+    /// - `arg1`: Command-specific data pointer
+    /// - `arg2`: Command-specific size or auxiliary data
     ///
     /// Returns 0 on success, or a non-zero status on failure.
     pub fn entry_point_worker<C: MmComponentInfo>(&'static self, op_code: u64, arg1: u64, arg2: u64) -> u64 {
@@ -292,7 +292,7 @@ impl MmUserCore {
     /// Handle the `StartUserCore` command.
     ///
     /// This is called once during initialization. The supervisor passes the HOB list
-    /// pointer as `arg2`. We:
+    /// pointer as `arg1`. We:
     /// 1. Set the static instance
     /// 2. Walk HOBs to discover the communication buffer and MM drivers
     /// 3. Build the MM System Table and publish the HOB list configuration table

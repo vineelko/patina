@@ -115,13 +115,13 @@ impl MmDispatcher {
         Self { executing: Mutex::new(false), pending: Mutex::new(Vec::new()) }
     }
 
-    /// Discover drivers from HOBs and dispatch them.
+    /// Discover drivers from HOBs and record them for later dispatch.
     ///
     /// This is the main entry point called during `StartUserCore`. It:
     /// 1. Walks the HOB list to find `MemoryAllocationModule` HOBs with the supervisor alloc GUID
     /// 2. Skips the supervisor core and user core modules
     /// 3. Reads the paired depex `GuidHob` that follows each driver HOB
-    /// 4. Evaluates dependencies and dispatches in order
+    /// 4. Records the discovered drivers as pending
     ///
     /// The discovered drivers are dispatched later by [`dispatch`](Self::dispatch)
     /// when the `MM_DISPATCH_EVENT_GROUP_GUID` MMI is delivered.
@@ -199,7 +199,7 @@ impl MmDispatcher {
                             if data.is_empty() {
                                 None
                             } else {
-                                // Check the name matches the expected depex HOB GUID before parsing.
+                                // Check the depex HOB belongs to this driver.
                                 let depex_hob_data = <[u8]>::as_ptr(data).cast::<DepexHobData>();
                                 // SAFETY: We trust that the supervisor correctly formats the depex HOB data
                                 let depex_hob_data = unsafe { &*depex_hob_data };

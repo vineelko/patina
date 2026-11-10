@@ -1,7 +1,7 @@
 #
-# Entry point to a Standalone MM driver.
+# Entry point shim for the MM User Core.
 #
-# Copyright (c), Microsoft Corporation.
+# Copyright (c) Microsoft Corporation.
 # SPDX-License-Identifier: BSD-2-Clause-Patent
 #
 

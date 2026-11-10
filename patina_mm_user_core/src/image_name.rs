@@ -267,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn test_loaded_image_name_rejects_a_size_that_does_not_fit() {
+    fn test_loaded_image_name_accepts_a_size_that_fits() {
         let image = build_mapped_pe(b"Whatever.pdb\0");
 
         // SAFETY: the size is rejected before any read when it cannot be a usize. On a

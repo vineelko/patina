@@ -6,9 +6,10 @@
 //! configurations, and services that are then dispatched in dependency order
 //! during MM User Core startup.
 //!
-//! The component [`Storage`], [`Component`], and parameter types are reused
-//! directly from the Patina SDK ([`patina::component`]); only the dispatcher and
-//! the platform-facing [`MmComponentInfo`] registration trait live here.
+//! The component [`Storage`], [`Component`](patina::component::Component), and
+//! parameter types are reused directly from the Patina SDK ([`patina::component`]);
+//! only the dispatcher and the platform-facing [`MmComponentInfo`] registration
+//! trait live here.
 //!
 //! ## Relationship to MM driver dispatch
 //!

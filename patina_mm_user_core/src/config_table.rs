@@ -23,10 +23,9 @@
 //!
 //! ## Thread Safety
 //!
-//! All access is serialized through a `spin::Mutex`. The configuration table
-//! array pointer stored in the system table is replaced atomically (pointer-
-//! sized write) so readers always see a consistent snapshot even without
-//! holding the lock.
+//! All access is serialized through a `spin::Mutex`. The previous configuration
+//! table array is freed before the new one is published to the system table, so
+//! readers must not access the table concurrently with an install.
 //!
 //! ## License
 //!
@@ -143,7 +142,6 @@ impl MmConfigurationTableDb {
     /// Look up a configuration table entry by GUID.
     ///
     /// Returns the `vendor_table` pointer if found, or `None`.
-    #[allow(dead_code)]
     pub fn get_configuration_table(&self, guid: &efi::Guid) -> Option<*mut c_void> {
         let inner = self.inner.lock();
         inner.entries.iter().find(|e| e.vendor_guid == *guid).map(|e| e.vendor_table)
@@ -155,8 +153,8 @@ impl MmConfigurationTableDb {
 
     /// Re‐publish the current entry list to the MM System Table.
     ///
-    /// Allocates a new boxed slice, updates the system table pointer, then
-    /// reclaims the previous allocation.
+    /// Reclaims the previous allocation, then allocates a new boxed slice and
+    /// updates the system table pointer and entry count.
     fn publish_to_system_table(inner: &mut ConfigTableInner, mmst: *mut EfiMmSystemTable) {
         if mmst.is_null() {
             return;

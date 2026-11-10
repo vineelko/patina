@@ -42,9 +42,6 @@ use core::ffi::c_void;
 use patina::standard::efi;
 use spin::Mutex;
 
-/// MMI handler entry point signature (external / C ABI).
-///
-/// Re-exported from [`patina::pi::mm_cis::MmiHandlerEntryPoint`].
 use patina::pi::mm_cis::MmiHandlerEntryPoint;
 
 /// `MAX_BIT >> 2`, which `PI_ENCODE_WARNING` and `PI_ENCODE_ERROR` set so PI status codes do not

@@ -1,6 +1,6 @@
-# Patina MM Supervisor Core
+# Patina MM User Core
 
-A pure Rust implementation of the MM Supervisor Core for standalone MM mode environments.
+A pure Rust implementation of the MM User Core for standalone MM mode environments.
 
 ## Overview
 
@@ -38,28 +38,19 @@ For simplicity, only runtime data is allowed from the user level.
    rustup override set nightly
    ```
 
-### Build Command
+### Build
 
-Build the example MM Supervisor binary:
-
-```bash
-cargo build --target x86_64-unknown-uefi --bin example_mm_user_core --features="x64 user_core"
-```
-
-The output PE/COFF binary will be at:
-
-```text
-target/x86_64-unknown-uefi/debug/example_mm_user_core.efi
-```
+This crate is a library. It is linked into a platform-provided MM User Core binary, which is built for the
+`x86_64-unknown-uefi` target to produce the PE/COFF image.
 
 ### Entry Point
 
-The MM Supervisor exports `user_core_main` as its entry point, matching the EDK2 convention:
+The MM User Core binary exports `user_core_main` as its entry point, matching the EDK2 convention:
 
 ```rust
 #[cfg_attr(target_os = "uefi", unsafe(export_name = "user_core_main"))]
 pub extern "efiapi" fn mm_user_main(op_code: u64, arg1: u64, arg2: u64) -> u64 {
-    USER_CORE.entry_point_worker(op_code, arg1, arg2)
+    USER_CORE.entry_point_worker::<MyMmPlatform>(op_code, arg1, arg2)
 }
 ```
 
@@ -76,7 +67,7 @@ The entry point supports 3 operation codes:
 
 1. **Start User Core**:
    - Executed on BSP only
-   - Initializes the user core and sets up the environment (pool mananger, protocol database, MMI handler database,
+   - Initializes the user core and sets up the environment (pool manager, protocol database, MMI handler database,
    etc.)
    - Dispatches all preloaded user drivers
 
@@ -98,19 +89,31 @@ The entry point supports 3 operation codes:
 #![no_main]
 
 use core::{ffi::c_void, panic::PanicInfo};
-use patina_mm_user_core::MmUserCore;
+use patina_mm_user_core::{
+    MmUserCore,
+    component_dispatcher::{Add, Component, MmComponentInfo},
+};
 
 // Static instance - no heap allocation required
 static USER_CORE: MmUserCore = MmUserCore::new();
+
+// The platform provides its components via an `MmComponentInfo` type.
+struct MyMmPlatform;
+
+impl MmComponentInfo for MyMmPlatform {
+    fn components(mut add: Add<Component>) {
+        // add.component(...);
+    }
+}
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     loop { core::hint::spin_loop(); }
 }
 
-#[unsafe(export_name = "MmUserCoreMain")]
+#[unsafe(export_name = "user_core_main")]
 pub extern "efiapi" fn mm_user_main(op_code: u64, arg1: u64, arg2: u64) -> u64 {
-    USER_CORE.entry_point_worker(op_code, arg1, arg2)
+    USER_CORE.entry_point_worker::<MyMmPlatform>(op_code, arg1, arg2)
 }
 ```
 
