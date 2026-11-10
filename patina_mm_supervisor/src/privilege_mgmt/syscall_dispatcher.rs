@@ -191,9 +191,11 @@ impl<O: SyscallOps> SyscallDispatcher<O> {
         };
 
         match result {
-            Err(err) if index == SyscallIndex::SaveStateRead2 => {
-                log::trace!("Syscall SaveStateRead2: {:?} returned value=0x{:x}", index, err.as_usize());
-                Ok(err.as_usize() as u64) // Return error code to caller for SaveStateRead2
+            // Both save-state phases report failures back to the caller as an EFI status in RAX,
+            // which is what `EFI_MM_CPU_PROTOCOL.ReadSaveState` returns to its own caller.
+            Err(err) if matches!(index, SyscallIndex::SaveStateRead | SyscallIndex::SaveStateRead2) => {
+                log::trace!("Syscall {:?} returned value=0x{:x}", index, err.as_usize());
+                Ok(err.as_usize() as u64)
             }
             Err(err) => {
                 panic!("Syscall: {index:?} failed with error: {err:?}"); // Panic for other syscalls
@@ -640,9 +642,11 @@ pub extern "efiapi" fn syscall_dispatcher(
 ) -> u64 {
     let ctx = SyscallContext { call_index, arg1, arg2, arg3, caller_addr, ring3_stack_ptr };
 
-    // Unwrap is safe here because the dispatch() will always return a u64
-    // result, and panic on failure.
-    SyscallDispatcher::new().dispatch(&ctx).unwrap()
+    // `dispatch` panics on a failed privileged request and returns save-state failures as a
+    // status value, so the only error left is an unknown syscall index.
+    SyscallDispatcher::new()
+        .dispatch(&ctx)
+        .unwrap_or_else(|status| panic!("Syscall 0x{call_index:x} failed with error: {status:?}"))
 }
 
 #[cfg(test)]
@@ -1038,7 +1042,7 @@ mod tests {
     #[should_panic(expected = "failed with error")]
     fn test_dispatch_panics_when_a_handler_fails() {
         // Ring 3 cannot be allowed to continue after a rejected privileged request, so every
-        // syscall except `SaveStateRead2` turns a handler error into a panic.
+        // syscall except the two save-state phases turns a handler error into a panic.
         let dispatcher = new_dispatcher(MockOps { msr_policy: PolicyDecision::Unavailable, ..Default::default() });
         let _ = dispatcher.dispatch(&ctx(SyscallIndex::RdMsr.as_u64(), 0x1B, 0, 0));
     }
@@ -1051,8 +1055,15 @@ mod tests {
     }
 
     #[test]
-    fn test_dispatch_returns_status_code_for_save_state_read2_errors() {
-        // `SaveStateRead2` reports failures back to the caller instead of panicking.
+    fn test_dispatch_returns_status_code_for_save_state_read_errors() {
+        // Both save-state phases report failures back to the caller instead of panicking. A
+        // register the save state does not define fails in phase 1.
+        let dispatcher = new_dispatcher(MockOps { phase1_result: Err(Status::NOT_FOUND), ..Default::default() });
+        assert_eq!(
+            dispatcher.dispatch(&ctx(SyscallIndex::SaveStateRead.as_u64(), 0x1000, 999, 0)),
+            Ok(Status::NOT_FOUND.as_usize() as u64)
+        );
+
         let dispatcher = new_dispatcher(MockOps { phase2_result: Err(Status::ACCESS_DENIED), ..Default::default() });
         assert_eq!(
             dispatcher.dispatch(&ctx(SyscallIndex::SaveStateRead2.as_u64(), 0x1000, 8, 0x2000)),
