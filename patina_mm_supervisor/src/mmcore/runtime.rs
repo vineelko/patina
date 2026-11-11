@@ -516,8 +516,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         }
     }
 
-    /// Runs `RunProcedure` commands from the BSP until the BSP releases this AP through its
-    /// rendezvous semaphore.
+    /// Runs the procedures the BSP posts to this AP's mailbox until the BSP releases this AP
+    /// through its rendezvous semaphore.
     fn ap_holding_pen(&'static self, cpu_id: u32) {
         // Each CPU owns the mailbox at its dense slot index.
         let cpu_index = if let Some(idx) = self.cpu_manager.find_cpu_index(cpu_id) {
@@ -547,7 +547,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
     /// Runs a command received by an AP, marking the AP busy while it runs.
     fn execute_ap_command(&self, cpu_id: u32, command: &ApCommand) -> ApResponse {
-        let ApCommand::RunProcedure { procedure, argument } = *command;
+        let ApCommand { procedure, argument } = *command;
         self.cpu_manager.set_ap_state(cpu_id, ApState::Busy);
         let response = self.run_procedure_on_ap(cpu_id, procedure, argument);
         self.cpu_manager.set_ap_state(cpu_id, ApState::InHoldingPen);
@@ -556,7 +556,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
     /// Runs a procedure on an AP, demoting to Ring 3 if the procedure is user-owned.
     ///
-    /// This is the AP side of `ApCommand::RunProcedure` and mirrors the C `ProcedureWrapper`: it
+    /// This is the AP side of [`ApCommand`] and mirrors the C `ProcedureWrapper`: it
     /// checks who owns the procedure's page and either calls it directly (supervisor-owned) or
     /// demotes to Ring 3 (user-owned).
     ///
@@ -696,9 +696,9 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             return efi::Status::INVALID_PARAMETER.as_usize() as u64;
         }
 
-        // 5. Send the RunProcedure command to the AP via mailbox
+        // 5. Send the procedure to the AP via mailbox
         //    This will fail if the AP's mailbox is not empty (AP is busy).
-        let command = ApCommand::RunProcedure { procedure, argument };
+        let command = ApCommand { procedure, argument };
         if self.mailbox_manager.send_command(cpu_index, command).is_err() {
             log::error!("START_AP: AP (CPU {cpu_id}, index {cpu_index}) is busy or mailbox unavailable");
             return efi::Status::INVALID_PARAMETER.as_usize() as u64;

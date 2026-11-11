@@ -52,21 +52,16 @@ impl core::fmt::Display for MailboxError {
     }
 }
 
-/// Commands that can be sent from the BSP to an AP through its mailbox.
+/// A procedure the BSP asks an AP to run through its mailbox.
 ///
-/// An AP with no pending command keeps polling, so there is no no-op variant.
+/// The AP demotes to Ring 3 if the procedure lives in user-owned memory, and calls it directly
+/// in Ring 0 otherwise. An AP with no pending command keeps polling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ApCommand {
-    /// Runs a procedure on the AP.
-    ///
-    /// The AP demotes to Ring 3 if the procedure lives in user-owned memory, and calls it
-    /// directly in Ring 0 otherwise.
-    RunProcedure {
-        /// The procedure function pointer.
-        procedure: u64,
-        /// The argument to pass to the procedure.
-        argument: u64,
-    },
+pub struct ApCommand {
+    /// The procedure function pointer.
+    pub procedure: u64,
+    /// The argument to pass to the procedure.
+    pub argument: u64,
 }
 
 /// Responses from APs to the BSP.
@@ -131,9 +126,9 @@ enum MailboxState {
 pub struct ApMailbox {
     /// Current state of the mailbox.
     state: AtomicU32,
-    /// The procedure function pointer (for `RunProcedure`).
+    /// The procedure function pointer of the pending [`ApCommand`].
     procedure: AtomicU64,
-    /// The argument to pass to the procedure (for `RunProcedure`).
+    /// The argument of the pending [`ApCommand`].
     argument: AtomicU64,
     /// The response data (packed into u64).
     response: AtomicU64,
@@ -165,7 +160,7 @@ impl ApMailbox {
         if result.is_ok() {
             let procedure = self.procedure.load(Ordering::Acquire);
             let argument = self.argument.load(Ordering::Acquire);
-            Some(ApCommand::RunProcedure { procedure, argument })
+            Some(ApCommand { procedure, argument })
         } else {
             None
         }
@@ -200,7 +195,7 @@ impl ApMailbox {
         }
 
         // Relaxed is enough: the Release store to `state` below orders these writes before it.
-        let ApCommand::RunProcedure { procedure, argument } = command;
+        let ApCommand { procedure, argument } = command;
         self.procedure.store(procedure, Ordering::Relaxed);
         self.argument.store(argument, Ordering::Relaxed);
 
@@ -243,16 +238,16 @@ impl Default for ApMailbox {
     }
 }
 
-/// Holds one mailbox per CPU index, `MAX_APS` in total.
-pub struct MailboxManager<const MAX_APS: usize> {
+/// Holds one mailbox per CPU index, `MAX_CPUS` in total.
+pub struct MailboxManager<const MAX_CPUS: usize> {
     /// One mailbox per CPU index.
-    mailboxes: [ApMailbox; MAX_APS],
+    mailboxes: [ApMailbox; MAX_CPUS],
 }
 
-impl<const MAX_APS: usize> MailboxManager<MAX_APS> {
+impl<const MAX_CPUS: usize> MailboxManager<MAX_CPUS> {
     /// Creates a manager with every mailbox empty.
     pub const fn new() -> Self {
-        Self { mailboxes: [const { ApMailbox::new() }; MAX_APS] }
+        Self { mailboxes: [const { ApMailbox::new() }; MAX_CPUS] }
     }
 
     /// Sends a command to a specific AP.
@@ -261,8 +256,8 @@ impl<const MAX_APS: usize> MailboxManager<MAX_APS> {
     /// [`MailboxError::CommandAlreadyPending`] when the AP has not taken its previous command.
     pub fn send_command(&self, cpu_index: usize, command: ApCommand) -> MmSupervisorResult<()> {
         let Some(mailbox) = self.mailboxes.get(cpu_index) else {
-            log::error!("No mailbox for CPU index {cpu_index} ({MAX_APS} slots)");
-            return Err(MailboxError::NoMailboxForCpuIndex { index: cpu_index, len: MAX_APS }.into());
+            log::error!("No mailbox for CPU index {cpu_index} ({MAX_CPUS} slots)");
+            return Err(MailboxError::NoMailboxForCpuIndex { index: cpu_index, len: MAX_CPUS }.into());
         };
         if mailbox.send_command(command) {
             Ok(())
@@ -311,7 +306,7 @@ impl<const MAX_APS: usize> MailboxManager<MAX_APS> {
     }
 }
 
-impl<const MAX_APS: usize> Default for MailboxManager<MAX_APS> {
+impl<const MAX_CPUS: usize> Default for MailboxManager<MAX_CPUS> {
     fn default() -> Self {
         Self::new()
     }

@@ -43,6 +43,12 @@ pub enum PolicyGateError {
     AccessDenied,
     /// The destination buffer is too small for the merged policy.
     BufferTooSmall,
+    /// The memory policy buffer is null or holds no descriptors.
+    InvalidMemoryPolicyBuffer,
+    /// The memory policy buffer was already set, and may not be replaced.
+    MemoryPolicyBufferAlreadySet,
+    /// The memory policy snapshot was already taken, and may not be retaken.
+    AlreadyLocked,
     /// Internal error during policy evaluation.
     InternalError,
 }
@@ -64,6 +70,9 @@ impl core::fmt::Display for PolicyGateError {
             }
             Self::AccessDenied => write!(f, "the firmware policy denied the access"),
             Self::BufferTooSmall => write!(f, "the destination buffer is too small for the policy"),
+            Self::InvalidMemoryPolicyBuffer => write!(f, "the memory policy buffer is null or empty"),
+            Self::MemoryPolicyBufferAlreadySet => write!(f, "the memory policy buffer is already set"),
+            Self::AlreadyLocked => write!(f, "the memory policy snapshot is already taken"),
             Self::InternalError => write!(f, "an internal error occurred while evaluating the policy"),
         }
     }
@@ -76,18 +85,31 @@ impl core::fmt::Display for PolicyGateError {
 /// `FETCH_POLICY` copy-out trust its fields. Validating the layout once here is what makes their
 /// unchecked `slice::from_raw_parts` calls sound.
 ///
+/// Every offset in the blob is a byte offset from the start of the blob, not an address. So the
+/// end of each structure is also an offset, and it is compared with the size the blob declares.
+///
+/// ## Errors
+///
+/// Returns `NullPointer` for a null `policy_ptr`, `InvalidVersion` for a policy that is not
+/// V1.0, and `MalformedPolicy` when an offset or count reaches past the buffer.
+///
 /// ## Safety
 ///
-/// `policy_ptr` must be non-null and point to `buffer_size` readable bytes.
+/// A non-null `policy_ptr` must point to `buffer_size` readable bytes.
 unsafe fn validate_policy_layout(policy_ptr: *const u8, buffer_size: usize) -> MmSupervisorResult<()> {
+    if policy_ptr.is_null() {
+        log::error!("Policy gate creation failed: policy buffer pointer is null");
+        return Err(PolicyGateError::NullPointer.into());
+    }
+
     let header_size = core::mem::size_of::<SecurePolicyDataV1_0>();
     if buffer_size < header_size {
         log::error!("policy blob buffer is {buffer_size} bytes, too small for a {header_size}-byte header");
         return Err(PolicyGateError::MalformedPolicy.into());
     }
 
-    // SAFETY: the buffer holds a complete header (checked above), and the caller guarantees
-    // `policy_ptr` is readable for `buffer_size` bytes.
+    // SAFETY: `policy_ptr` is non-null (checked above), the buffer holds a complete header
+    // (checked above), and the caller guarantees `policy_ptr` is readable for `buffer_size` bytes.
     let policy = unsafe { &*policy_ptr.cast::<SecurePolicyDataV1_0>() };
 
     if !policy.is_valid_version() {
@@ -107,13 +129,13 @@ unsafe fn validate_policy_layout(policy_ptr: *const u8, buffer_size: usize) -> M
         return Err(PolicyGateError::MalformedPolicy.into());
     }
 
-    let roots_end = (policy.policy_root_count as usize)
+    let roots_end_offset = (policy.policy_root_count as usize)
         .checked_mul(core::mem::size_of::<PolicyRootV1>())
         .and_then(|bytes| bytes.checked_add(policy.policy_root_offset as usize))
         .ok_or(PolicyGateError::MalformedPolicy)?;
-    if roots_end > declared {
+    if roots_end_offset > declared {
         log::error!(
-            "policy root array ends at {roots_end}, past the {declared}-byte blob ({} roots at offset {})",
+            "policy root array ends at offset {roots_end_offset}, past the {declared}-byte blob ({} roots at offset {})",
             policy.policy_root_count,
             policy.policy_root_offset
         );
@@ -129,13 +151,13 @@ unsafe fn validate_policy_layout(policy_ptr: *const u8, buffer_size: usize) -> M
             continue;
         };
 
-        let descriptors_end = (root.count as usize)
+        let descriptors_end_offset = (root.count as usize)
             .checked_mul(desc_size)
             .and_then(|bytes| bytes.checked_add(root.offset as usize))
             .ok_or(PolicyGateError::MalformedPolicy)?;
-        if descriptors_end > declared {
+        if descriptors_end_offset > declared {
             log::error!(
-                "policy type {} descriptors end at {descriptors_end}, past the {declared}-byte blob",
+                "policy type {} descriptors end at offset {descriptors_end_offset}, past the {declared}-byte blob",
                 root.policy_type
             );
             return Err(PolicyGateError::MalformedPolicy.into());
@@ -182,16 +204,11 @@ impl PolicyGate {
     ///
     /// ## Safety
     ///
-    /// `policy_ptr` must point to `buffer_size` readable bytes that stay valid for the lifetime
-    /// of this `PolicyGate`.
+    /// A non-null `policy_ptr` must point to `buffer_size` readable bytes that stay valid for the
+    /// lifetime of this `PolicyGate`.
     pub unsafe fn new(policy_ptr: *const u8, buffer_size: usize) -> MmSupervisorResult<Self> {
-        if policy_ptr.is_null() {
-            log::error!("Policy gate creation failed: policy buffer pointer is null");
-            return Err(PolicyGateError::NullPointer.into());
-        }
-
-        // SAFETY: `policy_ptr` is non-null (checked above) and, per this function's contract,
-        // points to `buffer_size` readable bytes that outlive the gate.
+        // SAFETY: per this function's contract, a non-null `policy_ptr` points to `buffer_size`
+        // readable bytes that outlive the gate. The null case is rejected inside the call.
         unsafe { validate_policy_layout(policy_ptr, buffer_size) }?;
 
         Ok(Self {
@@ -202,7 +219,7 @@ impl PolicyGate {
         })
     }
 
-    /// Sets the buffer that receives the page table snapshot. Call before
+    /// Sets the buffer that receives the page table snapshot. Call once, before
     /// [`take_snapshot`](Self::take_snapshot); the address and size usually come from the
     /// `PassDown` HOB.
     ///
@@ -210,9 +227,29 @@ impl PolicyGate {
     /// lifetime of the `PolicyGate`. Storing the pointer is safe; that contract is part of the
     /// safety requirements of [`Self::take_snapshot`], [`Self::verify_snapshot`] and
     /// [`Self::fetch_and_update_policy`], which dereference it.
-    pub fn set_memory_policy_buffer(&mut self, buffer: *mut MemDescriptorV1_0, max_count: usize) {
+    ///
+    /// ## Errors
+    ///
+    /// Returns `InvalidMemoryPolicyBuffer` for a null `buffer` or a zero `max_count`, and
+    /// `MemoryPolicyBufferAlreadySet` if a buffer was already set. The snapshot is the baseline
+    /// that later page table checks compare against, so it may not be moved once set.
+    pub fn set_memory_policy_buffer(
+        &mut self,
+        buffer: *mut MemDescriptorV1_0,
+        max_count: usize,
+    ) -> MmSupervisorResult<()> {
+        if !self.memory_policy_buffer.is_null() {
+            log::error!("memory policy buffer is already set");
+            return Err(PolicyGateError::MemoryPolicyBufferAlreadySet.into());
+        }
+        if buffer.is_null() || max_count == 0 {
+            log::error!("memory policy buffer {buffer:p} with {max_count} entries is not usable");
+            return Err(PolicyGateError::InvalidMemoryPolicyBuffer.into());
+        }
+
         self.memory_policy_buffer = buffer;
         self.memory_policy_max_count = max_count;
+        Ok(())
     }
 
     /// Returns the policy header.
@@ -525,8 +562,13 @@ impl PolicyGate {
     ///
     /// Walks the active page table, writes the descriptors into the memory policy buffer, and
     /// records the descriptor count. Afterwards [`is_locked`](Self::is_locked) returns `true`.
-    /// If the gate is already locked, the snapshot is not taken again and the existing count is
-    /// returned.
+    ///
+    /// ## Errors
+    ///
+    /// Returns `AlreadyLocked` if the snapshot was already taken. The snapshot is the baseline
+    /// for [`verify_snapshot`](Self::verify_snapshot), so a second walk is refused rather than
+    /// allowed to overwrite it. Returns `InternalError` if no memory policy buffer is set or the
+    /// page table walk fails.
     ///
     /// ## Safety
     ///
@@ -534,9 +576,9 @@ impl PolicyGate {
     /// - The memory policy buffer (set with [`Self::set_memory_policy_buffer`]) must still be
     ///   valid and large enough.
     pub unsafe fn take_snapshot(&self, cr3: u64, is_inside_mmram: IsInsideMmramFn) -> MmSupervisorResult<usize> {
-        // Already locked: return the saved count.
-        if let Some(&count) = self.snapshot_count.get() {
-            return Ok(count);
+        if self.is_locked() {
+            log::error!("take_snapshot: the memory policy snapshot is already taken");
+            return Err(PolicyGateError::AlreadyLocked.into());
         }
 
         if self.memory_policy_buffer.is_null() || self.memory_policy_max_count == 0 {

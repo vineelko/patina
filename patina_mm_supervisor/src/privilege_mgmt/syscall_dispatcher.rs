@@ -85,8 +85,11 @@ fn u32_from_arg(operation: &str, value: u64) -> Result<u32, Status> {
     })
 }
 
-/// Converts a firmware policy decision into a syscall result, logging why a request was refused.
-/// `operation` names the syscall in the log message.
+/// Returns `Ok` only if the firmware policy allowed the operation.
+///
+/// Otherwise returns the status the syscall reports to Ring 3: `ACCESS_DENIED` when the policy
+/// denies the operation, and `NOT_READY` when no policy gate is installed. Ring 3 sees only that
+/// status, so the reason is logged here, with `operation` naming the syscall.
 fn check_policy(operation: &str, decision: PolicyDecision) -> Result<(), Status> {
     match decision {
         PolicyDecision::Allowed => Ok(()),

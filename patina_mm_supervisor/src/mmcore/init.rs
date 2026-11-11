@@ -319,10 +319,40 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         log::info!("Freed MM Init module at {init_module}");
     }
 
-    /// Initializes the policy gate from the `PassDown` HOB and runs an initial
-    /// security validation.
+    /// Initializes the services the HOB list describes, then validates the security policy.
+    ///
+    /// Reads the MP Information HOB for the CPU count, which sizes everything that follows, then
+    /// the `PassDown` HOB for the policy gate, the syscall interface and the memory policy. It
+    /// then publishes the save-state metadata, records the optional MSEG region, patches every
+    /// core's SMI-handler IDT descriptor, assembles the communication buffers, and runs an initial
+    /// security check on the policy gate.
     fn init_policy_and_validate(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
-        self.init_policy_from_hob_list(hob_hand_off_table)?;
+        // The CPU count sizes the Ring 3 stack array the PassDown HOB describes, so it is read
+        // before anything that depends on it.
+        // SAFETY: `hob_hand_off_table` is the in-place PHIT of the validated HOB list handed to
+        // `bsp_init`, which is terminated by `END_OF_HOB_LIST`.
+        let mp_information = unsafe { find_guid_hob_data(hob_hand_off_table, MP_INFORMATION_HOB_GUID) }
+            .ok_or(CoreInitError::MpInformationHobMissing)?;
+        let number_of_cpus = self.parse_mp_information_hob(mp_information)?;
+
+        // SAFETY: as above, `hob_hand_off_table` is the in-place PHIT of the validated HOB list.
+        let pass_down_data = unsafe { find_guid_hob_data(hob_hand_off_table, MM_SUPV_PASS_DOWN_HOB_GUID) }
+            .ok_or(PassDownHobError::Missing)?;
+        // SAFETY: `pass_down_data` is a slice into the validated HOB list, so the buffer pointers
+        // it carries reference live memory as `init_from_pass_down_hob` requires.
+        let (save_state_info, mmi_entry_size) =
+            unsafe { self.init_from_pass_down_hob(pass_down_data, number_of_cpus) }?;
+
+        // `init_from_pass_down_hob` has just checked every save-state region it describes.
+        self.publish_save_state_metadata(save_state_info);
+
+        self.discover_mseg_base(hob_hand_off_table);
+
+        // The SMI entry blocks were already copied per SMBASE, so every core is patched here,
+        // not only the BSP.
+        patch_smi_handler_idt(save_state_info.smbase_array(), number_of_cpus, mmi_entry_size)?;
+
+        self.init_comm_buffers(hob_hand_off_table)?;
 
         let gate = security_state().policy_gate().ok_or(CoreInitError::PolicyGateUnavailable)?;
         policy::validation::security_policy_check(gate)?;
@@ -571,41 +601,6 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         Ok(())
     }
 
-    /// Initializes the services the HOB list describes.
-    ///
-    /// Reads the MP Information HOB for the CPU count, which sizes everything that follows, then
-    /// the `PassDown` HOB for the policy gate, the syscall interface and the memory policy. It
-    /// then publishes the save-state metadata, records the optional MSEG region, patches every
-    /// core's SMI-handler IDT descriptor, and assembles the communication buffers.
-    fn init_policy_from_hob_list(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
-        // The CPU count sizes the Ring 3 stack array the PassDown HOB describes, so it is read
-        // before anything that depends on it.
-        // SAFETY: `hob_hand_off_table` is the in-place PHIT of the validated HOB list handed to
-        // `bsp_init`, which is terminated by `END_OF_HOB_LIST`.
-        let mp_information = unsafe { find_guid_hob_data(hob_hand_off_table, MP_INFORMATION_HOB_GUID) }
-            .ok_or(CoreInitError::MpInformationHobMissing)?;
-        let number_of_cpus = self.parse_mp_information_hob(mp_information)?;
-
-        // SAFETY: as above, `hob_hand_off_table` is the in-place PHIT of the validated HOB list.
-        let pass_down_data = unsafe { find_guid_hob_data(hob_hand_off_table, MM_SUPV_PASS_DOWN_HOB_GUID) }
-            .ok_or(PassDownHobError::Missing)?;
-        // SAFETY: `pass_down_data` is a slice into the validated HOB list, so the buffer pointers
-        // it carries reference live memory as `init_from_pass_down_hob` requires.
-        let (save_state_info, mmi_entry_size) =
-            unsafe { self.init_from_pass_down_hob(pass_down_data, number_of_cpus) }?;
-
-        // `init_from_pass_down_hob` has just checked every save-state region it describes.
-        self.publish_save_state_metadata(save_state_info);
-
-        self.discover_mseg_base(hob_hand_off_table);
-
-        // The SMI entry blocks were already copied per SMBASE, so every core is patched here,
-        // not only the BSP.
-        patch_smi_handler_idt(save_state_info.smbase_array(), number_of_cpus, mmi_entry_size)?;
-
-        self.init_comm_buffers(hob_hand_off_table)
-    }
-
     /// Returns the CPU count from the MP Information HOB.
     ///
     /// The count is validated against `MAX_CPUS` here and returned as a `usize`, so callers
@@ -749,7 +744,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         gate.set_memory_policy_buffer(
             memory_policy_buffer as *mut MemDescriptorV1_0,
             MEMORY_POLICY_DESCRIPTORS_PER_PAGE,
-        );
+        )?;
         security_state().set_policy_gate(gate);
 
         Ok(memory_policy_buffer)

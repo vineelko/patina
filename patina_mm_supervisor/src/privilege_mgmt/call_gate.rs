@@ -3,12 +3,19 @@
 //! Programs the call gate and Task State Segment (TSS) entries that a demoted Ring 3
 //! routine uses to return to Ring 0. This return path is separate from syscall/sysret.
 //!
+//! The supervisor does not build the GDT it programs here. Each core's SMI entry code, which is
+//! placed at SMBASE + 0x8000 before the supervisor starts, loads a GDT whose layout is defined
+//! in `SmiException.nasm` (`MmSupervisorPkg/Core/Relocate/SmiException.nasm` in
+//! [mu_feature_mm_supv](https://github.com/microsoft/mu_feature_mm_supv)). The supervisor keeps
+//! that GDT loaded and finds it through GDTR, so the offsets below must match that file.
+//!
 //! ## License
 //!
 //! Copyright (c) Microsoft Corporation.
 //!
 //! SPDX-License-Identifier: Apache-2.0
 //!
+use patina_internal_cpu::gdt::TaskStateSegment;
 use patina_paging::x64::{disable_write_protection, enable_write_protection};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -18,10 +25,10 @@ use crate::error::MmSupervisorResult;
 #[cfg(target_os = "uefi")]
 core::arch::global_asm!(include_str!("call_gate_transfer.asm"));
 
-/// Long mode Ring 0 code segment selector.
+/// Long mode Ring 0 code segment selector in the SMI entry GDT.
 pub const LONG_CS_R0: u16 = 0x38;
 
-/// Call gate descriptor offset in GDT.
+/// Call gate descriptor offset in the SMI entry GDT.
 pub const CALL_GATE_OFFSET: u16 = 0x60;
 
 /// Offset of the TSS descriptor in the GDT (also its selector).
@@ -176,27 +183,6 @@ pub struct GdtRegister {
     pub base: u64,
 }
 
-/// 64-bit Task State Segment.
-///
-/// In 64-bit mode the TSS is not used for task switching; it holds the stack pointers the
-/// CPU loads on a privilege change, interrupt, or exception. Layout matches the Intel SDM
-/// (0x68 bytes).
-#[repr(C, packed(4))]
-#[derive(Debug, Clone, Copy, zerocopy_derive::FromBytes, zerocopy_derive::IntoBytes, zerocopy_derive::Immutable)]
-pub struct TaskStateSegment {
-    reserved_1: u32,
-    /// Canonical RSP values for privilege levels 0-2, loaded when moving to a more
-    /// privileged level.
-    pub privilege_stack_table: [u64; 3],
-    reserved_2: u64,
-    /// Canonical IST pointers, loaded when an IDT entry has a non-zero IST index.
-    pub interrupt_stack_table: [u64; 7],
-    reserved_3: u64,
-    reserved_4: u16,
-    /// Offset of the IO permission bitmap from the TSS base.
-    pub io_map_base: u16,
-}
-
 /// Returns the base address of the current GDT, read from GDTR.
 // Reads the running processor's GDTR, so it cannot be tested deterministically on the host.
 pub fn get_current_gdt_base() -> u64 {
@@ -265,9 +251,7 @@ fn program_privilege_transition_entries(
 
     update_entry::<TssDescriptor, _>(gdt, TSS_SEL_OFFSET as usize, |desc| desc.set_base(tss_addr))?;
 
-    update_entry::<TaskStateSegment, _>(gdt, TSS_DESC_OFFSET as usize, |tss| {
-        tss.privilege_stack_table[0] = cpl0_stack_ptr;
-    })?;
+    update_entry::<TaskStateSegment, _>(gdt, TSS_DESC_OFFSET as usize, |tss| tss.set_rsp0(cpl0_stack_ptr))?;
 
     Ok(())
 }

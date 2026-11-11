@@ -15,7 +15,24 @@ use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use crate::error::MmSupervisorResult;
 
 use super::CoreInitError;
-use super::semaphore::{sem_signal, sem_try_take};
+
+/// Signals a counting rendezvous semaphore (atomic increment).
+fn sem_signal(sem: &AtomicU32) {
+    sem.fetch_add(1, Ordering::AcqRel);
+}
+
+/// Consumes one count if the semaphore is positive. Non-blocking; returns whether a
+/// count was taken.
+fn sem_try_take(sem: &AtomicU32) -> bool {
+    let mut value = sem.load(Ordering::Acquire);
+    while value != 0 {
+        match sem.compare_exchange_weak(value, value - 1, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(current) => value = current,
+        }
+    }
+    false
+}
 
 /// The state of an Application Processor (AP).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

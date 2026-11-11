@@ -24,7 +24,6 @@ pub(crate) mod mseg;
 pub(crate) mod perf_timer;
 pub(crate) mod request_target;
 pub(crate) mod runtime;
-pub(crate) mod semaphore;
 pub(crate) mod smi_idt_patch;
 pub(crate) mod smrr;
 

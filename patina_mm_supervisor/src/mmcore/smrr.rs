@@ -267,6 +267,17 @@ pub(crate) fn smrr_enable() {
 /// region that is physically contiguous with it (regardless of allocation
 /// state), scanning repeatedly until no further adjacent region is found.
 ///
+/// The result is not simply the smallest base to the largest end of all the
+/// regions. The range grows only by merging a region that starts exactly where
+/// it ends, or ends exactly where it starts. Any gap between the range and the
+/// next region stops it. A region past a gap is left out, rather than pulling
+/// the non-SMRAM memory in the gap under the SMRR.
+///
+/// This is also where the range is validated for the SMRR registers: the
+/// selected region must meet the base and size limits above, and the
+/// coalesced range must pass [`verify_smrr_base_size`] (a power-of-two size,
+/// a base aligned to that size, and an end at or below 4 GiB).
+///
 /// Returns the coalesced range on success, or `None` if no scanned region meets
 /// the SMRR base/size requirements.
 pub(crate) fn coalesced_smrr_range(regions: &[MmramRegion]) -> Option<MemoryRange> {
