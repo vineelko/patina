@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn test_command_send_receive() {
         let mailbox = ApMailbox::new();
-        let cmd = ApCommand::RunProcedure { procedure: 0x1234, argument: 0x5678 };
+        let cmd = ApCommand { procedure: 0x1234, argument: 0x5678 };
 
         // Send a command; a second send is rejected while one is pending.
         assert!(mailbox.send_command(cmd));
@@ -386,7 +386,7 @@ mod tests {
                     std::thread::spawn(move || {
                         let value = sender_number * 0x1111_1111;
                         start.wait();
-                        if mailbox.send_command(ApCommand::RunProcedure { procedure: value, argument: value }) {
+                        if mailbox.send_command(ApCommand { procedure: value, argument: value }) {
                             accepted.fetch_add(1, Ordering::SeqCst);
                         }
                     })
@@ -398,8 +398,7 @@ mod tests {
 
             assert_eq!(accepted.load(Ordering::SeqCst), 1, "more than one sender claimed the mailbox");
 
-            let ApCommand::RunProcedure { procedure, argument } =
-                mailbox.take_command().expect("the accepted command is pending");
+            let ApCommand { procedure, argument } = mailbox.take_command().expect("the accepted command is pending");
             assert_eq!(procedure, argument, "payload was interleaved between senders");
         }
     }
@@ -408,11 +407,11 @@ mod tests {
     fn test_run_procedure_command() {
         let mailbox = ApMailbox::new();
 
-        let cmd = ApCommand::RunProcedure { procedure: 0xDEAD_BEEF, argument: 0x12345678 };
+        let cmd = ApCommand { procedure: 0xDEAD_BEEF, argument: 0x12345678 };
 
         assert!(mailbox.send_command(cmd));
         let received = mailbox.take_command();
-        assert!(matches!(received, Some(ApCommand::RunProcedure { procedure: 0xDEAD_BEEF, argument: 0x12345678 })));
+        assert!(matches!(received, Some(ApCommand { procedure: 0xDEAD_BEEF, argument: 0x12345678 })));
     }
 
     #[test]
@@ -424,7 +423,7 @@ mod tests {
     #[test]
     fn test_mailbox_manager_rejects_an_unknown_cpu_index() {
         let manager: MailboxManager<4> = MailboxManager::new();
-        let command = ApCommand::RunProcedure { procedure: 0x1000, argument: 0x2000 };
+        let command = ApCommand { procedure: 0x1000, argument: 0x2000 };
 
         // Slot 4 is past the end of a four slot manager.
         assert_eq!(
@@ -437,7 +436,7 @@ mod tests {
     #[test]
     fn test_mailbox_manager_rejects_a_second_pending_command() {
         let manager: MailboxManager<4> = MailboxManager::new();
-        let command = ApCommand::RunProcedure { procedure: 0x1000, argument: 0x2000 };
+        let command = ApCommand { procedure: 0x1000, argument: 0x2000 };
 
         assert!(manager.send_command(2, command).is_ok());
         // The slot already holds a command that the AP has not taken yet.
@@ -468,7 +467,7 @@ mod tests {
         let manager: MailboxManager<4> = MailboxManager::new();
 
         // Send a command to the AP occupying slot index 1.
-        let command = ApCommand::RunProcedure { procedure: 0x1000, argument: 0x2000 };
+        let command = ApCommand { procedure: 0x1000, argument: 0x2000 };
         assert!(manager.send_command(1, command).is_ok());
 
         // Check mailbox
@@ -489,15 +488,15 @@ mod tests {
 
         // Put the mailbox into a stuck, non-empty state: a command was sent and
         // picked up for processing, but no response was ever posted (hung AP).
-        assert!(mailbox.send_command(ApCommand::RunProcedure { procedure: 0x1000, argument: 7 }));
+        assert!(mailbox.send_command(ApCommand { procedure: 0x1000, argument: 7 }));
         let _ = mailbox.take_command();
 
         // A fresh command cannot be sent while stuck.
-        assert!(!mailbox.send_command(ApCommand::RunProcedure { procedure: 0x2000, argument: 8 }));
+        assert!(!mailbox.send_command(ApCommand { procedure: 0x2000, argument: 8 }));
 
         // Reset forces the mailbox back to empty, so a new command succeeds.
         mailbox.reset();
-        assert!(mailbox.send_command(ApCommand::RunProcedure { procedure: 0x2000, argument: 8 }));
+        assert!(mailbox.send_command(ApCommand { procedure: 0x2000, argument: 8 }));
     }
 
     #[test]
@@ -505,20 +504,20 @@ mod tests {
         let manager: MailboxManager<4> = MailboxManager::new();
 
         // Leave two different slots' mailboxes stuck in non-empty states.
-        assert!(manager.send_command(1, ApCommand::RunProcedure { procedure: 0x10, argument: 0 }).is_ok());
+        assert!(manager.send_command(1, ApCommand { procedure: 0x10, argument: 0 }).is_ok());
         let _ = manager.check_mailbox(1); // -> Processing
-        assert!(manager.send_command(2, ApCommand::RunProcedure { procedure: 0x20, argument: 0 }).is_ok()); // -> CommandPending
+        assert!(manager.send_command(2, ApCommand { procedure: 0x20, argument: 0 }).is_ok()); // -> CommandPending
 
         // Neither can accept a new command while stuck.
-        assert!(manager.send_command(1, ApCommand::RunProcedure { procedure: 0x11, argument: 0 }).is_err());
-        assert!(manager.send_command(2, ApCommand::RunProcedure { procedure: 0x21, argument: 0 }).is_err());
+        assert!(manager.send_command(1, ApCommand { procedure: 0x11, argument: 0 }).is_err());
+        assert!(manager.send_command(2, ApCommand { procedure: 0x21, argument: 0 }).is_err());
 
         // The BSP's leave-time sweep clears every mailbox at once.
         manager.reset_all();
 
         // Both slots are dispatchable again.
-        assert!(manager.send_command(1, ApCommand::RunProcedure { procedure: 0x11, argument: 0 }).is_ok());
-        assert!(manager.send_command(2, ApCommand::RunProcedure { procedure: 0x21, argument: 0 }).is_ok());
+        assert!(manager.send_command(1, ApCommand { procedure: 0x11, argument: 0 }).is_ok());
+        assert!(manager.send_command(2, ApCommand { procedure: 0x21, argument: 0 }).is_ok());
     }
 
     #[test]

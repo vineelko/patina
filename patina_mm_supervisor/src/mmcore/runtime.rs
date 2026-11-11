@@ -1310,7 +1310,7 @@ mod tests {
         assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Ok(0));
         assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Ok(1));
         // A null procedure is rejected by the AP, which still posts a response.
-        CORE.mailbox_manager.send_command(1, ApCommand::RunProcedure { procedure: 0, argument: 0 }).unwrap();
+        CORE.mailbox_manager.send_command(1, ApCommand { procedure: 0, argument: 0 }).unwrap();
         CORE.cpu_manager.release_all_aps();
 
         CORE.ap_holding_pen(1);
@@ -1324,7 +1324,7 @@ mod tests {
         let core = TestCore::new();
         assert_eq!(core.cpu_manager.register_cpu(1, 0, false), Ok(0));
 
-        let response = core.execute_ap_command(1, &ApCommand::RunProcedure { procedure: 0, argument: 0 });
+        let response = core.execute_ap_command(1, &ApCommand { procedure: 0, argument: 0 });
 
         assert!(matches!(response, ApResponse::Error(_)));
         assert_eq!(core.cpu_manager.get_ap_state(1), Some(ApState::InHoldingPen));
@@ -1381,7 +1381,7 @@ mod tests {
         assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
         assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Ok(1));
         // Occupy the mailbox so the dispatch has nowhere to post.
-        core.mailbox_manager.send_command(1, ApCommand::RunProcedure { procedure: 0x2000, argument: 0 }).unwrap();
+        core.mailbox_manager.send_command(1, ApCommand { procedure: 0x2000, argument: 0 }).unwrap();
 
         assert_eq!(core.start_ap_procedure(1, 0x1000, 0), efi::Status::INVALID_PARAMETER.as_usize() as u64);
     }

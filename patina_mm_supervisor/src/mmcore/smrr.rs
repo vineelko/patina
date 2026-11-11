@@ -576,4 +576,27 @@ mod tests {
         let regions = regions_from(&[(base, size, false), above]);
         assert_eq!(coalesced_smrr_range(&regions), MemoryRange::new(base, size * 2).ok());
     }
+
+    #[test]
+    fn test_coalesced_smrr_range_does_not_bridge_a_gap() {
+        // A region separated from the selected one by a gap is left out, so the SMRR does not
+        // cover the memory in between.
+        let base = 0x8000_0000u64;
+        let size = SIZE_256KB as u64 * 4;
+        let past_gap = (base + size + UEFI_PAGE_SIZE as u64, SIZE_256KB as u64, false);
+        let regions = regions_from(&[(base, size, false), past_gap]);
+        assert_eq!(coalesced_smrr_range(&regions), MemoryRange::new(base, size).ok());
+    }
+
+    #[test]
+    fn test_coalesced_smrr_range_chains_through_unsorted_regions() {
+        // The top region is listed first and only touches the selected range after the middle
+        // region is merged, so a second scan is needed to reach it.
+        let base = 0x8000_0000u64;
+        let size = SIZE_256KB as u64 * 2; // selected as the largest region
+        let middle = (base + size, SIZE_256KB as u64, false);
+        let top = (base + size + SIZE_256KB as u64, SIZE_256KB as u64, false);
+        let regions = regions_from(&[top, (base, size, false), middle]);
+        assert_eq!(coalesced_smrr_range(&regions), MemoryRange::new(base, size * 2).ok());
+    }
 }

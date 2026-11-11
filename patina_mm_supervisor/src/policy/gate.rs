@@ -852,6 +852,9 @@ mod tests {
             ),
             (PolicyGateError::AccessDenied, "the firmware policy denied the access"),
             (PolicyGateError::BufferTooSmall, "the destination buffer is too small for the policy"),
+            (PolicyGateError::InvalidMemoryPolicyBuffer, "the memory policy buffer is null or empty"),
+            (PolicyGateError::MemoryPolicyBufferAlreadySet, "the memory policy buffer is already set"),
+            (PolicyGateError::AlreadyLocked, "the memory policy snapshot is already taken"),
             (PolicyGateError::InternalError, "an internal error occurred while evaluating the policy"),
         ];
 
@@ -1209,7 +1212,7 @@ mod tests {
     }
 
     #[test]
-    fn test_take_snapshot_is_idempotent_once_recorded() {
+    fn test_take_snapshot_rejects_a_second_snapshot() {
         let policy = PolicyBuilder::new().build();
         let gate = policy.gate();
 
@@ -1219,8 +1222,44 @@ mod tests {
         // A second record does not overwrite the first.
         assert_eq!(gate.record_snapshot(7), 3);
 
-        // SAFETY: the recorded count short-circuits before `cr3` is dereferenced.
-        assert_eq!(unsafe { gate.take_snapshot(0x1000, |_| false) }, Ok(3));
+        // SAFETY: the lock check fails before `cr3` is dereferenced.
+        assert_eq!(unsafe { gate.take_snapshot(0x1000, |_| false) }, Err(PolicyGateError::AlreadyLocked.into()));
+        assert_eq!(gate.snapshot_count(), Some(3));
+    }
+
+    #[test]
+    fn test_set_memory_policy_buffer_rejects_an_unusable_buffer() {
+        let policy = PolicyBuilder::new().build();
+        let mut gate = policy.gate();
+        let mut snapshot = [mem(0x1000, 0x1000, RESOURCE_ATTR_READ)];
+
+        assert_eq!(
+            gate.set_memory_policy_buffer(core::ptr::null_mut(), 1),
+            Err(PolicyGateError::InvalidMemoryPolicyBuffer.into())
+        );
+        assert_eq!(
+            gate.set_memory_policy_buffer(snapshot.as_mut_ptr(), 0),
+            Err(PolicyGateError::InvalidMemoryPolicyBuffer.into())
+        );
+
+        // SAFETY: no buffer was stored, so the check fails before `cr3` is dereferenced.
+        assert_eq!(unsafe { gate.take_snapshot(0x1000, |_| false) }, Err(PolicyGateError::InternalError.into()));
+    }
+
+    #[test]
+    fn test_set_memory_policy_buffer_rejects_a_second_buffer() {
+        let policy = PolicyBuilder::new().build();
+        let mut gate = policy.gate();
+        let mut first = [mem(0x1000, 0x1000, RESOURCE_ATTR_READ)];
+        let mut second = [mem(0x2000, 0x1000, RESOURCE_ATTR_READ); 2];
+
+        assert_eq!(gate.set_memory_policy_buffer(first.as_mut_ptr(), first.len()), Ok(()));
+        assert_eq!(
+            gate.set_memory_policy_buffer(second.as_mut_ptr(), second.len()),
+            Err(PolicyGateError::MemoryPolicyBufferAlreadySet.into())
+        );
+        assert_eq!(gate.memory_policy_buffer, first.as_mut_ptr());
+        assert_eq!(gate.memory_policy_max_count, first.len());
     }
 
     #[test]
@@ -1267,7 +1306,7 @@ mod tests {
         let policy = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Mem(vec![])).build();
         let mut gate = policy.gate();
         let mut snapshot = [mem(0x1000, 0x1000, RESOURCE_ATTR_READ)];
-        gate.set_memory_policy_buffer(snapshot.as_mut_ptr(), snapshot.len());
+        gate.set_memory_policy_buffer(snapshot.as_mut_ptr(), snapshot.len()).expect("buffer is usable");
         gate.record_snapshot(snapshot.len());
 
         let mut dest = vec![0u8; 8];
@@ -1282,8 +1321,8 @@ mod tests {
     fn test_fetch_and_update_policy_requires_a_memory_policy_root() {
         let policy = PolicyBuilder::new().root(ACCESS_ATTR_ALLOW, Descriptors::Msr(vec![])).build();
         let mut gate = policy.gate();
-        let mut snapshot: [MemDescriptorV1_0; 0] = [];
-        gate.set_memory_policy_buffer(snapshot.as_mut_ptr(), 0);
+        let mut snapshot = [mem(0x1000, 0x1000, RESOURCE_ATTR_READ)];
+        gate.set_memory_policy_buffer(snapshot.as_mut_ptr(), snapshot.len()).expect("buffer is usable");
         gate.record_snapshot(0);
 
         let mut dest = vec![0u8; 256];
@@ -1405,7 +1444,7 @@ mod tests {
         let mut gate = policy.gate();
         let mut snapshot =
             [mem(0x1000, 0x1000, RESOURCE_ATTR_READ), mem(0x8000, 0x2000, RESOURCE_ATTR_READ | RESOURCE_ATTR_WRITE)];
-        gate.set_memory_policy_buffer(snapshot.as_mut_ptr(), snapshot.len());
+        gate.set_memory_policy_buffer(snapshot.as_mut_ptr(), snapshot.len()).expect("buffer is usable");
         gate.record_snapshot(snapshot.len());
 
         let descriptor_bytes = snapshot.len() * size_of::<MemDescriptorV1_0>();
@@ -1447,7 +1486,7 @@ mod tests {
 
         let mut gate = policy.gate();
         let mut snapshot = [mem(0x1000, 0x1000, RESOURCE_ATTR_READ)];
-        gate.set_memory_policy_buffer(snapshot.as_mut_ptr(), snapshot.len());
+        gate.set_memory_policy_buffer(snapshot.as_mut_ptr(), snapshot.len()).expect("buffer is usable");
         gate.record_snapshot(snapshot.len());
 
         let total = firmware_size + size_of::<MemDescriptorV1_0>();

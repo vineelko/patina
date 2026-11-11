@@ -1336,17 +1336,7 @@ mod tests {
     }
 
     #[test]
-    fn test_init_policy_from_hob_list_reports_missing_hobs() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
-
-        // A null list is not representable: the handoff table is taken by reference.
-        let hob_list = RawHobList::new().finish();
-        let result = supervisor.init_policy_from_hob_list(hob_list.handoff());
-        assert_eq!(result, Err(CoreInitError::MpInformationHobMissing.into()));
-    }
-
-    #[test]
-    fn test_init_policy_from_hob_list_reports_a_missing_pass_down_hob() {
+    fn test_init_policy_and_validate_reports_a_missing_pass_down_hob() {
         test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
 
@@ -1357,7 +1347,7 @@ mod tests {
         without_pass_down.push_guid_hob(MP_INFORMATION_HOB_GUID, &mp_information_hob_data(2));
         let without_pass_down = without_pass_down.finish();
 
-        let result = supervisor.init_policy_from_hob_list(without_pass_down.handoff());
+        let result = supervisor.init_policy_and_validate(without_pass_down.handoff());
         assert_eq!(result, Err(PassDownHobError::Missing.into()));
     }
 

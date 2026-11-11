@@ -303,7 +303,6 @@ pub unsafe extern "efiapi" fn setup_call_gate(return_pointer: u64, cpl0_stack_pt
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
-    use zerocopy::FromZeros;
 
     #[test]
     fn test_call_gate_error_names_the_undersized_gdt() {
@@ -419,8 +418,7 @@ mod tests {
         assert_eq!(tss_descriptor_of(&gdt).base(), GDT_BASE + u64::from(TSS_DESC_OFFSET));
 
         // RSP0 is what the CPU loads when Ring 3 transitions back into Ring 0.
-        let rsp0 = tss_of(&gdt).privilege_stack_table[0];
-        assert_eq!(rsp0, CPL0_STACK);
+        assert_eq!(tss_of(&gdt).rsp0(), CPL0_STACK);
     }
 
     #[test]
@@ -436,11 +434,13 @@ mod tests {
         let tss_desc = TssDescriptor { limit_low: 0x67, type_attr: 0x89, ..Default::default() };
         write_entry_at(&mut gdt, TSS_SEL_OFFSET as usize, &tss_desc);
 
-        let mut tss = TaskStateSegment::new_zeroed();
-        tss.privilege_stack_table[1] = 0xAAAA;
-        tss.interrupt_stack_table[0] = 0xBBBB;
-        tss.io_map_base = 0x68;
-        write_entry_at(&mut gdt, TSS_DESC_OFFSET as usize, &tss);
+        // Fill the TSS with a pattern, so any byte the programming changes is visible.
+        let tss_start = TSS_DESC_OFFSET as usize;
+        let tss_end = tss_start + core::mem::size_of::<TaskStateSegment>();
+        for (index, byte) in gdt[tss_start..tss_end].iter_mut().enumerate() {
+            *byte = 0x80 | index as u8;
+        }
+        let tss_before = gdt[tss_start..tss_end].to_vec();
 
         assert_eq!(program_privilege_transition_entries(&mut gdt, GDT_BASE, 0x2000, 0x3000), Ok(()));
 
@@ -454,17 +454,11 @@ mod tests {
         // The type/attribute byte of the TSS descriptor is set by the GDT builder, not here.
         assert_eq!(type_attr, 0x89);
 
-        let programmed_tss = tss_of(&gdt);
-        let (rsp0, rsp1, ist1, io_map_base) = (
-            programmed_tss.privilege_stack_table[0],
-            programmed_tss.privilege_stack_table[1],
-            programmed_tss.interrupt_stack_table[0],
-            programmed_tss.io_map_base,
-        );
-        assert_eq!(rsp0, 0x3000);
-        assert_eq!(rsp1, 0xAAAA);
-        assert_eq!(ist1, 0xBBBB);
-        assert_eq!(io_map_base, 0x68);
+        // RSP0 sits at bytes 4..12 of the TSS. Every other byte keeps its old value.
+        assert_eq!(tss_of(&gdt).rsp0(), 0x3000);
+        let tss_after = &gdt[tss_start..tss_end];
+        assert_eq!(tss_after[..4], tss_before[..4]);
+        assert_eq!(tss_after[12..], tss_before[12..]);
     }
 
     #[test]
@@ -492,7 +486,7 @@ mod tests {
             Err(CallGateError::GdtTooSmall.into())
         );
         assert_eq!(
-            update_entry::<TaskStateSegment, _>(&mut gdt, usize::MAX - 4, |tss| tss.io_map_base = 0),
+            update_entry::<TaskStateSegment, _>(&mut gdt, usize::MAX - 4, |tss| tss.set_rsp0(0)),
             Err(CallGateError::GdtTooSmall.into())
         );
 
@@ -513,7 +507,6 @@ mod tests {
         // Re-programming for a different demotion replaces the previous values.
         assert_eq!(program_privilege_transition_entries(&mut gdt, 0x1000, 0x4000, 0x5000), Ok(()));
         assert_eq!(call_gate_of(&gdt).offset(), 0x4000);
-        let rsp0 = tss_of(&gdt).privilege_stack_table[0];
-        assert_eq!(rsp0, 0x5000);
+        assert_eq!(tss_of(&gdt).rsp0(), 0x5000);
     }
 }
