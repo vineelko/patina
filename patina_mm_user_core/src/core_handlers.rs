@@ -8,7 +8,7 @@
 //!
 //! | GUID | Handler | Description |
 //! |------|---------|-------------|
-//! | `MM_DISPATCH_EVENT_GROUP_GUID` | `mm_driver_dispatch_handler` | Dispatches the discovered MM drivers |
+//! | `MM_DISPATCH_EVENT_GROUP_GUID` | `mm_driver_dispatch_handler` | Prepares and runs components, then dispatches discovered MM drivers |
 //! | `MM_DXE_READY_TO_LOCK_PROTOCOL_GUID` | `mm_ready_to_lock_handler` | Unregisters one-shot handlers, installs the ready-to-lock protocol |
 //! | `MM_END_OF_PEI_PROTOCOL_GUID` | `mm_end_of_pei_handler` | Installs the end-of-PEI protocol |
 //! | `END_OF_DXE_EVENT_GROUP_GUID` | `mm_end_of_dxe_handler` | Installs the end-of-DXE protocol |
@@ -27,7 +27,7 @@ use core::ffi::c_void;
 use patina::standard::efi;
 use spin::Mutex;
 
-use crate::{MmUserCore, mmi::InternalMmiHandler};
+use crate::{MmUserCore, component_dispatcher::MmComponentInfo, mmi::InternalMmiHandler};
 use patina::{
     BinaryGuid, Guid,
     management_mode::{
@@ -42,45 +42,53 @@ use patina::{
     uefi::event::{EXIT_BOOT_SERVICES_EVENT_GROUP_GUID, READY_TO_BOOT_EVENT_GROUP_GUID},
 };
 
-/// Table of MMI handlers registered by the MM Core, mirroring the C `mMmCoreMmiHandlers[]`.
-const CORE_MMI_HANDLERS: &[CoreMmiHandler] = &[
-    CoreMmiHandler {
-        handler: mm_driver_dispatch_handler,
-        handler_type: &MM_DISPATCH_EVENT_GROUP_GUID,
-        unregister_on_lock: true,
-    },
-    CoreMmiHandler {
-        handler: mm_ready_to_lock_handler,
-        handler_type: &MM_DXE_READY_TO_LOCK_PROTOCOL_GUID,
-        unregister_on_lock: true,
-    },
-    CoreMmiHandler {
-        handler: mm_end_of_pei_handler,
-        handler_type: &MM_END_OF_PEI_PROTOCOL_GUID,
-        unregister_on_lock: true,
-    },
-    CoreMmiHandler {
-        handler: mm_end_of_dxe_handler,
-        handler_type: &END_OF_DXE_EVENT_GROUP_GUID,
-        unregister_on_lock: false,
-    },
-    CoreMmiHandler {
-        handler: mm_exit_boot_service_handler,
-        handler_type: &EXIT_BOOT_SERVICES_EVENT_GROUP_GUID,
-        unregister_on_lock: false,
-    },
-    CoreMmiHandler {
-        handler: mm_ready_to_boot_handler,
-        handler_type: &READY_TO_BOOT_EVENT_GROUP_GUID,
-        unregister_on_lock: false,
-    },
-];
+/// Number of entries in [`core_mmi_handlers`].
+const CORE_MMI_HANDLER_COUNT: usize = 6;
 
-/// Dispatch handles returned by `register_internal_handler`, indexed like `CORE_MMI_HANDLERS`.
+/// Table of MMI handlers registered by the MM Core, mirroring the C `mMmCoreMmiHandlers[]`.
+///
+/// Generic over the platform's [`MmComponentInfo`] so the driver dispatch handler can
+/// dispatch the platform's components.
+fn core_mmi_handlers<C: MmComponentInfo>() -> [CoreMmiHandler; CORE_MMI_HANDLER_COUNT] {
+    [
+        CoreMmiHandler {
+            handler: mm_driver_dispatch_handler::<C>,
+            handler_type: &MM_DISPATCH_EVENT_GROUP_GUID,
+            unregister_on_lock: true,
+        },
+        CoreMmiHandler {
+            handler: mm_ready_to_lock_handler::<C>,
+            handler_type: &MM_DXE_READY_TO_LOCK_PROTOCOL_GUID,
+            unregister_on_lock: true,
+        },
+        CoreMmiHandler {
+            handler: mm_end_of_pei_handler,
+            handler_type: &MM_END_OF_PEI_PROTOCOL_GUID,
+            unregister_on_lock: true,
+        },
+        CoreMmiHandler {
+            handler: mm_end_of_dxe_handler,
+            handler_type: &END_OF_DXE_EVENT_GROUP_GUID,
+            unregister_on_lock: false,
+        },
+        CoreMmiHandler {
+            handler: mm_exit_boot_service_handler,
+            handler_type: &EXIT_BOOT_SERVICES_EVENT_GROUP_GUID,
+            unregister_on_lock: false,
+        },
+        CoreMmiHandler {
+            handler: mm_ready_to_boot_handler,
+            handler_type: &READY_TO_BOOT_EVENT_GROUP_GUID,
+            unregister_on_lock: false,
+        },
+    ]
+}
+
+/// Dispatch handles returned by `register_internal_handler`, indexed like [`core_mmi_handlers`].
 ///
 /// Filled in by [`register_core_mmi_handlers`].
-static DISPATCH_HANDLES: Mutex<[SendHandle; CORE_MMI_HANDLERS.len()]> =
-    Mutex::new([SendHandle::NULL; CORE_MMI_HANDLERS.len()]);
+static DISPATCH_HANDLES: Mutex<[SendHandle; CORE_MMI_HANDLER_COUNT]> =
+    Mutex::new([SendHandle::NULL; CORE_MMI_HANDLER_COUNT]);
 
 /// A core MMI handler to register at startup.
 struct CoreMmiHandler {
@@ -108,11 +116,11 @@ impl SendHandle {
 /// Registers every core MMI handler with the MMI database.
 ///
 /// This includes the `MM_DISPATCH_EVENT_GROUP_GUID` handler that performs the deferred
-/// driver dispatch, so it must run before any driver is dispatched.
-pub fn register_core_mmi_handlers() {
+/// component and driver dispatch for the platform's `C`.
+pub fn register_core_mmi_handlers<C: MmComponentInfo>() {
     let mut handles = DISPATCH_HANDLES.lock();
 
-    for (index, (slot, entry)) in handles.iter_mut().zip(CORE_MMI_HANDLERS.iter()).enumerate() {
+    for (index, (slot, entry)) in handles.iter_mut().zip(core_mmi_handlers::<C>().iter()).enumerate() {
         match MmUserCore::instance().mmi_db.register_internal_handler(entry.handler, Some(entry.handler_type)) {
             Ok(handle) => {
                 *slot = SendHandle(handle);
@@ -147,31 +155,44 @@ fn install_lifecycle_protocol(guid: &efi::Guid) -> efi::Status {
 
 /// MM Driver Dispatch Handler.
 ///
-/// Dispatches the drivers discovered during `StartUserCore`, then unregisters itself.
+/// Prepares and runs components, then dispatches the drivers discovered during `StartUserCore`.
 ///
 /// Corresponds to the C `MmDriverDispatchHandler`.
-fn mm_driver_dispatch_handler(
+fn mm_driver_dispatch_handler<C: MmComponentInfo>(
     _handler_type: &efi::Guid,
     _comm_buffer: *mut c_void,
     _comm_buffer_size: *mut usize,
 ) -> efi::Status {
     log::info!("MM driver dispatch event received");
 
-    match MmUserCore::instance().dispatch_drivers() {
-        Ok(count) => log::info!("Successfully dispatched {count} MM driver(s)."),
-        Err(status) => log::error!("Driver dispatch failed: {:#x}", status.as_usize()),
-    }
-
-    // One-shot: unregister this handler.
     let handles = DISPATCH_HANDLES.lock();
     let dispatch_handle = handles.first().map_or(core::ptr::null_mut(), |handle| handle.0);
     drop(handles);
 
-    if !dispatch_handle.is_null() {
-        let _ = MmUserCore::instance().mmi_handler_unregister(dispatch_handle);
+    // One-shot: retire before running any component or driver code, so a nested dispatch
+    // event cannot re-enter.
+    let core = MmUserCore::instance();
+    if !dispatch_handle.is_null()
+        && let Err(status) = core.mmi_handler_unregister(dispatch_handle)
+    {
+        log::error!("Failed to unregister MM dispatch handler: {:#x}", status.as_usize());
+        return status;
     }
 
-    efi::Status::SUCCESS
+    if let Err(status) = core.dispatch_components::<C>() {
+        return status;
+    }
+
+    match core.dispatch_drivers() {
+        Ok(count) => {
+            log::info!("Successfully dispatched {count} MM driver(s).");
+            efi::Status::SUCCESS
+        }
+        Err(status) => {
+            log::error!("Driver dispatch failed: {:#x}", status.as_usize());
+            status
+        }
+    }
 }
 
 /// MM Ready To Lock Handler.
@@ -181,7 +202,7 @@ fn mm_driver_dispatch_handler(
 /// to notify MM drivers.
 ///
 /// Corresponds to the C `MmReadyToLockHandler`.
-fn mm_ready_to_lock_handler(
+fn mm_ready_to_lock_handler<C: MmComponentInfo>(
     _handler_type: &efi::Guid,
     _comm_buffer: *mut c_void,
     _comm_buffer_size: *mut usize,
@@ -190,7 +211,7 @@ fn mm_ready_to_lock_handler(
 
     // Unregister the handlers that are not needed after the lock.
     let handles = DISPATCH_HANDLES.lock();
-    for (handle, entry) in handles.iter().zip(CORE_MMI_HANDLERS.iter()) {
+    for (handle, entry) in handles.iter().zip(core_mmi_handlers::<C>().iter()) {
         if entry.unregister_on_lock && !handle.0.is_null() {
             let _ = MmUserCore::instance().mmi_handler_unregister(handle.0);
         }
@@ -296,6 +317,8 @@ mod tests {
         DISPATCH_HANDLES.lock().iter().map(|handle| handle.0).collect()
     }
 
+    type Platform = crate::tests::BarePlatform;
+
     /// Reports whether a handler is still registered, by unregistering it.
     fn take_handler(core: &MmUserCore, handle: efi::Handle) -> bool {
         core.mmi_db.mmi_handler_unregister(handle).is_ok()
@@ -309,10 +332,10 @@ mod tests {
     fn test_register_core_mmi_handlers_registers_every_entry() {
         let core = init_core();
 
-        register_core_mmi_handlers();
+        register_core_mmi_handlers::<Platform>();
 
         let handles = dispatch_handles();
-        assert_eq!(handles.len(), CORE_MMI_HANDLERS.len(), "one slot per table entry");
+        assert_eq!(handles.len(), core_mmi_handlers::<Platform>().len(), "one slot per table entry");
         assert!(handles.iter().all(|handle| !handle.is_null()), "every handler got a handle: {handles:?}");
         // The handles are distinct, so the table did not overwrite a slot.
         for (index, handle) in handles.iter().enumerate() {
@@ -390,11 +413,22 @@ mod tests {
     #[test]
     fn test_driver_dispatch_handler_is_one_shot() {
         let core = init_core();
-        register_core_mmi_handlers();
+        let hobs = crate::tests::HobListBuffer::new().build();
+        assert_eq!(
+            core.entry_point_worker::<Platform>(
+                patina::management_mode::supervisor::UserCommandType::StartUserCore as u64,
+                hobs.as_ptr() as u64,
+                0,
+            ),
+            efi::Status::SUCCESS.as_usize() as u64
+        );
         let dispatch_handle = dispatch_handles()[0];
 
-        let status =
-            mm_driver_dispatch_handler(&MM_DISPATCH_EVENT_GROUP_GUID, core::ptr::null_mut(), core::ptr::null_mut());
+        let status = mm_driver_dispatch_handler::<Platform>(
+            &MM_DISPATCH_EVENT_GROUP_GUID,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        );
 
         assert_eq!(status, efi::Status::SUCCESS);
         // No drivers were discovered, but the handler must still retire itself so a later
@@ -403,31 +437,52 @@ mod tests {
     }
 
     #[test]
-    fn test_driver_dispatch_handler_tolerates_an_unregistered_handle() {
+    fn test_driver_dispatch_handler_rejects_a_missing_hob_list() {
         init_core();
 
-        // `register_core_mmi_handlers` was never called, so the handle slot is still null.
-        let status =
-            mm_driver_dispatch_handler(&MM_DISPATCH_EVENT_GROUP_GUID, core::ptr::null_mut(), core::ptr::null_mut());
+        // `StartUserCore` has not recorded the HOB list or registered a dispatch handle.
+        let status = mm_driver_dispatch_handler::<Platform>(
+            &MM_DISPATCH_EVENT_GROUP_GUID,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        );
 
-        assert_eq!(status, efi::Status::SUCCESS);
+        assert_eq!(status, efi::Status::NOT_READY);
+    }
+
+    #[test]
+    fn test_driver_dispatch_handler_rejects_a_retired_handle() {
+        let core = init_core();
+        register_core_mmi_handlers::<Platform>();
+        assert!(take_handler(core, dispatch_handles()[0]));
+
+        let status = mm_driver_dispatch_handler::<Platform>(
+            &MM_DISPATCH_EVENT_GROUP_GUID,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        );
+
+        assert_eq!(status, efi::Status::INVALID_PARAMETER);
     }
 
     #[test]
     fn test_ready_to_lock_handler_retires_only_the_one_shot_handlers() {
         let core = init_core();
-        register_core_mmi_handlers();
+        register_core_mmi_handlers::<Platform>();
         let handles = dispatch_handles();
 
-        let status =
-            mm_ready_to_lock_handler(&MM_DXE_READY_TO_LOCK_PROTOCOL_GUID, core::ptr::null_mut(), core::ptr::null_mut());
+        let status = mm_ready_to_lock_handler::<Platform>(
+            &MM_DXE_READY_TO_LOCK_PROTOCOL_GUID,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        );
 
         assert_eq!(status, efi::Status::SUCCESS);
         assert_eq!(protocol_holders(core, &MM_READY_TO_LOCK_PROTOCOL_GUID), 1);
 
         // Handlers flagged `unregister_on_lock` are gone; the rest survive the lock so they can
         // still service end-of-DXE, exit-boot-services and ready-to-boot.
-        for (entry, &handle) in CORE_MMI_HANDLERS.iter().zip(handles.iter()) {
+        for (entry, &handle) in core_mmi_handlers::<Platform>().iter().zip(handles.iter()) {
             assert_eq!(
                 take_handler(core, handle),
                 !entry.unregister_on_lock,

@@ -61,11 +61,18 @@ The entry point takes one of three operation codes:
    - Runs once, on the BSP.
    - Initializes the user core (pool allocator, protocol database, MMI handler database, and so on).
    - Discovers the MM drivers from the HOB list. They are dispatched later, when the MM dispatch event MMI arrives.
-   - Dispatches the platform's Patina components.
+   - Records the persistent user HOB list address and registers the MM dispatch handler for the platform's
+     components, without calling platform registration callbacks, constructing components, initializing parameters,
+     or parsing component HOBs.
 
 2. User Request (1):
    - Runs on the BSP.
    - Dispatches the MMI to the registered user-level handlers.
+   - On `MM_DISPATCH_EVENT_GROUP_GUID`, prepares and runs the platform's Patina components, then dispatches MM
+     drivers. The supervisor has rendezvoused registered APs before forwarding this request.
+   - Component preparation includes registration, construction, parameter initialization, and HOB parsing.
+     Execution runs both configuration phases before drivers evaluate their dependencies.
+   - The dispatch handler retires before invoking any component code, so components are dispatched once.
 
 3. User AP Procedure (2):
    - Runs on the APs, in parallel.
