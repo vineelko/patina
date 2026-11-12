@@ -51,7 +51,6 @@ use core::fmt;
 
 use patina::management_mode::supervisor::{
     MM_SUPERVISOR_CORE_GUID, MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID,
-    MM_SUPERVISOR_USER_GUID,
 };
 use patina::pi::guid::HOB_MEMORY_ALLOC_MODULE_GUID;
 use patina::pi::hob::{
@@ -126,9 +125,10 @@ pub enum HobValidationError {
         /// The module allocation's range.
         range: MemoryRange,
     },
-    /// The Init allocation cannot be reclaimed as whole pages.
-    InitModuleNotPageAligned {
-        /// The Init allocation's range.
+    /// A module allocation does not start and end on page boundaries, so its pages cannot be
+    /// validated or reclaimed as whole pages.
+    AllocationModuleNotPageAligned {
+        /// The module allocation's range.
         range: MemoryRange,
     },
     /// One or more required module allocations were not described.
@@ -244,6 +244,13 @@ pub enum HobValidationError {
         /// The attribute bits that were actually set on the page.
         found: u64,
     },
+    /// A page is both writable (`ReadOnly` clear) and executable (`ExecuteProtect` clear).
+    PageWritableAndExecutable {
+        /// Base address of the offending page.
+        addr: u64,
+        /// The attribute bits that were actually set on the page.
+        found: u64,
+    },
     /// A module's entry point does not lie on a present, read-only, executable page.
     EntryPointNotOnCodePage {
         /// The module entry point.
@@ -270,7 +277,9 @@ impl fmt::Display for HobValidationError {
             Self::AllocationModuleOutsideMmram { range } => {
                 write!(f, "allocation module HOB {range} is outside MMRAM")
             }
-            Self::InitModuleNotPageAligned { range } => write!(f, "MM Init allocation {range} is not page aligned"),
+            Self::AllocationModuleNotPageAligned { range } => {
+                write!(f, "allocation module HOB {range} is not page aligned")
+            }
             Self::MissingModule { has_init, has_supv_core } => {
                 write!(f, "required MM module missing: has_init={has_init}, has_supv_core={has_supv_core}")
             }
@@ -320,6 +329,9 @@ impl fmt::Display for HobValidationError {
                 f,
                 "page at 0x{addr:x} has forbidden attributes set (forbidden 0x{forbidden:x}, found 0x{found:x})"
             ),
+            Self::PageWritableAndExecutable { addr, found } => {
+                write!(f, "page at 0x{addr:x} is both writable and executable (found 0x{found:x})")
+            }
             Self::EntryPointNotOnCodePage { entry_point, attributes } => write!(
                 f,
                 "module entry point 0x{entry_point:x} is not on a present, read-only, executable page \
@@ -528,8 +540,8 @@ fn validate_allocation_modules<'a>(
                     HobValidationError::InvalidAddressRange { kind: "allocation module HOB", base, length }.into()
                 );
             }
-            if is_init && !matches!(range.is_aligned(UEFI_PAGE_SIZE as u64), Ok(true)) {
-                return Err(HobValidationError::InitModuleNotPageAligned { range }.into());
+            if !matches!(range.is_aligned(UEFI_PAGE_SIZE as u64), Ok(true)) {
+                return Err(HobValidationError::AllocationModuleNotPageAligned { range }.into());
             }
             if !mmram.contains_range(&range) {
                 return Err(HobValidationError::AllocationModuleOutsideMmram { range }.into());
@@ -806,16 +818,25 @@ fn verify_module_page_protections<'a>(
             name if name == MM_SUPERVISOR_CORE_GUID => {
                 log::info!("Verifying MM Supervisor Core module page protections: {range}");
                 // Supervisor core pages must be supervisor-owned (`Supervisor` set).
-                verify_page_attributes(page_table, &range, MemoryAttributes::Supervisor, MemoryAttributes::empty())?;
+                verify_page_attributes(
+                    page_table,
+                    &range,
+                    MemoryAttributes::Supervisor,
+                    MemoryAttributes::ReadProtect,
+                )?;
                 verify_entry_point_on_code_page(page_table, module.entry_point)?;
             }
-            name if name == MM_SUPERVISOR_USER_GUID => {
-                log::info!("Verifying MM Supervisor User module page protections: {range}");
-                // User core pages must be user-accessible (`Supervisor` clear).
-                verify_page_attributes(page_table, &range, MemoryAttributes::empty(), MemoryAttributes::Supervisor)?;
+            _ => {
+                log::info!("Verifying MM Supervisor user level module page protections: {range}");
+                // User core and driver pages must be user-accessible (`Supervisor` clear).
+                verify_page_attributes(
+                    page_table,
+                    &range,
+                    MemoryAttributes::empty(),
+                    MemoryAttributes::Supervisor | MemoryAttributes::ReadProtect,
+                )?;
                 verify_entry_point_on_code_page(page_table, module.entry_point)?;
             }
-            _ => {}
         }
     }
 
@@ -868,6 +889,12 @@ fn verify_page_attributes(
         let attrs = page_table
             .query_memory_region(addr, UEFI_PAGE_SIZE as u64)
             .map_err(|_| HobValidationError::PageAttributeQueryFailed { addr })?;
+        // Writable and executable are the absence of `ReadOnly` and `ExecuteProtect`, so a page
+        // carrying neither is an automatic failure.
+        if !attrs.intersects(MemoryAttributes::ReadOnly | MemoryAttributes::ExecuteProtect) {
+            return Err(HobValidationError::PageWritableAndExecutable { addr, found: attrs.bits() }.into());
+        }
+
         if !attrs.contains(required) {
             return Err(HobValidationError::PageMissingAttribute {
                 addr,
@@ -923,6 +950,7 @@ mod tests {
     use crate::error::MmSupervisorError;
     use crate::hob::pass_down::{MM_SUPV_PASS_DOWN_HOB_GUID, MM_SUPV_PASS_DOWN_HOB_REVISION};
     use core::mem::size_of;
+    use patina::management_mode::supervisor::MM_SUPERVISOR_USER_GUID;
     use patina_paging::{MockPageTable, PtError};
 
     use crate::test_support::{PageAlignedMemory, init_global_state_over};
@@ -1413,8 +1441,8 @@ mod tests {
                 0,
                 HobValidationError::InvalidAddressRange { kind: "allocation module HOB", base: 0x4000, length: 0 },
             ),
-            (0x4001, 0x2000, HobValidationError::InitModuleNotPageAligned { range: span(0x4001, 0x2000) }),
-            (0x4000, 0x2001, HobValidationError::InitModuleNotPageAligned { range: span(0x4000, 0x2001) }),
+            (0x4001, 0x2000, HobValidationError::AllocationModuleNotPageAligned { range: span(0x4001, 0x2000) }),
+            (0x4000, 0x2001, HobValidationError::AllocationModuleNotPageAligned { range: span(0x4000, 0x2001) }),
             (
                 0,
                 0x2000,
@@ -1438,6 +1466,26 @@ mod tests {
                 ),
                 Err(expected.into())
             );
+        }
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_requires_every_module_page_aligned() {
+        // Not only the Init allocation: every module is checked and reclaimed in whole pages.
+        let driver_guid = patina::BinaryGuid::from_string("0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0");
+        let init = allocation_module(HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID, 0x1000, 0x1000, 0x1000);
+        for module_name in [MM_SUPERVISOR_CORE_GUID, MM_SUPERVISOR_USER_GUID, driver_guid] {
+            for (base, length) in [(0x2001, 0x1000), (0x2000, 0x1001)] {
+                let module =
+                    allocation_module(MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, module_name, base, length, base);
+                assert_eq!(
+                    validate_allocation_modules(
+                        [Hob::MemoryAllocationModule(&init), Hob::MemoryAllocationModule(&module)],
+                        span(0x1000, 0x8000),
+                    ),
+                    Err(HobValidationError::AllocationModuleNotPageAligned { range: span(base, length) }.into())
+                );
+            }
         }
     }
 
@@ -2123,17 +2171,38 @@ mod tests {
             verify_module_page_protections(hobs.clone(), &page_table(core_code, supervisor_code)),
             Err(HobValidationError::PageHasForbiddenAttribute {
                 addr: 0x2000,
-                forbidden: MemoryAttributes::Supervisor.bits(),
+                forbidden: (MemoryAttributes::Supervisor | MemoryAttributes::ReadProtect).bits(),
                 found: supervisor_code.bits(),
             }
             .into())
         );
 
-        // The entry point must be on a present, read-only, executable page.
+        // No module page may be both writable and executable.
+        assert_eq!(
+            verify_module_page_protections(hobs.clone(), &page_table(MemoryAttributes::Supervisor, user_code)),
+            Err(HobValidationError::PageWritableAndExecutable {
+                addr: 0x1000,
+                found: MemoryAttributes::Supervisor.bits()
+            }
+            .into())
+        );
+
+        // Nor may one be missing.
+        let missing_core = core_code | MemoryAttributes::ReadProtect;
+        assert_eq!(
+            verify_module_page_protections(hobs.clone(), &page_table(missing_core, user_code)),
+            Err(HobValidationError::PageHasForbiddenAttribute {
+                addr: 0x1000,
+                forbidden: MemoryAttributes::ReadProtect.bits(),
+                found: missing_core.bits(),
+            }
+            .into())
+        );
+
+        // The entry point must be on a read-only, executable page.
         for core_page in [
-            MemoryAttributes::Supervisor,
             core_code | MemoryAttributes::ExecuteProtect,
-            core_code | MemoryAttributes::ReadProtect,
+            MemoryAttributes::Supervisor | MemoryAttributes::ExecuteProtect,
         ] {
             assert_eq!(
                 verify_module_page_protections(hobs.clone(), &page_table(core_page, user_code)),
@@ -2150,6 +2219,54 @@ mod tests {
     }
 
     #[test]
+    fn test_mm_supervisor_hob_validation_driver_page_protections() {
+        // Drivers run in Ring 3 like the User module, so their pages are held to the same rules.
+        let driver_guid = patina::BinaryGuid::from_string("0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0");
+        let driver = allocation_module(MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, driver_guid, 0x5000, 0x2000, 0x5100);
+        let hobs = [Hob::MemoryAllocationModule(&driver)];
+
+        // The entry point lies in the first page, which is queried for both the page walk and the
+        // entry point.
+        let page_table = |first: MemoryAttributes, second: MemoryAttributes| {
+            let mut page_table = MockPageTable::new();
+            page_table.expect_query_memory_region().withf(|&addr, _| addr == 0x5000).returning(move |_, _| Ok(first));
+            page_table.expect_query_memory_region().withf(|&addr, _| addr == 0x6000).returning(move |_, _| Ok(second));
+            page_table
+        };
+
+        // RO+X code with either RO+NX or RW+NX data is accepted.
+        let code = MemoryAttributes::ReadOnly;
+        for data in [MemoryAttributes::ReadOnly | MemoryAttributes::ExecuteProtect, MemoryAttributes::ExecuteProtect] {
+            assert_eq!(verify_module_page_protections(hobs.clone(), &page_table(code, data)), Ok(()));
+        }
+
+        // A driver page must not be a supervisor page.
+        let supervisor_data = MemoryAttributes::Supervisor | MemoryAttributes::ExecuteProtect;
+        assert_eq!(
+            verify_module_page_protections(hobs.clone(), &page_table(code, supervisor_data)),
+            Err(HobValidationError::PageHasForbiddenAttribute {
+                addr: 0x6000,
+                forbidden: (MemoryAttributes::Supervisor | MemoryAttributes::ReadProtect).bits(),
+                found: supervisor_data.bits(),
+            }
+            .into())
+        );
+
+        // Nor both writable and executable.
+        assert_eq!(
+            verify_module_page_protections(hobs.clone(), &page_table(code, MemoryAttributes::empty())),
+            Err(HobValidationError::PageWritableAndExecutable { addr: 0x6000, found: 0 }.into())
+        );
+
+        // The driver's entry point must be on a code page.
+        let data = MemoryAttributes::ExecuteProtect;
+        assert_eq!(
+            verify_module_page_protections(hobs, &page_table(data, code)),
+            Err(HobValidationError::EntryPointNotOnCodePage { entry_point: 0x5100, attributes: data.bits() }.into())
+        );
+    }
+
+    #[test]
     fn test_mm_supervisor_hob_validation_page_attributes_checks_each_page() {
         // An unaligned range is widened to whole pages, and each page is queried on its own.
         let mut page_table = MockPageTable::new();
@@ -2158,7 +2275,7 @@ mod tests {
                 .expect_query_memory_region()
                 .withf(move |&addr, &size| addr == page && size == 0x1000)
                 .times(1)
-                .returning(|_, _| Ok(MemoryAttributes::Supervisor));
+                .returning(|_, _| Ok(MemoryAttributes::Supervisor | MemoryAttributes::ExecuteProtect));
         }
         assert_eq!(
             verify_page_attributes(
@@ -2172,12 +2289,54 @@ mod tests {
     }
 
     #[test]
+    fn test_mm_supervisor_hob_validation_page_attributes_rejects_writable_executable_pages() {
+        // Read-only or non-executable pages pass, whatever else they carry.
+        for attributes in [
+            MemoryAttributes::ReadOnly,
+            MemoryAttributes::ExecuteProtect,
+            MemoryAttributes::ReadOnly | MemoryAttributes::ExecuteProtect,
+            MemoryAttributes::Supervisor | MemoryAttributes::ReadOnly,
+        ] {
+            let mut page_table = MockPageTable::new();
+            page_table.expect_query_memory_region().returning(move |_, _| Ok(attributes));
+            assert_eq!(
+                verify_page_attributes(
+                    &page_table,
+                    &span(0x1000, 0x1000),
+                    MemoryAttributes::empty(),
+                    MemoryAttributes::empty()
+                ),
+                Ok(())
+            );
+        }
+
+        // A writable, executable page is rejected even when the caller requires and forbids nothing.
+        for attributes in [MemoryAttributes::empty(), MemoryAttributes::Supervisor] {
+            let mut page_table = MockPageTable::new();
+            page_table.expect_query_memory_region().returning(move |_, _| Ok(attributes));
+            assert_eq!(
+                verify_page_attributes(
+                    &page_table,
+                    &span(0x1000, 0x1000),
+                    MemoryAttributes::empty(),
+                    MemoryAttributes::empty()
+                ),
+                Err(HobValidationError::PageWritableAndExecutable { addr: 0x1000, found: attributes.bits() }.into())
+            );
+        }
+    }
+
+    #[test]
     fn test_mm_supervisor_hob_validation_page_attributes_reports_the_failing_page() {
         let required = MemoryAttributes::Supervisor;
+        let data = MemoryAttributes::ExecuteProtect;
 
         // A page that cannot be queried is reported by its address.
         let mut page_table = MockPageTable::new();
-        page_table.expect_query_memory_region().withf(|&addr, _| addr == 0x1000).returning(move |_, _| Ok(required));
+        page_table
+            .expect_query_memory_region()
+            .withf(|&addr, _| addr == 0x1000)
+            .returning(move |_, _| Ok(required | data));
         page_table
             .expect_query_memory_region()
             .withf(|&addr, _| addr == 0x2000)
@@ -2188,10 +2347,15 @@ mod tests {
         );
 
         let mut page_table = MockPageTable::new();
-        page_table.expect_query_memory_region().returning(|_, _| Ok(MemoryAttributes::empty()));
+        page_table.expect_query_memory_region().returning(move |_, _| Ok(data));
         assert_eq!(
             verify_page_attributes(&page_table, &span(0x1000, 0x1000), required, MemoryAttributes::empty()),
-            Err(HobValidationError::PageMissingAttribute { addr: 0x1000, desired: required.bits(), found: 0 }.into())
+            Err(HobValidationError::PageMissingAttribute {
+                addr: 0x1000,
+                desired: required.bits(),
+                found: data.bits()
+            }
+            .into())
         );
 
         let mut page_table = MockPageTable::new();
@@ -2369,7 +2533,7 @@ mod tests {
             HobValidationError::MmramNotContiguous { covered: 0x1000, span: 0x2000 },
             HobValidationError::MemoryAllocationInsideMmram { range: span(0x1000, 0x1000) },
             HobValidationError::AllocationModuleOutsideMmram { range: span(0x1000, 0x1000) },
-            HobValidationError::InitModuleNotPageAligned { range: span(0x1001, 0x1000) },
+            HobValidationError::AllocationModuleNotPageAligned { range: span(0x1001, 0x1000) },
             HobValidationError::MissingModule { has_init: false, has_supv_core: false },
             HobValidationError::MissingModule { has_init: false, has_supv_core: true },
             HobValidationError::MissingModule { has_init: true, has_supv_core: false },
@@ -2395,6 +2559,7 @@ mod tests {
             HobValidationError::PageAttributeQueryFailed { addr: 0x1000 },
             HobValidationError::PageMissingAttribute { addr: 0x1000, desired: 0x1, found: 0 },
             HobValidationError::PageHasForbiddenAttribute { addr: 0x1000, forbidden: 0x1, found: 0x1 },
+            HobValidationError::PageWritableAndExecutable { addr: 0x1000, found: 0 },
             HobValidationError::EntryPointNotOnCodePage { entry_point: 0x5000, attributes: 0x1 },
         ];
         for err in errors {
