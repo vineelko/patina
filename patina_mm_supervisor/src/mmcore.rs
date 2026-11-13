@@ -72,6 +72,10 @@ pub enum CoreInitError {
         /// APIC ID that tried to claim it.
         requested: u32,
     },
+    /// A core tried to register before the BSP published the CPU slots.
+    CpuSlotsUnavailable,
+    /// The CPU slots were already published.
+    CpuSlotsAlreadyPublished,
     /// The BSP found no configured user entry point to demote to.
     UserEntryPointMissing,
     /// The HOB list described no MM Init module allocation.
@@ -188,6 +192,8 @@ impl fmt::Display for CoreInitError {
                     "CPU index {index} is already registered to APIC {existing}, cannot register APIC {requested}"
                 )
             }
+            Self::CpuSlotsUnavailable => write!(f, "the CPU slots have not been published yet"),
+            Self::CpuSlotsAlreadyPublished => write!(f, "the CPU slots were already published"),
             Self::UserEntryPointMissing => write!(f, "no user entry point is configured for the BSP to demote to"),
             Self::InitModuleRegionMissing => write!(f, "the HOB list described no MM Init module allocation"),
             Self::InitModuleRegionInvalid { base, length } => {
@@ -268,7 +274,7 @@ impl fmt::Display for CoreInitError {
 /// ```
 pub struct MmSupervisorCore<P: PlatformInfo, const MAX_CPUS: usize> {
     /// Registered CPUs and their states.
-    pub(crate) cpu_manager: CpuManager<MAX_CPUS>,
+    pub(crate) cpu_manager: CpuManager,
     /// Per-AP command mailboxes.
     pub(crate) mailbox_manager: MailboxManager,
     /// Syscall interface and per-CPU Ring 3 stacks.
@@ -301,7 +307,6 @@ mod tests {
     fn test_supervisor_default_matches_new() {
         let supervisor: MmSupervisorCore<TestPlatform, 2> = MmSupervisorCore::default();
 
-        assert_eq!(supervisor.cpu_manager().max_cpus(), 2);
         assert_eq!(supervisor.cpu_manager().get_cpu_id_by_index(0), None);
         assert!(!supervisor.initialized.load(Ordering::Relaxed));
         assert_eq!(supervisor.number_of_cores(), 0);
@@ -322,6 +327,8 @@ mod tests {
             format!("{}", CoreInitError::CpuIndexAlreadyRegistered { index: 1, existing: 0x10, requested: 0x30 }),
             "CPU index 1 is already registered to APIC 16, cannot register APIC 48"
         );
+        assert_eq!(format!("{}", CoreInitError::CpuSlotsUnavailable), "the CPU slots have not been published yet");
+        assert_eq!(format!("{}", CoreInitError::CpuSlotsAlreadyPublished), "the CPU slots were already published");
         assert_eq!(
             format!("{}", CoreInitError::UserEntryPointMissing),
             "no user entry point is configured for the BSP to demote to"

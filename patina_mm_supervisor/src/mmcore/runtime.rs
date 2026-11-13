@@ -717,7 +717,7 @@ mod tests {
     use crate::mmcore::mailbox::{ApCommand, ApResponse};
     use crate::mmcore::request_target::RequestTarget;
     use crate::state::{init_state, security_state};
-    use crate::test_support::leaked_storage;
+    use crate::test_support::publish_per_core_storage;
     use crate::{MmSupervisorCore, comm_buffer::CommBufferConfig, comm_buffer::CommChannel};
     use crate::{SupervisorMmiHandler, privilege_mgmt::mock};
     use core::sync::atomic::{AtomicUsize, Ordering};
@@ -828,6 +828,7 @@ mod tests {
     #[test]
     fn test_wait_for_ap_arrival_succeeds_once_every_ap_checks_in() {
         let core = TestCore::new();
+        publish_per_core_storage(&core, 4);
         assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
         assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Ok(1));
         assert_eq!(core.cpu_manager.register_cpu(2, 2, false), Ok(2));
@@ -841,6 +842,7 @@ mod tests {
     #[should_panic(expected = "fail-secure")]
     fn test_wait_for_ap_arrival_halts_when_an_ap_is_missing() {
         let core = TestCore::new();
+        publish_per_core_storage(&core, 4);
         assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
         assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Ok(1));
 
@@ -1139,6 +1141,7 @@ mod tests {
     fn test_process_user_request_round_trips_a_synchronous_request() {
         init_state().set_user_entry_point(0x4000);
         let core = TestCore::new();
+        publish_per_core_storage(&core, 4);
         core.syscall_interface.init(4, 0x8000, 0x1000).expect("syscall interface initializes");
         core.number_of_cores.store(1, Ordering::Release);
         assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
@@ -1195,6 +1198,7 @@ mod tests {
     fn test_process_user_request_rejects_an_oversized_response_from_ring_3() {
         init_state().set_user_entry_point(0x4000);
         let core = TestCore::new();
+        publish_per_core_storage(&core, 4);
         core.syscall_interface.init(4, 0x8000, 0x1000).expect("syscall interface initializes");
         assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
 
@@ -1228,6 +1232,7 @@ mod tests {
     fn test_process_user_request_keeps_a_response_that_fits() {
         init_state().set_user_entry_point(0x4000);
         let core = TestCore::new();
+        publish_per_core_storage(&core, 4);
         core.syscall_interface.init(4, 0x8000, 0x1000).expect("syscall interface initializes");
         assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
 
@@ -1278,6 +1283,7 @@ mod tests {
     #[test]
     fn test_ap_holding_pen_exits_once_released() {
         static CORE: TestCore = TestCore::new();
+        publish_per_core_storage(&CORE, 4);
         assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Ok(0));
         assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Ok(1));
         // The BSP has already signalled the exit barrier, so the pen drains on the first poll.
@@ -1289,7 +1295,7 @@ mod tests {
     #[test]
     fn test_ap_holding_pen_services_a_pending_command_before_exiting() {
         static CORE: TestCore = TestCore::new();
-        CORE.mailbox_manager.init(leaked_storage(2)).expect("mailbox storage is published");
+        publish_per_core_storage(&CORE, 4);
         assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Ok(0));
         assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Ok(1));
         // A null procedure is rejected by the AP, which still posts a response.
@@ -1305,6 +1311,7 @@ mod tests {
     #[test]
     fn test_execute_ap_command_restores_the_holding_pen_state() {
         let core = TestCore::new();
+        publish_per_core_storage(&core, 4);
         assert_eq!(core.cpu_manager.register_cpu(1, 0, false), Ok(0));
 
         let response = core.execute_ap_command(1, &ApCommand { procedure: 0, argument: 0 });
@@ -1333,6 +1340,7 @@ mod tests {
     #[test]
     fn test_start_ap_procedure_validates_the_target_cpu() {
         let core = TestCore::new();
+        publish_per_core_storage(&core, 4);
         let invalid = efi::Status::INVALID_PARAMETER.as_usize() as u64;
 
         // Before the core count is known, every index is out of range.
@@ -1353,6 +1361,7 @@ mod tests {
     #[test]
     fn test_start_ap_procedure_rejects_an_unpopulated_slot() {
         let core = TestCore::new();
+        publish_per_core_storage(&core, 4);
         // Registering out of order leaves slot 0 empty even though index 0 is in range.
         core.number_of_cores.store(2, Ordering::Release);
         assert_eq!(core.cpu_manager.register_cpu(7, 1, false), Ok(1));
@@ -1363,8 +1372,8 @@ mod tests {
     #[test]
     fn test_start_ap_procedure_rejects_a_busy_mailbox() {
         let core = TestCore::new();
+        publish_per_core_storage(&core, 4);
         core.number_of_cores.store(2, Ordering::Release);
-        core.mailbox_manager.init(leaked_storage(2)).expect("mailbox storage is published");
         assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
         assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Ok(1));
         // Occupy the mailbox so the dispatch has nowhere to post.
@@ -1376,8 +1385,8 @@ mod tests {
     #[test]
     fn test_start_ap_procedure_reports_the_ap_response() {
         static CORE: TestCore = TestCore::new();
+        publish_per_core_storage(&CORE, 4);
         CORE.number_of_cores.store(2, Ordering::Release);
-        CORE.mailbox_manager.init(leaked_storage(2)).expect("mailbox storage is published");
         assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Ok(0));
         assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Ok(1));
 

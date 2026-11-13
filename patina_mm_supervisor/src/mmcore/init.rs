@@ -166,6 +166,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // Size the per-core storage from the core count. The page table now exists, so the pages
         // are mapped supervisor-only and non-executable as they are allocated.
         let page_allocator = security_state().page_allocator();
+        self.cpu_manager.init(allocate_per_core_slice(page_allocator, number_of_cpus)?)?;
         self.mailbox_manager.init(allocate_per_core_slice(page_allocator, number_of_cpus)?)?;
         log::info!("Allocated per-core storage for {number_of_cpus} cores");
 

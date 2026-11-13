@@ -54,6 +54,15 @@ pub(crate) fn leaked_storage<T: Default>(count: usize) -> &'static [T] {
     Box::leak((0..count).map(|_| T::default()).collect())
 }
 
+/// Publishes `count` CPU slots and mailboxes on `core`, standing in for BSP initialization.
+pub(crate) fn publish_per_core_storage<P: PlatformInfo, const MAX_CPUS: usize>(
+    core: &MmSupervisorCore<P, MAX_CPUS>,
+    count: usize,
+) {
+    core.cpu_manager.init(leaked_storage(count)).expect("CPU slots are published");
+    core.mailbox_manager.init(leaked_storage(count)).expect("mailboxes are published");
+}
+
 pub(crate) struct RawHobList {
     pub(crate) storage: Vec<u64>,
     pub(crate) byte_len: usize,

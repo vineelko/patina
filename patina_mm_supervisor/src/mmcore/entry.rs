@@ -179,12 +179,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             log::info!("MM Supervisor Core v{}", env!("CARGO_PKG_VERSION"));
             log::info!("BSP (CPU {cpu_id}, index {cpu_index}) starting one-time initialization...");
 
-            self.cpu_manager.register_cpu(cpu_id, cpu_index, true)?;
-
             // SAFETY: `hob_list` was checked non-null above, and the caller guarantees it points
             // to a valid HOB list during the BSP's first entry.
             let hob_hand_off_table = unsafe { hob_list.cast::<PhaseHandoffInformationTable>().as_ref_unchecked() };
             let user_hob_list = self.bsp_init(hob_hand_off_table)?;
+
+            // `bsp_init` published the CPU slots, so the BSP can now take its own.
+            self.cpu_manager.register_cpu(cpu_id, cpu_index, true)?;
 
             // Demote to the user core entry point found in the HOB list.
             let user_entry = init_state()
@@ -236,7 +237,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     }
 
     /// Returns the CPU manager.
-    pub fn cpu_manager(&self) -> &CpuManager<MAX_CPUS> {
+    pub fn cpu_manager(&self) -> &CpuManager {
         &self.cpu_manager
     }
 
@@ -271,10 +272,9 @@ mod tests {
     fn test_supervisor_creation_and_accessors() {
         let supervisor: MmSupervisorCore<TestPlatform, 4> = MmSupervisorCore::new();
 
-        assert_eq!(supervisor.cpu_manager().max_cpus(), 4);
+        // The per-core storage is only published by BSP initialization.
         assert_eq!(supervisor.cpu_manager().get_cpu_id_by_index(0), None);
         assert_eq!(supervisor.mailbox_manager().check_mailbox(0), None);
-        assert_eq!(supervisor.mailbox_manager().check_mailbox(4), None);
         assert!(!supervisor.initialized.load(Ordering::Relaxed));
     }
 

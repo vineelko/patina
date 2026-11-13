@@ -12,6 +12,8 @@
 
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
+use spin::Once;
+
 use crate::error::MmSupervisorResult;
 
 use super::CoreInitError;
@@ -59,9 +61,9 @@ impl From<u8> for ApState {
     }
 }
 
-/// Information about a registered CPU stored in a fixed-size slot.
+/// Information about a registered CPU, one slot per CPU index.
 #[repr(C)]
-struct CpuSlot {
+pub(crate) struct CpuSlot {
     /// The CPU's APIC ID. `u32::MAX` means slot is unused.
     cpu_id: AtomicU32,
     /// Whether this CPU is the BSP (0 = AP, 1 = BSP).
@@ -98,20 +100,53 @@ impl CpuSlot {
     }
 }
 
+impl Default for CpuSlot {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Manager for CPU-related operations.
 ///
-/// Tracks registered CPUs and their states in a fixed array of `MAX_CPUS` slots.
-pub struct CpuManager<const MAX_CPUS: usize> {
+/// Tracks registered CPUs and their states, one slot per core the MP Information HOB reports.
+/// The slot storage is published once by [`CpuManager::init`] during BSP initialization. Before
+/// that the manager has no slots, so every lookup finds nothing.
+pub struct CpuManager {
     /// One slot per dense CPU index.
-    slots: [CpuSlot; MAX_CPUS],
+    slots: Once<&'static [CpuSlot]>,
     /// The APIC ID of the BSP.
     bsp_id: AtomicU32,
 }
 
-impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
-    /// Creates a CPU manager with no CPUs registered.
+impl CpuManager {
+    /// Creates a CPU manager with no slot storage.
     pub const fn new() -> Self {
-        Self { slots: [const { CpuSlot::new() }; MAX_CPUS], bsp_id: AtomicU32::new(u32::MAX) }
+        Self { slots: Once::new(), bsp_id: AtomicU32::new(u32::MAX) }
+    }
+
+    /// Publishes `slots`, one per CPU index. Each must be unused, as `CpuSlot::default` creates
+    /// it.
+    ///
+    /// ## Errors
+    ///
+    /// Returns [`CoreInitError::CpuSlotsAlreadyPublished`] if slots were already published. The
+    /// new ones are not used.
+    pub(crate) fn init(&self, slots: &'static [CpuSlot]) -> MmSupervisorResult<()> {
+        let mut published = false;
+        self.slots.call_once(|| {
+            published = true;
+            slots
+        });
+        if !published {
+            log::error!("CPU slot storage was already published");
+            return Err(CoreInitError::CpuSlotsAlreadyPublished.into());
+        }
+        Ok(())
+    }
+
+    /// Returns the published slots, or none before [`CpuManager::init`].
+    fn slots(&self) -> &'static [CpuSlot] {
+        self.slots.get().copied().unwrap_or(&[])
     }
 
     /// Registers a CPU with the manager.
@@ -120,15 +155,17 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
     /// the dense, 0-based UEFI processor index that selects this CPU's slot.
     ///
     /// Returns `Ok(cpu_index)` on success. Re-registering the same CPU is idempotent and
-    /// returns the same index. Returns [`CoreInitError::CpuIndexOutOfRange`] if `cpu_index` is
-    /// out of range, or [`CoreInitError::CpuIndexAlreadyRegistered`] if the slot is already
-    /// occupied by a different CPU.
+    /// returns the same index. Returns [`CoreInitError::CpuSlotsUnavailable`] before the slots
+    /// are published, [`CoreInitError::CpuIndexOutOfRange`] if `cpu_index` is out of range, or
+    /// [`CoreInitError::CpuIndexAlreadyRegistered`] if the slot is already occupied by a
+    /// different CPU.
     pub fn register_cpu(&self, cpu_id: u32, cpu_index: usize, is_bsp: bool) -> MmSupervisorResult<usize> {
         // Each physical CPU owns a distinct, stable `cpu_index`, so this slot is only
         // ever written by this CPU. That makes the load-check-then-store below safe
         // without a compare-exchange.
+        let slots = self.slots.get().ok_or(CoreInitError::CpuSlotsUnavailable)?;
         let slot =
-            self.slots.get(cpu_index).ok_or(CoreInitError::CpuIndexOutOfRange { index: cpu_index, len: MAX_CPUS })?;
+            slots.get(cpu_index).ok_or(CoreInitError::CpuIndexOutOfRange { index: cpu_index, len: slots.len() })?;
         match slot.get_cpu_id() {
             Some(existing) if existing == cpu_id => {
                 // Idempotent re-registration.
@@ -158,11 +195,6 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
         Ok(cpu_index)
     }
 
-    /// Gets the maximum number of CPUs supported.
-    pub const fn max_cpus(&self) -> usize {
-        MAX_CPUS
-    }
-
     /// Gets the APIC ID of the BSP.
     pub fn bsp_id(&self) -> Option<u32> {
         let id = self.bsp_id.load(Ordering::SeqCst);
@@ -176,7 +208,7 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
 
     /// Finds the slot index for a given CPU ID (APIC ID).
     fn find_slot(&self, cpu_id: u32) -> Option<usize> {
-        for (index, slot) in self.slots.iter().enumerate() {
+        for (index, slot) in self.slots().iter().enumerate() {
             if slot.get_cpu_id() == Some(cpu_id) {
                 return Some(index);
             }
@@ -193,21 +225,21 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
     ///
     /// Returns `None` if the index is out of range or the slot is unused.
     pub fn get_cpu_id_by_index(&self, index: usize) -> Option<u32> {
-        self.slots.get(index)?.get_cpu_id()
+        self.slots().get(index)?.get_cpu_id()
     }
 
     /// Gets the AP state by slot index.
     ///
     /// Returns `None` if the index is out of range or the slot is unused.
     pub fn get_ap_state_by_index(&self, index: usize) -> Option<ApState> {
-        let slot = self.slots.get(index)?;
+        let slot = self.slots().get(index)?;
         if slot.is_used() { Some(ApState::from(slot.state.load(Ordering::Acquire))) } else { None }
     }
 
     /// Gets the state of an AP.
     pub fn get_ap_state(&self, cpu_id: u32) -> Option<ApState> {
         let index = self.find_slot(cpu_id)?;
-        let slot = self.slots.get(index)?;
+        let slot = self.slots().get(index)?;
         Some(ApState::from(slot.state.load(Ordering::Acquire)))
     }
 
@@ -220,7 +252,7 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
             None => return false,
         };
 
-        let Some(slot) = self.slots.get(index) else {
+        let Some(slot) = self.slots().get(index) else {
             return false;
         };
 
@@ -236,7 +268,7 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
 
     /// Calls `f` with the APIC ID of each registered AP.
     pub fn for_each_ap<F: FnMut(u32)>(&self, mut f: F) {
-        for slot in &self.slots {
+        for slot in self.slots() {
             if let Some(cpu_id) = slot.get_cpu_id()
                 && slot.is_bsp.load(Ordering::Acquire) == 0
             {
@@ -248,7 +280,7 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
     /// Counts APs in a specific state.
     pub fn count_aps_in_state(&self, state: ApState) -> usize {
         let mut count = 0;
-        for slot in &self.slots {
+        for slot in self.slots() {
             if slot.is_used()
                 && slot.is_bsp.load(Ordering::Acquire) == 0
                 && slot.state.load(Ordering::Acquire) == state as u8
@@ -262,7 +294,7 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
     /// Releases every registered AP from the exit barrier by signaling each AP's
     /// rendezvous semaphore. Called by the BSP.
     pub fn release_all_aps(&self) {
-        for slot in &self.slots {
+        for slot in self.slots() {
             if slot.is_used() && slot.is_bsp.load(Ordering::Acquire) == 0 {
                 sem_signal(&slot.run);
             }
@@ -274,7 +306,7 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
     ///
     /// Called by an AP spinning in the holding pen.
     pub fn take_release_by_index(&self, cpu_index: usize) -> bool {
-        let Some(slot) = self.slots.get(cpu_index) else {
+        let Some(slot) = self.slots().get(cpu_index) else {
             return false;
         };
         sem_try_take(&slot.run)
@@ -285,7 +317,7 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
     pub fn ack_exit_to_bsp(&self) {
         if let Some(bsp_id) = self.bsp_id()
             && let Some(index) = self.find_slot(bsp_id)
-            && let Some(slot) = self.slots.get(index)
+            && let Some(slot) = self.slots().get(index)
         {
             sem_signal(&slot.run);
         }
@@ -307,7 +339,7 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
             Some(index) => index,
             None => return 0,
         };
-        let Some(slot) = self.slots.get(bsp_index) else {
+        let Some(slot) = self.slots().get(bsp_index) else {
             return 0;
         };
 
@@ -322,7 +354,7 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
     }
 }
 
-impl<const MAX_CPUS: usize> Default for CpuManager<MAX_CPUS> {
+impl Default for CpuManager {
     fn default() -> Self {
         Self::new()
     }
@@ -332,6 +364,14 @@ impl<const MAX_CPUS: usize> Default for CpuManager<MAX_CPUS> {
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
+    use crate::test_support::leaked_storage;
+
+    /// A manager with `slots` published slots.
+    fn manager_with(slots: usize) -> CpuManager {
+        let manager = CpuManager::new();
+        manager.init(leaked_storage(slots)).expect("fresh storage is published");
+        manager
+    }
 
     #[test]
     fn test_ap_state_maps_every_byte_value() {
@@ -365,21 +405,45 @@ mod tests {
 
     #[test]
     fn test_cpu_manager_creation() {
-        let manager: CpuManager<4> = CpuManager::new();
+        let manager = CpuManager::new();
         assert_eq!(manager.get_cpu_id_by_index(0), None);
         assert!(manager.bsp_id().is_none());
-        assert_eq!(manager.max_cpus(), 4);
     }
 
     #[test]
     fn test_cpu_manager_is_const() {
         // Verify we can create a static instance
-        static _MANAGER: CpuManager<8> = CpuManager::new();
+        static _MANAGER: CpuManager = CpuManager::new();
+    }
+
+    #[test]
+    fn test_cpu_manager_has_no_slots_before_init() {
+        let manager = CpuManager::new();
+
+        // No core can register before the BSP has published the slots, and nothing is found.
+        assert_eq!(manager.register_cpu(0, 0, true), Err(CoreInitError::CpuSlotsUnavailable.into()));
+        assert_eq!(manager.find_cpu_index(0), None);
+        assert_eq!(manager.count_aps_in_state(ApState::NotPresent), 0);
+        assert!(!manager.take_release_by_index(0));
+    }
+
+    #[test]
+    fn test_cpu_manager_publishes_slots_once() {
+        let manager = manager_with(2);
+        assert_eq!(manager.register_cpu(0x10, 1, false), Ok(1));
+
+        // A second publication is refused, and the first slots, with their registrations, stay.
+        assert_eq!(manager.init(leaked_storage(8)), Err(CoreInitError::CpuSlotsAlreadyPublished.into()));
+        assert_eq!(manager.get_cpu_id_by_index(1), Some(0x10));
+        assert_eq!(
+            manager.register_cpu(0x20, 2, false),
+            Err(CoreInitError::CpuIndexOutOfRange { index: 2, len: 2 }.into())
+        );
     }
 
     #[test]
     fn test_cpu_registration() {
-        let manager: CpuManager<4> = CpuManager::new();
+        let manager = manager_with(4);
 
         // Register BSP
         let bsp_idx = manager.register_cpu(0, 0, true);
@@ -398,7 +462,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_registration() {
-        let manager: CpuManager<4> = CpuManager::new();
+        let manager = manager_with(4);
 
         // Registering the same CPU twice is idempotent: the second call returns the
         // same index and does not consume another slot.
@@ -413,7 +477,7 @@ mod tests {
     fn test_register_decouples_apic_id_from_cpu_index() {
         // APIC IDs are sparse and unordered; cpu_index is dense and 0-based. The CPU
         // must land in slots[cpu_index] regardless of APIC ID or registration order.
-        let manager: CpuManager<4> = CpuManager::new();
+        let manager = manager_with(4);
 
         // Register out of order with non-contiguous APIC IDs.
         assert_eq!(manager.register_cpu(0x20, 2, false), Ok(2));
@@ -439,7 +503,7 @@ mod tests {
 
     #[test]
     fn test_ap_state_management() {
-        let manager: CpuManager<4> = CpuManager::new();
+        let manager = manager_with(4);
         manager.register_cpu(0, 0, true).unwrap();
         manager.register_cpu(1, 1, false).unwrap();
         // APs register as NotPresent and only enter the holding pen on check-in.
@@ -460,7 +524,7 @@ mod tests {
 
     #[test]
     fn test_ap_state_by_index_tracks_only_used_slots() {
-        let manager: CpuManager<4> = CpuManager::new();
+        let manager = manager_with(4);
         manager.register_cpu(0x20, 0, true).unwrap();
         manager.register_cpu(0x30, 1, false).unwrap();
         manager.set_ap_state(0x30, ApState::InHoldingPen);
@@ -482,7 +546,7 @@ mod tests {
 
     #[test]
     fn test_take_release_by_index_refuses_an_index_out_of_range() {
-        let manager: CpuManager<4> = CpuManager::new();
+        let manager = manager_with(4);
         manager.register_cpu(0x20, 0, true).unwrap();
 
         // An AP polling with an index outside the array must not take a release token from
@@ -498,15 +562,14 @@ mod tests {
     fn test_cpu_manager_default_matches_new() {
         // CpuManager is held in a static, so Default has to produce the same empty manager that
         // new() does.
-        let manager: CpuManager<4> = CpuManager::default();
+        let manager = CpuManager::default();
         assert_eq!(manager.get_cpu_id_by_index(0), None);
-        assert_eq!(manager.max_cpus(), 4);
         assert!(manager.bsp_id().is_none());
     }
 
     #[test]
     fn test_for_each_ap() {
-        let manager: CpuManager<4> = CpuManager::new();
+        let manager = manager_with(4);
         manager.register_cpu(0, 0, true).unwrap();
         manager.register_cpu(1, 1, false).unwrap();
         manager.register_cpu(2, 2, false).unwrap();
@@ -525,11 +588,11 @@ mod tests {
     }
 
     #[test]
-    fn test_max_cpu_limit() {
-        let manager: CpuManager<2> = CpuManager::new();
+    fn test_cpu_index_limit_is_the_slot_count() {
+        let manager = manager_with(2);
         assert!(manager.register_cpu(0, 0, true).is_ok());
         assert!(manager.register_cpu(1, 1, false).is_ok());
-        // cpu_index 2 is out of range for CpuManager<2>.
+        // cpu_index 2 is out of range for a manager with two slots.
         assert_eq!(
             manager.register_cpu(2, 2, false),
             Err(CoreInitError::CpuIndexOutOfRange { index: 2, len: 2 }.into())
@@ -538,7 +601,7 @@ mod tests {
 
     #[test]
     fn test_count_aps_in_state() {
-        let manager: CpuManager<4> = CpuManager::new();
+        let manager = manager_with(4);
         manager.register_cpu(0, 0, true).unwrap();
         manager.register_cpu(1, 1, false).unwrap();
         manager.register_cpu(2, 2, false).unwrap();
@@ -559,7 +622,7 @@ mod tests {
 
     #[test]
     fn test_exit_barrier_rendezvous() {
-        let manager: CpuManager<4> = CpuManager::new();
+        let manager = manager_with(4);
         manager.register_cpu(0, 0, true).unwrap(); // BSP at slot 0
         manager.register_cpu(10, 1, false).unwrap(); // AP at slot 1
         manager.register_cpu(20, 2, false).unwrap(); // AP at slot 2
@@ -587,7 +650,7 @@ mod tests {
 
     #[test]
     fn test_exit_barrier_gives_up_on_an_ap_that_never_checks_out() {
-        let manager: CpuManager<4> = CpuManager::new();
+        let manager = manager_with(4);
         manager.register_cpu(0, 0, true).unwrap(); // BSP at slot 0
         manager.register_cpu(10, 1, false).unwrap(); // AP at slot 1
         manager.register_cpu(20, 2, false).unwrap(); // AP at slot 2
@@ -602,7 +665,7 @@ mod tests {
 
     #[test]
     fn test_exit_barrier_returns_immediately_when_there_is_nothing_to_wait_for() {
-        let manager: CpuManager<4> = CpuManager::new();
+        let manager = manager_with(4);
 
         // A BSP running alone has no acknowledgements to collect, so the barrier must not spin
         // for the whole exit window.
@@ -611,7 +674,7 @@ mod tests {
 
         // Without a registered BSP there is no semaphore the APs could have signaled, so the
         // barrier reports a short count instead of waiting on one that can never be posted.
-        let unregistered: CpuManager<4> = CpuManager::new();
+        let unregistered = manager_with(4);
         assert_eq!(unregistered.wait_for_ap_exit_acks(2, u64::MAX), 0);
     }
 

@@ -1028,6 +1028,7 @@ mod tests {
     #[test]
     fn test_save_state_processor_id_from_cpu_manager() {
         static SUPERVISOR: MmSupervisorCore<TestPlatform, 4> = MmSupervisorCore::new();
+        crate::test_support::publish_per_core_storage(&SUPERVISOR, 4);
 
         assert_eq!(SUPERVISOR.cpu_manager().register_cpu(0x20, 2, false), Ok(2));
 
