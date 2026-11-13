@@ -60,7 +60,7 @@ impl fmt::Display for SyscallSetupError {
 /// Internal state for the syscall interface.
 struct SyscallInterfaceState {
     /// Number of CPUs configured.
-    num_cpus: usize,
+    number_of_cores: usize,
     /// CPL3 stack array base address.
     cpl3_stack_base: u64,
     /// Per-CPU stack size.
@@ -70,7 +70,7 @@ struct SyscallInterfaceState {
 impl SyscallInterfaceState {
     /// Creates zeroed state; [`SyscallInterface::init`] fills it in.
     const fn new() -> Self {
-        Self { num_cpus: 0, cpl3_stack_base: 0, stack_size: 0 }
+        Self { number_of_cores: 0, cpl3_stack_base: 0, stack_size: 0 }
     }
 }
 
@@ -96,19 +96,24 @@ impl SyscallInterface {
     /// ## Errors
     ///
     /// Returns `AlreadyInitialized` on a second call. The first configuration is kept.
-    pub fn init(&self, num_cpus: usize, cpl3_stack_base: u64, stack_size: usize) -> Result<(), SyscallSetupError> {
+    pub fn init(
+        &self,
+        number_of_cores: usize,
+        cpl3_stack_base: u64,
+        stack_size: usize,
+    ) -> Result<(), SyscallSetupError> {
         if self.initialized.swap(true, Ordering::SeqCst) {
             log::error!("Syscall interface init rejected: already initialized");
             return Err(SyscallSetupError::AlreadyInitialized);
         }
 
         let mut state = self.state.lock();
-        state.num_cpus = num_cpus;
+        state.number_of_cores = number_of_cores;
         state.cpl3_stack_base = cpl3_stack_base;
         state.stack_size = stack_size;
 
         log::info!(
-            "SyscallInterface initialized: {num_cpus} CPUs, cpl3_stack=0x{cpl3_stack_base:016x}, stack_size=0x{stack_size:x}"
+            "SyscallInterface initialized: {number_of_cores} cores, cpl3_stack=0x{cpl3_stack_base:016x}, stack_size=0x{stack_size:x}"
         );
 
         Ok(())
@@ -132,8 +137,8 @@ impl SyscallInterface {
         }
 
         let state = self.state.lock();
-        if cpu_index >= state.num_cpus {
-            log::error!("Invalid CPU index {}: exceeds configured CPU count {}", cpu_index, state.num_cpus);
+        if cpu_index >= state.number_of_cores {
+            log::error!("Invalid CPU index {}: exceeds configured CPU count {}", cpu_index, state.number_of_cores);
             return Err(SyscallSetupError::InvalidCpuIndex);
         }
 
@@ -188,7 +193,7 @@ mod tests {
     fn test_cpl3_stack_calculation() {
         let interface = SyscallInterface::new();
 
-        // Initialize with known values: num_cpus=4, cpl3_stack_base=0x10000, stack_size=0x4000
+        // Initialize with known values: number_of_cores=4, cpl3_stack_base=0x10000, stack_size=0x4000
         interface.init(4, 0x10000, 0x4000).unwrap();
 
         // CPU 0: base + 0x4000 * 1 - 8 = 0x10000 + 0x4000 - 8 = 0x13FF8

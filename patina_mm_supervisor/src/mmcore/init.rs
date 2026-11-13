@@ -460,17 +460,17 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// Maps the per-CPU Ring 3 stacks as user-accessible, writable, non-executable pages.
     ///
     /// A demoted routine faults on its first push if its stack is supervisor-owned. The range
-    /// covers the `num_cpus` stacks the MM IPL provisioned, which is also the range
+    /// covers the `number_of_cores` stacks the MM IPL provisioned, which is also the range
     /// [`SyscallInterface::get_cpl3_stack`](crate::privilege_mgmt::syscall_setup::SyscallInterface::get_cpl3_stack)
     /// hands out.
-    fn map_cpl3_stacks_to_user(&self, base: u64, per_core_size: u64, num_cpus: usize) -> MmSupervisorResult<()> {
-        let invalid_region = || CoreInitError::Cpl3StackRegionInvalid { base, per_core_size, num_cpus };
+    fn map_cpl3_stacks_to_user(&self, base: u64, per_core_size: u64, number_of_cores: usize) -> MmSupervisorResult<()> {
+        let invalid_region = || CoreInitError::Cpl3StackRegionInvalid { base, per_core_size, number_of_cores };
 
         if base == 0 || per_core_size == 0 {
             return Err(invalid_region().into());
         }
 
-        let total_size = per_core_size.checked_mul(num_cpus as u64).ok_or_else(invalid_region)?;
+        let total_size = per_core_size.checked_mul(number_of_cores as u64).ok_or_else(invalid_region)?;
         let stacks = MemoryRange::new(base, total_size)
             .and_then(|range| range.align_outward(UEFI_PAGE_SIZE as u64))
             .map_err(|_| invalid_region())?;
@@ -775,7 +775,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let stack_size = usize::try_from(cpl3_stack_size).map_err(|_| CoreInitError::Cpl3StackRegionInvalid {
             base: cpl3_stack_base,
             per_core_size: cpl3_stack_size,
-            num_cpus: number_of_cores,
+            number_of_cores: number_of_cores,
         })?;
 
         self.syscall_interface.init(number_of_cores, cpl3_stack_base, stack_size)?;
@@ -1117,11 +1117,11 @@ mod tests {
         // A zero base or per-core size, and a total that overflows, all mean the producer gave
         // the supervisor nowhere to demote to. Each is reported rather than halting here, and
         // each is refused before the region is looked up in the page table.
-        for (base, per_core_size, num_cpus) in [(0, 0x2000, 4), (0x1000, 0, 4), (0x1000, u64::MAX, 4)] {
+        for (base, per_core_size, number_of_cores) in [(0, 0x2000, 4), (0x1000, 0, 4), (0x1000, u64::MAX, 4)] {
             assert_eq!(
-                supervisor.map_cpl3_stacks_to_user(base, per_core_size, num_cpus),
-                Err(CoreInitError::Cpl3StackRegionInvalid { base, per_core_size, num_cpus }.into()),
-                "base 0x{base:x} size 0x{per_core_size:x} for {num_cpus} CPUs should be refused"
+                supervisor.map_cpl3_stacks_to_user(base, per_core_size, number_of_cores),
+                Err(CoreInitError::Cpl3StackRegionInvalid { base, per_core_size, number_of_cores }.into()),
+                "base 0x{base:x} size 0x{per_core_size:x} for {number_of_cores} cores should be refused"
             );
         }
     }

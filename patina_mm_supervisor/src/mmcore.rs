@@ -135,7 +135,7 @@ pub enum CoreInitError {
         /// Per-core stack size the HOB reported.
         per_core_size: u64,
         /// Number of CPUs the stacks were sized for.
-        num_cpus: usize,
+        number_of_cores: usize,
     },
     /// The Ring 3 stack region is not entirely inside MMRAM.
     ///
@@ -212,11 +212,11 @@ impl fmt::Display for CoreInitError {
             Self::HobListCopyNotMapped { base, size } => {
                 write!(f, "the HOB list copy at 0x{base:016x} (0x{size:x} bytes) could not be mapped read-only")
             }
-            Self::Cpl3StackRegionInvalid { base, per_core_size, num_cpus } => {
+            Self::Cpl3StackRegionInvalid { base, per_core_size, number_of_cores } => {
                 write!(
                     f,
                     "the PassDown HOB describes no usable Ring 3 stack region \
-                     (base 0x{base:016x}, 0x{per_core_size:x} bytes per core, {num_cpus} CPUs)"
+                     (base 0x{base:016x}, 0x{per_core_size:x} bytes per core, {number_of_cores} cores)"
                 )
             }
             Self::Cpl3StackRegionOutsideMmram { range } => {
@@ -366,9 +366,9 @@ mod tests {
             "the HOB list copy at 0x0000000000001000 (0x2000 bytes) could not be mapped read-only"
         );
         assert_eq!(
-            format!("{}", CoreInitError::Cpl3StackRegionInvalid { base: 0, per_core_size: 0x2000, num_cpus: 4 }),
+            format!("{}", CoreInitError::Cpl3StackRegionInvalid { base: 0, per_core_size: 0x2000, number_of_cores: 4 }),
             "the PassDown HOB describes no usable Ring 3 stack region \
-             (base 0x0000000000000000, 0x2000 bytes per core, 4 CPUs)"
+             (base 0x0000000000000000, 0x2000 bytes per core, 4 cores)"
         );
         assert_eq!(
             format!("{}", CoreInitError::Cpl3StackRegionOutsideMmram { range: stacks }),

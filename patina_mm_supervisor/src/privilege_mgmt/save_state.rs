@@ -346,18 +346,24 @@ fn policy_checks_for_register(reg: MmSaveStateRegister) -> Option<&'static [Save
 /// Validates and stages the register and CPU index for Phase 2. `protocol` is kept so Phase 2
 /// can check it matches, and `register_raw` is the raw `EFI_MM_SAVE_STATE_REGISTER` value.
 pub fn save_state_read_phase1(protocol: u64, register_raw: u64, cpu_index: u64) -> SyscallResult {
-    let num_cpus = save_state_info()
+    let number_of_cores = save_state_info()
         .inspect_err(|status| log::error!("SAVE_STATE_READ: Unable to get number of CPUs: {:#x}", status.as_usize()))?
         .number_of_cores();
 
-    stage_read_request(current_apic_id(), protocol, register_raw, cpu_index, num_cpus)
+    stage_read_request(current_apic_id(), protocol, register_raw, cpu_index, number_of_cores)
 }
 
-/// Validates a Phase 1 request against `num_cpus` and stages it for Phase 2 on behalf of `caller`.
+/// Validates a Phase 1 request against `number_of_cores` and stages it for Phase 2 on behalf of `caller`.
 ///
 /// A register value the PI spec does not define is `NOT_FOUND`, which is what
 /// `EFI_MM_CPU_PROTOCOL.ReadSaveState` reports for a register missing from the save state.
-fn stage_read_request(caller: u32, protocol: u64, register_raw: u64, cpu_index: u64, num_cpus: usize) -> SyscallResult {
+fn stage_read_request(
+    caller: u32,
+    protocol: u64,
+    register_raw: u64,
+    cpu_index: u64,
+    number_of_cores: usize,
+) -> SyscallResult {
     let Some(register) = MmSaveStateRegister::from_u64(register_raw) else {
         log::error!("SAVE_STATE_READ: Unknown register value: {register_raw}");
         return Err(Status::NOT_FOUND);
@@ -367,8 +373,8 @@ fn stage_read_request(caller: u32, protocol: u64, register_raw: u64, cpu_index: 
         log::error!("SAVE_STATE_READ: CPU index {cpu_index} does not fit the target architecture");
         return Err(Status::INVALID_PARAMETER);
     };
-    if index >= num_cpus {
-        log::error!("SAVE_STATE_READ: CPU index {cpu_index} >= NumberOfCpus {num_cpus}");
+    if index >= number_of_cores {
+        log::error!("SAVE_STATE_READ: CPU index {cpu_index} >= number of cores {number_of_cores}");
         return Err(Status::INVALID_PARAMETER);
     }
 
@@ -651,12 +657,12 @@ mod tests {
     }
 
     impl FakeSmram {
-        /// Builds an SMBASE array of `num_cpus` entries all pointing at a single backing region.
-        fn new(num_cpus: usize) -> Self {
+        /// Builds an SMBASE array of `number_of_cores` entries all pointing at a single backing region.
+        fn new(number_of_cores: usize) -> Self {
             let region_size = SMRAM_SAVE_STATE_MAP_OFFSET as usize + SMRAM_SAVE_STATE_MAP_SIZE;
             let region = vec![0u8; region_size].into_boxed_slice();
             let smbase = region.as_ptr() as u64;
-            Self { region, sm_bases: vec![smbase; num_cpus].into_boxed_slice() }
+            Self { region, sm_bases: vec![smbase; number_of_cores].into_boxed_slice() }
         }
 
         /// Returns the metadata the save-state syscall would receive from the `PassDown` HOB.
