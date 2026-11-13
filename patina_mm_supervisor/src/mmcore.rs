@@ -21,6 +21,7 @@ pub(crate) mod entry;
 pub(crate) mod init;
 pub(crate) mod mailbox;
 pub(crate) mod mseg;
+pub(crate) mod per_core;
 pub(crate) mod perf_timer;
 pub(crate) mod request_target;
 pub(crate) mod runtime;
@@ -269,7 +270,7 @@ pub struct MmSupervisorCore<P: PlatformInfo, const MAX_CPUS: usize> {
     /// Registered CPUs and their states.
     pub(crate) cpu_manager: CpuManager<MAX_CPUS>,
     /// Per-AP command mailboxes.
-    pub(crate) mailbox_manager: MailboxManager<MAX_CPUS>,
+    pub(crate) mailbox_manager: MailboxManager,
     /// Syscall interface and per-CPU Ring 3 stacks.
     pub(crate) syscall_interface: SyscallInterface,
     /// Set once the BSP has finished its one-time initialization.

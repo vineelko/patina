@@ -246,7 +246,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     }
 
     /// Returns the mailbox manager.
-    pub fn mailbox_manager(&self) -> &MailboxManager<MAX_CPUS> {
+    pub fn mailbox_manager(&self) -> &MailboxManager {
         &self.mailbox_manager
     }
 }

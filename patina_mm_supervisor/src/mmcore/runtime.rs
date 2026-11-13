@@ -717,6 +717,7 @@ mod tests {
     use crate::mmcore::mailbox::{ApCommand, ApResponse};
     use crate::mmcore::request_target::RequestTarget;
     use crate::state::{init_state, security_state};
+    use crate::test_support::leaked_storage;
     use crate::{MmSupervisorCore, comm_buffer::CommBufferConfig, comm_buffer::CommChannel};
     use crate::{SupervisorMmiHandler, privilege_mgmt::mock};
     use core::sync::atomic::{AtomicUsize, Ordering};
@@ -1288,6 +1289,7 @@ mod tests {
     #[test]
     fn test_ap_holding_pen_services_a_pending_command_before_exiting() {
         static CORE: TestCore = TestCore::new();
+        CORE.mailbox_manager.init(leaked_storage(2)).expect("mailbox storage is published");
         assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Ok(0));
         assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Ok(1));
         // A null procedure is rejected by the AP, which still posts a response.
@@ -1362,6 +1364,7 @@ mod tests {
     fn test_start_ap_procedure_rejects_a_busy_mailbox() {
         let core = TestCore::new();
         core.number_of_cores.store(2, Ordering::Release);
+        core.mailbox_manager.init(leaked_storage(2)).expect("mailbox storage is published");
         assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
         assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Ok(1));
         // Occupy the mailbox so the dispatch has nowhere to post.
@@ -1374,6 +1377,7 @@ mod tests {
     fn test_start_ap_procedure_reports_the_ap_response() {
         static CORE: TestCore = TestCore::new();
         CORE.number_of_cores.store(2, Ordering::Release);
+        CORE.mailbox_manager.init(leaked_storage(2)).expect("mailbox storage is published");
         assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Ok(0));
         assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Ok(1));
 

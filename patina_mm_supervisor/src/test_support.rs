@@ -47,6 +47,13 @@ use std::{
 pub(crate) struct TestPlatform;
 
 impl PlatformInfo for TestPlatform {}
+
+/// `count` default values of `T` that stay allocated for the rest of the test process, standing in
+/// for the pages the BSP allocates for per-core arrays.
+pub(crate) fn leaked_storage<T: Default>(count: usize) -> &'static [T] {
+    Box::leak((0..count).map(|_| T::default()).collect())
+}
+
 pub(crate) struct RawHobList {
     pub(crate) storage: Vec<u64>,
     pub(crate) byte_len: usize,

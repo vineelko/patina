@@ -13,13 +13,19 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+use spin::Once;
+
 use crate::error::MmSupervisorResult;
 
 use super::perf_timer;
 
-/// Errors produced while posting a command to an AP's mailbox.
+/// Errors produced by the mailbox manager.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MailboxError {
+    /// The mailbox storage has not been published yet.
+    NotInitialized,
+    /// The mailbox storage was already published.
+    AlreadyInitialized,
     /// The CPU index has no mailbox slot.
     NoMailboxForCpuIndex {
         /// The index the caller asked for.
@@ -42,6 +48,8 @@ impl core::error::Error for MailboxError {}
 impl core::fmt::Display for MailboxError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::NotInitialized => write!(f, "the mailbox storage has not been published yet"),
+            Self::AlreadyInitialized => write!(f, "the mailbox storage was already published"),
             Self::NoMailboxForCpuIndex { index, len } => {
                 write!(f, "CPU index {index} has no mailbox slot among the {len} available")
             }
@@ -240,26 +248,60 @@ impl Default for ApMailbox {
     }
 }
 
-/// Holds one mailbox per CPU index, `MAX_CPUS` in total.
-pub struct MailboxManager<const MAX_CPUS: usize> {
+/// Holds one mailbox per CPU index, sized from the core count the MP Information HOB reports.
+///
+/// The storage is published once by [`MailboxManager::init`] during BSP initialization. Before
+/// that the manager has no mailboxes, so every lookup finds nothing.
+pub struct MailboxManager {
     /// One mailbox per CPU index.
-    mailboxes: [ApMailbox; MAX_CPUS],
+    mailboxes: Once<&'static [ApMailbox]>,
 }
 
-impl<const MAX_CPUS: usize> MailboxManager<MAX_CPUS> {
-    /// Creates a manager with every mailbox empty.
+impl MailboxManager {
+    /// Creates a manager with no mailbox storage.
     pub const fn new() -> Self {
-        Self { mailboxes: [const { ApMailbox::new() }; MAX_CPUS] }
+        Self { mailboxes: Once::new() }
+    }
+
+    /// Publishes `mailboxes`, one per CPU index. Each must be empty, as `ApMailbox::default`
+    /// creates it.
+    ///
+    /// ## Errors
+    ///
+    /// Returns [`MailboxError::AlreadyInitialized`] if mailboxes were already published. The new
+    /// ones are not used.
+    pub(crate) fn init(&self, mailboxes: &'static [ApMailbox]) -> MmSupervisorResult<()> {
+        let mut published = false;
+        self.mailboxes.call_once(|| {
+            published = true;
+            mailboxes
+        });
+        if !published {
+            log::error!("Mailbox storage was already published");
+            return Err(MailboxError::AlreadyInitialized.into());
+        }
+        Ok(())
+    }
+
+    /// Returns the published mailboxes, or none before [`MailboxManager::init`].
+    fn mailboxes(&self) -> &'static [ApMailbox] {
+        self.mailboxes.get().copied().unwrap_or(&[])
     }
 
     /// Sends a command to a specific AP.
     ///
-    /// Reports [`MailboxError::NoMailboxForCpuIndex`] when `cpu_index` has no slot, and
+    /// Reports [`MailboxError::NotInitialized`] before the storage is published,
+    /// [`MailboxError::NoMailboxForCpuIndex`] when `cpu_index` has no slot, and
     /// [`MailboxError::CommandAlreadyPending`] when the AP has not taken its previous command.
     pub fn send_command(&self, cpu_index: usize, command: ApCommand) -> MmSupervisorResult<()> {
-        let Some(mailbox) = self.mailboxes.get(cpu_index) else {
-            log::error!("No mailbox for CPU index {cpu_index} ({MAX_CPUS} slots)");
-            return Err(MailboxError::NoMailboxForCpuIndex { index: cpu_index, len: MAX_CPUS }.into());
+        let Some(mailboxes) = self.mailboxes.get() else {
+            log::error!("No mailbox storage for CPU index {cpu_index}");
+            return Err(MailboxError::NotInitialized.into());
+        };
+        let Some(mailbox) = mailboxes.get(cpu_index) else {
+            let len = mailboxes.len();
+            log::error!("No mailbox for CPU index {cpu_index} ({len} slots)");
+            return Err(MailboxError::NoMailboxForCpuIndex { index: cpu_index, len }.into());
         };
         if mailbox.send_command(command) {
             Ok(())
@@ -271,19 +313,19 @@ impl<const MAX_CPUS: usize> MailboxManager<MAX_CPUS> {
 
     /// Checks for a pending command (called by AP).
     pub fn check_mailbox(&self, cpu_index: usize) -> Option<ApCommand> {
-        self.mailboxes.get(cpu_index)?.take_command()
+        self.mailboxes().get(cpu_index)?.take_command()
     }
 
     /// Posts a response (called by AP).
     pub fn post_response(&self, cpu_index: usize, response: ApResponse) {
-        if let Some(mailbox) = self.mailboxes.get(cpu_index) {
+        if let Some(mailbox) = self.mailboxes().get(cpu_index) {
             mailbox.post_response(response);
         }
     }
 
     /// Resets every assigned mailbox back to the empty state.
     pub fn reset_all(&self) {
-        for mailbox in &self.mailboxes {
+        for mailbox in self.mailboxes() {
             mailbox.reset();
         }
     }
@@ -292,7 +334,7 @@ impl<const MAX_CPUS: usize> MailboxManager<MAX_CPUS> {
     ///
     /// Returns `None` on timeout or if `cpu_index` has no mailbox.
     pub fn wait_response(&self, cpu_index: usize, timeout_us: u64) -> Option<ApResponse> {
-        let mailbox = self.mailboxes.get(cpu_index)?;
+        let mailbox = self.mailboxes().get(cpu_index)?;
         let mut result = None;
 
         perf_timer::spin_until(timeout_us, || {
@@ -308,7 +350,7 @@ impl<const MAX_CPUS: usize> MailboxManager<MAX_CPUS> {
     }
 }
 
-impl<const MAX_CPUS: usize> Default for MailboxManager<MAX_CPUS> {
+impl Default for MailboxManager {
     fn default() -> Self {
         Self::new()
     }
@@ -318,6 +360,14 @@ impl<const MAX_CPUS: usize> Default for MailboxManager<MAX_CPUS> {
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
     use super::*;
+    use crate::test_support::leaked_storage;
+
+    /// A manager with `slots` published mailboxes.
+    fn manager_with(slots: usize) -> MailboxManager {
+        let manager = MailboxManager::new();
+        manager.init(leaked_storage(slots)).expect("fresh storage is published");
+        manager
+    }
 
     #[test]
     fn test_mailbox_creation() {
@@ -329,16 +379,14 @@ mod tests {
 
     #[test]
     fn test_mailbox_defaults_match_new() {
-        // Both types are held in fixed-size arrays, so Default has to produce the same empty
-        // mailbox that new() does or an array built by default would start out usable.
+        // The manager is held in a static, so Default has to produce the same empty manager that
+        // new() does: no mailbox can be reached before storage is published.
         let mailbox = ApMailbox::default();
         assert_eq!(mailbox.take_command(), None);
         assert_eq!(mailbox.get_response(), None);
 
-        let manager = MailboxManager::<4>::default();
-        for index in 0..4 {
-            assert_eq!(manager.check_mailbox(index), None);
-        }
+        let manager = MailboxManager::default();
+        assert_eq!(manager.check_mailbox(0), None);
     }
 
     #[test]
@@ -419,12 +467,37 @@ mod tests {
     #[test]
     fn test_mailbox_manager_is_const() {
         // Verify we can create a static manager
-        static _MANAGER: MailboxManager<8> = MailboxManager::new();
+        static _MANAGER: MailboxManager = MailboxManager::new();
+    }
+
+    #[test]
+    fn test_mailbox_manager_has_no_mailboxes_before_init() {
+        let manager = MailboxManager::new();
+        let command = ApCommand { procedure: 0x1000, argument: 0x2000 };
+
+        assert_eq!(manager.send_command(0, command), Err(MailboxError::NotInitialized.into()));
+        assert_eq!(manager.check_mailbox(0), None);
+        assert_eq!(manager.wait_response(0, 0), None);
+    }
+
+    #[test]
+    fn test_mailbox_manager_publishes_storage_once() {
+        let manager = manager_with(2);
+        let command = ApCommand { procedure: 0x1000, argument: 0x2000 };
+        assert!(manager.send_command(1, command).is_ok());
+
+        // A second publication is refused, and the first storage, with its pending command, stays.
+        assert_eq!(manager.init(leaked_storage(8)), Err(MailboxError::AlreadyInitialized.into()));
+        assert_eq!(manager.check_mailbox(1), Some(command));
+        assert_eq!(
+            manager.send_command(2, command),
+            Err(MailboxError::NoMailboxForCpuIndex { index: 2, len: 2 }.into())
+        );
     }
 
     #[test]
     fn test_mailbox_manager_rejects_an_unknown_cpu_index() {
-        let manager: MailboxManager<4> = MailboxManager::new();
+        let manager = manager_with(4);
         let command = ApCommand { procedure: 0x1000, argument: 0x2000 };
 
         // Slot 4 is past the end of a four slot manager.
@@ -437,7 +510,7 @@ mod tests {
 
     #[test]
     fn test_mailbox_manager_rejects_a_second_pending_command() {
-        let manager: MailboxManager<4> = MailboxManager::new();
+        let manager = manager_with(4);
         let command = ApCommand { procedure: 0x1000, argument: 0x2000 };
 
         assert!(manager.send_command(2, command).is_ok());
@@ -454,6 +527,8 @@ mod tests {
 
     #[test]
     fn test_mailbox_error_displays_each_variant() {
+        assert_eq!(format!("{}", MailboxError::NotInitialized), "the mailbox storage has not been published yet");
+        assert_eq!(format!("{}", MailboxError::AlreadyInitialized), "the mailbox storage was already published");
         assert_eq!(
             format!("{}", MailboxError::NoMailboxForCpuIndex { index: 4, len: 4 }),
             "CPU index 4 has no mailbox slot among the 4 available"
@@ -466,7 +541,7 @@ mod tests {
 
     #[test]
     fn test_mailbox_manager() {
-        let manager: MailboxManager<4> = MailboxManager::new();
+        let manager = manager_with(4);
 
         // Send a command to the AP occupying slot index 1.
         let command = ApCommand { procedure: 0x1000, argument: 0x2000 };
@@ -503,7 +578,7 @@ mod tests {
 
     #[test]
     fn test_manager_reset_all_scrubs_every_mailbox() {
-        let manager: MailboxManager<4> = MailboxManager::new();
+        let manager = manager_with(4);
 
         // Leave two different slots' mailboxes stuck in non-empty states.
         assert!(manager.send_command(1, ApCommand { procedure: 0x10, argument: 0 }).is_ok());

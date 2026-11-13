@@ -54,6 +54,7 @@ use crate::{
 
 use super::CoreInitError;
 use super::mseg::{MSEG_SMRAM_HOB_GUID, parse_mseg_smram_hob};
+use super::per_core::allocate_per_core_slice;
 use super::smi_idt_patch::patch_smi_handler_idt;
 use super::smrr::{configure_smm_code_access, smrr_initialize};
 use crate::hob::pass_down::{MM_SUPV_PASS_DOWN_HOB_GUID, MmSupvPassDownHobData, PassDownHobError};
@@ -161,6 +162,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         }
 
         self.init_page_table()?;
+
+        // Size the per-core storage from the core count. The page table now exists, so the pages
+        // are mapped supervisor-only and non-executable as they are allocated.
+        let page_allocator = security_state().page_allocator();
+        self.mailbox_manager.init(allocate_per_core_slice(page_allocator, number_of_cpus)?)?;
+        log::info!("Allocated per-core storage for {number_of_cpus} cores");
 
         // Validate the HOBs that need the page table, now that it exists. The checks that only
         // need the page allocator ran above.
