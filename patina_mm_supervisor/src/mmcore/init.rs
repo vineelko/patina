@@ -99,7 +99,7 @@ pub(crate) fn validate_init_code_page(address: u64, attributes: MemoryAttributes
     );
 }
 
-impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
+impl<P: PlatformInfo> MmSupervisorCore<P> {
     /// BSP-only, one-time initialization.
     ///
     /// Loads the IDT, parses and validates the incoming HOB list, programs the SMRR, initializes
@@ -622,11 +622,11 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         self.parse_mp_information_hob(mp_information)
     }
 
-    /// Returns the CPU count from the MP Information HOB.
+    /// Returns the core count from the MP Information HOB.
     ///
-    /// The count is validated against `MAX_CPUS` here and returned as a `usize`, so callers
-    /// index and size allocations with it directly. A raw `u64` count from the HOB that does not
-    /// fit a `usize` is reported in [`CoreInitError::InvalidCpuCount`] as `usize::MAX`.
+    /// The count is returned as a `usize`, so callers index and size allocations with it directly.
+    /// It is bounded by the payload: every processor entry it counts must be present. A raw `u64`
+    /// count that does not fit a `usize` cannot meet that bound and is reported as malformed.
     fn parse_mp_information_hob(&self, data: &[u8]) -> MmSupervisorResult<usize> {
         /// Offset of `ProcessorInfoBuffer[]` within `MP_INFORMATION_HOB_DATA`.
         const PROCESSOR_INFO_BUFFER_OFFSET: usize = 16;
@@ -652,16 +652,15 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
                 })?,
         );
 
-        // A count that does not fit a `usize` is certainly larger than MAX_CPUS, so it is named
-        // as the largest count this target can express and rejected by the bound below rather
-        // than needing an error of its own.
+        // A count that does not fit a `usize` is named as the largest count this target can
+        // express, so the size check below rejects it rather than needing an error of its own.
         let core_count = usize::try_from(number_of_cores).unwrap_or(usize::MAX);
-        if core_count == 0 || core_count > MAX_CPUS {
-            log::error!("MP Information HOB CPU count {core_count} is outside the supported range 1..={MAX_CPUS}");
-            return Err(CoreInitError::InvalidCpuCount { found: core_count, maximum: MAX_CPUS }.into());
+        if core_count == 0 {
+            log::error!("MP Information HOB reports zero cores");
+            return Err(CoreInitError::ZeroCoreCount.into());
         }
 
-        // `core_count` is bounded by `MAX_CPUS`, so the offsets below cannot overflow today.
+        // The processor entries must all fit in the payload, which bounds the count.
         let processor_info_size = core_count.checked_mul(PROCESSOR_INFO_ENTRY_SIZE).ok_or_else(|| {
             log::error!("MP Information HOB: {core_count} processor entries overflow the payload size");
             CoreInitError::MpInformationHobMalformed
@@ -694,10 +693,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// `buffer` must name `number_of_cores` bytes that stay resident for the supervisor's
     /// lifetime.
     unsafe fn store_mm_initialized_slots(&self, buffer: u64, number_of_cores: usize) -> MmSupervisorResult<()> {
-        // The slice built below is `number_of_cores` elements long, so the bound is a
+        // The slice built below is `number_of_cores` elements long, so its MMRAM range is a
         // memory-safety precondition and is checked here rather than assumed of the caller.
-        if number_of_cores == 0 || number_of_cores > MAX_CPUS {
-            return Err(CoreInitError::InvalidCpuCount { found: number_of_cores, maximum: MAX_CPUS }.into());
+        if number_of_cores == 0 {
+            return Err(CoreInitError::ZeroCoreCount.into());
         }
         if !MemoryRange::new(buffer, number_of_cores as u64).is_ok_and(|range| is_range_inside_mmram(&range)) {
             log::error!("MM initialized buffer at 0x{buffer:016x} does not contain {number_of_cores} slot(s) in MMRAM");
@@ -915,7 +914,7 @@ mod tests {
         let after_scan = unsafe { core::slice::from_raw_parts(memory.base() as *const u8, size) };
         assert!(after_scan.iter().all(|byte| *byte == 0xa5), "scanning wrote into the memory the HOB list describes");
 
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let page_allocator = PageAllocator::new();
         let paging_allocator = PagingPoolAllocator::new();
         // SAFETY: the scanned descriptor references the live, exclusively owned `memory`.
@@ -932,7 +931,7 @@ mod tests {
 
     #[test]
     fn test_init_page_allocators_commits_scanned_regions() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let memory = PageAlignedMemory::new(memory::DEFAULT_PAGING_POOL_PAGES + 8);
         let hob_list = smram_hob_list(&memory);
         let scanned = scan_regions(&hob_list);
@@ -953,7 +952,7 @@ mod tests {
 
     #[test]
     fn test_init_page_allocators_reports_paging_pool_allocation_failure() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let memory = PageAlignedMemory::new(2);
         let hob_list = smram_hob_list(&memory);
         let scanned = scan_regions(&hob_list);
@@ -970,7 +969,7 @@ mod tests {
 
     #[test]
     fn test_init_page_allocators_reports_paging_allocator_failure() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let existing_pool = PageAlignedMemory::new(memory::DEFAULT_PAGING_POOL_PAGES);
         let paging_allocator = PagingPoolAllocator::new();
         // SAFETY: `existing_pool` is page-aligned, exclusively owned, and remains alive.
@@ -993,7 +992,7 @@ mod tests {
 
     #[test]
     fn test_discover_and_store_user_entry_walks_real_hob_list() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let state = InitState::new();
         let mut hob_list = RawHobList::new();
         hob_list.push_struct(allocation_module(
@@ -1011,7 +1010,7 @@ mod tests {
 
     #[test]
     fn test_discover_and_store_user_entry_reports_a_missing_module() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let state = InitState::new();
         let hob_list = RawHobList::new().finish();
 
@@ -1025,7 +1024,7 @@ mod tests {
     #[serial]
     fn test_publish_hob_list_to_user_copies_the_list_and_reclaims_whole_pages() {
         test_support::init_test_logger();
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let memory = PageAlignedMemory::new(memory::DEFAULT_PAGING_POOL_PAGES + 32);
         init_global_state_over(&memory);
 
@@ -1074,7 +1073,7 @@ mod tests {
     #[serial]
     fn test_publish_hob_list_to_user_reports_a_failed_reclaim() {
         test_support::init_test_logger();
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let memory = PageAlignedMemory::new(memory::DEFAULT_PAGING_POOL_PAGES + 32);
         init_global_state_over(&memory);
 
@@ -1102,7 +1101,7 @@ mod tests {
     #[serial]
     fn test_publish_hob_list_to_user_rejects_a_list_outside_mmram() {
         test_support::init_test_logger();
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let memory = PageAlignedMemory::new(memory::DEFAULT_PAGING_POOL_PAGES + 8);
         init_global_state_over(&memory);
 
@@ -1120,7 +1119,7 @@ mod tests {
 
     #[test]
     fn test_map_cpl3_stacks_to_user_rejects_a_region_the_hob_does_not_describe() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
 
         // A zero base or per-core size, and a total that overflows, all mean the producer gave
         // the supervisor nowhere to demote to. Each is reported rather than halting here, and
@@ -1138,7 +1137,7 @@ mod tests {
     #[serial]
     fn test_map_cpl3_stacks_to_user_rejects_a_region_outside_mmram() {
         test_support::init_test_logger();
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let memory = PageAlignedMemory::new(memory::DEFAULT_PAGING_POOL_PAGES + 8);
         init_global_state_over(&memory);
 
@@ -1162,7 +1161,7 @@ mod tests {
     #[serial]
     fn test_publish_hob_list_to_user_refuses_to_publish_without_a_page_table() {
         test_support::init_test_logger();
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let memory = PageAlignedMemory::new(memory::DEFAULT_PAGING_POOL_PAGES + 8);
         let hob_list = smram_hob_list(&memory);
         let scanned = scan_regions(&hob_list);
@@ -1197,7 +1196,7 @@ mod tests {
 
     #[test]
     fn test_free_init_module_does_not_mark_missing_image_as_freed() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let state = InitState::new();
         let hob_list = RawHobList::new().finish();
 
@@ -1213,7 +1212,7 @@ mod tests {
 
     #[test]
     fn test_discover_init_region_rejects_an_empty_allocation() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let state = InitState::new();
         let mut init_module = allocation_module(HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID, 0x10_0000);
         init_module.alloc_descriptor.memory_length = 0;
@@ -1230,7 +1229,7 @@ mod tests {
 
     #[test]
     fn test_free_init_module_skips_already_freed_region() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let state = InitState::new();
         state.mark_init_module_freed();
 
@@ -1359,7 +1358,7 @@ mod tests {
     #[test]
     fn test_init_policy_and_validate_reports_a_missing_pass_down_hob() {
         test_support::init_test_logger();
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
 
         // The PassDown lookup is the first step, so initialization stops there. Lists that get
         // past this point reach steps that touch real MMRAM, so the later required-HOB lookups are
@@ -1375,7 +1374,7 @@ mod tests {
     #[test]
     fn test_mp_information_cpu_count_reports_a_missing_hob() {
         test_support::init_test_logger();
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let hob_list = RawHobList::new().finish();
 
         let result = supervisor.mp_information_cpu_count(hob_list.handoff(), whole_address_space());
@@ -1385,7 +1384,7 @@ mod tests {
 
     #[test]
     fn test_mp_information_cpu_count_requires_the_payload_inside_mmram() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let hob_list = policy_hob_list_with_core_count(2, false);
 
         assert_eq!(supervisor.mp_information_cpu_count(hob_list.handoff(), whole_address_space()), Ok(2));
@@ -1405,21 +1404,23 @@ mod tests {
     }
 
     #[test]
-    fn test_mp_information_cpu_count_reports_an_invalid_cpu_count() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+    fn test_mp_information_cpu_count_takes_any_nonzero_count_the_payload_holds() {
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
 
-        for core_count in [0, 5] {
-            let hob_list = policy_hob_list_with_core_count(core_count, true);
+        let empty = policy_hob_list_with_core_count(0, true);
+        assert_eq!(
+            supervisor.mp_information_cpu_count(empty.handoff(), whole_address_space()),
+            Err(CoreInitError::ZeroCoreCount.into())
+        );
 
-            let result = supervisor.mp_information_cpu_count(hob_list.handoff(), whole_address_space());
-
-            assert_eq!(result, Err(CoreInitError::InvalidCpuCount { found: core_count, maximum: 4 }.into()));
-        }
+        // No compile-time capacity caps the count; the payload holds all five processor entries.
+        let five = policy_hob_list_with_core_count(5, true);
+        assert_eq!(supervisor.mp_information_cpu_count(five.handoff(), whole_address_space()), Ok(5));
     }
 
     #[test]
     fn test_parse_mp_information_hob() {
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let processor_ids = [0x00_u64, 0x10, 0x20];
         let mut data = [0_u8; 16 + 3 * PROCESSOR_INFO_ENTRY_SIZE];
         data[..8].copy_from_slice(&(processor_ids.len() as u64).to_le_bytes());
@@ -1434,7 +1435,7 @@ mod tests {
     #[test]
     fn test_parse_mp_information_hob_rejects_invalid_size() {
         test_support::init_test_logger();
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let mut data = [0_u8; 16 + PROCESSOR_INFO_ENTRY_SIZE];
 
         assert_eq!(
@@ -1449,14 +1450,19 @@ mod tests {
     #[test]
     fn test_parse_mp_information_hob_rejects_invalid_core_count() {
         test_support::init_test_logger();
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let mut data = [0_u8; 16];
 
-        for core_count in [0_usize, 5] {
-            data[..8].copy_from_slice(&(core_count as u64).to_le_bytes());
+        data[..8].copy_from_slice(&0_u64.to_le_bytes());
+        assert_eq!(supervisor.parse_mp_information_hob(&data), Err(CoreInitError::ZeroCoreCount.into()));
+
+        // A count far beyond what the payload holds, including one that overflows the entry size,
+        // fails the payload bound.
+        for core_count in [5_u64, u64::MAX] {
+            data[..8].copy_from_slice(&core_count.to_le_bytes());
             assert_eq!(
                 supervisor.parse_mp_information_hob(&data),
-                Err(CoreInitError::InvalidCpuCount { found: core_count, maximum: 4 }.into())
+                Err(CoreInitError::MpInformationHobMalformed.into())
             );
         }
     }
@@ -1464,7 +1470,7 @@ mod tests {
     #[test]
     fn test_store_mm_initialized_slots_rejects_a_null_buffer() {
         test_support::init_test_logger();
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
 
         // SAFETY: a null buffer fails the MMRAM check before anything is read.
         let result = unsafe { supervisor.store_mm_initialized_slots(0, 2) };
@@ -1473,17 +1479,15 @@ mod tests {
     }
 
     #[test]
-    fn test_store_mm_initialized_slots_rejects_an_unusable_core_count() {
+    fn test_store_mm_initialized_slots_rejects_zero_cores() {
         test_support::init_test_logger();
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let memory = PageAlignedMemory::new(1);
 
         // The count is the length of the slot slice, so it is refused before the buffer is read.
-        for core_count in [0, 5] {
-            // SAFETY: the count is rejected before `memory` is dereferenced.
-            let result = unsafe { supervisor.store_mm_initialized_slots(memory.base(), core_count) };
-            assert_eq!(result, Err(CoreInitError::InvalidCpuCount { found: core_count, maximum: 4 }.into()));
-        }
+        // SAFETY: the count is rejected before `memory` is dereferenced.
+        let result = unsafe { supervisor.store_mm_initialized_slots(memory.base(), 0) };
+        assert_eq!(result, Err(CoreInitError::ZeroCoreCount.into()));
         assert!(init_state().mm_initialized_buffer().is_none());
     }
 
@@ -1491,7 +1495,7 @@ mod tests {
     #[serial]
     fn test_store_mm_initialized_slots_rejects_a_buffer_outside_mmram() {
         test_support::init_test_logger();
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let memory = PageAlignedMemory::new(memory::DEFAULT_PAGING_POOL_PAGES + 8);
         test_support::init_global_state_over(&memory);
 
@@ -1508,7 +1512,7 @@ mod tests {
     #[serial]
     fn test_store_mm_initialized_slots_publishes_one_slot_per_cpu() {
         test_support::init_test_logger();
-        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let supervisor = MmSupervisorCore::<TestPlatform>::new();
         let memory = PageAlignedMemory::new(memory::DEFAULT_PAGING_POOL_PAGES + 8);
         test_support::init_global_state_over(&memory);
 

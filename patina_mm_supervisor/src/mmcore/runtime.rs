@@ -46,7 +46,7 @@ const AP_EXIT_TIMEOUT_US: u64 = 1_000_000;
 /// Timeout for waiting for an AP to complete a dispatched procedure (10 seconds).
 const AP_TIMEOUT_US: u64 = 10_000_000;
 
-impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
+impl<P: PlatformInfo> MmSupervisorCore<P> {
     /// Serves one MMI on a core that has finished initialization.
     ///
     /// `cpu_id` is the APIC ID; `cpu_index` is the dense, 0-based UEFI processor index that
@@ -761,7 +761,7 @@ mod tests {
         }
     }
 
-    type TestCore = MmSupervisorCore<TestPlatform, 4>;
+    type TestCore = MmSupervisorCore<TestPlatform>;
 
     /// Owns the heap allocations a [`CommBufferConfig`] points at, keeping them alive for a test.
     struct TestBuffers {

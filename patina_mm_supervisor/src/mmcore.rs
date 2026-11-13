@@ -102,13 +102,8 @@ pub enum CoreInitError {
     MpInformationHobOutsideMmram,
     /// The MP Information HOB is too short, or its processor entries do not fit its payload.
     MpInformationHobMalformed,
-    /// The CPU count the producer reported cannot be used to size the per-core arrays.
-    InvalidCpuCount {
-        /// CPU count reported by the HOB.
-        found: usize,
-        /// Maximum CPU count this supervisor instance supports.
-        maximum: usize,
-    },
+    /// The MP Information HOB reports zero cores.
+    ZeroCoreCount,
     /// The per-core initialized buffer the `PassDown` HOB describes is not usable: its address
     /// does not fit the target architecture, or it does not hold one slot per CPU inside MMRAM.
     InitializedBufferInvalid,
@@ -204,9 +199,7 @@ impl fmt::Display for CoreInitError {
             Self::MpInformationHobMalformed => {
                 write!(f, "the MP Information HOB is too short or its processor entries do not fit")
             }
-            Self::InvalidCpuCount { found, maximum } => {
-                write!(f, "the producer reported {found} CPUs, outside the supported range 1..={maximum}")
-            }
+            Self::ZeroCoreCount => write!(f, "the MP Information HOB reports zero cores"),
             Self::InitializedBufferInvalid => {
                 write!(f, "the per-core initialized buffer is not addressable or not resident in MMRAM")
             }
@@ -245,8 +238,9 @@ impl fmt::Display for CoreInitError {
 /// The MM Supervisor Core for a standalone MM environment.
 ///
 /// It initializes the BSP, dispatches requests, and drives the APs through the holding pen and
-/// mailboxes. [`PlatformInfo`] supplies the platform's extra MMI handlers, and `MAX_CPUS` sizes
-/// the fixed per-CPU arrays. Nothing is heap allocated, so the core can live in a `static`.
+/// mailboxes. [`PlatformInfo`] supplies the platform's extra MMI handlers. The per-core arrays are
+/// sized from the core count the MP Information HOB reports and allocated during BSP
+/// initialization, so the core itself can live in a `static`.
 ///
 /// ## Examples
 ///
@@ -262,8 +256,7 @@ impl fmt::Display for CoreInitError {
 ///
 /// impl PlatformInfo for MyPlatform {}
 ///
-/// // The const generic argument is the maximum CPU count used to size internal arrays.
-/// static SUPERVISOR: MmSupervisorCore<MyPlatform, 8> = MmSupervisorCore::new();
+/// static SUPERVISOR: MmSupervisorCore<MyPlatform> = MmSupervisorCore::new();
 ///
 /// // The MM IPL invokes this entry point on every core.
 /// pub extern "efiapi" fn mm_entry(cpu_index: usize, hob_list: *const c_void) {
@@ -272,7 +265,7 @@ impl fmt::Display for CoreInitError {
 /// }
 /// # }
 /// ```
-pub struct MmSupervisorCore<P: PlatformInfo, const MAX_CPUS: usize> {
+pub struct MmSupervisorCore<P: PlatformInfo> {
     /// Registered CPUs and their states.
     pub(crate) cpu_manager: CpuManager,
     /// Per-AP command mailboxes.
@@ -287,7 +280,7 @@ pub struct MmSupervisorCore<P: PlatformInfo, const MAX_CPUS: usize> {
     pub(crate) _phantom: core::marker::PhantomData<fn() -> P>,
 }
 
-impl<P: PlatformInfo, const MAX_CPUS: usize> Default for MmSupervisorCore<P, MAX_CPUS> {
+impl<P: PlatformInfo> Default for MmSupervisorCore<P> {
     fn default() -> Self {
         Self::new()
     }
@@ -305,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_supervisor_default_matches_new() {
-        let supervisor: MmSupervisorCore<TestPlatform, 2> = MmSupervisorCore::default();
+        let supervisor: MmSupervisorCore<TestPlatform> = MmSupervisorCore::default();
 
         assert_eq!(supervisor.cpu_manager().get_cpu_id_by_index(0), None);
         assert!(!supervisor.initialized.load(Ordering::Relaxed));
@@ -353,10 +346,7 @@ mod tests {
             format!("{}", CoreInitError::MpInformationHobMalformed),
             "the MP Information HOB is too short or its processor entries do not fit"
         );
-        assert_eq!(
-            format!("{}", CoreInitError::InvalidCpuCount { found: 9, maximum: 4 }),
-            "the producer reported 9 CPUs, outside the supported range 1..=4"
-        );
+        assert_eq!(format!("{}", CoreInitError::ZeroCoreCount), "the MP Information HOB reports zero cores");
         assert_eq!(
             format!("{}", CoreInitError::InitializedBufferInvalid),
             "the per-core initialized buffer is not addressable or not resident in MMRAM"

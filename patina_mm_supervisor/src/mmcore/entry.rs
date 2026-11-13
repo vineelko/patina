@@ -69,7 +69,7 @@ fn core_already_initialized(cpu_index: usize) -> MmSupervisorResult<bool> {
     }
 }
 
-impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
+impl<P: PlatformInfo> MmSupervisorCore<P> {
     /// Creates the supervisor. Performs no heap allocation, so it can initialize a `static`.
     pub const fn new() -> Self {
         Self {
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_supervisor_creation_and_accessors() {
-        let supervisor: MmSupervisorCore<TestPlatform, 4> = MmSupervisorCore::new();
+        let supervisor: MmSupervisorCore<TestPlatform> = MmSupervisorCore::new();
 
         // The per-core storage is only published by BSP initialization.
         assert_eq!(supervisor.cpu_manager().get_cpu_id_by_index(0), None);
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn test_supervisor_is_const() {
-        static _SUPERVISOR: MmSupervisorCore<TestPlatform, 4> = MmSupervisorCore::new();
+        static _SUPERVISOR: MmSupervisorCore<TestPlatform> = MmSupervisorCore::new();
     }
 
     #[test]

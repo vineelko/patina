@@ -4,8 +4,9 @@
 //!
 //! Every core enters through [`MmSupervisorCore::entry_point`]. The BSP runs one-time
 //! initialization and then serves MMI requests, while the APs wait in a holding pen and poll
-//! their mailboxes for commands from the BSP. The supervisor does not use a heap: its structures
-//! are fixed-size arrays sized by const generics.
+//! their mailboxes for commands from the BSP. The supervisor does not use a heap. Its per-core
+//! arrays are sized from the core count the MP Information HOB reports and allocated from MMRAM
+//! pages during BSP initialization.
 //!
 //! ## Examples
 //!
@@ -18,8 +19,7 @@
 //!
 //! impl PlatformInfo for MyPlatform {}
 //!
-//! // The const generic argument is the maximum CPU count used to size internal arrays.
-//! static SUPERVISOR: MmSupervisorCore<MyPlatform, 8> = MmSupervisorCore::new();
+//! static SUPERVISOR: MmSupervisorCore<MyPlatform> = MmSupervisorCore::new();
 //! # }
 //! ```
 //!

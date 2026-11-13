@@ -9,11 +9,11 @@ A Rust implementation of the MM (Management Mode) Supervisor Core for standalone
 
 ## Memory Model
 
-The supervisor does not use heap allocation. Its data structures are fixed-size arrays sized by a const generic:
+The supervisor does not use heap allocation. `MmSupervisorCore` is built by a `const fn`, so the whole supervisor can be
+instantiated as a `static`.
 
-- `MAX_CPUS` - Maximum number of CPUs supported, supplied as a const generic argument to `MmSupervisorCore`
-
-This allows the entire supervisor to be instantiated as a `static` with no runtime allocation.
+The per-core arrays (CPU slots and AP mailboxes) are sized from the core count the MP Information HOB reports. The BSP
+allocates them from supervisor-only MMRAM pages during initialization, so one supervisor binary supports any core count.
 
 ## Building a PE/COFF Binary
 
@@ -102,8 +102,7 @@ struct MyPlatform;
 impl PlatformInfo for MyPlatform {}
 
 // Static instance - no heap allocation required.
-// The const generic argument is the maximum CPU count used to size internal arrays.
-static SUPERVISOR: MmSupervisorCore<MyPlatform, 8> = MmSupervisorCore::new();
+static SUPERVISOR: MmSupervisorCore<MyPlatform> = MmSupervisorCore::new();
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {

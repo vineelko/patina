@@ -55,10 +55,7 @@ pub(crate) fn leaked_storage<T: Default>(count: usize) -> &'static [T] {
 }
 
 /// Publishes `count` CPU slots and mailboxes on `core`, standing in for BSP initialization.
-pub(crate) fn publish_per_core_storage<P: PlatformInfo, const MAX_CPUS: usize>(
-    core: &MmSupervisorCore<P, MAX_CPUS>,
-    count: usize,
-) {
+pub(crate) fn publish_per_core_storage<P: PlatformInfo>(core: &MmSupervisorCore<P>, count: usize) {
     core.cpu_manager.init(leaked_storage(count)).expect("CPU slots are published");
     core.mailbox_manager.init(leaked_storage(count)).expect("mailboxes are published");
 }
@@ -322,7 +319,7 @@ pub(crate) fn padded_hob_list(extra: usize) -> RawHobList {
     list.finish()
 }
 pub(crate) fn init_global_state_over(memory: &PageAlignedMemory) {
-    let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+    let supervisor = MmSupervisorCore::<TestPlatform>::new();
     let hob_list = smram_hob_list(memory);
     let scanned = scan_regions(&hob_list);
 
@@ -355,7 +352,7 @@ pub(crate) fn map_supervisor_only(memory: &PageAlignedMemory) {
 /// Tests perturb that mapping, by un-mapping a page, clearing its protection, or dropping
 /// the page table, and assert the free is refused and nothing is released.
 pub(crate) struct MappedInitModule {
-    pub(crate) supervisor: MmSupervisorCore<TestPlatform, 4>,
+    pub(crate) supervisor: MmSupervisorCore<TestPlatform>,
     pub(crate) state: InitState,
     pub(crate) init_module: MemoryAllocationModule,
     pub(crate) core_module: MemoryAllocationModule,
