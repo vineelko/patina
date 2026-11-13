@@ -15,8 +15,9 @@
 //!    allocations outside of MMRAM).
 //! 3. The supervisor's module HOBs, including the standard PI Init module HOB,
 //!    lie inside MMRAM, do not overlap each other, and have entry points inside
-//!    their allocations. The Init allocation is page-aligned, and both the Init
-//!    and Core modules must be present.
+//!    their allocations. Every module allocation is page-aligned, the Init, Core
+//!    and User modules are each described at most once, and both the Init and
+//!    Core modules must be present.
 //! 4. Resource descriptor HOBs do not overlap within the same version and
 //!    address space (memory vs I/O). Only v2 descriptors are checked unless the
 //!    `v1_resource_descriptor_support` feature is enabled, which adds v1.
@@ -51,6 +52,7 @@ use core::fmt;
 
 use patina::management_mode::supervisor::{
     MM_SUPERVISOR_CORE_GUID, MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID,
+    MM_SUPERVISOR_USER_GUID,
 };
 use patina::pi::guid::HOB_MEMORY_ALLOC_MODULE_GUID;
 use patina::pi::hob::{
@@ -137,6 +139,13 @@ pub enum HobValidationError {
         has_init: bool,
         /// Whether the Supervisor Core module HOB was present.
         has_supv_core: bool,
+        /// Whether the User module HOB was present.
+        has_user: bool,
+    },
+    /// The Init, Core or User module is described by more than one allocation module HOB.
+    DuplicateModule {
+        /// The name of the module described more than once.
+        module_name: patina::BinaryGuid,
     },
     /// Two memory allocation module HOBs overlap each other.
     AllocationModulesOverlap {
@@ -282,6 +291,9 @@ impl fmt::Display for HobValidationError {
             }
             Self::MissingModule { has_init, has_supv_core } => {
                 write!(f, "required MM module missing: has_init={has_init}, has_supv_core={has_supv_core}")
+            }
+            Self::DuplicateModule { module_name } => {
+                write!(f, "MM module {module_name} is described by more than one allocation module HOB")
             }
             Self::AllocationModulesOverlap { first, second } => {
                 write!(f, "allocation module HOBs overlap: {first} and {second}")
@@ -521,17 +533,25 @@ fn validate_allocation_modules<'a>(
     let mut count = 0usize;
     let mut has_init = false;
     let mut has_supv_core = false;
+    let mut has_user = false;
 
     for current in hobs {
         if let Hob::MemoryAllocationModule(module) = current {
+            let is_supv_module = module.alloc_descriptor.name == MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID;
             let is_init = module.alloc_descriptor.name == HOB_MEMORY_ALLOC_MODULE_GUID
                 && module.module_name == MM_SUPERVISOR_INIT_GUID;
-            if module.alloc_descriptor.name != MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID && !is_init {
+            if !is_supv_module && !is_init {
                 continue;
             }
+            // The Init, Core and User modules are looked up by name, so each must be described once.
+            let is_core = is_supv_module && module.module_name == MM_SUPERVISOR_CORE_GUID;
+            let is_user = is_supv_module && module.module_name == MM_SUPERVISOR_USER_GUID;
+            if (is_init && has_init) || (is_core && has_supv_core) || (is_user && has_user) {
+                return Err(HobValidationError::DuplicateModule { module_name: module.module_name }.into());
+            }
             has_init |= is_init;
-            has_supv_core |= module.alloc_descriptor.name == MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID
-                && module.module_name == MM_SUPERVISOR_CORE_GUID;
+            has_supv_core |= is_core;
+            has_user |= is_user;
             let base = module.alloc_descriptor.memory_base_address;
             let length = module.alloc_descriptor.memory_length;
             let range = checked_range("allocation module HOB", base, length)?;
@@ -558,8 +578,8 @@ fn validate_allocation_modules<'a>(
         }
     }
 
-    if !has_init || !has_supv_core {
-        return Err(HobValidationError::MissingModule { has_init, has_supv_core }.into());
+    if !has_init || !has_supv_core || !has_user {
+        return Err(HobValidationError::MissingModule { has_init, has_supv_core, has_user }.into());
     }
 
     if let Some((first, second)) = MemoryRange::find_overlap(modules.iter().flatten()) {
@@ -950,7 +970,6 @@ mod tests {
     use crate::error::MmSupervisorError;
     use crate::hob::pass_down::{MM_SUPV_PASS_DOWN_HOB_GUID, MM_SUPV_PASS_DOWN_HOB_REVISION};
     use core::mem::size_of;
-    use patina::management_mode::supervisor::MM_SUPERVISOR_USER_GUID;
     use patina_paging::{MockPageTable, PtError};
 
     use crate::test_support::{PageAlignedMemory, init_global_state_over};
@@ -1002,6 +1021,10 @@ mod tests {
             },
         }
     }
+
+    /// Name of an MM driver module: not the Init, Core or User module.
+    const TEST_DRIVER_GUID: patina::BinaryGuid =
+        patina::BinaryGuid::from_string("0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0");
 
     fn allocation_module(
         allocation_name: patina::BinaryGuid,
@@ -1360,17 +1383,72 @@ mod tests {
             Err(MmSupervisorError::HobValidation(HobValidationError::AllocationModulesOverlap { .. }))
         ));
 
-        let module = allocation_module(
-            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
-            MM_SUPERVISOR_CORE_GUID,
-            0x1000,
-            0x1000,
-            0x1000,
-        );
+        // Drivers are not limited to one HOB each, so repeating one reaches the module limit.
+        let module =
+            allocation_module(MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, TEST_DRIVER_GUID, 0x1000, 0x1000, 0x1000);
         let hobs = (0..=MAX_ALLOC_MODULES).map(|_| Hob::MemoryAllocationModule(&module));
         assert_eq!(
             validate_allocation_modules(hobs, mmram()),
             Err(HobValidationError::TooManyAllocationModules { limit: MAX_ALLOC_MODULES }.into())
+        );
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_rejects_duplicate_modules() {
+        let init = allocation_module(HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID, 0x1000, 0x1000, 0x1000);
+        let core = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_CORE_GUID,
+            0x2000,
+            0x1000,
+            0x2000,
+        );
+        let user = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_USER_GUID,
+            0x3000,
+            0x1000,
+            0x3000,
+        );
+
+        // A second, non-overlapping HOB for the Init, Core or User module is rejected by name.
+        for (alloc_name, module_name) in [
+            (HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID),
+            (MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_CORE_GUID),
+            (MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_USER_GUID),
+        ] {
+            let duplicate = allocation_module(alloc_name, module_name, 0x5000, 0x1000, 0x5000);
+            assert_eq!(
+                validate_allocation_modules(
+                    [
+                        Hob::MemoryAllocationModule(&init),
+                        Hob::MemoryAllocationModule(&core),
+                        Hob::MemoryAllocationModule(&user),
+                        Hob::MemoryAllocationModule(&duplicate),
+                    ],
+                    span(0x1000, 0x8000),
+                ),
+                Err(HobValidationError::DuplicateModule { module_name }.into())
+            );
+        }
+
+        // Two drivers with the same name are not the modules looked up by name, so both pass.
+        let driver =
+            allocation_module(MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, TEST_DRIVER_GUID, 0x4000, 0x1000, 0x4000);
+        let same_driver =
+            allocation_module(MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, TEST_DRIVER_GUID, 0x5000, 0x1000, 0x5000);
+        assert_eq!(
+            validate_allocation_modules(
+                [
+                    Hob::MemoryAllocationModule(&init),
+                    Hob::MemoryAllocationModule(&core),
+                    Hob::MemoryAllocationModule(&user),
+                    Hob::MemoryAllocationModule(&driver),
+                    Hob::MemoryAllocationModule(&same_driver),
+                ],
+                span(0x1000, 0x8000),
+            ),
+            Ok(())
         );
     }
 
@@ -1472,9 +1550,8 @@ mod tests {
     #[test]
     fn test_mm_supervisor_hob_validation_requires_every_module_page_aligned() {
         // Not only the Init allocation: every module is checked and reclaimed in whole pages.
-        let driver_guid = patina::BinaryGuid::from_string("0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0");
         let init = allocation_module(HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID, 0x1000, 0x1000, 0x1000);
-        for module_name in [MM_SUPERVISOR_CORE_GUID, MM_SUPERVISOR_USER_GUID, driver_guid] {
+        for module_name in [MM_SUPERVISOR_CORE_GUID, MM_SUPERVISOR_USER_GUID, TEST_DRIVER_GUID] {
             for (base, length) in [(0x2001, 0x1000), (0x2000, 0x1001)] {
                 let module =
                     allocation_module(MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, module_name, base, length, base);
@@ -2221,8 +2298,8 @@ mod tests {
     #[test]
     fn test_mm_supervisor_hob_validation_driver_page_protections() {
         // Drivers run in Ring 3 like the User module, so their pages are held to the same rules.
-        let driver_guid = patina::BinaryGuid::from_string("0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0");
-        let driver = allocation_module(MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, driver_guid, 0x5000, 0x2000, 0x5100);
+        let driver =
+            allocation_module(MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID, TEST_DRIVER_GUID, 0x5000, 0x2000, 0x5100);
         let hobs = [Hob::MemoryAllocationModule(&driver)];
 
         // The entry point lies in the first page, which is queried for both the page walk and the
@@ -2537,6 +2614,7 @@ mod tests {
             HobValidationError::MissingModule { has_init: false, has_supv_core: false },
             HobValidationError::MissingModule { has_init: false, has_supv_core: true },
             HobValidationError::MissingModule { has_init: true, has_supv_core: false },
+            HobValidationError::DuplicateModule { module_name: MM_SUPERVISOR_CORE_GUID },
             HobValidationError::AllocationModulesOverlap { first: span(0, 0x1000), second: span(0x800, 0x1000) },
             HobValidationError::TooManyAllocationModules { limit: MAX_ALLOC_MODULES },
             HobValidationError::AllocationModuleEntryPointOutOfRange {
