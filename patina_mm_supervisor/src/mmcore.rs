@@ -93,6 +93,8 @@ pub enum CoreInitError {
     },
     /// The MP Information HOB was not present in the HOB list.
     MpInformationHobMissing,
+    /// The MP Information HOB's payload does not lie inside MMRAM.
+    MpInformationHobOutsideMmram,
     /// The MP Information HOB is too short, or its processor entries do not fit its payload.
     MpInformationHobMalformed,
     /// The CPU count the producer reported cannot be used to size the per-core arrays.
@@ -191,6 +193,7 @@ impl fmt::Display for CoreInitError {
                 write!(f, "the MM Init module allocation at 0x{base:016x} (+0x{length:x}) is not a valid range")
             }
             Self::MpInformationHobMissing => write!(f, "the MP Information HOB is missing from the HOB list"),
+            Self::MpInformationHobOutsideMmram => write!(f, "the MP Information HOB payload is not inside MMRAM"),
             Self::MpInformationHobMalformed => {
                 write!(f, "the MP Information HOB is too short or its processor entries do not fit")
             }
@@ -333,6 +336,10 @@ mod tests {
         assert_eq!(
             format!("{}", CoreInitError::MpInformationHobMissing),
             "the MP Information HOB is missing from the HOB list"
+        );
+        assert_eq!(
+            format!("{}", CoreInitError::MpInformationHobOutsideMmram),
+            "the MP Information HOB payload is not inside MMRAM"
         );
         assert_eq!(
             format!("{}", CoreInitError::MpInformationHobMalformed),

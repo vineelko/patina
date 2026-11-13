@@ -10,14 +10,14 @@
 //! that the HOB headers form a list that ends within a fixed size. The rest
 //! run once the MMRAM regions are scanned:
 //!
-//! 1. The scanned MMRAM regions form a single contiguous, non-overlapping span.
+//! 1. The scanned MMRAM regions form a single contiguous, non-overlapping span
+//!    that starts at or above 1 MiB.
 //! 2. No `EFI_HOB_TYPE_MEMORY_ALLOCATION` HOB overlaps MMRAM (these describe
 //!    allocations outside of MMRAM).
 //! 3. The supervisor's module HOBs, including the standard PI Init module HOB,
 //!    lie inside MMRAM, do not overlap each other, and have entry points inside
-//!    their allocations. Every module allocation is page-aligned, the Init, Core
-//!    and User modules are each described at most once, and both the Init and
-//!    Core modules must be present.
+//!    their allocations. Every module allocation is page-aligned, and the Init,
+//!    Core and User modules are each described exactly once.
 //! 4. Resource descriptor HOBs do not overlap within the same version and
 //!    address space (memory vs I/O). Only v2 descriptors are checked unless the
 //!    `v1_resource_descriptor_support` feature is enabled, which adds v1.
@@ -27,7 +27,10 @@
 //! 5. Every v2 resource descriptor carries valid memory attributes (exactly one
 //!    cacheability bit for memory, no `EFI_MEMORY_UCE`, no attributes for I/O).
 //! 6. The pointers reported in the MM Supervisor `PassDown` HOB reference
-//!    memory inside MMRAM (and the HOB reports the expected revision).
+//!    memory inside MMRAM (and the HOB reports the expected revision). Its
+//!    buffers, sized for the CPU count, the module allocations and the HOB list
+//!    each lie in pages the producer marked allocated, no two share a page, and
+//!    the Ring 3 stacks start and end on page boundaries.
 //!
 //! ## Post-paging checks
 //!
@@ -89,6 +92,10 @@ const MAX_RESOURCE_HOBS: usize = 128;
 /// chosen by the producer can move the walk.
 const MAX_HOB_LIST_SIZE: usize = 0x10_0000;
 
+/// Lowest address MMRAM may start at. The SMRR range was always chosen at or above 1 MiB, and
+/// MMRAM is now that range as a whole.
+const MMRAM_MIN_BASE: u64 = 0x10_0000;
+
 /// Errors produced while validating the critical incoming HOBs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HobValidationError {
@@ -116,6 +123,11 @@ pub enum HobValidationError {
         covered: u64,
         /// Bytes spanned from the lowest base to the highest end.
         span: u64,
+    },
+    /// The MMRAM span starts below 1 MiB.
+    MmramBelowOneMib {
+        /// The span the scanned regions cover.
+        span: MemoryRange,
     },
     /// A memory allocation HOB describes memory that overlaps MMRAM.
     MemoryAllocationInsideMmram {
@@ -228,6 +240,33 @@ pub enum HobValidationError {
         /// Byte length of the list, as walked from its headers.
         size: u64,
     },
+    /// A region the supervisor remaps for Ring 3 does not start and end on page boundaries, so
+    /// the rest of its first or last page would be exposed with it.
+    RegionNotPageAligned {
+        /// Which region was checked.
+        kind: &'static str,
+        /// The region's range.
+        range: MemoryRange,
+    },
+    /// A region the supervisor keeps using does not lie in MMRAM the producer marked allocated,
+    /// so it would alias pages the page allocator hands out.
+    RegionNotInAllocatedMmram {
+        /// Which region was checked.
+        kind: &'static str,
+        /// The region's range, widened to whole pages.
+        range: MemoryRange,
+    },
+    /// Two regions the supervisor keeps using share a page.
+    RegionsOverlap {
+        /// Which region the first one is.
+        first_kind: &'static str,
+        /// The first region, widened to whole pages.
+        first: MemoryRange,
+        /// Which region the second one is.
+        second_kind: &'static str,
+        /// The second region, widened to whole pages.
+        second: MemoryRange,
+    },
     /// The active page table was not available to query page attributes.
     PageTableUnavailable,
     /// A page could not be queried in the active page table (e.g. unmapped).
@@ -282,6 +321,7 @@ impl fmt::Display for HobValidationError {
             Self::MmramNotContiguous { covered, span } => {
                 write!(f, "MMRAM regions are not contiguous: cover 0x{covered:x} of 0x{span:x} span")
             }
+            Self::MmramBelowOneMib { span } => write!(f, "MMRAM span {span} starts below 1 MiB"),
             Self::MemoryAllocationInsideMmram { range } => write!(f, "memory allocation HOB {range} overlaps MMRAM"),
             Self::AllocationModuleOutsideMmram { range } => {
                 write!(f, "allocation module HOB {range} is outside MMRAM")
@@ -289,9 +329,10 @@ impl fmt::Display for HobValidationError {
             Self::AllocationModuleNotPageAligned { range } => {
                 write!(f, "allocation module HOB {range} is not page aligned")
             }
-            Self::MissingModule { has_init, has_supv_core } => {
-                write!(f, "required MM module missing: has_init={has_init}, has_supv_core={has_supv_core}")
-            }
+            Self::MissingModule { has_init, has_supv_core, has_user } => write!(
+                f,
+                "required MM module missing: has_init={has_init}, has_supv_core={has_supv_core}, has_user={has_user}"
+            ),
             Self::DuplicateModule { module_name } => {
                 write!(f, "MM module {module_name} is described by more than one allocation module HOB")
             }
@@ -329,6 +370,13 @@ impl fmt::Display for HobValidationError {
             Self::HobListOutsideMmram { base, size } => {
                 write!(f, "HOB list at 0x{base:x} (size 0x{size:x}) is not inside MMRAM")
             }
+            Self::RegionNotPageAligned { kind, range } => write!(f, "{kind} region {range} is not page aligned"),
+            Self::RegionNotInAllocatedMmram { kind, range } => {
+                write!(f, "{kind} region {range} is not inside MMRAM the producer marked allocated")
+            }
+            Self::RegionsOverlap { first_kind, first, second_kind, second } => {
+                write!(f, "{first_kind} region {first} and {second_kind} region {second} share a page")
+            }
             Self::PageTableUnavailable => write!(f, "active page table is not available to query page attributes"),
             Self::PageAttributeQueryFailed { addr } => {
                 write!(f, "failed to query page attributes at 0x{addr:x}")
@@ -359,9 +407,9 @@ fn checked_range(kind: &'static str, base: u64, length: u64) -> MmSupervisorResu
     MemoryRange::new(base, length).map_err(|_| HobValidationError::InvalidAddressRange { kind, base, length }.into())
 }
 
-/// Validates that the scanned MMRAM regions form a single contiguous, non-overlapping span and
-/// returns that span. The regions are not required to be sorted.
-fn validate_mmram_contiguous(regions: &[MmramRegion]) -> MmSupervisorResult<MemoryRange> {
+/// Validates that the scanned MMRAM regions form a single contiguous, non-overlapping span that
+/// starts at or above 1 MiB, and returns that span. The regions are not required to be sorted.
+pub(crate) fn validate_mmram_contiguous(regions: &[MmramRegion]) -> MmSupervisorResult<MemoryRange> {
     let ranges = regions.iter().map(|region| region.range);
     let span = MemoryRange::collapse(ranges.clone()).map_err(|_| HobValidationError::NoMmramRegions)?;
 
@@ -373,6 +421,10 @@ fn validate_mmram_contiguous(regions: &[MmramRegion]) -> MmSupervisorResult<Memo
         // The regions are disjoint, so their sizes sum to less than the span they cover.
         let covered: u64 = regions.iter().map(|region| region.range.size()).sum();
         return Err(HobValidationError::MmramNotContiguous { covered, span: span.size() }.into());
+    }
+
+    if span.base() < MMRAM_MIN_BASE {
+        return Err(HobValidationError::MmramBelowOneMib { span }.into());
     }
 
     Ok(span)
@@ -486,7 +538,7 @@ pub(crate) unsafe fn validate_hob_list_structure(handoff: &PhaseHandoffInformati
 /// reason its contents do.
 ///
 /// `mmram` is the span returned by [`validate_mmram_contiguous`].
-fn validate_hob_list_inside_mmram(
+pub(crate) fn validate_hob_list_inside_mmram(
     handoff: &PhaseHandoffInformationTable,
     length: u64,
     mmram: MemoryRange,
@@ -751,10 +803,13 @@ fn dump_regions(regions: &[MmramRegion]) {
     log::debug!("---- End MMRAM region dump ----");
 }
 
-/// Validates the `PassDown` HOB present in the HOB list.
+/// Validates the `PassDown` HOB present in the HOB list and returns its payload.
 ///
 /// `mmram` is the span returned by [`validate_mmram_contiguous`].
-fn validate_pass_down<'a>(hobs: impl IntoIterator<Item = Hob<'a>>, mmram: MemoryRange) -> MmSupervisorResult<()> {
+fn validate_pass_down<'a>(
+    hobs: impl IntoIterator<Item = Hob<'a>>,
+    mmram: MemoryRange,
+) -> MmSupervisorResult<MmSupvPassDownHobData> {
     let data = hobs
         .into_iter()
         .find_map(|hob| match hob {
@@ -763,40 +818,146 @@ fn validate_pass_down<'a>(hobs: impl IntoIterator<Item = Hob<'a>>, mmram: Memory
         })
         .ok_or(PassDownHobError::Missing)?;
     let (pass_down, _) = MmSupvPassDownHobData::read_from_prefix(data).map_err(|_| PassDownHobError::TooSmall)?;
-    validate_pass_down_pointers(&pass_down, mmram)
+    validate_pass_down_pointers(&pass_down, mmram)?;
+    Ok(pass_down)
+}
+
+/// Most regions [`validate_named_regions`] tracks: every module allocation, the HOB list and the
+/// four `PassDown` buffers.
+const MAX_NAMED_REGIONS: usize = MAX_ALLOC_MODULES + 5;
+
+/// Returns the range of a module HOB that [`validate_allocation_modules`] checks: the supervisor's
+/// own modules and the standard PI Init module. Returns `None` for any other HOB.
+fn supervisor_module_range(hob: Hob<'_>) -> Option<(&'static str, MmSupervisorResult<MemoryRange>)> {
+    let Hob::MemoryAllocationModule(module) = hob else {
+        return None;
+    };
+    let is_init =
+        module.alloc_descriptor.name == HOB_MEMORY_ALLOC_MODULE_GUID && module.module_name == MM_SUPERVISOR_INIT_GUID;
+    if module.alloc_descriptor.name != MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID && !is_init {
+        return None;
+    }
+    let base = module.alloc_descriptor.memory_base_address;
+    let length = module.alloc_descriptor.memory_length;
+    Some(("allocation module", checked_range("allocation module HOB", base, length)))
+}
+
+/// Widens `range` to whole pages, requires every page to lie in MMRAM the producer marked
+/// allocated, and returns the widened range.
+///
+/// Free MMRAM belongs to the page allocator, so a region there would alias pages it hands out,
+/// such as the paging pool. `regions` are the scanned MMRAM regions.
+fn allocated_pages(kind: &'static str, range: MemoryRange, regions: &[MmramRegion]) -> MmSupervisorResult<MemoryRange> {
+    let pages = range
+        .align_outward(UEFI_PAGE_SIZE as u64)
+        .map_err(|_| HobValidationError::RegionNotInAllocatedMmram { kind, range })?;
+
+    // The scanned regions do not overlap, so the parts they share with `pages` add up to the
+    // bytes of `pages` they cover.
+    let mut allocated = 0u64;
+    for region in regions {
+        if region.pre_allocated
+            && let Ok(shared) = region.range.intersection(&pages)
+        {
+            allocated += shared.size();
+        }
+    }
+    if allocated != pages.size() {
+        return Err(HobValidationError::RegionNotInAllocatedMmram { kind, range: pages }.into());
+    }
+
+    Ok(pages)
+}
+
+/// Validates the regions in MMRAM the producer named and the supervisor keeps using: the module
+/// allocations, the HOB list and the `PassDown` buffers, each at its full size for
+/// `number_of_cpus`.
+///
+/// Each region is widened to whole pages and must lie in MMRAM the producer marked allocated (see
+/// [`allocated_pages`]). No two regions may share a page, and the Ring 3 stacks, which are
+/// remapped user-writable, must start and end on page boundaries.
+///
+/// `regions` are the scanned MMRAM regions. `hobs` must already have passed
+/// [`validate_allocation_modules`].
+fn validate_named_regions<'a>(
+    hobs: impl IntoIterator<Item = Hob<'a>>,
+    hob_list: MemoryRange,
+    pass_down: &MmSupvPassDownHobData,
+    number_of_cpus: usize,
+    regions: &[MmramRegion],
+) -> MmSupervisorResult<()> {
+    let cpus = number_of_cpus as u64;
+    let stacks =
+        checked_range("cpl3_stack_base", pass_down.cpl3_stack_base, pass_down.cpl3_stack_size.saturating_mul(cpus))?;
+    if !matches!(stacks.is_aligned(UEFI_PAGE_SIZE as u64), Ok(true)) {
+        return Err(HobValidationError::RegionNotPageAligned { kind: "cpl3_stack_base", range: stacks }.into());
+    }
+    let others = [
+        ("HOB list", Ok(hob_list)),
+        ("cpl3_stack_base", Ok(stacks)),
+        (
+            "sm_base_array",
+            checked_range("sm_base_array", pass_down.sm_base_array, (size_of::<u64>() as u64).saturating_mul(cpus)),
+        ),
+        ("mm_initialized_buffer", checked_range("mm_initialized_buffer", pass_down.mm_initialized_buffer, cpus)),
+        (
+            "firmware_policy_buffer",
+            checked_range(
+                "firmware_policy_buffer",
+                pass_down.firmware_policy_buffer,
+                pass_down.firmware_policy_buffer_size,
+            ),
+        ),
+    ];
+
+    let mut named: [Option<(&'static str, MemoryRange)>; MAX_NAMED_REGIONS] = [None; MAX_NAMED_REGIONS];
+    for (index, (kind, range)) in hobs.into_iter().filter_map(supervisor_module_range).chain(others).enumerate() {
+        let slot =
+            named.get_mut(index).ok_or(HobValidationError::TooManyAllocationModules { limit: MAX_ALLOC_MODULES })?;
+        *slot = Some((kind, allocated_pages(kind, range?, regions)?));
+    }
+
+    let named = named.iter().flatten();
+    for (index, &(first_kind, first)) in named.clone().enumerate() {
+        for &(second_kind, second) in named.clone().skip(index + 1) {
+            if first.overlaps(&second) {
+                return Err(HobValidationError::RegionsOverlap { first_kind, first, second_kind, second }.into());
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Validates the critical incoming HOBs before their contents are consumed.
 ///
-/// `hob_list_len` is the length returned by [`validate_hob_list_structure`], which must already
-/// have accepted the list. `regions` are the MMRAM regions scanned from the HOB list. They are
-/// checked to form one contiguous span, and every containment check runs against that span
-/// rather than the page allocator, so this can run before the allocator has committed to the
-/// producer's descriptors.
+/// `mmram` is the span [`establish_mmram_bound`](crate::memory::mmram::establish_mmram_bound)
+/// returned for `regions`, the MMRAM regions scanned from the HOB list. Every containment check
+/// runs against that span rather than the page allocator, so this can run before the allocator has
+/// committed to the producer's descriptors. `hob_list_len` is the length returned by
+/// [`validate_hob_list_structure`]. `number_of_cpus` is the MP Information HOB's count, which
+/// sizes the per-CPU `PassDown` buffers.
 pub(crate) fn validate_incoming_hobs_pre_paging_init(
     handoff: &PhaseHandoffInformationTable,
     hob_list_len: u64,
     regions: &[MmramRegion],
+    mmram: MemoryRange,
+    number_of_cpus: usize,
 ) -> MmSupervisorResult<()> {
-    // The regions were already copied out of the HOB list into a fixed array, so printing them
-    // reads nothing beyond that array.
-    dump_regions(regions);
-
-    let mmram = validate_mmram_contiguous(regions)?;
-    // The HOB list is itself a buffer at an address the producer chose, so it is checked before
-    // anything it describes is trusted. Its length is walked from the headers rather than read
-    // from the PHIT, which platforms do not reliably populate for the MM HOB list.
-    validate_hob_list_inside_mmram(handoff, hob_list_len, mmram)?;
     // Runs before the remaining checks so the whole list is still visible when one of them fails.
     dump_hobs(handoff);
-    // MMRAM is a single contiguous span (checked above), so every containment check below
-    // tests against that one range instead of iterating the region list.
+    dump_regions(regions);
+
+    // `establish_mmram_bound` derived `mmram` with `validate_mmram_contiguous`, so MMRAM is that one
+    // span and every containment check below tests against it instead of iterating the regions.
     let hob = Hob::Handoff(handoff);
     validate_memory_allocations(&hob, mmram)?;
     validate_allocation_modules(&hob, mmram)?;
     validate_resource_descriptor_overlaps(&hob)?;
     validate_resource_v2_memory_attributes(&hob)?;
-    validate_pass_down(&hob, mmram)?;
+    let pass_down = validate_pass_down(&hob, mmram)?;
+    let hob_list = checked_range("HOB list", core::ptr::from_ref(handoff) as u64, hob_list_len)?;
+    validate_named_regions(&hob, hob_list, &pass_down, number_of_cpus, regions)?;
 
     Ok(())
 }
@@ -1139,12 +1300,13 @@ mod tests {
 
     #[test]
     fn test_mm_supervisor_hob_validation_pre_paging_accepts_a_complete_hob_list() {
-        /// A HOB list with Init, Core, and the required `PassDown` HOB.
+        /// A HOB list with Init, Core, User, and the required `PassDown` HOB.
         #[repr(C, align(8))]
         struct PassDownHobList {
             handoff: PhaseHandoffInformationTable,
             core: MemoryAllocationModule,
             init: MemoryAllocationModule,
+            user: MemoryAllocationModule,
             guid: GuidHob,
             pass_down: MmSupvPassDownHobData,
             end: HobHeader,
@@ -1173,14 +1335,31 @@ mod tests {
                 0x1000,
             ),
             init: allocation_module(HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID, 0x2000, 0x2000, 0x2100),
+            user: allocation_module(
+                MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+                MM_SUPERVISOR_USER_GUID,
+                0x9000,
+                0x1000,
+                0x9000,
+            ),
             guid: guid_hob(MM_SUPV_PASS_DOWN_HOB_GUID, size_of::<MmSupvPassDownHobData>()),
-            pass_down: pass_down(),
+            // Each buffer in its own pages after the modules, as the producer allocates them.
+            pass_down: MmSupvPassDownHobData {
+                cpl3_stack_base: 0x4000,
+                sm_base_array: 0x6000,
+                mm_initialized_buffer: 0x7000,
+                firmware_policy_buffer: 0x8000,
+                ..pass_down()
+            },
             end: HobHeader { r#type: END_OF_HOB_LIST, length: size_of::<HobHeader>() as u16, reserved: 0 },
         };
         let list_end = (&raw const list).addr() as u64 + size_of::<PassDownHobList>() as u64;
-        // One region from the lowest address the producer named up to the end of the list on the
-        // stack, so the modules, the PassDown pointers and the list itself are all inside it.
-        let regions = [region(0x1000, list_end - 0x1000)];
+        // One allocated region from the lowest address the producer named up to the page holding
+        // the end of the list on the stack, so the modules, the PassDown buffers and every page of
+        // the list itself are inside it.
+        let mmram = span(0x1000, list_end.next_multiple_of(0x1000) - 0x1000);
+        let regions = [MmramRegion::new(mmram, true)];
+        let cpus = 2;
 
         // Everything the producer named resolves inside the scanned regions, so the whole
         // pre-paging sequence runs to completion.
@@ -1188,17 +1367,18 @@ mod tests {
         let hob_list_len = unsafe { validate_hob_list_structure(&list.handoff) };
         assert_eq!(hob_list_len, Ok(size_of::<PassDownHobList>() as u64));
         let hob_list_len = hob_list_len.expect("the list is well formed");
-        assert_eq!(validate_incoming_hobs_pre_paging_init(&list.handoff, hob_list_len, &regions), Ok(()));
+        assert_eq!(validate_hob_list_inside_mmram(&list.handoff, hob_list_len, mmram), Ok(()));
+        assert_eq!(validate_incoming_hobs_pre_paging_init(&list.handoff, hob_list_len, &regions, mmram, cpus), Ok(()));
         list.init.alloc_descriptor.memory_base_address = 0x1000;
         assert!(matches!(
-            validate_incoming_hobs_pre_paging_init(&list.handoff, hob_list_len, &regions),
+            validate_incoming_hobs_pre_paging_init(&list.handoff, hob_list_len, &regions, mmram, cpus),
             Err(MmSupervisorError::HobValidation(HobValidationError::AllocationModulesOverlap { .. }))
         ));
 
         // The HOB list itself is a buffer at an address the producer chose, so it is rejected
         // when it falls outside the regions it described.
         assert!(matches!(
-            validate_incoming_hobs_pre_paging_init(&list.handoff, hob_list_len, &[region(0x1000, 0x8000)]),
+            validate_hob_list_inside_mmram(&list.handoff, hob_list_len, span(0x1000, 0x8000)),
             Err(MmSupervisorError::HobValidation(HobValidationError::HobListOutsideMmram { .. }))
         ));
     }
@@ -1241,14 +1421,14 @@ mod tests {
     #[test]
     fn test_mm_supervisor_hob_validation_contiguous_single_region() {
         // A single region maps to itself.
-        assert_eq!(validate_mmram_contiguous(&[region(0x1000, 0x2000)]), Ok(span(0x1000, 0x2000)));
+        assert_eq!(validate_mmram_contiguous(&[region(0x10_1000, 0x2000)]), Ok(span(0x10_1000, 0x2000)));
     }
 
     #[test]
     fn test_mm_supervisor_hob_validation_contiguous_adjacent_unsorted() {
         // Two adjacent regions provided out of order collapse to one [min_base, max_end) span.
-        let regions = [region(0x3000, 0x1000), region(0x1000, 0x2000)];
-        assert_eq!(validate_mmram_contiguous(&regions), Ok(span(0x1000, 0x3000)));
+        let regions = [region(0x10_3000, 0x1000), region(0x10_1000, 0x2000)];
+        assert_eq!(validate_mmram_contiguous(&regions), Ok(span(0x10_1000, 0x3000)));
     }
 
     #[test]
@@ -1258,7 +1438,7 @@ mod tests {
 
     #[test]
     fn test_mm_supervisor_hob_validation_overlapping_regions_rejected() {
-        let regions = [region(0x1000, 0x2000), region(0x2000, 0x2000)];
+        let regions = [region(0x10_1000, 0x2000), region(0x10_2000, 0x2000)];
         assert!(matches!(
             validate_mmram_contiguous(&regions),
             Err(MmSupervisorError::HobValidation(HobValidationError::MmramRegionsOverlap { .. }))
@@ -1267,12 +1447,24 @@ mod tests {
 
     #[test]
     fn test_mm_supervisor_hob_validation_gap_rejected() {
-        // Gap between 0x2000 and 0x3000.
-        let regions = [region(0x1000, 0x1000), region(0x3000, 0x1000)];
+        // Gap between 0x10_2000 and 0x10_3000.
+        let regions = [region(0x10_1000, 0x1000), region(0x10_3000, 0x1000)];
         assert!(matches!(
             validate_mmram_contiguous(&regions),
             Err(MmSupervisorError::HobValidation(HobValidationError::MmramNotContiguous { .. }))
         ));
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_mmram_below_one_mib_rejected() {
+        // Starting at 1 MiB is accepted.
+        assert_eq!(validate_mmram_contiguous(&[region(0x10_0000, 0x1000)]), Ok(span(0x10_0000, 0x1000)));
+
+        // A span that starts lower is rejected, even when it reaches above 1 MiB.
+        for regions in [vec![region(0xF_F000, 0x1000)], vec![region(0xF_F000, 0x1000), region(0x10_0000, 0x1000)]] {
+            let span = MemoryRange::collapse(regions.iter().map(|region| region.range)).unwrap();
+            assert_eq!(validate_mmram_contiguous(&regions), Err(HobValidationError::MmramBelowOneMib { span }.into()));
+        }
     }
 
     #[test]
@@ -1463,12 +1655,20 @@ mod tests {
             0x1000,
         );
         let init = allocation_module(HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID, 0x2000, 0x1000, 0x2000);
+        let user = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_USER_GUID,
+            0x3000,
+            0x1000,
+            0x3000,
+        );
         assert_eq!(
             validate_allocation_modules(
                 [
                     Hob::MemoryAllocationModule(&module),
                     Hob::MemoryAllocationModule(&core),
-                    Hob::MemoryAllocationModule(&init)
+                    Hob::MemoryAllocationModule(&init),
+                    Hob::MemoryAllocationModule(&user)
                 ],
                 mmram(),
             ),
@@ -1499,7 +1699,7 @@ mod tests {
         ] {
             assert_eq!(
                 validate_allocation_modules(hobs, mmram()),
-                Err(HobValidationError::MissingModule { has_init: false, has_supv_core }.into())
+                Err(HobValidationError::MissingModule { has_init: false, has_supv_core, has_user: false }.into())
             );
         }
     }
@@ -1571,7 +1771,14 @@ mod tests {
         let init = allocation_module(HOB_MEMORY_ALLOC_MODULE_GUID, MM_SUPERVISOR_INIT_GUID, 0x4000, 0x2000, 0x4100);
         assert_eq!(
             validate_allocation_modules([Hob::MemoryAllocationModule(&init)], mmram()),
-            Err(HobValidationError::MissingModule { has_init: true, has_supv_core: false }.into())
+            Err(HobValidationError::MissingModule { has_init: true, has_supv_core: false, has_user: false }.into())
+        );
+        let user = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_USER_GUID,
+            0x8000,
+            0x1000,
+            0x8000,
         );
         for (base, length) in [(0x4000, 0x2000), (0x3000, 0x2000), (0x5000, 0x2000), (0x4000, 0x1000), (0x3000, 0x4000)]
         {
@@ -1584,7 +1791,11 @@ mod tests {
             );
             assert!(matches!(
                 validate_allocation_modules(
-                    [Hob::MemoryAllocationModule(&core), Hob::MemoryAllocationModule(&init)],
+                    [
+                        Hob::MemoryAllocationModule(&core),
+                        Hob::MemoryAllocationModule(&init),
+                        Hob::MemoryAllocationModule(&user)
+                    ],
                     mmram(),
                 ),
                 Err(MmSupervisorError::HobValidation(HobValidationError::AllocationModulesOverlap { .. }))
@@ -2153,20 +2364,121 @@ mod tests {
     fn test_mm_supervisor_hob_validation_pass_down_hob_errors_and_success() {
         let data = pass_down_bytes(&pass_down());
         let matching = guid_hob(MM_SUPV_PASS_DOWN_HOB_GUID, data.len());
-        assert_eq!(validate_pass_down([Hob::GuidHob(&matching, &data)], mmram()), Ok(()));
+        assert!(validate_pass_down([Hob::GuidHob(&matching, &data)], mmram()).is_ok());
 
         let unrelated = guid_hob(MM_SUPERVISOR_CORE_GUID, data.len());
-        assert_eq!(
+        assert!(matches!(
             validate_pass_down([Hob::GuidHob(&unrelated, &data)], mmram()),
-            Err(PassDownHobError::Missing.into())
-        );
+            Err(MmSupervisorError::PassDownHob(PassDownHobError::Missing))
+        ));
 
         let short_data = [0u8; 4];
         let short = guid_hob(MM_SUPV_PASS_DOWN_HOB_GUID, short_data.len());
-        assert_eq!(
+        assert!(matches!(
             validate_pass_down([Hob::GuidHob(&short, &short_data)], mmram()),
-            Err(PassDownHobError::TooSmall.into())
+            Err(MmSupervisorError::PassDownHob(PassDownHobError::TooSmall))
+        ));
+    }
+
+    #[test]
+    fn test_mm_supervisor_hob_validation_named_regions() {
+        // [0x1000, 0x9000) is what the producer allocated; [0x9000, 0x11000) is free MMRAM, which
+        // the page allocator hands out, for example as the paging pool.
+        let regions = [MmramRegion::new(span(0x1000, 0x8000), true), MmramRegion::new(span(0x9000, 0x8000), false)];
+        let core = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_CORE_GUID,
+            0x1000,
+            0x1000,
+            0x1000,
         );
+        let hob_list = span(0x2000, 0x800);
+        // Two CPUs, each buffer in its own allocated pages, as the producer lays them out.
+        let pd = MmSupvPassDownHobData {
+            cpl3_stack_base: 0x3000,
+            cpl3_stack_size: 0x1000,
+            sm_base_array: 0x5000,
+            mm_initialized_buffer: 0x6000,
+            firmware_policy_buffer: 0x7000,
+            firmware_policy_buffer_size: 0x1000,
+            ..pass_down()
+        };
+        let check = |pd: MmSupvPassDownHobData| {
+            validate_named_regions([Hob::MemoryAllocationModule(&core)], hob_list, &pd, 2, &regions)
+        };
+        assert_eq!(check(pd), Ok(()));
+
+        // The Ring 3 stacks are remapped user-writable, so they must start and end on a page.
+        for (base, size, range) in [(0x3800, 0x1000, span(0x3800, 0x2000)), (0x3000, 0x1100, span(0x3000, 0x2200))] {
+            assert_eq!(
+                check(MmSupvPassDownHobData { cpl3_stack_base: base, cpl3_stack_size: size, ..pd }),
+                Err(HobValidationError::RegionNotPageAligned { kind: "cpl3_stack_base", range }.into())
+            );
+        }
+
+        // Nothing may sit in free MMRAM, including stacks that only fit for the first CPU.
+        for (pd, kind, range) in [
+            (MmSupvPassDownHobData { cpl3_stack_base: 0x9000, ..pd }, "cpl3_stack_base", span(0x9000, 0x2000)),
+            (MmSupvPassDownHobData { cpl3_stack_base: 0x8000, ..pd }, "cpl3_stack_base", span(0x8000, 0x2000)),
+            (MmSupvPassDownHobData { sm_base_array: 0x9000, ..pd }, "sm_base_array", span(0x9000, 0x1000)),
+            (
+                MmSupvPassDownHobData { mm_initialized_buffer: 0x9000, ..pd },
+                "mm_initialized_buffer",
+                span(0x9000, 0x1000),
+            ),
+            (
+                MmSupvPassDownHobData { firmware_policy_buffer: 0x9000, ..pd },
+                "firmware_policy_buffer",
+                span(0x9000, 0x1000),
+            ),
+        ] {
+            assert_eq!(check(pd), Err(HobValidationError::RegionNotInAllocatedMmram { kind, range }.into()));
+        }
+        let free_core = allocation_module(
+            MM_SUPERVISOR_HOB_MEMORY_ALLOC_MODULE_GUID,
+            MM_SUPERVISOR_CORE_GUID,
+            0x9000,
+            0x1000,
+            0x9000,
+        );
+        assert_eq!(
+            validate_named_regions([Hob::MemoryAllocationModule(&free_core)], hob_list, &pd, 2, &regions),
+            Err(HobValidationError::RegionNotInAllocatedMmram {
+                kind: "allocation module",
+                range: span(0x9000, 0x1000)
+            }
+            .into())
+        );
+
+        // No two regions may share a page.
+        for (pd, first_kind, first, second_kind, second) in [
+            (
+                MmSupvPassDownHobData { cpl3_stack_base: 0x1000, ..pd },
+                "allocation module",
+                span(0x1000, 0x1000),
+                "cpl3_stack_base",
+                span(0x1000, 0x2000),
+            ),
+            (
+                MmSupvPassDownHobData { mm_initialized_buffer: 0x5800, ..pd },
+                "sm_base_array",
+                span(0x5000, 0x1000),
+                "mm_initialized_buffer",
+                span(0x5000, 0x1000),
+            ),
+            (
+                MmSupvPassDownHobData { firmware_policy_buffer: 0x2800, firmware_policy_buffer_size: 0x100, ..pd },
+                "HOB list",
+                span(0x2000, 0x1000),
+                "firmware_policy_buffer",
+                span(0x2000, 0x1000),
+            ),
+        ] {
+            assert_eq!(
+                check(pd),
+                Err(HobValidationError::RegionsOverlap { first_kind, first, second_kind, second }.into())
+            );
+        }
     }
 
     #[test]
@@ -2608,12 +2920,14 @@ mod tests {
             HobValidationError::InvalidAddressRange { kind: "MMRAM region", base: 0x1000, length: 0 },
             HobValidationError::MmramRegionsOverlap { first: span(0, 0x1000), second: span(0x800, 0x1000) },
             HobValidationError::MmramNotContiguous { covered: 0x1000, span: 0x2000 },
+            HobValidationError::MmramBelowOneMib { span: span(0xF_F000, 0x1000) },
             HobValidationError::MemoryAllocationInsideMmram { range: span(0x1000, 0x1000) },
             HobValidationError::AllocationModuleOutsideMmram { range: span(0x1000, 0x1000) },
             HobValidationError::AllocationModuleNotPageAligned { range: span(0x1001, 0x1000) },
-            HobValidationError::MissingModule { has_init: false, has_supv_core: false },
-            HobValidationError::MissingModule { has_init: false, has_supv_core: true },
-            HobValidationError::MissingModule { has_init: true, has_supv_core: false },
+            HobValidationError::MissingModule { has_init: false, has_supv_core: false, has_user: false },
+            HobValidationError::MissingModule { has_init: false, has_supv_core: true, has_user: true },
+            HobValidationError::MissingModule { has_init: true, has_supv_core: false, has_user: true },
+            HobValidationError::MissingModule { has_init: true, has_supv_core: true, has_user: false },
             HobValidationError::DuplicateModule { module_name: MM_SUPERVISOR_CORE_GUID },
             HobValidationError::AllocationModulesOverlap { first: span(0, 0x1000), second: span(0x800, 0x1000) },
             HobValidationError::TooManyAllocationModules { limit: MAX_ALLOC_MODULES },
@@ -2633,6 +2947,14 @@ mod tests {
             HobValidationError::MalformedHob { offset: 0x38, hob_type: GUID_EXTENSION, length: 0 },
             HobValidationError::HobListTooLarge { limit: MAX_HOB_LIST_SIZE },
             HobValidationError::HobListOutsideMmram { base: 0x1000, size: 0x40 },
+            HobValidationError::RegionNotPageAligned { kind: "cpl3_stack_base", range: span(0x1800, 0x1000) },
+            HobValidationError::RegionNotInAllocatedMmram { kind: "sm_base_array", range: span(0x1000, 0x1000) },
+            HobValidationError::RegionsOverlap {
+                first_kind: "HOB list",
+                first: span(0x1000, 0x1000),
+                second_kind: "firmware_policy_buffer",
+                second: span(0x1000, 0x1000),
+            },
             HobValidationError::PageTableUnavailable,
             HobValidationError::PageAttributeQueryFailed { addr: 0x1000 },
             HobValidationError::PageMissingAttribute { addr: 0x1000, desired: 0x1, found: 0 },

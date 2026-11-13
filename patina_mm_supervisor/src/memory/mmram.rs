@@ -15,7 +15,7 @@ use core::fmt;
 use patina::{MemoryRange, memory_range::Coverage};
 
 use crate::error::MmSupervisorResult;
-use crate::mmcore::smrr::coalesced_smrr_range;
+use crate::hob::validation::validate_mmram_contiguous;
 use crate::state::security_state;
 
 /// A region of MMRAM: its address range, and whether it was reported as pre-allocated in the
@@ -55,8 +55,6 @@ pub enum MmramBoundError {
         /// The address that was expected to be covered.
         anchor: u64,
     },
-    /// No scanned region meets the SMRR base and size requirements.
-    NoSmrrRange,
 }
 
 impl core::error::Error for MmramBoundError {}
@@ -67,7 +65,6 @@ impl fmt::Display for MmramBoundError {
             Self::AnchorOutsideRegions { anchor } => {
                 write!(f, "the scanned descriptors do not cover the supervisor image anchor 0x{anchor:016x}")
             }
-            Self::NoSmrrRange => write!(f, "no scanned region meets the SMRR base and size requirements"),
         }
     }
 }
@@ -91,13 +88,15 @@ pub(crate) fn supervisor_image_anchor() -> u64 {
 /// contiguity requirement it confines a forged HOB list to extending the span the supervisor is
 /// actually running in.
 ///
-/// The range is the single range the SMRRs will cover, as selected by [`coalesced_smrr_range`].
+/// The range is the span [`validate_mmram_contiguous`] returns for `scanned`, which the SMRRs will
+/// cover. [`smrr_initialize`](crate::mmcore::smrr::smrr_initialize) checks it meets the SMRR size
+/// and alignment rules before programming it.
 pub(crate) fn establish_mmram_bound(scanned: &[MmramRegion], anchor: u64) -> MmSupervisorResult<MemoryRange> {
     if !scanned.contains_address(anchor) {
         return Err(MmramBoundError::AnchorOutsideRegions { anchor }.into());
     }
 
-    let range = coalesced_smrr_range(scanned).ok_or(MmramBoundError::NoSmrrRange)?;
+    let range = validate_mmram_contiguous(scanned)?;
     log::info!("Discovered MMRAM range: {range}");
     Ok(range)
 }
@@ -174,10 +173,6 @@ mod tests {
             format!("{}", MmramBoundError::AnchorOutsideRegions { anchor: 0x7000_0000 }),
             "the scanned descriptors do not cover the supervisor image anchor 0x0000000070000000"
         );
-        assert_eq!(
-            format!("{}", MmramBoundError::NoSmrrRange),
-            "no scanned region meets the SMRR base and size requirements"
-        );
         assert_ne!(
             format!("{}", MmramBoundError::AnchorOutsideRegions { anchor: 0x1000 }),
             format!("{}", MmramBoundError::AnchorOutsideRegions { anchor: 0x2000 })
@@ -223,11 +218,15 @@ mod tests {
     }
 
     #[test]
-    fn test_establish_mmram_bound_rejects_regions_without_an_smrr_range() {
-        // The region covers the anchor, but its size is not a power of two.
-        let regions = [MmramRegion::new(MemoryRange::new(0x80_0000, 0x60_0000).unwrap(), false)];
+    fn test_establish_mmram_bound_rejects_mmram_below_one_mib() {
+        // The region covers the anchor, but starts below 1 MiB.
+        let below = MemoryRange::new(0x8_0000, 0x10_0000).unwrap();
+        let regions = [MmramRegion::new(below, false)];
 
-        assert_eq!(establish_mmram_bound(&regions, 0x80_0000), Err(MmramBoundError::NoSmrrRange.into()));
+        assert_eq!(
+            establish_mmram_bound(&regions, 0x8_0000),
+            Err(crate::hob::validation::HobValidationError::MmramBelowOneMib { span: below }.into())
+        );
     }
 
     #[test]

@@ -249,8 +249,8 @@ mod tests {
             MmSupervisorError::CoreInit(CoreInitError::InitializedBufferUnavailable)
         );
         assert_eq!(
-            MmSupervisorError::from(MmramBoundError::NoSmrrRange),
-            MmSupervisorError::MmramBound(MmramBoundError::NoSmrrRange)
+            MmSupervisorError::from(MmramBoundError::AnchorOutsideRegions { anchor: 0x1000 }),
+            MmSupervisorError::MmramBound(MmramBoundError::AnchorOutsideRegions { anchor: 0x1000 })
         );
         assert_eq!(MmSupervisorError::from(AllocError::OutOfMemory), MmSupervisorError::Alloc(AllocError::OutOfMemory));
         assert_eq!(
@@ -337,7 +337,7 @@ mod tests {
                 SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 0, smbase: 0x3000 }.into(),
                 "Save-state validation: ",
             ),
-            (MmramBoundError::NoSmrrRange.into(), "MMRAM bound: "),
+            (MmramBoundError::AnchorOutsideRegions { anchor: 0x1000 }.into(), "MMRAM bound: "),
             (SmrrError::SmrrUnsupported.into(), "SMRR programming: "),
             (CallGateError::GdtTooSmall.into(), "Call gate setup: "),
             (SmiHandlerIdtPatchError::EntryTooSmall.into(), "SMI handler IDT patch: "),
@@ -378,7 +378,7 @@ mod tests {
             MmSupervisorError::from(PageTableWalkError::InvalidCr3),
             MmSupervisorError::from(SyscallSetupError::NotInitialized),
             MmSupervisorError::from(SaveStateValidationError::UnusableSaveStateRegion { cpu_index: 0, smbase: 0 }),
-            MmSupervisorError::from(MmramBoundError::NoSmrrRange),
+            MmSupervisorError::from(MmramBoundError::AnchorOutsideRegions { anchor: 0x1000 }),
             MmSupervisorError::from(SmrrError::SmrrUnsupported),
             MmSupervisorError::from(CallGateError::GdtTooSmall),
             MmSupervisorError::from(SmiHandlerIdtPatchError::EntryTooSmall),

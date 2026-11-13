@@ -131,7 +131,18 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         let smrr_range = establish_mmram_bound(scanned_regions, supervisor_image_anchor())?;
 
-        validation::validate_incoming_hobs_pre_paging_init(hob_hand_off_table, hob_list_len, scanned_regions)?;
+        // Make sure hob list is inside the MMRAM range.
+        validation::validate_hob_list_inside_mmram(hob_hand_off_table, hob_list_len, smrr_range)?;
+
+        // Then get the core count as we will need this for the rest of the routine.
+        let number_of_cpus = self.mp_information_cpu_count(hob_hand_off_table, smrr_range)?;
+        validation::validate_incoming_hobs_pre_paging_init(
+            hob_hand_off_table,
+            hob_list_len,
+            scanned_regions,
+            smrr_range,
+            number_of_cpus,
+        )?;
 
         // Program the range before the allocator makes the first write into MMRAM. Enabling it is
         // left to `smrr_enable` on the next SMI entry: finalizing it here makes the range enforcing
@@ -157,7 +168,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         self.discover_and_store_user_entry(hob_hand_off_table, init_state())?;
         self.discover_and_store_init_region(hob_hand_off_table, init_state())?;
-        self.init_policy_and_validate(hob_hand_off_table)?;
+        self.init_policy_and_validate(hob_hand_off_table, number_of_cpus)?;
         let user_hob_list = self.publish_hob_list_to_user(hob_hand_off_table)?;
 
         log::info!("BSP one-time initialization complete.");
@@ -324,22 +335,20 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
     /// Initializes the services the HOB list describes, then validates the security policy.
     ///
-    /// Reads the MP Information HOB for the CPU count, which sizes everything that follows, then
+    /// Passed in the MP Information HOB for the CPU count, which sizes everything that follows, then
     /// the `PassDown` HOB for the policy gate, the syscall interface and the memory policy. It
     /// then publishes the save-state metadata, records the optional MSEG region, patches every
     /// core's SMI-handler IDT descriptor, assembles the communication buffers, and runs an initial
     /// security check on the policy gate.
-    fn init_policy_and_validate(&self, hob_hand_off_table: &PhaseHandoffInformationTable) -> MmSupervisorResult<()> {
-        // The CPU count sizes the Ring 3 stack array the PassDown HOB describes, so it is read
-        // before anything that depends on it.
-        // SAFETY: `hob_hand_off_table` is the in-place PHIT of the validated HOB list handed to
-        // `bsp_init`, which is terminated by `END_OF_HOB_LIST`.
-        let mp_information = unsafe { find_guid_hob_data(hob_hand_off_table, MP_INFORMATION_HOB_GUID) }
-            .ok_or(CoreInitError::MpInformationHobMissing)?;
-        let number_of_cores = self.parse_mp_information_hob(mp_information)?;
+    fn init_policy_and_validate(
+        &self,
+        hob_hand_off_table: &PhaseHandoffInformationTable,
+        number_of_cores: usize,
+    ) -> MmSupervisorResult<()> {
         self.number_of_cores.store(number_of_cores, Ordering::Release);
 
-        // SAFETY: as above, `hob_hand_off_table` is the in-place PHIT of the validated HOB list.
+        // SAFETY: `hob_hand_off_table` is the in-place PHIT of the validated HOB list handed to
+        // `bsp_init`, which is terminated by `END_OF_HOB_LIST`.
         let pass_down_data = unsafe { find_guid_hob_data(hob_hand_off_table, MM_SUPV_PASS_DOWN_HOB_GUID) }
             .ok_or(PassDownHobError::Missing)?;
         // SAFETY: `pass_down_data` is a slice into the validated HOB list, so the buffer pointers
@@ -577,6 +586,32 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         log::info!("Comm buffers: supervisor [{supv}], user [{user}], supv_to_user=0x{supv_to_user_buffer:x}");
 
         Ok(())
+    }
+
+    /// Returns the CPU count from the MP Information HOB in `hob_hand_off_table`.
+    ///
+    /// The payload is read in place, so it must lie inside `mmram`, where nothing outside MM can
+    /// change it once checked. `mmram` is the span [`establish_mmram_bound`] returned, which
+    /// [`validation::validate_hob_list_inside_mmram`] has confirmed holds this list.
+    fn mp_information_cpu_count(
+        &self,
+        hob_hand_off_table: &PhaseHandoffInformationTable,
+        mmram: MemoryRange,
+    ) -> MmSupervisorResult<usize> {
+        // SAFETY: `hob_hand_off_table` is the in-place PHIT of the HOB list handed to `bsp_init`,
+        // which passed `validate_hob_list_structure`, so the walk stays within the list and ends at
+        // its `END_OF_HOB_LIST`.
+        let mp_information = unsafe { find_guid_hob_data(hob_hand_off_table, MP_INFORMATION_HOB_GUID) }
+            .ok_or(CoreInitError::MpInformationHobMissing)?;
+
+        // An empty payload has nothing to read, and the parse below reports it as malformed.
+        let inside_mmram = MemoryRange::new(mp_information.as_ptr().addr() as u64, mp_information.len() as u64)
+            .map_or(mp_information.is_empty(), |payload| mmram.contains_range(&payload));
+        if !inside_mmram {
+            return Err(CoreInitError::MpInformationHobOutsideMmram.into());
+        }
+
+        self.parse_mp_information_hob(mp_information)
     }
 
     /// Returns the CPU count from the MP Information HOB.
@@ -1318,40 +1353,59 @@ mod tests {
         test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
 
-        // Carries the MP Information HOB so initialization reaches the PassDown lookup and
-        // stops there. Lists that get past this point reach steps that touch real MMRAM, so
-        // the later required-HOB lookups are not reachable from a host test.
-        let mut without_pass_down = RawHobList::new();
-        without_pass_down.push_guid_hob(MP_INFORMATION_HOB_GUID, &mp_information_hob_data(2));
-        let without_pass_down = without_pass_down.finish();
+        // The PassDown lookup is the first step, so initialization stops there. Lists that get
+        // past this point reach steps that touch real MMRAM, so the later required-HOB lookups are
+        // not reachable from a host test.
+        let without_pass_down = RawHobList::new().finish();
 
-        let result = supervisor.init_policy_and_validate(without_pass_down.handoff());
+        let result = supervisor.init_policy_and_validate(without_pass_down.handoff(), 2);
         assert_eq!(result, Err(PassDownHobError::Missing.into()));
-        // The CPU count is recorded as soon as the MP Information HOB is read.
+        // The core count is recorded before the PassDown lookup.
         assert_eq!(supervisor.number_of_cores(), 2);
     }
 
     #[test]
-    fn test_init_policy_and_validate_reports_initialization_failure() {
+    fn test_mp_information_cpu_count_reports_a_missing_hob() {
         test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let hob_list = RawHobList::new().finish();
 
-        let result = supervisor.init_policy_and_validate(hob_list.handoff());
+        let result = supervisor.mp_information_cpu_count(hob_list.handoff(), whole_address_space());
 
         assert_eq!(result, Err(CoreInitError::MpInformationHobMissing.into()));
     }
 
     #[test]
-    fn test_init_policy_and_validate_reports_an_invalid_mp_core_count() {
+    fn test_mp_information_cpu_count_requires_the_payload_inside_mmram() {
+        let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
+        let hob_list = policy_hob_list_with_core_count(2, false);
+
+        assert_eq!(supervisor.mp_information_cpu_count(hob_list.handoff(), whole_address_space()), Ok(2));
+
+        // The list is on the host heap, so a one-page span at 0x1000 cannot hold its payload. It is
+        // rejected before a byte of it is read.
+        let mmram = MemoryRange::new(0x1000, UEFI_PAGE_SIZE as u64).unwrap();
+        assert_eq!(
+            supervisor.mp_information_cpu_count(hob_list.handoff(), mmram),
+            Err(CoreInitError::MpInformationHobOutsideMmram.into())
+        );
+    }
+
+    /// A span holding any host test buffer, standing in for MMRAM.
+    fn whole_address_space() -> MemoryRange {
+        MemoryRange::new(0, u64::MAX).unwrap()
+    }
+
+    #[test]
+    fn test_mp_information_cpu_count_reports_an_invalid_cpu_count() {
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
 
         for core_count in [0, 5] {
             let hob_list = policy_hob_list_with_core_count(core_count, true);
 
-            let result = supervisor.init_policy_and_validate(hob_list.handoff());
+            let result = supervisor.mp_information_cpu_count(hob_list.handoff(), whole_address_space());
 
-            assert!(result.is_err(), "CPU count {core_count} should fail-stop initialization");
+            assert_eq!(result, Err(CoreInitError::InvalidCpuCount { found: core_count, maximum: 4 }.into()));
         }
     }
 
