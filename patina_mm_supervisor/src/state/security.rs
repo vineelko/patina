@@ -174,7 +174,7 @@ mod tests {
         state.set_save_state_info(first);
         state.set_save_state_info(second);
         let info = state.save_state_info().unwrap();
-        assert_eq!((info.number_of_cpus(), info.smbase_array()), (4, 0x3000));
+        assert_eq!((info.number_of_cores(), info.smbase_array()), (4, 0x3000));
     }
 
     #[test]

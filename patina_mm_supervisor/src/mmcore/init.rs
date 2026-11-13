@@ -336,8 +336,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // `bsp_init`, which is terminated by `END_OF_HOB_LIST`.
         let mp_information = unsafe { find_guid_hob_data(hob_hand_off_table, MP_INFORMATION_HOB_GUID) }
             .ok_or(CoreInitError::MpInformationHobMissing)?;
-        let number_of_cpus = self.parse_mp_information_hob(mp_information)?;
-        self.number_of_cores.store(number_of_cpus, Ordering::Release);
+        let number_of_cores = self.parse_mp_information_hob(mp_information)?;
+        self.number_of_cores.store(number_of_cores, Ordering::Release);
 
         // SAFETY: as above, `hob_hand_off_table` is the in-place PHIT of the validated HOB list.
         let pass_down_data = unsafe { find_guid_hob_data(hob_hand_off_table, MM_SUPV_PASS_DOWN_HOB_GUID) }
@@ -345,7 +345,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // SAFETY: `pass_down_data` is a slice into the validated HOB list, so the buffer pointers
         // it carries reference live memory as `init_from_pass_down_hob` requires.
         let (save_state_info, mmi_entry_size) =
-            unsafe { self.init_from_pass_down_hob(pass_down_data, number_of_cpus) }?;
+            unsafe { self.init_from_pass_down_hob(pass_down_data, number_of_cores) }?;
 
         // `init_from_pass_down_hob` has just checked every save-state region it describes.
         self.publish_save_state_metadata(save_state_info);
@@ -354,7 +354,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // The SMI entry blocks were already copied per SMBASE, so every core is patched here,
         // not only the BSP.
-        patch_smi_handler_idt(save_state_info.smbase_array(), number_of_cpus, mmi_entry_size)?;
+        patch_smi_handler_idt(save_state_info.smbase_array(), number_of_cores, mmi_entry_size)?;
 
         self.init_comm_buffers(hob_hand_off_table)?;
 
@@ -519,7 +519,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         log::info!(
             "Save-state metadata initialized for {} CPU(s) from SMBASE array at 0x{:016x} \
              using the {} save-state layout",
-            save_state_info.number_of_cpus(),
+            save_state_info.number_of_cores(),
             save_state_info.smbase_array(),
             vendor_name()
         );
@@ -596,7 +596,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // The payload was checked to be at least `PROCESSOR_INFO_BUFFER_OFFSET` bytes above,
         // so reading the leading count cannot fail. The reasons are still reported in case a
         // future change loosens that guard.
-        let number_of_cpus = u64::from_le_bytes(
+        let number_of_cores = u64::from_le_bytes(
             data.get(0..8)
                 .ok_or_else(|| {
                     log::error!("MP Information HOB has no processor count field");
@@ -612,15 +612,15 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         // A count that does not fit a `usize` is certainly larger than MAX_CPUS, so it is named
         // as the largest count this target can express and rejected by the bound below rather
         // than needing an error of its own.
-        let cpu_count = usize::try_from(number_of_cpus).unwrap_or(usize::MAX);
-        if cpu_count == 0 || cpu_count > MAX_CPUS {
-            log::error!("MP Information HOB CPU count {cpu_count} is outside the supported range 1..={MAX_CPUS}");
-            return Err(CoreInitError::InvalidCpuCount { found: cpu_count, maximum: MAX_CPUS }.into());
+        let core_count = usize::try_from(number_of_cores).unwrap_or(usize::MAX);
+        if core_count == 0 || core_count > MAX_CPUS {
+            log::error!("MP Information HOB CPU count {core_count} is outside the supported range 1..={MAX_CPUS}");
+            return Err(CoreInitError::InvalidCpuCount { found: core_count, maximum: MAX_CPUS }.into());
         }
 
-        // `cpu_count` is bounded by `MAX_CPUS`, so the offsets below cannot overflow today.
-        let processor_info_size = cpu_count.checked_mul(PROCESSOR_INFO_ENTRY_SIZE).ok_or_else(|| {
-            log::error!("MP Information HOB: {cpu_count} processor entries overflow the payload size");
+        // `core_count` is bounded by `MAX_CPUS`, so the offsets below cannot overflow today.
+        let processor_info_size = core_count.checked_mul(PROCESSOR_INFO_ENTRY_SIZE).ok_or_else(|| {
+            log::error!("MP Information HOB: {core_count} processor entries overflow the payload size");
             CoreInitError::MpInformationHobMalformed
         })?;
 
@@ -631,13 +631,13 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         data.get(PROCESSOR_INFO_BUFFER_OFFSET..processor_info_end).ok_or_else(|| {
             log::error!(
-                "MP Information HOB holds {} bytes but {cpu_count} processor entries need {processor_info_end}",
+                "MP Information HOB holds {} bytes but {core_count} processor entries need {processor_info_end}",
                 data.len()
             );
             CoreInitError::MpInformationHobMalformed
         })?;
 
-        Ok(cpu_count)
+        Ok(core_count)
     }
 
     /// Publishes the per-core "MM initialized" slots the MM IPL allocated.
@@ -648,26 +648,26 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// ## Safety
     ///
-    /// `buffer` must name `number_of_cpus` bytes that stay resident for the supervisor's
+    /// `buffer` must name `number_of_cores` bytes that stay resident for the supervisor's
     /// lifetime.
-    unsafe fn store_mm_initialized_slots(&self, buffer: u64, number_of_cpus: usize) -> MmSupervisorResult<()> {
-        // The slice built below is `number_of_cpus` elements long, so the bound is a
+    unsafe fn store_mm_initialized_slots(&self, buffer: u64, number_of_cores: usize) -> MmSupervisorResult<()> {
+        // The slice built below is `number_of_cores` elements long, so the bound is a
         // memory-safety precondition and is checked here rather than assumed of the caller.
-        if number_of_cpus == 0 || number_of_cpus > MAX_CPUS {
-            return Err(CoreInitError::InvalidCpuCount { found: number_of_cpus, maximum: MAX_CPUS }.into());
+        if number_of_cores == 0 || number_of_cores > MAX_CPUS {
+            return Err(CoreInitError::InvalidCpuCount { found: number_of_cores, maximum: MAX_CPUS }.into());
         }
-        if !MemoryRange::new(buffer, number_of_cpus as u64).is_ok_and(|range| is_range_inside_mmram(&range)) {
-            log::error!("MM initialized buffer at 0x{buffer:016x} does not contain {number_of_cpus} slot(s) in MMRAM");
+        if !MemoryRange::new(buffer, number_of_cores as u64).is_ok_and(|range| is_range_inside_mmram(&range)) {
+            log::error!("MM initialized buffer at 0x{buffer:016x} does not contain {number_of_cores} slot(s) in MMRAM");
             return Err(CoreInitError::InitializedBufferInvalid.into());
         }
 
         let address = usize::try_from(buffer).map_err(|_| CoreInitError::InitializedBufferInvalid)?;
         let buffer_ptr = core::ptr::with_exposed_provenance::<AtomicU8>(address);
-        // SAFETY: the checks above place `number_of_cpus` one-byte slots inside MMRAM at
+        // SAFETY: the checks above place `number_of_cores` one-byte slots inside MMRAM at
         // `buffer`, and this function's contract keeps them resident.
-        let initialized_slots = unsafe { core::slice::from_raw_parts(buffer_ptr, number_of_cpus) };
+        let initialized_slots = unsafe { core::slice::from_raw_parts(buffer_ptr, number_of_cores) };
         init_state().set_mm_initialized_buffer(initialized_slots);
-        log::info!("MM Initialized buffer set to 0x{buffer:016x} with {number_of_cpus} slot(s)");
+        log::info!("MM Initialized buffer set to 0x{buffer:016x} with {number_of_cores} slot(s)");
 
         Ok(())
     }
@@ -684,7 +684,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         .inspect_err(|err| log::error!("PassDown HOB does not describe usable save-state regions: {err}"))?;
         log::info!(
             "Validated save-state regions for {} CPU(s) from SMBASE array at 0x{:016x}",
-            save_state_info.number_of_cpus(),
+            save_state_info.number_of_cores(),
             save_state_info.smbase_array()
         );
 
@@ -733,17 +733,17 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         &self,
         cpl3_stack_base: u64,
         cpl3_stack_size: u64,
-        number_of_cpus: usize,
+        number_of_cores: usize,
     ) -> MmSupervisorResult<()> {
         // The CPU count bounds `get_cpl3_stack`, so it must be the count the MM IPL sized the
         // stack array for, not the supervisor's `MAX_CPUS` capacity.
         let stack_size = usize::try_from(cpl3_stack_size).map_err(|_| CoreInitError::Cpl3StackRegionInvalid {
             base: cpl3_stack_base,
             per_core_size: cpl3_stack_size,
-            num_cpus: number_of_cpus,
+            num_cpus: number_of_cores,
         })?;
 
-        self.syscall_interface.init(number_of_cpus, cpl3_stack_base, stack_size)?;
+        self.syscall_interface.init(number_of_cores, cpl3_stack_base, stack_size)?;
         Ok(())
     }
 
@@ -793,7 +793,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     pub(crate) unsafe fn init_from_pass_down_hob(
         &self,
         data: &[u8],
-        number_of_cpus: usize,
+        number_of_cores: usize,
     ) -> MmSupervisorResult<(SaveStateInfo, u64)> {
         let MmSupvPassDownHobData {
             cpl3_stack_base,
@@ -808,12 +808,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
         // SAFETY: this function's contract requires the pointers the HOB carries to name resident
         // memory of the size they declare.
-        unsafe { self.store_mm_initialized_slots(mm_initialized_buffer, number_of_cpus) }?;
+        unsafe { self.store_mm_initialized_slots(mm_initialized_buffer, number_of_cores) }?;
 
         // SAFETY: `check_save_state_regions` proves the SMBASE array and every map it describes
         // before anything reads through them, and the MM IPL keeps them resident for the
         // supervisor's lifetime.
-        let save_state_info = unsafe { SaveStateInfo::new(number_of_cpus, sm_base_array) }
+        let save_state_info = unsafe { SaveStateInfo::new(number_of_cores, sm_base_array) }
             .inspect_err(|err| log::error!("PassDown HOB does not describe a usable SMBASE array: {err}"))?;
         self.check_save_state_regions(&save_state_info)?;
 
@@ -821,8 +821,8 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let memory_policy_buffer =
             unsafe { self.install_policy_gate(firmware_policy_buffer, firmware_policy_buffer_size) }?;
 
-        self.start_syscall_interface(cpl3_stack_base, cpl3_stack_size, number_of_cpus)?;
-        self.map_cpl3_stacks_to_user(cpl3_stack_base, cpl3_stack_size, number_of_cpus)?;
+        self.start_syscall_interface(cpl3_stack_base, cpl3_stack_size, number_of_cores)?;
+        self.map_cpl3_stacks_to_user(cpl3_stack_base, cpl3_stack_size, number_of_cores)?;
 
         // SAFETY: `install_policy_gate` returned a freshly allocated page, which holds
         // `MEMORY_POLICY_DESCRIPTORS_PER_PAGE` descriptors and stays resident.
@@ -1343,15 +1343,15 @@ mod tests {
     }
 
     #[test]
-    fn test_init_policy_and_validate_reports_an_invalid_mp_cpu_count() {
+    fn test_init_policy_and_validate_reports_an_invalid_mp_core_count() {
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
 
-        for cpu_count in [0, 5] {
-            let hob_list = policy_hob_list_with_cpu_count(cpu_count, true);
+        for core_count in [0, 5] {
+            let hob_list = policy_hob_list_with_core_count(core_count, true);
 
             let result = supervisor.init_policy_and_validate(hob_list.handoff());
 
-            assert!(result.is_err(), "CPU count {cpu_count} should fail-stop initialization");
+            assert!(result.is_err(), "CPU count {core_count} should fail-stop initialization");
         }
     }
 
@@ -1385,16 +1385,16 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_mp_information_hob_rejects_invalid_cpu_count() {
+    fn test_parse_mp_information_hob_rejects_invalid_core_count() {
         test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let mut data = [0_u8; 16];
 
-        for cpu_count in [0_usize, 5] {
-            data[..8].copy_from_slice(&(cpu_count as u64).to_le_bytes());
+        for core_count in [0_usize, 5] {
+            data[..8].copy_from_slice(&(core_count as u64).to_le_bytes());
             assert_eq!(
                 supervisor.parse_mp_information_hob(&data),
-                Err(CoreInitError::InvalidCpuCount { found: cpu_count, maximum: 4 }.into())
+                Err(CoreInitError::InvalidCpuCount { found: core_count, maximum: 4 }.into())
             );
         }
     }
@@ -1411,16 +1411,16 @@ mod tests {
     }
 
     #[test]
-    fn test_store_mm_initialized_slots_rejects_an_unusable_cpu_count() {
+    fn test_store_mm_initialized_slots_rejects_an_unusable_core_count() {
         test_support::init_test_logger();
         let supervisor = MmSupervisorCore::<TestPlatform, 4>::new();
         let memory = PageAlignedMemory::new(1);
 
         // The count is the length of the slot slice, so it is refused before the buffer is read.
-        for cpu_count in [0, 5] {
+        for core_count in [0, 5] {
             // SAFETY: the count is rejected before `memory` is dereferenced.
-            let result = unsafe { supervisor.store_mm_initialized_slots(memory.base(), cpu_count) };
-            assert_eq!(result, Err(CoreInitError::InvalidCpuCount { found: cpu_count, maximum: 4 }.into()));
+            let result = unsafe { supervisor.store_mm_initialized_slots(memory.base(), core_count) };
+            assert_eq!(result, Err(CoreInitError::InvalidCpuCount { found: core_count, maximum: 4 }.into()));
         }
         assert!(init_state().mm_initialized_buffer().is_none());
     }

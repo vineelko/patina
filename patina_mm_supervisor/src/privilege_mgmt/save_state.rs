@@ -130,8 +130,8 @@ const MAP_SIZE: u64 = SMRAM_SAVE_STATE_MAP_SIZE as u64;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SaveStateInfo {
     /// Number of CPUs (from `MP_INFORMATION_HOB_DATA.NumberOfProcessors`).
-    number_of_cpus: usize,
-    /// The SMBASE array (`u64[number_of_cpus]`).
+    number_of_cores: usize,
+    /// The SMBASE array (`u64[number_of_cores]`).
     smbase_array: MemoryRange,
 }
 
@@ -140,7 +140,7 @@ impl SaveStateInfo {
     ///
     /// ## Errors
     ///
-    /// Returns [`SaveStateValidationError::UnusableSmBaseArray`] when `number_of_cpus` is 0,
+    /// Returns [`SaveStateValidationError::UnusableSmBaseArray`] when `number_of_cores` is 0,
     /// when `smbase_array` is null or not aligned for `u64`, or when the end of the array
     /// does not fit in a `u64`.
     ///
@@ -151,7 +151,7 @@ impl SaveStateInfo {
     /// and [`get_save_state`](Self::get_save_state) read through `smbase_array`, so before
     /// the first such call:
     ///
-    /// - The `number_of_cpus` `u64` SMBASE values at `smbase_array` must be initialized and
+    /// - The `number_of_cores` `u64` SMBASE values at `smbase_array` must be initialized and
     ///   readable.
     /// - For every CPU for which `save_state_map_base` returns an address,
     ///   `SMRAM_SAVE_STATE_MAP_SIZE` bytes at that address must be readable. Only
@@ -160,23 +160,23 @@ impl SaveStateInfo {
     /// Both must stay true for as long as those methods are called. The value may be built
     /// before [`validate_save_state_regions`] checks the regions, as long as each check
     /// finishes before the first read it covers.
-    pub(crate) unsafe fn new(number_of_cpus: usize, smbase_array: u64) -> Result<Self, SaveStateValidationError> {
-        let invalid = SaveStateValidationError::UnusableSmBaseArray { base: smbase_array, count: number_of_cpus };
+    pub(crate) unsafe fn new(number_of_cores: usize, smbase_array: u64) -> Result<Self, SaveStateValidationError> {
+        let invalid = SaveStateValidationError::UnusableSmBaseArray { base: smbase_array, count: number_of_cores };
         if smbase_array == 0 || !smbase_array.is_multiple_of(core::mem::align_of::<u64>() as u64) {
             return Err(invalid);
         }
-        let array = number_of_cpus
+        let array = number_of_cores
             .checked_mul(core::mem::size_of::<u64>())
             .and_then(|size| u64::try_from(size).ok())
             .and_then(|size| MemoryRange::new(smbase_array, size).ok())
             .ok_or(invalid)?;
 
-        Ok(Self { number_of_cpus, smbase_array: array })
+        Ok(Self { number_of_cores, smbase_array: array })
     }
 
     /// Returns the number of CPUs.
-    pub(crate) fn number_of_cpus(&self) -> usize {
-        self.number_of_cpus
+    pub(crate) fn number_of_cores(&self) -> usize {
+        self.number_of_cores
     }
 
     /// Returns the address of the SMBASE array.
@@ -196,12 +196,12 @@ impl SaveStateInfo {
     /// Returns [`SaveStateError::InvalidParameter`] when `cpu_index` is not below the CPU
     /// count.
     pub(crate) fn smbase(&self, cpu_index: usize) -> Result<u64, SaveStateError> {
-        if cpu_index >= self.number_of_cpus {
+        if cpu_index >= self.number_of_cores {
             return Err(SaveStateError::InvalidParameter);
         }
 
         // SAFETY: `SaveStateInfo::new` checked that `smbase_array` is a non-null, aligned array of
-        // `number_of_cpus` `u64` entries, its contract makes them initialized and readable, and
+        // `number_of_cores` `u64` entries, its contract makes them initialized and readable, and
         // `cpu_index` is below that count.
         Ok(unsafe { (self.smbase_array.base() as *const u64).add(cpu_index).read() })
     }
@@ -250,25 +250,26 @@ pub(crate) fn validate_save_state_regions(
     is_inside_mmram: impl Fn(&MemoryRange) -> bool,
     is_supervisor_owned: impl Fn(&MemoryRange) -> bool,
 ) -> MmSupervisorResult<()> {
-    let (smbase_array, number_of_cpus) = (info.smbase_array(), info.number_of_cpus());
+    let (smbase_array, number_of_cores) = (info.smbase_array(), info.number_of_cores());
     // `SaveStateInfo::new` already rejected a null, empty, misaligned, or overflowing array.
     let array = info.smbase_array_range();
     if !is_inside_mmram(&array) {
-        return Err(SaveStateValidationError::UnusableSmBaseArray { base: smbase_array, count: number_of_cpus }.into());
+        return Err(SaveStateValidationError::UnusableSmBaseArray { base: smbase_array, count: number_of_cores }.into());
     }
     if !is_supervisor_owned(&array) {
         return Err(SaveStateValidationError::SmBaseArrayNotSupervisorOwned {
             base: smbase_array,
-            count: number_of_cpus,
+            count: number_of_cores,
         }
         .into());
     }
 
     // The checks above prove the SMBASE array, so the entries can be read through `info`.
-    for cpu_index in 0..number_of_cpus {
-        let smbase = info
-            .smbase(cpu_index)
-            .map_err(|_| SaveStateValidationError::UnusableSmBaseArray { base: smbase_array, count: number_of_cpus })?;
+    for cpu_index in 0..number_of_cores {
+        let smbase = info.smbase(cpu_index).map_err(|_| SaveStateValidationError::UnusableSmBaseArray {
+            base: smbase_array,
+            count: number_of_cores,
+        })?;
         let map =
             info.save_state_map_base(cpu_index).ok().and_then(|map_base| MemoryRange::new(map_base, MAP_SIZE).ok());
         match map {
@@ -295,7 +296,7 @@ pub(crate) fn log_save_state_map(info: SaveStateInfo) {
         return;
     }
 
-    for cpu_index in 0..info.number_of_cpus() {
+    for cpu_index in 0..info.number_of_cores() {
         let smbase = match info.smbase(cpu_index) {
             Ok(smbase) => smbase,
             Err(error) => {
@@ -347,7 +348,7 @@ fn policy_checks_for_register(reg: MmSaveStateRegister) -> Option<&'static [Save
 pub fn save_state_read_phase1(protocol: u64, register_raw: u64, cpu_index: u64) -> SyscallResult {
     let num_cpus = save_state_info()
         .inspect_err(|status| log::error!("SAVE_STATE_READ: Unable to get number of CPUs: {:#x}", status.as_usize()))?
-        .number_of_cpus();
+        .number_of_cores();
 
     stage_read_request(current_apic_id(), protocol, register_raw, cpu_index, num_cpus)
 }
@@ -691,9 +692,9 @@ mod tests {
     }
 
     /// Wraps an SMBASE array that the validator must reject before it reads any entry.
-    fn unchecked_info(smbase_array: u64, number_of_cpus: usize) -> SaveStateInfo {
+    fn unchecked_info(smbase_array: u64, number_of_cores: usize) -> SaveStateInfo {
         // SAFETY: each caller passes an array the validator rejects before reading through it.
-        unsafe { SaveStateInfo::new(number_of_cpus, smbase_array) }.expect("the array has a valid shape")
+        unsafe { SaveStateInfo::new(number_of_cores, smbase_array) }.expect("the array has a valid shape")
     }
 
     /// Answers "supervisor-owned" for every range, isolating the containment rules.
@@ -1186,7 +1187,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_save_state_read_phase1_stages_against_the_initialized_cpu_count() {
+    fn test_save_state_read_phase1_stages_against_the_initialized_core_count() {
         test_support::init_test_logger();
         let smram = FakeSmram::new(2);
         security_state().set_save_state_info(smram.info());

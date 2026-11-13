@@ -161,18 +161,18 @@ pub(crate) struct SmiHandlerIdtPatchInputs {
 /// [`is_range_inside_mmram`](crate::memory::mmram::is_range_inside_mmram).
 fn validate_smi_handler_idt_patch_inputs(
     sm_base_array: u64,
-    number_of_cpus: usize,
+    number_of_cores: usize,
     mmi_entry_size: u64,
     is_inside_mmram: impl Fn(&MemoryRange) -> bool,
 ) -> MmSupervisorResult<SmiHandlerIdtPatchInputs> {
     if mmi_entry_size == 0 {
         return Err(SmiHandlerIdtPatchError::ZeroEntrySize.into());
     }
-    if sm_base_array == 0 || number_of_cpus == 0 {
+    if sm_base_array == 0 || number_of_cores == 0 {
         return Err(SmiHandlerIdtPatchError::MissingSmBaseArray.into());
     }
 
-    let sm_base_array_size = number_of_cpus
+    let sm_base_array_size = number_of_cores
         .checked_mul(core::mem::size_of::<u64>())
         .filter(|size| isize::try_from(*size).is_ok())
         .ok_or(SmiHandlerIdtPatchError::SmBaseArraySizeOverflow)?;
@@ -242,8 +242,8 @@ fn parse_smi_handler_idt_descriptor(mmi_entry: &[u8]) -> MmSupervisorResult<u64>
 /// carries a `Fixup64[FIXUP64_SMI_HANDLER_IDTR]` slot holding the address of the
 /// `IA32_DESCRIPTOR` that core's SMI entry `lidt`s.
 ///
-/// `sm_base_array` is the per-CPU SMBASE array (`u64[number_of_cpus]`) from the `PassDown`
-/// HOB; `number_of_cpus` is its length.
+/// `sm_base_array` is the per-CPU SMBASE array (`u64[number_of_cores]`) from the `PassDown`
+/// HOB; `number_of_cores` is its length.
 ///
 /// ## Errors
 ///
@@ -252,11 +252,11 @@ fn parse_smi_handler_idt_descriptor(mmi_entry: &[u8]) -> MmSupervisorResult<u64>
 /// but the error fails supervisor initialization.
 pub(crate) fn patch_smi_handler_idt(
     sm_base_array: u64,
-    number_of_cpus: usize,
+    number_of_cores: usize,
     mmi_entry_size: u64,
 ) -> MmSupervisorResult<()> {
     let inputs =
-        validate_smi_handler_idt_patch_inputs(sm_base_array, number_of_cpus, mmi_entry_size, is_range_inside_mmram)?;
+        validate_smi_handler_idt_patch_inputs(sm_base_array, number_of_cores, mmi_entry_size, is_range_inside_mmram)?;
 
     let idtr = read_idtr();
     // Copy packed fields into aligned locals before formatting; taking a reference to a
@@ -308,7 +308,7 @@ pub(crate) fn patch_smi_handler_idt(
     }
 
     log::info!(
-        "Patched the SMI handler IDT descriptor on {number_of_cpus} CPU(s): base=0x{idtr_base:016x}, limit=0x{idtr_limit:04x}"
+        "Patched the SMI handler IDT descriptor on {number_of_cores} CPU(s): base=0x{idtr_base:016x}, limit=0x{idtr_limit:04x}"
     );
     Ok(())
 }

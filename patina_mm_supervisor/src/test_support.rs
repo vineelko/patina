@@ -239,14 +239,14 @@ pub(crate) fn guid_hob(name: patina::BinaryGuid, data_len: usize) -> GuidHob {
         name,
     }
 }
-pub(crate) fn mp_information_hob_data(number_of_cpus: usize) -> Vec<u8> {
-    let mut data = vec![0_u8; 16 + number_of_cpus * PROCESSOR_INFO_ENTRY_SIZE];
-    data[0..8].copy_from_slice(&(number_of_cpus as u64).to_le_bytes());
+pub(crate) fn mp_information_hob_data(number_of_cores: usize) -> Vec<u8> {
+    let mut data = vec![0_u8; 16 + number_of_cores * PROCESSOR_INFO_ENTRY_SIZE];
+    data[0..8].copy_from_slice(&(number_of_cores as u64).to_le_bytes());
     data
 }
-pub(crate) fn policy_hob_list_with_cpu_count(number_of_cpus: usize, include_mseg: bool) -> RawHobList {
+pub(crate) fn policy_hob_list_with_core_count(number_of_cores: usize, include_mseg: bool) -> RawHobList {
     let mut list = RawHobList::new();
-    list.push_guid_hob(MP_INFORMATION_HOB_GUID, &mp_information_hob_data(number_of_cpus));
+    list.push_guid_hob(MP_INFORMATION_HOB_GUID, &mp_information_hob_data(number_of_cores));
     list.push_guid_hob(MM_SUPV_PASS_DOWN_HOB_GUID, &pass_down_hob_data(&valid_pass_down_hob()));
     if include_mseg {
         list.push_guid_hob(MSEG_SMRAM_HOB_GUID, &mseg_smram_hob_data(0x0040_0000, 0x0040_0000, 0x0002_0000));
