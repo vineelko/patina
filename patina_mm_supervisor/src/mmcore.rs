@@ -28,7 +28,7 @@ pub(crate) mod smi_idt_patch;
 pub(crate) mod smrr;
 
 use core::fmt;
-use core::sync::atomic::AtomicBool;
+use core::sync::atomic::{AtomicBool, AtomicUsize};
 
 use patina::{MemoryRange, error::EfiError};
 
@@ -271,6 +271,8 @@ pub struct MmSupervisorCore<P: PlatformInfo, const MAX_CPUS: usize> {
     pub(crate) syscall_interface: SyscallInterface<MAX_CPUS>,
     /// Set once the BSP has finished its one-time initialization.
     pub(crate) initialized: AtomicBool,
+    /// Number of cores the MP Information HOB reports. Zero until the BSP has read that HOB.
+    pub(crate) number_of_cores: AtomicUsize,
     /// Ties the instance to its platform type.
     pub(crate) _phantom: core::marker::PhantomData<fn() -> P>,
 }
@@ -296,8 +298,9 @@ mod tests {
         let supervisor: MmSupervisorCore<TestPlatform, 2> = MmSupervisorCore::default();
 
         assert_eq!(supervisor.cpu_manager().max_cpus(), 2);
-        assert_eq!(supervisor.cpu_manager().registered_count(), 0);
+        assert_eq!(supervisor.cpu_manager().get_cpu_id_by_index(0), None);
         assert!(!supervisor.initialized.load(Ordering::Relaxed));
+        assert_eq!(supervisor.number_of_cores(), 0);
     }
 
     #[test]

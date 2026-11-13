@@ -54,7 +54,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     ///
     /// Implements the MP synchronization protocol:
     /// 1. APs check in by setting their state to `InHoldingPen` and entering the holding pen
-    /// 2. BSP waits for all registered APs, all cores must be in MM before servicing a request
+    /// 2. BSP waits for every AP the MP Information HOB reports, all cores must be in MM before servicing a request
     /// 3. BSP processes the pending request via `bsp_request_loop`
     /// 4. BSP releases every AP via the per-CPU rendezvous semaphore
     /// 5. BSP waits, bounded by `AP_EXIT_TIMEOUT_US`, for every released AP to acknowledge it has left
@@ -63,12 +63,14 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let is_bsp = is_bsp();
 
         if is_bsp {
-            let expected_aps = self.cpu_manager.registered_count().saturating_sub(1);
+            // An AP checks in only after it has registered and finished per-core init, so a full
+            // holding pen means every core the MP Information HOB reports is in this MMI.
+            let expected_aps = self.number_of_cores().saturating_sub(1);
 
-            // Wait for all registered APs to check in (set state to InHoldingPen).
+            // Wait for every AP to check in (set state to InHoldingPen).
             self.wait_for_ap_arrival(expected_aps);
 
-            // Every registered AP is in MM, so the request can be served.
+            // Every AP is in MM, so the request can be served.
             log::trace!("BSP (CPU {cpu_id}) entering request serving routine...");
             self.bsp_request_loop(cpu_index);
 
@@ -95,7 +97,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         }
     }
 
-    /// Waits for every registered AP to check in to the holding pen.
+    /// Waits for every AP the MP Information HOB reports to check in to the holding pen.
     ///
     /// ## Panics
     ///
@@ -227,7 +229,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let entry_context = EfiMmEntryContext {
             mm_startup_this_ap: 0,
             currently_executing_cpu: cpu_index as u64,
-            number_of_cpus: self.cpu_manager.registered_count() as u64,
+            number_of_cpus: self.number_of_cores() as u64,
             cpu_save_state_size: 0,
             cpu_save_state: 0,
         };
@@ -638,7 +640,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     /// Validates a procedure and runs it on one AP, waiting for it to finish.
     ///
     /// Follows the C `InternalSmmStartupThisAp`:
-    /// 1. CPU index is within range of registered CPUs
+    /// 1. CPU index is below the core count the MP Information HOB reports
     /// 2. CPU at that index is present (registered)
     /// 3. CPU is not the BSP
     /// 4. Procedure pointer is non-null
@@ -649,10 +651,10 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
     pub(crate) fn start_ap_procedure(&self, cpu_index: u64, procedure: u64, argument: u64) -> u64 {
         let cpu_index = cpu_index as usize;
 
-        // 1. Validate CPU index is within registered count
-        let registered = self.cpu_manager.registered_count();
-        if cpu_index >= registered {
-            log::error!("START_AP: CpuIndex({cpu_index}) >= registered_count({registered})");
+        // 1. Validate CPU index is below the core count
+        let number_of_cores = self.number_of_cores();
+        if cpu_index >= number_of_cores {
+            log::error!("START_AP: CpuIndex({cpu_index}) >= number_of_cores({number_of_cores})");
             return efi::Status::INVALID_PARAMETER.as_usize() as u64;
         }
 
@@ -1137,6 +1139,7 @@ mod tests {
         init_state().set_user_entry_point(0x4000);
         let core = TestCore::new();
         core.syscall_interface.init(4, 0x8000, 0x1000).expect("syscall interface initializes");
+        core.number_of_cores.store(1, Ordering::Release);
         assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
 
         let mut buffers = TestBuffers::new(256);
@@ -1330,15 +1333,16 @@ mod tests {
         let core = TestCore::new();
         let invalid = efi::Status::INVALID_PARAMETER.as_usize() as u64;
 
-        // No CPUs are registered yet, so every index is out of range.
+        // Before the core count is known, every index is out of range.
         assert_eq!(core.start_ap_procedure(0, 0x1000, 0), invalid);
 
+        core.number_of_cores.store(2, Ordering::Release);
         assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
         assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Ok(1));
 
         // Index 0 is the BSP, which cannot be told to run an AP procedure.
         assert_eq!(core.start_ap_procedure(0, 0x1000, 0), invalid);
-        // Beyond the registered count.
+        // Beyond the core count.
         assert_eq!(core.start_ap_procedure(2, 0x1000, 0), invalid);
         // A null procedure pointer.
         assert_eq!(core.start_ap_procedure(1, 0, 0), invalid);
@@ -1347,7 +1351,8 @@ mod tests {
     #[test]
     fn test_start_ap_procedure_rejects_an_unpopulated_slot() {
         let core = TestCore::new();
-        // Registering out of order leaves slot 0 empty while raising the registered count.
+        // Registering out of order leaves slot 0 empty even though index 0 is in range.
+        core.number_of_cores.store(2, Ordering::Release);
         assert_eq!(core.cpu_manager.register_cpu(7, 1, false), Ok(1));
 
         assert_eq!(core.start_ap_procedure(0, 0x1000, 0), efi::Status::INVALID_PARAMETER.as_usize() as u64);
@@ -1356,6 +1361,7 @@ mod tests {
     #[test]
     fn test_start_ap_procedure_rejects_a_busy_mailbox() {
         let core = TestCore::new();
+        core.number_of_cores.store(2, Ordering::Release);
         assert_eq!(core.cpu_manager.register_cpu(0, 0, true), Ok(0));
         assert_eq!(core.cpu_manager.register_cpu(1, 1, false), Ok(1));
         // Occupy the mailbox so the dispatch has nowhere to post.
@@ -1367,6 +1373,7 @@ mod tests {
     #[test]
     fn test_start_ap_procedure_reports_the_ap_response() {
         static CORE: TestCore = TestCore::new();
+        CORE.number_of_cores.store(2, Ordering::Release);
         assert_eq!(CORE.cpu_manager.register_cpu(0, 0, true), Ok(0));
         assert_eq!(CORE.cpu_manager.register_cpu(1, 1, false), Ok(1));
 

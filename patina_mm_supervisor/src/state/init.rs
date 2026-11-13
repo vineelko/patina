@@ -118,11 +118,6 @@ impl InitState {
         self.per_core_init_count.fetch_add(1, Ordering::SeqCst) + 1
     }
 
-    /// Returns the number of cores that have completed per-core init (Acquire).
-    pub(crate) fn per_core_init_count(&self) -> u32 {
-        self.per_core_init_count.load(Ordering::Acquire)
-    }
-
     /// Stores the user module entry point (one-time).
     pub(crate) fn set_user_entry_point(&self, entry: u64) {
         self.user_entry_point.call_once(|| entry);
@@ -228,7 +223,6 @@ mod tests {
         assert!(state.processor_id_lookup_fn().is_none());
         assert!(!state.is_bsp_init_complete());
         assert!(state.mm_initialized_buffer().is_none());
-        assert_eq!(state.per_core_init_count(), 0);
         assert!(state.user_entry_point().is_none());
         assert!(state.init_module_region().is_none());
         assert!(!state.is_init_module_freed());
@@ -282,7 +276,6 @@ mod tests {
 
         assert_eq!(state.inc_per_core_init_count(), 1);
         assert_eq!(state.inc_per_core_init_count(), 2);
-        assert_eq!(state.per_core_init_count(), 2);
 
         assert!(state.mark_at_runtime());
         assert!(!state.mark_at_runtime());

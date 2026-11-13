@@ -12,7 +12,7 @@
 
 use core::ffi::c_void;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use patina::management_mode::supervisor::UserCommandType;
 use patina::pi::hob::PhaseHandoffInformationTable;
@@ -77,8 +77,17 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
             mailbox_manager: MailboxManager::new(),
             syscall_interface: SyscallInterface::new(),
             initialized: AtomicBool::new(false),
+            number_of_cores: AtomicUsize::new(0),
             _phantom: core::marker::PhantomData,
         }
+    }
+
+    /// Returns the number of cores the MP Information HOB reports, or zero before the BSP has
+    /// read that HOB during initialization.
+    ///
+    /// The BSP waits for this many cores in every MMI before it serves a request.
+    pub(crate) fn number_of_cores(&self) -> usize {
+        self.number_of_cores.load(Ordering::Acquire)
     }
 
     /// Stores this instance's address for [`Self::instance`].
@@ -114,10 +123,12 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
 
     /// Entry point for every core, BSP and APs.
     ///
-    /// On a core's first entry the BSP runs one-time initialization and starts the user core,
-    /// then every core runs per-core initialization. The BSP returns only after every registered
-    /// core has finished. On later entries the BSP serves the pending request while the APs wait
-    /// in the holding pen, and each core returns once the APs have been released.
+    /// The BSP's first entry comes from its own SMI in the C `ExecuteFirstSmiInit`, before the APs
+    /// are sent theirs. The BSP runs one-time initialization, starts the user core, and runs
+    /// per-core initialization. Each AP then runs per-core initialization on its own first
+    /// entry. On every later entry the BSP waits for every core the MP Information HOB reports to
+    /// enter the MMI, serves the pending request while the APs wait in the holding pen, and each
+    /// core returns once the APs have been released.
     ///
     /// ## Panics
     ///
@@ -221,16 +232,6 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let init_count = init_state().inc_per_core_init_count();
         log::info!("CPU {cpu_id} (index {cpu_index}) completed per-core init ({init_count} cores initialized)");
 
-        // The BSP returns only after every registered CPU has finished per-core init.
-        if is_bsp {
-            let expected_cpus = self.cpu_manager.registered_count();
-            while init_state().per_core_init_count() < expected_cpus as u32 {
-                core::hint::spin_loop();
-            }
-
-            log::info!("All {expected_cpus} cores completed initialization, returning to caller.");
-        }
-
         Ok(())
     }
 
@@ -271,7 +272,7 @@ mod tests {
         let supervisor: MmSupervisorCore<TestPlatform, 4> = MmSupervisorCore::new();
 
         assert_eq!(supervisor.cpu_manager().max_cpus(), 4);
-        assert_eq!(supervisor.cpu_manager().registered_count(), 0);
+        assert_eq!(supervisor.cpu_manager().get_cpu_id_by_index(0), None);
         assert_eq!(supervisor.mailbox_manager().check_mailbox(0), None);
         assert_eq!(supervisor.mailbox_manager().check_mailbox(4), None);
         assert!(!supervisor.initialized.load(Ordering::Relaxed));

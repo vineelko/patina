@@ -13,7 +13,10 @@
 //! SPDX-License-Identifier: Apache-2.0
 //!
 
-use core::{ffi::c_void, sync::atomic::AtomicU8};
+use core::{
+    ffi::c_void,
+    sync::atomic::{AtomicU8, Ordering},
+};
 
 use patina::{
     MemoryRange, UEFI_PAGE_SIZE,
@@ -334,6 +337,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         let mp_information = unsafe { find_guid_hob_data(hob_hand_off_table, MP_INFORMATION_HOB_GUID) }
             .ok_or(CoreInitError::MpInformationHobMissing)?;
         let number_of_cpus = self.parse_mp_information_hob(mp_information)?;
+        self.number_of_cores.store(number_of_cpus, Ordering::Release);
 
         // SAFETY: as above, `hob_hand_off_table` is the in-place PHIT of the validated HOB list.
         let pass_down_data = unsafe { find_guid_hob_data(hob_hand_off_table, MM_SUPV_PASS_DOWN_HOB_GUID) }
@@ -1323,6 +1327,8 @@ mod tests {
 
         let result = supervisor.init_policy_and_validate(without_pass_down.handoff());
         assert_eq!(result, Err(PassDownHobError::Missing.into()));
+        // The CPU count is recorded as soon as the MP Information HOB is read.
+        assert_eq!(supervisor.number_of_cores(), 2);
     }
 
     #[test]

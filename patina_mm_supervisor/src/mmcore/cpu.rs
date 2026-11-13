@@ -104,8 +104,6 @@ impl CpuSlot {
 pub struct CpuManager<const MAX_CPUS: usize> {
     /// One slot per dense CPU index.
     slots: [CpuSlot; MAX_CPUS],
-    /// Number of CPUs currently registered.
-    registered_count: AtomicU32,
     /// The APIC ID of the BSP.
     bsp_id: AtomicU32,
 }
@@ -113,11 +111,7 @@ pub struct CpuManager<const MAX_CPUS: usize> {
 impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
     /// Creates a CPU manager with no CPUs registered.
     pub const fn new() -> Self {
-        Self {
-            slots: [const { CpuSlot::new() }; MAX_CPUS],
-            registered_count: AtomicU32::new(0),
-            bsp_id: AtomicU32::new(u32::MAX),
-        }
+        Self { slots: [const { CpuSlot::new() }; MAX_CPUS], bsp_id: AtomicU32::new(u32::MAX) }
     }
 
     /// Registers a CPU with the manager.
@@ -154,8 +148,6 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
         // Publish the CPU ID last so readers that observe it also see the fields above.
         slot.cpu_id.store(cpu_id, Ordering::Release);
 
-        self.registered_count.fetch_add(1, Ordering::SeqCst);
-
         if is_bsp {
             self.bsp_id.store(cpu_id, Ordering::SeqCst);
             log::info!("Registered BSP with APIC ID {cpu_id} at index {cpu_index}");
@@ -164,11 +156,6 @@ impl<const MAX_CPUS: usize> CpuManager<MAX_CPUS> {
         }
 
         Ok(cpu_index)
-    }
-
-    /// Gets the number of registered CPUs.
-    pub fn registered_count(&self) -> usize {
-        self.registered_count.load(Ordering::SeqCst) as usize
     }
 
     /// Gets the maximum number of CPUs supported.
@@ -379,7 +366,7 @@ mod tests {
     #[test]
     fn test_cpu_manager_creation() {
         let manager: CpuManager<4> = CpuManager::new();
-        assert_eq!(manager.registered_count(), 0);
+        assert_eq!(manager.get_cpu_id_by_index(0), None);
         assert!(manager.bsp_id().is_none());
         assert_eq!(manager.max_cpus(), 4);
     }
@@ -407,8 +394,6 @@ mod tests {
 
         let ap2_idx = manager.register_cpu(2, 2, false);
         assert_eq!(ap2_idx, Ok(2));
-
-        assert_eq!(manager.registered_count(), 3);
     }
 
     #[test]
@@ -420,7 +405,8 @@ mod tests {
         let idx = manager.register_cpu(1, 1, false);
         assert!(idx.is_ok());
         assert_eq!(manager.register_cpu(1, 1, false), idx);
-        assert_eq!(manager.registered_count(), 1);
+        assert_eq!(manager.get_cpu_id_by_index(1), Some(1));
+        assert_eq!(manager.get_cpu_id_by_index(2), None);
     }
 
     #[test]
@@ -513,7 +499,7 @@ mod tests {
         // CpuManager is held in a static, so Default has to produce the same empty manager that
         // new() does.
         let manager: CpuManager<4> = CpuManager::default();
-        assert_eq!(manager.registered_count(), 0);
+        assert_eq!(manager.get_cpu_id_by_index(0), None);
         assert_eq!(manager.max_cpus(), 4);
         assert!(manager.bsp_id().is_none());
     }
