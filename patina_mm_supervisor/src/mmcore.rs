@@ -271,7 +271,7 @@ pub struct MmSupervisorCore<P: PlatformInfo, const MAX_CPUS: usize> {
     /// Per-AP command mailboxes.
     pub(crate) mailbox_manager: MailboxManager<MAX_CPUS>,
     /// Syscall interface and per-CPU Ring 3 stacks.
-    pub(crate) syscall_interface: SyscallInterface<MAX_CPUS>,
+    pub(crate) syscall_interface: SyscallInterface,
     /// Set once the BSP has finished its one-time initialization.
     pub(crate) initialized: AtomicBool,
     /// Number of cores the MP Information HOB reports. Zero until the BSP has read that HOB.

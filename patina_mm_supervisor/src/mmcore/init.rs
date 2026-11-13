@@ -771,7 +771,7 @@ impl<P: PlatformInfo, const MAX_CPUS: usize> MmSupervisorCore<P, MAX_CPUS> {
         number_of_cores: usize,
     ) -> MmSupervisorResult<()> {
         // The CPU count bounds `get_cpl3_stack`, so it must be the count the MM IPL sized the
-        // stack array for, not the supervisor's `MAX_CPUS` capacity.
+        // stack array for.
         let stack_size = usize::try_from(cpl3_stack_size).map_err(|_| CoreInitError::Cpl3StackRegionInvalid {
             base: cpl3_stack_base,
             per_core_size: cpl3_stack_size,
